@@ -126,6 +126,13 @@ export async function createApp(options = {}) {
       res.writeHead(400).end();
       return;
     }
+    // www.<your domain> → <your domain>: the extension only works on BASE_URL.
+    const base = new URL(cfg.baseUrl);
+    if ((req.method === 'GET' || req.method === 'HEAD')
+      && String(req.headers.host || '').toLowerCase() === `www.${base.host}`) {
+      res.writeHead(301, { location: base.origin + url.pathname + url.search }).end();
+      return;
+    }
     req.query = url.searchParams;
     req.ip = clientIp(req, cfg.trustProxy);
     try {

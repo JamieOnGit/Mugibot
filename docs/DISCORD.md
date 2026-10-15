@@ -11,7 +11,7 @@ Discord is where members get pinged and hang out. Mugibot's bot:
   `/status`, and `/restock` (admins only)
 
 You need: a Discord server you own, and Mugibot's address (`BASE_URL`, e.g.
-`https://app.yourdomain.com`). Below, `<BASE_URL>` means that address.
+`https://mugibot.com`, or `https://mugibot-live.fly.dev` without a domain). Below, `<BASE_URL>` means that address.
 
 ---
 

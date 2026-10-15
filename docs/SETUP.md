@@ -214,21 +214,43 @@ Open `https://mugibot-live.fly.dev`, sign up as `jamie`, and you're the admin.
 
 **No domain? Skip this step.** Mugibot works at `https://mugibot-live.fly.dev`.
 
-If you own a domain, or buy one (e.g. from VentraIP, Crazy Domains, Namecheap
-or Cloudflare), you can use an address on it instead, like
-`app.mugibot.com.au`. In both commands below, replace `app.yourdomain.com`
-with that address.
+This guide uses `mugibot.com`. If your domain is different, use yours
+everywhere it says `mugibot.com`.
 
-```bash
-fly certs add app.yourdomain.com
-```
+1. **Buy the domain** (e.g. from Namecheap, Porkbun or Cloudflare). Make sure
+   **WHOIS privacy** (also called "domain privacy" or "redaction") is on, so
+   your name and details aren't public. It's free at those three. (A `.com.au`
+   would publish the ABN it's registered with, a `.com` doesn't need one.)
+2. **Tell Fly about it**, for both `mugibot.com` and `www.mugibot.com`:
 
-It prints DNS records. Add them at the company you bought the domain from
-(their "DNS" settings). It can take up to an hour to start working. Then:
+   ```bash
+   fly certs add mugibot.com
+   fly certs add www.mugibot.com
+   ```
 
-```bash
-fly secrets set BASE_URL=https://app.yourdomain.com EXTRA_ORIGINS=https://mugibot-live.fly.dev
-```
+3. **Add the DNS records they print** at the company you bought the domain
+   from (their "DNS" or "Advanced DNS" settings):
+   - for `mugibot.com`: an **A** record and an **AAAA** record. The host / name is `@`.
+   - for `www.mugibot.com`: a **CNAME** record. The host / name is `www`, the value is `mugibot-live.fly.dev`.
+
+   On Cloudflare, set each record to **DNS only** (grey cloud), not proxied.
+   Remove any "parking" records the registrar added for `@` or `www`.
+4. **Check it.** After a few minutes (up to an hour), each of these says
+   the certificate is **Ready** / issued:
+
+   ```bash
+   fly certs show mugibot.com
+   fly certs show www.mugibot.com
+   ```
+
+5. **Switch Mugibot to the new address:**
+
+   ```bash
+   fly secrets set BASE_URL=https://mugibot.com EXTRA_ORIGINS=https://mugibot-live.fly.dev
+   ```
+
+Open https://mugibot.com: it shows Mugibot. `www.mugibot.com` sends people to
+`mugibot.com`.
 
 Decide on the address **before** you set up Discord and Whop and hand out the
 extension. All three use it: the Discord redirect, the Whop webhook, and the
@@ -301,7 +323,7 @@ go by Discord DM. Admins can also make a reset link. To send emails too:
 3. Run:
 
 ```bash
-fly secrets set RESEND_API_KEY=re_… EMAIL_FROM="Mugibot <alerts@yourdomain.com>"
+fly secrets set RESEND_API_KEY=re_… EMAIL_FROM="Mugibot <alerts@mugibot.com>"
 ```
 
 ---
@@ -323,7 +345,7 @@ Open `https://<your address>/admin`:
   It's already set up for your address. They load it with Developer mode, as in
   step 2. Write this up in a pinned message in your Discord.
 - **Chrome Web Store (recommended once you have members):**
-  `BASE_URL=https://app.yourdomain.com npm run build:extension` makes
+  `BASE_URL=https://mugibot.com npm run build:extension` makes
   `dist/mugibot-extension.zip`. Upload it in the
   [Chrome Web Store developer console](https://chrome.google.com/webstore/devconsole)
   (one-time US$5 fee). In the listing:

@@ -238,3 +238,18 @@ test('opened at another address for this server (localhost vs 127.0.0.1): sign-u
   assert.match(page.text, /class="host-warning"/);
   assert.ok(page.text.includes(`href="${env.url}/signup?x=1"`), 'links to the configured address');
 });
+
+test('www.<the address> redirects to the address itself (the extension only works there)', async () => {
+  const base = new URL(env.url);
+  const get = (host) => new Promise((resolve, reject) => {
+    http.get({ host: base.hostname, port: base.port, path: '/login?next=%2Fapp', headers: { host } }, (res) => {
+      res.resume();
+      resolve(res);
+    }).on('error', reject);
+  });
+  const www = await get(`www.${base.host}`);
+  assert.equal(www.statusCode, 301);
+  assert.equal(www.headers.location, `${base.origin}/login?next=%2Fapp`);
+  const plain = await get(base.host);
+  assert.notEqual(plain.statusCode, 301);
+});
