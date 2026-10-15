@@ -62,6 +62,15 @@ cp .env.example .env
 (You don't need `npm install` to run Mugibot. The server has no dependencies.
 It's only for running the tests.)
 
+Download it **only once**. Running `git clone` again from inside the Mugibot
+folder puts a second copy inside the first. To get updates later, use these
+two lines instead:
+
+```bash
+cd ~/Mugibot
+git pull
+```
+
 Open `.env` in a text editor (Mac: `open -e .env`, Windows: `notepad .env`) and set your admin username:
 
 ```

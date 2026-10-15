@@ -62,6 +62,10 @@ cp .env.example .env
 npm run demo
 ```
 
+Do the `git clone` line only once. Run again from inside the Mugibot folder, it
+puts a second copy inside the first. To get updates later, run `cd ~/Mugibot`,
+then `git pull`.
+
 `npm run demo` starts Mugibot on http://localhost:8080 and the dummy stores on
 http://localhost:5055, and opens the dashboard in your browser. Leave that
 Terminal window open while you use it (press Ctrl+C to stop). The admin
