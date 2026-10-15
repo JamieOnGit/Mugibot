@@ -6,6 +6,7 @@
   <title>Dashboard — {{APP_NAME}}</title>
   <link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/site.css">
+  <script src="/js/theme.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -15,6 +16,7 @@
         <span id="plan-pill" class="pill"></span>
         <a class="link opt" id="admin-link" href="/admin" hidden>Admin</a>
         <span class="muted small opt" id="who"></span>
+        <button class="btn small theme-toggle" id="theme-toggle" type="button" aria-label="Switch light or dark theme" title="Light / dark">☾</button>
         <button class="btn small" id="logout" type="button">Log out</button>
       </nav>
     </div>
@@ -23,6 +25,7 @@
   <div class="app">
     <nav class="side" aria-label="Sections">
       <a href="#watch" data-tab="watch">🔔 Watchlist</a>
+      <a href="#monitor" data-tab="monitor">📡 Monitor</a>
       <a href="#checkout" data-tab="checkout">📦 Checkout details</a>
       <a href="#discord" data-tab="discord">💬 Discord</a>
       <a href="#extension" data-tab="extension">🧩 Extension</a>
@@ -72,6 +75,120 @@
             <button class="btn small" type="button" id="w-demo" hidden>Add dummy-store test items</button>
           </div>
         </div>
+      </section>
+
+      <!-- 📡 Monitor -->
+      <section data-panel="monitor" hidden>
+        <div class="tab-head">
+          <h2>Monitor</h2>
+          <span class="live" id="m-live" title="Updates as they happen">Live</span>
+          <button class="btn small primary" id="m-add-toggle" type="button" hidden>+ Add monitor</button>
+        </div>
+        <p class="muted small">Restocks, new listings and price changes across the stores: the same alerts as the Discord channels. ⚡ Buy adds the product to your watchlist and runs your own checkout.</p>
+        <div class="stats" id="m-stats"></div>
+
+        <form class="card" id="m-add" hidden>
+          <h3>Add a monitor</h3>
+          <div class="grid2">
+            <div class="span2"><label for="ma-url">Product link</label><input id="ma-url" type="url" placeholder="https://www.kmart.com.au/product/…" autocomplete="off"></div>
+            <div><label for="ma-store">…or store</label><select id="ma-store"><option value="">Choose…</option></select></div>
+            <div><label for="ma-sku">and SKU</label><input id="ma-sku" autocomplete="off" placeholder="43818648"></div>
+            <div><label for="ma-category">Category</label><select id="ma-category"><option value="">Guess from the name</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select></div>
+            <div><label for="ma-interval">Check every (seconds)</label><input id="ma-interval" type="number" min="20" max="3600" placeholder="60 (default)"></div>
+          </div>
+          <fieldset class="kinds" id="ma-kinds"><legend>Alerts</legend></fieldset>
+          <div class="form-actions"><button class="btn primary" type="submit">Add monitor</button><span class="msg" id="ma-msg"></span></div>
+        </form>
+
+        <div class="filters" role="search">
+          <input id="m-q" type="search" placeholder="Search name or SKU" aria-label="Search products">
+          <select id="m-category" aria-label="Category"><option value="">All categories</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select>
+          <select id="m-store" aria-label="Store"><option value="">All stores</option></select>
+          <select id="m-status" aria-label="Stock"><option value="">Any stock</option><option value="available">Available now</option><option value="unavailable">Not available</option><option value="problem">Having problems</option></select>
+        </div>
+
+        <div class="m-grid">
+          <div class="card">
+            <div class="card-head"><h3>Live feed</h3><select id="m-kind" aria-label="Alert kind"><option value="">Everything</option><option value="restock">Restocks</option><option value="listed">New listings</option><option value="price">Price changes</option><option value="sold_out">Sold out</option></select></div>
+            <ul class="feed-list" id="m-feed"></ul>
+            <button class="btn small" id="m-more" type="button" hidden>Older alerts</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Products <span class="muted small" id="m-count"></span></h3></div>
+            <ul class="products" id="m-products"></ul>
+          </div>
+        </div>
+
+        <div id="m-admin" hidden>
+          <div class="card">
+            <div class="card-head"><h3>Discord alert channels</h3><button class="btn small" id="mr-new" type="button">+ Add rule</button></div>
+            <p class="muted small">Each rule sends matching alerts to one channel, with an optional role ping. Copy IDs in Discord with Developer Mode on (right-click → Copy Channel ID / Copy Role ID). Give the bot View Channel, Send Messages and Embed Links there.</p>
+            <div class="notice" id="mr-fallback" hidden></div>
+            <ul class="rules" id="mr-list"></ul>
+            <form id="mr-form" hidden>
+              <input type="hidden" id="mr-id">
+              <div class="grid2">
+                <div><label for="mr-name">Name</label><input id="mr-name" maxlength="60" placeholder="Pokémon restocks"></div>
+                <div><label for="mr-channel">Channel ID</label><input id="mr-channel" inputmode="numeric" placeholder="123456789012345678"></div>
+                <div><label for="mr-role">Role to ping (optional)</label><input id="mr-role" inputmode="numeric" placeholder="Role ID"></div>
+                <div><label for="mr-keywords">Only names containing (optional)</label><input id="mr-keywords" placeholder="booster box, ETB"></div>
+              </div>
+              <fieldset class="kinds" id="mr-kinds"><legend>Alerts</legend></fieldset>
+              <fieldset class="kinds" id="mr-categories"><legend>Categories (none ticked = all)</legend></fieldset>
+              <fieldset class="kinds" id="mr-stores"><legend>Stores (none ticked = all)</legend></fieldset>
+              <label class="check"><input type="checkbox" id="mr-enabled" checked> On</label>
+              <div class="form-actions"><button class="btn primary" type="submit">Save rule</button><button class="btn" type="button" id="mr-cancel">Cancel</button><span class="msg" id="mr-msg"></span></div>
+            </form>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Health</h3><button class="btn small" id="mh-refresh" type="button">Refresh</button></div>
+            <p class="muted small" id="mh-loop"></p>
+            <div class="table-wrap"><table class="table" id="mh-table"><thead><tr><th>Store</th><th>Checks (1 h)</th><th>OK</th><th>Blocked</th><th>Errors</th><th>Avg time</th><th>Last OK</th><th>Server checks</th></tr></thead><tbody></tbody></table></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Check log</h3><label class="check small"><input type="checkbox" id="ml-errors" checked> Problems only</label></div>
+            <div class="table-wrap"><table class="table" id="ml-table"><thead><tr><th>When</th><th>Product</th><th>Store</th><th>From</th><th>Result</th><th>Price</th><th>Time</th></tr></thead><tbody></tbody></table></div>
+          </div>
+        </div>
+
+        <dialog class="detail" id="m-detail" aria-labelledby="md-name">
+          <div class="detail-head">
+            <img id="md-img" alt="" referrerpolicy="no-referrer">
+            <div>
+              <h3 id="md-name"></h3>
+              <p class="muted small" id="md-meta"></p>
+              <p id="md-state"></p>
+            </div>
+            <button class="btn small" id="md-close" type="button" aria-label="Close">✕</button>
+          </div>
+          <div class="form-actions" id="md-actions"></div>
+          <h4>Price history</h4>
+          <div class="chart" id="md-chart"></div>
+          <details><summary class="small">Show as a table</summary><div class="table-wrap"><table class="table" id="md-history"><thead><tr><th>When</th><th>Price</th></tr></thead><tbody></tbody></table></div></details>
+          <h4>Alerts</h4>
+          <ul class="feed-list compact" id="md-alerts"></ul>
+          <form id="md-settings" hidden>
+            <h4>Monitor settings</h4>
+            <div class="grid2">
+              <div><label for="md-sname">Name</label><input id="md-sname" maxlength="120"></div>
+              <div><label for="md-category">Category</label><select id="md-category"><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select></div>
+              <div><label for="md-interval">Check every (seconds)</label><input id="md-interval" type="number" min="20" max="3600" placeholder="60 (default)"></div>
+              <div><label for="md-note">Note</label><input id="md-note" maxlength="200"></div>
+            </div>
+            <fieldset class="kinds" id="md-kinds"><legend>Alerts</legend></fieldset>
+            <div class="form-actions">
+              <button class="btn primary" type="submit">Save</button>
+              <button class="btn" type="button" id="md-pause"></button>
+              <button class="btn" type="button" id="md-check">Check now</button>
+              <button class="btn danger" type="button" id="md-remove">Remove</button>
+              <span class="msg" id="md-msg"></span>
+            </div>
+          </form>
+          <div id="md-log-box" hidden>
+            <h4>Check log</h4>
+            <div class="table-wrap"><table class="table" id="md-log"><thead><tr><th>When</th><th>From</th><th>Result</th><th>Price</th><th>Time</th></tr></thead><tbody></tbody></table></div>
+          </div>
+        </dialog>
       </section>
 
       <!-- 📦 Checkout details -->

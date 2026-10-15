@@ -27,6 +27,13 @@ community. Built on TCGCopBot's working Kmart flow.
 - **Accounts are a username and a password.** Each account has its own
   watchlist, delivery addresses (several if wanted), card (kept in that
   member's browser), alert settings and activity.
+- **Monitor feed** ([docs/MONITORING.md](docs/MONITORING.md)). Admins pick the
+  Pokémon and One Piece products to watch, and Mugibot posts their restocks, new
+  listings and price changes to your Discord channels: the product image,
+  store, price, stock and a ⚡ Buy button. Each channel gets what its rule asks
+  for (by category, store, kind or keyword). The dashboard's **Monitor** tab
+  shows the live feed, health, searchable products and each product's price
+  history. Manage it from the dashboard or with `/monitor` in Discord.
 - **Admin console** at `/admin`: members, memberships, Discord status, SKU
   totals, restock pings, stores and flows, a setup check, Whop memberships and
   an audit log.
@@ -42,6 +49,7 @@ community. Built on TCGCopBot's working Kmart flow.
 | Set up the Whop product, A$19.99 plan, API key and webhook | [docs/WHOP.md](docs/WHOP.md) |
 | Send a retailer's checkout flow (BIG W, Target…) or change one | [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md) |
 | Run the community day to day (admin console) | [docs/ADMIN.md](docs/ADMIN.md) |
+| Set up the Monitor feed: products, alert channels, schedules | [docs/MONITORING.md](docs/MONITORING.md) |
 
 ## Quick start (on your computer)
 
@@ -132,7 +140,7 @@ their account, and is filled in at every store's checkout.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 85 tests in about a minute:
+the 104 tests in about two minutes:
 
 ```bash
 npm install
@@ -151,12 +159,19 @@ npm test
 - **Monitor** (dummy stores): one request per page, the honest User-Agent, price
   limits, not listed → listed → restock, Shopify JSON, blocked stores handed to
   browsers, store switches, announcements, private-address protection.
+- **Monitor feed** (dummy stores, fake Discord): name, image, price and stock
+  from the first check without an alert; restock, price drop and rise alerts
+  once per cooldown; alert rules by category, store, kind and keyword; price
+  history, check log and health; pause, resume and intervals; Shopify cart
+  links; blocked stores keep their last status; admins' browsers for stores
+  that refuse servers; `/monitor` and `/restocks`.
 - **The real extension in Chromium:** Kmart (verified), BIG W, EB Games and
   JB Hi-Fi flows each stop at their final button with nothing pressed, plus the
   card in a payment frame, the Discord ⚡ Buy button, in-browser checks, and two
   accounts in one browser.
-- **Website in a browser:** every dashboard and admin tab, phone-sized screens, no
-  JavaScript errors.
+- **Website in a browser:** every dashboard and admin tab, including the
+  Monitor tab (live alerts, product page with price chart, alert rules, light
+  and dark themes), phone-sized screens, no JavaScript errors.
 
 ## Layout
 
@@ -165,11 +180,12 @@ server/
   app.js            routing and security checks      repo.js     all per-member data access
   db.js             SQLite schema                    crypto.js   passwords, tokens, encryption, signed links
   retailers/        one file per store, with its checkout flow (kmart.js, bigw.js, …)
-  monitor/          SKU monitor (server checks, in-browser check results)
+  monitor/          SKU monitor (server checks, in-browser check results), feed.js (the Monitor feed's alerts)
+  catalog.js        the Monitor's products, monitors, price history, check log, alert rules
   discord.js        Discord OAuth, server roles, DMs, channel posts
   whop.js           Whop checkout links, webhooks, membership sync
-  notifier.js       pings: feed, Discord DM, webhook, email, channel posts
-  routes/           auth, user, ext (extension API), membership, discord (+ slash commands), admin, web
+  notifier.js       a member's pings: activity feed, Discord DM, webhook, email
+  routes/           auth, user, ext (extension API), membership, discord (+ slash commands), monitor, admin, web
 web/                landing, sign-in, dashboard, ⚡ Buy page, admin console, terms, privacy
 extension/          the browser extension (built per server by server/extension.js)
 devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, JB Hi-Fi-style)

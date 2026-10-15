@@ -56,7 +56,14 @@ role order, channel), **Post a test message** and **Register slash commands**
 it belongs to. Tick "only ones nobody has linked yet" to find people who paid
 but haven't connected their account.
 
-**Audit log.** Who changed what.
+**Audit log.** Who changed what, including monitors added, paused, resumed and removed.
+
+## The Monitor feed
+
+Monitors, Discord alert channels, health per store and the check log are on
+the dashboard's **Monitor** tab. Admins see the controls there, and members see
+the feed. In Discord: `/monitor add · list · pause · resume · remove · status`.
+See [MONITORING.md](MONITORING.md).
 
 ## Command line (on the server)
 

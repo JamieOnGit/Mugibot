@@ -344,6 +344,23 @@ fly secrets set RESEND_API_KEY=re_… EMAIL_FROM="Mugibot <alerts@mugibot.com>"
 
 ---
 
+## 6b. The Monitor feed (restock channels)
+
+Members get DMs for their own watchlists either way. The Monitor is the shared
+feed: your Discord channels get restocks, listings and price changes for the
+products admins pick. Follow **[MONITORING.md](MONITORING.md)**, section 5. In
+short:
+
+1. Make channels like `#pokemon-restocks` and `#onepiece-restocks`, and let
+   the bot post there.
+2. Admin → Setup check → **Register slash commands**. This adds `/monitor` and
+   `/restocks`.
+3. Dashboard → **Monitor** → **Discord alert channels** → **+ Add rule**, once
+   per channel. Then **Test** each rule.
+4. **+ Add monitor** for each product, or `/monitor add` in Discord.
+
+---
+
 ## 7. Check everything from the admin console
 
 Open `https://<your address>/admin`:

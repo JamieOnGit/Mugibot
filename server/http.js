@@ -101,8 +101,12 @@ export function clientIp(req, trustProxy) {
 }
 
 export function securityHeaders(cfg) {
+  // Product pictures in the Monitor come from the stores' own image servers (https only;
+  // plus the dummy store when testing on your computer).
+  let demo = '';
+  try { if (cfg.demoStoreUrl) demo = ` ${new URL(cfg.demoStoreUrl).origin}`; } catch { /* not an address */ }
   const h = {
-    'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    'content-security-policy': `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:${demo}; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
     'x-content-type-options': 'nosniff',
     'x-frame-options': 'DENY',
     'referrer-policy': 'same-origin',
