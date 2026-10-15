@@ -223,7 +223,8 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   assert.equal(cat.monitorForProduct(p.id).paused, 1);
   if (shots) await page.screenshot({ path: path.join(shots, 'monitor-product.png') });
   await page.click('#md-close');
-  assert.equal(await page.evaluate(() => location.hash), '#monitor');
+  // The dialog's close event (which puts the address back) fires just after the click.
+  await page.waitForFunction(() => location.hash === '#monitor');
   await page.goto(`${env.url}/app#monitor/${p.id}`);
   await page.waitForSelector('#m-detail[open]');
   await page.click('#md-close');
