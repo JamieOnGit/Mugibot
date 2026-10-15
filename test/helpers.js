@@ -56,7 +56,8 @@ export async function startFakeDiscord() {
     dmsClosed: new Set(),
     messages: [], // { channel, body }
     guild: { id: 'guild-1', name: 'Mugibot Members' },
-    roles: [{ id: 'role-member', name: 'Member', position: 1 }, { id: 'role-bot', name: 'Mugibot', position: 5 }],
+    // Bot role: Create Invite, View Channels, Send Messages, Embed Links, Manage Roles.
+    roles: [{ id: 'guild-1', name: '@everyone', position: 0, permissions: '0' }, { id: 'role-member', name: 'Member', position: 1, permissions: '0' }, { id: 'role-bot', name: 'Mugibot', position: 5, permissions: String(1n | (1n << 10n) | (1n << 11n) | (1n << 14n) | (1n << 28n)) }],
     botRoles: ['role-bot'],
     rateLimitNext: 0,
   };

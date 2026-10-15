@@ -25,7 +25,7 @@ function explain(status, body, what) {
   if (code === 10011) return "The member role doesn't exist (DISCORD_MEMBER_ROLE_ID)";
   if (code === 10003) return "The channel doesn't exist or the bot can't see it (DISCORD_RESTOCK_CHANNEL_ID)";
   if (status === 401) return 'The bot token is wrong (DISCORD_BOT_TOKEN)';
-  if (code === 50013 || status === 403) return `The bot isn't allowed to ${what}. Give it "Manage Roles" (and "Kick Members" if you remove people) and drag its role above the member role`;
+  if (code === 50013 || status === 403) return `The bot isn't allowed to ${what}. Give its role "Create Invite" and "Manage Roles" (and "Kick Members" if you remove people), and drag it above the member role`;
   return `Discord said HTTP ${status}${body && body.message ? ` (${body.message})` : ''}`;
 }
 
@@ -286,6 +286,16 @@ export class Discord {
     } else {
       add(false, 'Member role', 'Optional: set DISCORD_MEMBER_ROLE_ID so members get a role (and lose it when their membership ends)');
     }
+    // Permissions come from @everyone (same ID as the server) plus the bot's own roles.
+    const botRoles = list.filter((r) => r.id === this.d.guildId || (botMember.body && (botMember.body.roles || []).includes(r.id)));
+    const perms = botRoles.reduce((p, r) => p | BigInt(r.permissions || '0'), 0n);
+    const needed = [['Create Invite', 1n], ['Manage Roles', 1n << 28n], ['View Channels', 1n << 10n], ['Send Messages', 1n << 11n], ['Embed Links', 1n << 14n]];
+    if (this.d.kickOnExpire) needed.push(['Kick Members', 1n << 1n]);
+    const missing = perms & 8n ? [] : needed.filter(([, bit]) => !(perms & bit)).map(([name]) => name);
+    const ownRole = botRoles.filter((r) => r.id !== this.d.guildId).sort((a, b) => b.position - a.position)[0];
+    add(!missing.length, 'Bot permissions', missing.length
+      ? `Missing: ${missing.join(', ')}. Server settings → Roles → @${ownRole ? ownRole.name : 'the bot\'s role'} → Permissions`
+      : needed.map(([name]) => name).join(', '));
     if (this.d.restockChannelId) {
       const ch = await this.api('GET', `/channels/${this.d.restockChannelId}`);
       add(ch.status === 200, 'Restock channel', ch.status === 200 ? `#${ch.body.name}` : explain(ch.status, ch.body, 'see that channel'));

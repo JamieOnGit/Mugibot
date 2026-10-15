@@ -62,13 +62,30 @@ You need: a Discord server you own, and Mugibot's address (`BASE_URL`, e.g.
 
 1. **OAuth2** page → **OAuth2 URL Generator**:
    - Scopes: tick **bot** and **applications.commands**.
-   - Bot permissions: tick **Manage Roles**, **View Channels**, **Send
-     Messages**, **Embed Links**. Also tick **Kick Members** only if you'll
-     set `DISCORD_KICK_ON_EXPIRE=1`.
+   - Bot permissions: tick **Create Instant Invite**, **Manage Roles**, **View
+     Channels**, **Send Messages** and **Embed Links**. Also tick **Kick
+     Members** only if you'll set `DISCORD_KICK_ON_EXPIRE=1`. Don't tick
+     Administrator; the bot doesn't need it.
 2. Copy the generated URL at the bottom, open it, choose your server → **Authorize**.
-3. **Role order (important):** Server Settings → Roles → drag the bot's role
+3. Discord gives the bot its own role, named after the app ("Mugibot"), with
+   those permissions. Don't give the bot any other roles (not `Member`, not
+   `Restock Pings`).
+4. **Role order (important):** Server Settings → Roles → drag the bot's role
    (named "Mugibot") **above** `Member` (and above `Restock Pings`). A bot can
    only give and take roles that sit below its own.
+
+Already invited the bot without some of these? Server Settings → Roles →
+**Mugibot** → **Permissions**, and turn on **Create Invite**, **Manage Roles**,
+**View Channels**, **Send Messages** and **Embed Links**.
+
+What each permission is for:
+
+| Permission | Why |
+|---|---|
+| Create Invite | Discord requires it for a bot to add people to the server |
+| Manage Roles | Give members the `Member` role, and take it away when their membership ends |
+| View Channels, Send Messages, Embed Links | Post restocks in `#restocks` |
+| Kick Members (optional) | Only with `DISCORD_KICK_ON_EXPIRE=1`: remove people from the server when their membership ends |
 
 ---
 
@@ -146,8 +163,8 @@ Mugibot also checks that they're an admin in Mugibot.
 ## 7. Test it
 
 1. Admin console → **Setup check** → **Check the Discord bot**. Every line
-   should be ✓. "Member role … is above the bot's own role" means step 3.3
-   still needs doing.
+   should be ✓. "Member role … is above the bot's own role" means step 3.4
+   still needs doing. "Bot permissions: Missing …" lists what to turn on.
 2. **Post a test message in the restock channel.** It appears in `#restocks`.
 3. Your dashboard → **Discord** tab → **Connect Discord** → Authorize. You come
    back connected and (as an admin, or with an active membership) are added

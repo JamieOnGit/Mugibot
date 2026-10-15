@@ -268,6 +268,13 @@ test('admin setup check reads the bot, server, role order and channel', async ()
   assert.equal(byLabel.Server.detail, 'Mugibot Members');
   assert.equal(byLabel['Member role'].ok, true);
   assert.equal(byLabel['Restock channel'].ok, true);
+  assert.equal(byLabel['Bot permissions'].ok, true, byLabel['Bot permissions'].detail);
+  const saved = discord.state.roles;
+  discord.state.roles = saved.map((x) => (x.id === 'role-bot' ? { ...x, permissions: String(1n << 28n | 1n << 10n | 1n << 11n | 1n << 14n) } : x));
+  r = await boss.post('/api/admin/integrations/discord-check');
+  const perms = r.body.checks.find((c) => c.label === 'Bot permissions');
+  assert.equal(perms.ok, false);
+  assert.match(perms.detail, /^Missing: Create Invite\. Server settings → Roles → @Mugibot → Permissions/);
   discord.state.roles = [{ id: 'role-member', name: 'Member', position: 9 }, { id: 'role-bot', name: 'Mugibot', position: 2 }];
   r = await boss.post('/api/admin/integrations/discord-check');
   const role = r.body.checks.find((c) => c.label === 'Member role');

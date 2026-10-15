@@ -277,7 +277,8 @@ Follow **[DISCORD.md](DISCORD.md)**. In short, you'll:
 1. Create the server's roles (`Member`, optional `Restock Pings`) and a private `#restocks` channel.
 2. Create a Discord application. Copy its Application ID, Public Key and Client
    Secret, and add the redirect `https://<your address>/auth/discord/callback`.
-3. Create its bot, copy the token, and invite it with **Manage Roles**.
+3. Create its bot, copy the token, and invite it with **Create Instant Invite**,
+   **Manage Roles**, **View Channels**, **Send Messages** and **Embed Links**.
 4. Drag the bot's role above `Member`.
 5. Copy the server, role and channel IDs.
 6. Set the `DISCORD_…` secrets (DISCORD.md step 5 says where each one comes
