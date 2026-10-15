@@ -32,12 +32,20 @@ const STATES = '<option value="">Select state</option><option value="NSW">New So
 export function defaultShops() {
   const out = {};
   for (const [id, list] of Object.entries(DUMMY_PRODUCTS)) {
-    out[id] = { products: list.map((p, i) => ({ ...p, listed: true, maxQty: 0, qtyStyle: id === 'bigw' ? 'select' : 'input', lateMs: 0, id: 4400000 + i })), cart: [], orders: [], steps: [], data: {} };
+    out[id] = {
+      products: list.map((p, i) => ({ ...p, listed: true, maxQty: 0, qtyStyle: id === 'bigw' ? 'select' : 'input', lateMs: 0, id: 4400000 + i })),
+      cart: [], orders: [], steps: [], data: {},
+      // Like a real store on a fresh page: "Add" does nothing until the page's code has
+      // started (hydrateMs after load), and the add itself can be slow (addDelayMs).
+      hydrateMs: 0, addDelayMs: 0, refuseAdds: false,
+      // What the bag page showed each time it was opened (number of items in it).
+      bagViews: [],
+    };
   }
   return out;
 }
 
-function page(shop, title, body, { head = '' } = {}) {
+function page(shop, title, body, { head = '', bagCount = null } = {}) {
   const s = SHOPS[shop] || { name: 'Dummy store', color: '#444' };
   const base = shop ? `/${shop}` : '';
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>
@@ -48,8 +56,15 @@ button[disabled]{background:#999;cursor:default}label{display:block;margin:8px 0
 .tile{display:inline-block;border:1px solid #ddd;padding:10px;margin:6px;width:200px;vertical-align:top}.err{color:#c00;font-weight:600}
 .choice[aria-pressed=true]{outline:3px solid #0a0}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style>${head}</head>
 <body><div class="dummy">⚠ Dummy store for testing Mugibot — nothing here is real. <a href="/">Control panel</a></div>
-<header><a href="${base}/">${esc(s.name)}</a> · <a href="${base}/cart">${shop === 'kmart' ? 'Bag' : 'Cart'}</a></header><main>${body}</main>
+<header><a href="${base}/">${esc(s.name)}</a> · ${bagLink(shop, bagCount)}</header><main>${body}</main>
 <footer>${esc(s.name)} is a fake store for testing.</footer></body></html>`;
+}
+
+// The header's bag link, with the item count like real stores show it.
+function bagLink(shop, count) {
+  const word = shop === 'kmart' ? 'Bag' : 'Cart';
+  const label = count == null ? word : `${word}, ${count} item${count === 1 ? '' : 's'}`;
+  return `<a href="${shop ? `/${shop}` : ''}/cart" id="bag-link" aria-label="${label}">${word}${count ? ` <span class="bag-count">${count}</span>` : ''}</a>`;
 }
 
 function parseBody(req) {
@@ -94,8 +109,9 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const line = cart.find((c) => c.sku === sku);
     if (line) line.qty = Math.min(max, line.qty + (Number(qty) || 1));
     else cart.push({ sku, qty: Math.min(max, Number(qty) || 1), price: p.price, name: p.name });
-    return { ok: true, count: cart.length };
+    return { ok: true, count: cart.length, items: cart.reduce((n, c) => n + c.qty, 0) };
   }
+  const bagCount = (shop) => shopOf(shop).cart.reduce((n, c) => n + c.qty, 0);
 
   const ldFor = (p) => `<script type="application/ld+json">${JSON.stringify({
     '@context': 'https://schema.org', '@type': 'Product', name: p.name, sku: p.sku,
@@ -152,14 +168,21 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       <script>
         ${p.lateMs ? `setTimeout(() => { document.getElementById('buybox').innerHTML = ${JSON.stringify(button)}; }, ${Number(p.lateMs)});` : ''}
         ${stepperJs(p)}
+        // Until the page's code has started, pressing Add does nothing (like a store that's still loading).
+        let started = ${shopOf(shop).hydrateMs ? 'false' : 'true'};
+        ${shopOf(shop).hydrateMs ? `addEventListener('load', () => setTimeout(() => { started = true; }, ${Number(shopOf(shop).hydrateMs)}));` : ''}
         document.addEventListener('click', async (e) => {
-          if (!e.target.closest('#atc')) return;
+          if (!e.target.closest('#atc') || !started) return;
           ${readQtyJs}
           const r = await fetch('/${shop}/api/cart/add', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({sku:'${p.sku}', qty})});
           const d = await r.json();
-          if (d.ok) setTimeout(() => { document.getElementById('drawer-msg').textContent = d.count + ' item(s) in your ${shop === 'kmart' ? 'bag' : 'cart'}'; document.getElementById('drawer').classList.add('open'); }, 150);
+          if (!d.ok) return;
+          const bag = document.getElementById('bag-link');
+          bag.setAttribute('aria-label', '${shop === 'kmart' ? 'Bag' : 'Cart'}, ' + d.items + ' items');
+          bag.innerHTML = '${shop === 'kmart' ? 'Bag' : 'Cart'} <span class="bag-count">' + d.items + '</span>';
+          setTimeout(() => { document.getElementById('drawer-msg').textContent = d.count + ' item(s) in your ${shop === 'kmart' ? 'bag' : 'cart'}'; document.getElementById('drawer').classList.add('open'); }, 150);
         });
-      </script>`, { head: ldFor(p) });
+      </script>`, { head: ldFor(p), bagCount: bagCount(shop) });
   }
 
   function searchPage(shop, q) {
@@ -413,7 +436,8 @@ for (const el of document.querySelectorAll('input')) {
 
     if (sub === '/api/cart/add' && req.method === 'POST') {
       const b = await parseBody(req);
-      const r = addToCart(shop, b.sku, b.qty);
+      if (S.addDelayMs) await new Promise((r) => setTimeout(r, S.addDelayMs));
+      const r = S.refuseAdds ? { ok: false } : addToCart(shop, b.sku, b.qty);
       return json(r.ok ? 200 : 409, r);
     }
     if (sub === '/cart/add' && shop === 'jbhifi') {
@@ -428,7 +452,10 @@ for (const el of document.querySelectorAll('input')) {
       line.qty = Math.max(1, Math.min(Number(find(shop, b.sku)?.maxQty) || 10, Number(b.qty) || 1));
       return json(200, { ok: true, qty: line.qty });
     }
-    if (sub === '/cart' || sub === '/cart/') return html(200, cartPage(shop));
+    if (sub === '/cart' || sub === '/cart/') {
+      S.bagViews.push(bagCount(shop));
+      return html(200, cartPage(shop));
+    }
     if (sub === '/api/checkout/step' && req.method === 'POST') {
       const b = await parseBody(req);
       S.steps.push(b);

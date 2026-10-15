@@ -94,10 +94,12 @@ export default {
       quantity: 'page',             // 'page' (set it on the product page, else in the cart) | 'bag' | 'none'
       quantitySelector: null,       // optional CSS selector for the quantity control
       waitMs: 12000,                // how long to wait for the add button on a fresh page
+      settleMs: 800,                // after the page has loaded, wait this long before pressing Add
     },
     added: {                        // the popup / drawer after adding
       checkout: [/^(secure )?check ?out( now)?$/i],
       viewBag: [/\bview (cart|trolley)\b/i],
+      confirm: [/added to (your )?trolley/i],   // optional: the store's "added" message
     },
     bag: {                          // the cart page
       path: /\/cart(\/|$)/i,
@@ -128,6 +130,11 @@ stores. Some rules always apply, whatever a flow says:
 - Express payments (PayPal, Afterpay, Zip, Apple Pay…), click & collect,
   sign-in, newsletters and marketing boxes are never chosen.
 - Fields that already have a value (e.g. from a store account) are left alone.
+- The bag is only opened once the store shows the item went in: the "added"
+  popup, an "Added to bag" message, or the number on the store's bag icon going
+  up. If the page didn't react to the Add press at all (it wasn't ready yet), Add
+  is pressed once more; if it still doesn't go in, Mugibot stops and says so
+  instead of opening an empty bag.
 
 Field names for `fields`: `email`, `phone`, `firstName`, `lastName`,
 `fullName`, `address1`, `address2`, `suburb`, `state`, `postcode`, `country`,

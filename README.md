@@ -37,6 +37,7 @@ community. Built on TCGCopBot's working Kmart flow.
 |---|---|
 | Try it on my computer in 5 minutes, with dummy stores | [Quick start](#quick-start-on-your-computer) below |
 | Put it online for members, step by step | **[docs/SETUP.md](docs/SETUP.md)** |
+| Put changes live without a computer (merge on GitHub → live) | [docs/SETUP.md, step 3d](docs/SETUP.md#3d-automatic-deploys-from-github-no-more-terminal) |
 | Set up the Discord server, bot, roles and slash commands | [docs/DISCORD.md](docs/DISCORD.md) |
 | Set up the Whop product, A$19.99 plan, API key and webhook | [docs/WHOP.md](docs/WHOP.md) |
 | Send a retailer's checkout flow (BIG W, Target…) or change one | [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md) |

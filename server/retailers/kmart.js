@@ -26,6 +26,9 @@ export default {
       add: [/\badd to (bag|cart)\b/i, /\bpre-?order\b/i],
       quantity: 'page',
       waitMs: 12000,
+      // kmart.com.au shows "Add to bag" before its own code has started; pressing it
+      // that early does nothing. Wait this long after the page has loaded.
+      settleMs: 1500,
     },
     added: {
       checkout: [/^(secure )?check ?out( now)?$/i],
