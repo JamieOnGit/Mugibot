@@ -378,6 +378,12 @@ Open `https://<your address>/admin`:
   Bump `version` in `extension/manifest.json` with every update. The dashboard
   tells members when their copy is out of date.
 
+**Updates.** When there's a new version (or your site moves to a new address),
+the extension's toolbar icon shows **NEW** and its popup shows an **Update**
+button. It opens the dashboard's update steps: download, copy the new files
+over the old folder, then press **Reload** in the popup. Their saved card and
+connection stay. Copies from the Chrome Web Store update by themselves.
+
 ---
 
 ## 9. First real test on Kmart

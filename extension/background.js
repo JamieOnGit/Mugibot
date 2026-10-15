@@ -21,6 +21,8 @@ const CONFIG = globalThis.MGB_CONFIG;
 const Vault = globalThis.MGBVault;
 const SERVER = CONFIG.server.replace(/\/+$/, '');
 const SERVER_ORIGIN = new URL(SERVER).origin;
+// Every address of your Mugibot site (the dashboard can be opened on any of them).
+const APP_ORIGINS = new Set([SERVER_ORIGIN, ...(CONFIG.appOrigins || [])]);
 const VERSION = chrome.runtime.getManifest().version;
 const PASS_TTL = 15 * 60 * 1000;
 const CHECK_ALARM = 'mgb-checks';
@@ -131,15 +133,57 @@ async function fillData(sender, part, profileId) {
   return { profile: res.body.profile, card, cardLocked: vault.saved && !vault.unlocked };
 }
 
+// --- updates -----------------------------------------------------------------
+/** "1.0.10" > "1.0.9" */
+function newer(a, b) {
+  const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  }
+  return false;
+}
+
+/**
+ * Is there a newer extension? Asks your Mugibot site (at most every 10 minutes).
+ * Also notices when the site has moved to a new address: this copy was built for
+ * the old one, so it needs downloading again from the new one.
+ */
+async function updateInfo(force = false) {
+  let { appInfo } = await chrome.storage.local.get('appInfo');
+  if (force || !appInfo || appInfo.server !== SERVER || Date.now() - appInfo.at > 10 * 60 * 1000) {
+    try {
+      const res = await fetch(`${SERVER}/api/ext/app`, { cache: 'no-store' });
+      if (res.ok) {
+        const b = await res.json();
+        appInfo = { server: SERVER, url: String(b.url || SERVER).replace(/\/+$/, ''), version: String(b.extensionVersion || ''), store: b.chromeStoreUrl || null, at: Date.now() };
+        await chrome.storage.local.set({ appInfo });
+      }
+    } catch { /* offline: use what we knew */ }
+  }
+  const info = { current: VERSION, latest: VERSION, url: SERVER, moved: false, available: false, store: null };
+  if (appInfo && appInfo.server === SERVER) {
+    let moved = false;
+    try { moved = new URL(appInfo.url).origin !== SERVER_ORIGIN; } catch { /* keep false */ }
+    Object.assign(info, { latest: appInfo.version || VERSION, url: appInfo.url, moved, store: appInfo.store });
+    info.available = moved || newer(info.latest, VERSION);
+  }
+  chrome.action.setBadgeText({ text: info.available ? 'NEW' : '' });
+  if (info.available) chrome.action.setBadgeBackgroundColor({ color: '#d97706' });
+  chrome.action.setTitle({ title: info.available ? `${CONFIG.appName} — update available` : CONFIG.appName });
+  return info;
+}
+
 async function status() {
+  const update = await updateInfo().catch(() => null);
   const auth = await getAuth();
-  if (!auth) return { paired: false, server: SERVER, appName: CONFIG.appName, version: VERSION };
+  if (!auth) return { paired: false, server: SERVER, appName: CONFIG.appName, version: VERSION, update };
   const me = await api('GET', `/api/ext/me?v=${encodeURIComponent(VERSION)}`);
   const still = await getAuth();
-  if (!still) return { paired: false, server: SERVER, appName: CONFIG.appName, version: VERSION, disconnected: true };
+  if (!still) return { paired: false, server: SERVER, appName: CONFIG.appName, version: VERSION, disconnected: true, update };
   const { lastChecks } = await chrome.storage.local.get('lastChecks');
   return {
-    paired: true, server: SERVER, appName: CONFIG.appName, version: VERSION, user: still.user,
+    paired: true, server: SERVER, appName: CONFIG.appName, version: VERSION, user: still.user, update,
     online: me.status === 200, entitlement: me.body && me.body.entitlement, card: await Vault.status(still.user.id), lastChecks: lastChecks || null,
   };
 }
@@ -217,11 +261,15 @@ function ensureAlarm() {
 chrome.runtime.onInstalled.addListener(ensureAlarm);
 chrome.runtime.onStartup.addListener(ensureAlarm);
 ensureAlarm();
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === CHECK_ALARM) runChecks().catch(() => null); });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name !== CHECK_ALARM) return;
+  runChecks().catch(() => null);
+  updateInfo().catch(() => null); // keeps the "NEW" badge on the toolbar icon up to date
+});
 
 // --- messages ---------------------------------------------------------------
 const fromApp = (sender) => {
-  try { return !!sender.tab && sender.frameId === 0 && new URL(sender.url).origin === SERVER_ORIGIN; } catch { return false; }
+  try { return !!sender.tab && sender.frameId === 0 && APP_ORIGINS.has(new URL(sender.url).origin); } catch { return false; }
 };
 // The popup and Settings page (Settings opens in a tab, so check the page's address, not the tab).
 const fromExtensionPage = (sender) => sender.id === chrome.runtime.id && String(sender.url || '').startsWith(`chrome-extension://${chrome.runtime.id}/`);
@@ -263,7 +311,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'appHello': {
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
         const auth = await getAuth();
-        return { version: VERSION, paired: !!auth, userId: auth ? auth.user.id : null, username: auth ? auth.user.username : null };
+        return { version: VERSION, server: SERVER, paired: !!auth, userId: auth ? auth.user.id : null, username: auth ? auth.user.username : null };
       }
       case 'pair':
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
@@ -284,6 +332,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // From the popup / settings page only
       case 'status':
         return fromExtensionPage(sender) ? status() : null;
+      case 'update':
+        return fromExtensionPage(sender) ? updateInfo(true) : null;
+      case 'reload':
+        // Loads the extension's files again — after you've copied a new version over them.
+        if (!fromExtensionPage(sender)) return null;
+        setTimeout(() => chrome.runtime.reload(), 100);
+        return { ok: true };
       case 'unpair': {
         if (!fromExtensionPage(sender)) return null;
         await api('POST', '/api/ext/unpair', {});

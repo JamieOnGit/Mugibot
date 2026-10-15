@@ -16,12 +16,25 @@ function checksText(l) {
   return `${l.checked} checked ${mins < 1 ? 'just now' : `${mins} min ago`}${l.blocked ? ` · ${l.blocked} blocked` : ''}`;
 }
 
+function renderUpdate(u) {
+  const box = $('update');
+  box.hidden = !(u && u.available);
+  if (!u || !u.available) return;
+  const host = new URL(u.url).host;
+  $('update-title').textContent = u.moved ? `${CONFIG.appName} has moved to ${host}` : `Update available: v${u.latest}`;
+  $('update-text').textContent = u.moved
+    ? `This copy was downloaded for ${new URL(CONFIG.server).host}, so it can't work with your dashboard at ${host}. Download it again from there.`
+    : `You have v${u.current}. Press Update for the new version and how to install it.`;
+  $('update-go').href = u.store && !u.moved ? u.store : `${u.url}/app#update`;
+}
+
 async function render() {
   $('app-name').textContent = CONFIG.appName;
   $('open-dash').href = `${dash}#extension`;
   $('open-dash2').href = dash;
   const s = await ask({ type: 'status' });
   $('foot').textContent = s ? `v${s.version} · ${new URL(s.server).host}` : '';
+  renderUpdate(s && s.update);
   if (!s || !s.paired) {
     $('signed-out').hidden = false;
     $('signed-in').hidden = true;
@@ -93,6 +106,21 @@ $('check-now').addEventListener('click', async () => {
   await ask({ type: 'checkNow' });
   $('check-now').disabled = false;
   render();
+});
+
+async function reload(e) {
+  if (e) e.preventDefault();
+  await ask({ type: 'reload' });
+}
+$('reload').addEventListener('click', reload);
+$('reload2').addEventListener('click', reload);
+
+$('check-update').addEventListener('click', async (e) => {
+  e.preventDefault();
+  $('check-update').textContent = 'Checking…';
+  const u = await ask({ type: 'update' });
+  renderUpdate(u);
+  $('check-update').textContent = u && u.available ? 'Update available' : (u ? 'Up to date' : "Couldn't check");
 });
 
 render();

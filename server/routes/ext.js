@@ -3,6 +3,7 @@
 // Card details are not part of this API: they stay in the extension.
 
 import { entitlement } from '../entitlement.js';
+import { EXTENSION_VERSION } from '../extension.js';
 import { DEFAULT_ALERTS, HttpError, bad, str } from '../schema.js';
 
 const EVENT_TYPES = { add: 'info', basket: 'info', step: 'info', checkout: 'success', ready: 'success', error: 'warn' };
@@ -23,11 +24,22 @@ export function register(router, ctx) {
     return { token, device, user: { id: user.id, username: user.username } };
   }, { auth: 'none', csrf: false });
 
+  // Which version this extension is, and which of the site's addresses it was built for.
+  const seen = (req, version = req.device.version) => {
+    const host = String(req.headers.host || '').toLowerCase();
+    if (version !== req.device.version || host !== req.device.host) repo.setDeviceSeen(req.user.id, req.device.id, { version, host });
+  };
+
   router.get('/api/ext/me', async (req) => {
-    const version = str(req.query.get('v'), 20);
-    if (version && version !== req.device.version) repo.setDeviceVersion(req.user.id, req.device.id, version);
+    seen(req, str(req.query.get('v'), 20) || req.device.version);
     return { user: { id: req.user.id, username: req.user.username }, device: req.device, entitlement: entitlement(req.user, repo.now()) };
   }, { auth: 'device' });
+
+  // For the extension's update check: the newest version, and the site's address
+  // (an extension downloaded before the site moved still talks to the old one).
+  router.get('/api/ext/app', async () => ({
+    name: cfg.appName, url: cfg.baseUrl, extensionVersion: EXTENSION_VERSION, chromeStoreUrl: cfg.chromeStoreUrl || null,
+  }), { auth: 'none' });
 
   router.post('/api/ext/unpair', async (req) => {
     repo.deleteDevice(req.user.id, req.device.id);
@@ -37,6 +49,7 @@ export function register(router, ctx) {
 
   // Your watchlist and the checkout flow of every store.
   router.get('/api/ext/items', async (req) => {
+    seen(req);
     const settings = { ...DEFAULT_ALERTS, ...(repo.getData(req.user.id, 'alerts', {}) || {}) };
     return {
       items: repo.listItems(req.user.id).map((it) => ({

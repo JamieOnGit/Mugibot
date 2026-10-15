@@ -34,6 +34,7 @@ export function register(router, ctx) {
       supportEmail: cfg.supportEmail,
       limits: cfg.limits,
       extensionVersion: EXTENSION_VERSION,
+      host: new URL(cfg.baseUrl).host,
       chromeStoreUrl: cfg.chromeStoreUrl,
       monitorIntervalSeconds: cfg.monitor.urlIntervalSeconds,
       browserIntervalSeconds: cfg.monitor.browserIntervalSeconds,

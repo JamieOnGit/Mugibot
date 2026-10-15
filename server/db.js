@@ -217,6 +217,8 @@ const MIGRATIONS = [
     created_at INTEGER NOT NULL
   );
   `,
+  // 2 — the address each connected extension talks to (an extension is built for one address)
+  `ALTER TABLE devices ADD COLUMN host TEXT NOT NULL DEFAULT '';`,
 ];
 
 export class Db {

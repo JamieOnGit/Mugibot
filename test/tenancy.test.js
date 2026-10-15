@@ -152,3 +152,22 @@ test('admins see accounts and memberships, not personal details', async () => {
   assert.ok(skus.some((s) => s.sku === '43818648' && s.watchers >= 2), 'SKU totals');
   assert.doesNotMatch(JSON.stringify(skus), /ash|misty|usr_/, 'not who');
 });
+
+test('the extension can check for updates, and each connected extension shows which address it was built for', async () => {
+  const app = await fetch(`${env.url}/api/ext/app`).then((r) => r.json());
+  assert.equal(app.url, env.url);
+  assert.match(app.extensionVersion, /^\d+\.\d+\.\d+$/);
+  const device = await Device.pair(env.url, ash, 'Old download');
+  await device.call('GET', '/api/ext/me?v=1.0.0');
+  let mine = (await ash.get('/api/devices')).body.devices.find((d) => d.name === 'Old download');
+  assert.equal(mine.version, '1.0.0');
+  assert.equal(mine.host, new URL(env.url).host);
+  // The same extension talking to another of the site's addresses (e.g. the old fly.dev one).
+  const other = new Device(env.url.replace('127.0.0.1', 'localhost'), device.token);
+  await other.call('GET', '/api/ext/items');
+  mine = (await ash.get('/api/devices')).body.devices.find((d) => d.name === 'Old download');
+  assert.equal(mine.host, `localhost:${new URL(env.url).port}`);
+  assert.equal((await misty.get('/api/devices')).body.devices.some((d) => d.name === 'Old download'), false);
+  const me = (await ash.get('/api/me')).body;
+  assert.equal(me.app.host, new URL(env.url).host, 'the dashboard knows its own address to compare');
+});

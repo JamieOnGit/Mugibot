@@ -16,10 +16,14 @@ const TABS = ['watch', 'checkout', 'discord', 'extension', 'membership', 'activi
 const loaders = {};
 
 function showTab() {
-  const tab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'watch';
+  const hash = location.hash.slice(1);
+  // #update (from the extension's Update button) is the Extension tab's update steps.
+  const tab = hash === 'update' ? 'extension' : TABS.includes(hash) ? hash : 'watch';
   $$('[data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== tab; });
   $$('.side a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
-  if (loaders[tab]) loaders[tab]().catch(showError);
+  if (loaders[tab]) {
+    loaders[tab]().then(() => { if (hash === 'update') $('#ext-update').scrollIntoView({ block: 'start' }); }).catch(showError);
+  }
 }
 window.addEventListener('hashchange', showTab);
 
@@ -112,7 +116,14 @@ async function renderExtStatus() {
   let level = 'warn';
   let text;
   if (!ext.installed) {
-    text = [h('b', {}, "The extension isn't in this browser. "), '⚡ Buy will open the product, but nothing will be added automatically. ', h('a', { href: '#extension' }, 'Install it')];
+    // A connected extension that talks to another of the site's addresses was downloaded
+    // before the site moved: it can't see this page, so it looks like it isn't installed.
+    const { devices } = await api('GET', '/api/devices').catch(() => ({ devices: [] }));
+    const recent = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    const old = devices.find((d) => d.host && d.host !== state.me.app.host && d.host !== location.host && d.lastSeenAt > recent);
+    text = old
+      ? [h('b', {}, `Your extension (${old.name}${old.version ? `, v${old.version}` : ''}) was downloaded for ${old.host}, so it can't work with this page. `), h('a', { href: '#update' }, 'Download it again from here')]
+      : [h('b', {}, "The extension isn't in this browser. "), '⚡ Buy will open the product, but nothing will be added automatically. ', h('a', { href: '#extension' }, 'Install it')];
   } else if (!ext.paired) {
     text = [h('b', {}, 'The extension is installed but not connected. '), h('button', { class: 'btn small primary', type: 'button' }, 'Connect this browser')];
   } else if (ext.userId !== me.id) {
@@ -123,7 +134,7 @@ async function renderExtStatus() {
     text = [h('b', {}, '✓ Extension connected. '), `⚡ Buy runs automatically in this browser. Version ${ext.version}.`];
     if (ext.version !== latest) {
       level = 'warn';
-      text.push(' ', h('b', {}, `Version ${latest} is available — `), h('a', { href: '#extension' }, 'update it'));
+      text.push(' ', h('b', {}, `Version ${latest} is available — `), h('a', { href: '#update' }, 'update it'));
     }
   }
   for (const id of ['#ext-status', '#ext-status-2']) {

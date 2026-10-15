@@ -200,6 +200,21 @@ test('Extension tab: install steps, browser checks switch, stores and their flow
   await page.waitForFunction(() => /On/.test(document.querySelector('#b-msg').textContent));
 });
 
+test('an extension downloaded for the old address: the dashboard says so and links to the update steps', async () => {
+  // Connect an extension that talks to another of the site's addresses (like mugibot-live.fly.dev after moving to mugibot.com).
+  const code = await page.evaluate(async () => (await (await fetch('/api/devices/pair-code', { method: 'POST', headers: { 'x-mugibot': '1' } })).json()).code);
+  const old = env.url.replace('127.0.0.1', 'localhost');
+  const paired = await fetch(`${old}/api/ext/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, name: 'Chrome on Mac', version: '1.0.0' }) }).then((r) => r.json());
+  await fetch(`${old}/api/ext/me?v=1.0.0`, { headers: { authorization: `Bearer ${paired.token}` } });
+  await page.goto(`${env.url}/app#extension`);
+  await page.waitForFunction(() => /was downloaded for/.test(document.querySelector('#ext-status-2').textContent));
+  assert.match(await page.textContent('#ext-status-2'), /Your extension \(Chrome on Mac, v1\.0\.0\) was downloaded for localhost:\d+, so it can't work with this page/);
+  await page.click('#ext-status-2 a[href="#update"]');
+  await page.locator('#ext-update').waitFor({ state: 'visible' });
+  assert.match(await page.textContent('#ext-update'), /Download the latest version/);
+  await page.evaluate(async (id) => fetch(`/api/devices/${id}`, { method: 'DELETE', headers: { 'x-mugibot': '1' } }), paired.device.id);
+});
+
 test('Membership tab: become a member through Whop, then it shows the membership', async () => {
   // A plain member account for this (admins are always active).
   const p2 = await browser.newPage({ viewport: { width: 1280, height: 900 } });

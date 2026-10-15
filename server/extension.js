@@ -18,10 +18,19 @@ const SHARED = ['html.js', 'extract.js', 'status.js'].map((f) => ({ name: `lib/$
 
 const isLocal = (u) => ['localhost', '127.0.0.1'].includes(new URL(u).hostname);
 
-export function extensionManifest(cfg) {
+/** Every address the site answers on (BASE_URL first, then EXTRA_ORIGINS). */
+export function appOrigins(cfg) {
+  const out = [];
+  for (const u of [cfg.baseUrl, ...(cfg.extraOrigins || [])]) {
+    try { out.push(new URL(u).origin); } catch { /* not an address */ }
+  }
+  return [...new Set(out)];
+}
+
+export function extensionManifest(cfg, { version } = {}) {
   const app = new URL(cfg.baseUrl);
   // Match patterns can't include a port; without one they match every port.
-  const appPattern = `${app.protocol}//${app.hostname}/*`;
+  const appPatterns = [...new Set(appOrigins(cfg).map((o) => { const u = new URL(o); return `${u.protocol}//${u.hostname}/*`; }))];
   const stores = [...new Set(RETAILER_DEFS.flatMap((r) => r.hosts).map((h) => `https://${h}/*`))];
   const local = isLocal(cfg.baseUrl) || (cfg.demoStoreUrl && isLocal(cfg.demoStoreUrl));
   // A server on your own computer also lets the extension work on the dummy store there.
@@ -31,11 +40,12 @@ export function extensionManifest(cfg) {
     dev.push(`${d.protocol}//${d.hostname}/*`);
   }
   const m = structuredClone(TEMPLATE);
+  if (version) m.version = version;
   m.name = cfg.appName === 'Mugibot' ? m.name : `${cfg.appName} Checkout`;
-  // The app (your account) and the stores (in-browser restock checks of your own SKUs).
-  m.host_permissions = [...new Set([appPattern, ...stores, ...dev])];
+  // The app (your account, on any of the site's addresses) and the stores (in-browser restock checks of your own SKUs).
+  m.host_permissions = [...new Set([...appPatterns, ...stores, ...dev])];
   m.content_scripts = [
-    { matches: [appPattern], js: ['bridge.js'], run_at: 'document_start' },
+    { matches: appPatterns, js: ['bridge.js'], run_at: 'document_start' },
     { matches: [...stores, ...dev], js: ['capture.js'], run_at: 'document_start' },
     { matches: [...stores, ...dev], js: ['flows.js', 'core.js', 'fill.js', 'content.js'], run_at: 'document_idle' },
     { matches: [...PAYMENT_HOSTS, ...stores, ...dev], js: ['flows.js', 'fill.js', 'frame.js'], run_at: 'document_idle', all_frames: true },
@@ -46,11 +56,11 @@ export function extensionManifest(cfg) {
 }
 
 export function extensionConfigJs(cfg) {
-  return `// Written by the ${cfg.appName} server — the account server this extension talks to.\nglobalThis.MGB_CONFIG = ${JSON.stringify({ server: cfg.baseUrl, appName: cfg.appName })};\n`;
+  return `// Written by the ${cfg.appName} server — the account server this extension talks to.\nglobalThis.MGB_CONFIG = ${JSON.stringify({ server: cfg.baseUrl, appName: cfg.appName, appOrigins: appOrigins(cfg) })};\n`;
 }
 
-/** All files of the extension built for this server: [{name, data}]. */
-export function extensionFiles(cfg) {
+/** All files of the extension built for this server: [{name, data}]. opts.version: build as another version (tests). */
+export function extensionFiles(cfg, opts = {}) {
   const files = [];
   for (const name of fs.readdirSync(EXTENSION_SRC).sort()) {
     const full = path.join(EXTENSION_SRC, name);
@@ -58,15 +68,15 @@ export function extensionFiles(cfg) {
     files.push({ name, data: fs.readFileSync(full) });
   }
   for (const f of SHARED) files.push({ name: f.name, data: fs.readFileSync(f.from) });
-  files.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(extensionManifest(cfg), null, 2)) });
+  files.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(extensionManifest(cfg, opts), null, 2)) });
   files.push({ name: 'config.js', data: Buffer.from(extensionConfigJs(cfg)) });
   return files;
 }
 
-export function writeExtension(cfg, outDir) {
+export function writeExtension(cfg, outDir, opts = {}) {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
-  for (const f of extensionFiles(cfg)) {
+  for (const f of extensionFiles(cfg, opts)) {
     fs.mkdirSync(path.dirname(path.join(outDir, f.name)), { recursive: true });
     fs.writeFileSync(path.join(outDir, f.name), f.data);
   }
@@ -75,7 +85,7 @@ export function writeExtension(cfg, outDir) {
 
 let cached = null;
 export function extensionZip(cfg) {
-  const key = `${cfg.baseUrl}|${cfg.demoStoreUrl}`;
+  const key = `${cfg.baseUrl}|${(cfg.extraOrigins || []).join(',')}|${cfg.demoStoreUrl}`;
   if (!cached || cached.key !== key) {
     const folder = `${cfg.appName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-extension`;
     cached = { key, zip: makeZip(extensionFiles(cfg).map((f) => ({ name: `${folder}/${f.name}`, data: f.data }))) };
