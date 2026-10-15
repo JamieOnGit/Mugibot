@@ -210,21 +210,30 @@ Open `https://mugibot-live.fly.dev`, sign up as `jamie`, and you're the admin.
 > encrypted with keys protected by it. If it's lost or changed, those details
 > can't be read any more (members would need to re-enter them).
 
-### 3c. Your own domain (recommended, do it before members install the extension)
+### 3c. Your own domain (optional)
+
+**No domain? Skip this step.** Mugibot works at `https://mugibot-live.fly.dev`.
+
+If you own a domain, or buy one (e.g. from VentraIP, Crazy Domains, Namecheap
+or Cloudflare), you can use an address on it instead, like
+`app.mugibot.com.au`. In both commands below, replace `app.yourdomain.com`
+with that address.
 
 ```bash
 fly certs add app.yourdomain.com
 ```
 
-Add the DNS records it prints at your domain registrar, then:
+It prints DNS records. Add them at the company you bought the domain from
+(their "DNS" settings). It can take up to an hour to start working. Then:
 
 ```bash
 fly secrets set BASE_URL=https://app.yourdomain.com EXTRA_ORIGINS=https://mugibot-live.fly.dev
 ```
 
-The address is built into the extension members download, so settle on it
-before you hand out the extension. If you change it later, members need to
-download the extension again.
+Decide on the address **before** you set up Discord and Whop and hand out the
+extension. All three use it: the Discord redirect, the Whop webhook, and the
+extension members download. If you change it later, you'll have to update
+the first two, and members will have to download the extension again.
 
 **Done when:** your live address shows the Mugibot landing page and you can log
 in as admin.
