@@ -35,6 +35,11 @@ export class Hub {
     return set.size;
   }
 
+  /** Everyone with a dashboard open right now. */
+  userIds() {
+    return [...this.clients.keys()];
+  }
+
   broadcastComment(text) {
     for (const set of this.clients.values()) for (const res of set) res.write(`: ${text}\n\n`);
   }

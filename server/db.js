@@ -219,6 +219,104 @@ const MIGRATIONS = [
   `,
   // 2 — the address each connected extension talks to (an extension is built for one address)
   `ALTER TABLE devices ADD COLUMN host TEXT NOT NULL DEFAULT '';`,
+  // 3 — the Monitor feed (docs/MONITORING.md): a shared product catalogue, the monitors admins
+  //     run on it, price history, a check log, the alerts it sent, and which channel gets what.
+  `
+  CREATE TABLE products (
+    id TEXT PRIMARY KEY,
+    store TEXT NOT NULL,
+    sku TEXT NOT NULL COLLATE NOCASE,
+    name TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',          -- '' until the product page is found
+    image TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'other', -- pokemon | onepiece | other
+    status TEXT NOT NULL DEFAULT 'pending',
+    status_source TEXT NOT NULL DEFAULT '', -- server | browser | manual
+    confirmed INTEGER NOT NULL DEFAULT 0,    -- 1 = the last check succeeded
+    price REAL,
+    previous_price REAL,
+    variant_id TEXT NOT NULL DEFAULT '',    -- Shopify: for the add-to-cart link
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    status_at INTEGER,
+    price_at INTEGER,
+    checked_at INTEGER,
+    last_ok_at INTEGER,
+    browser_next_at INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (store, sku)
+  );
+
+  CREATE TABLE monitors (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL UNIQUE REFERENCES products(id) ON DELETE CASCADE,
+    interval_seconds INTEGER,              -- NULL = the default
+    paused INTEGER NOT NULL DEFAULT 0,
+    kinds TEXT NOT NULL DEFAULT '["restock","listed","price_drop"]',
+    note TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE price_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    price REAL NOT NULL,
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX price_history_product ON price_history(product_id, at);
+
+  CREATE TABLE check_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id TEXT REFERENCES products(id) ON DELETE CASCADE,
+    store TEXT NOT NULL,
+    url TEXT NOT NULL,
+    source TEXT NOT NULL,                  -- server | browser
+    status TEXT NOT NULL,
+    price REAL,
+    ms INTEGER,
+    error TEXT NOT NULL DEFAULT '',
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX check_log_product ON check_log(product_id, at);
+  CREATE INDEX check_log_at ON check_log(at);
+
+  CREATE TABLE feed_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL,                    -- restock | listed | sold_out | price_drop | price_rise
+    store TEXT NOT NULL,
+    sku TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    image TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'other',
+    status TEXT NOT NULL DEFAULT '',
+    price REAL,
+    previous_price REAL,
+    manual INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '',
+    posted TEXT NOT NULL DEFAULT '[]',     -- the Discord channels it went to
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX feed_alerts_at ON feed_alerts(at);
+  CREATE INDEX feed_alerts_product ON feed_alerts(product_id, kind, at);
+
+  CREATE TABLE alert_routes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    role_id TEXT NOT NULL DEFAULT '',
+    categories TEXT NOT NULL DEFAULT '[]', -- [] = every category
+    stores TEXT NOT NULL DEFAULT '[]',     -- [] = every store
+    kinds TEXT NOT NULL DEFAULT '["restock","listed"]',
+    keywords TEXT NOT NULL DEFAULT '',     -- comma-separated; any must appear in the product name
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export class Db {

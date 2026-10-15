@@ -288,7 +288,7 @@ test('admin console registers the slash commands (no command line needed)', asyn
   await boss.post('/api/auth/login', { username: 'boss2', password: 'correct horse battery staple' });
   const r = await boss.post('/api/admin/integrations/discord-commands');
   assert.equal(r.status, 200, r.text);
-  assert.deepEqual(r.body.commands, ['/watch', '/unwatch', '/watchlist', '/buy', '/status', '/restock']);
+  assert.deepEqual(r.body.commands, ['/watch', '/unwatch', '/watchlist', '/buy', '/status', '/restock', '/monitor', '/restocks']);
   const member = new Client(env.url);
   await member.post('/api/auth/signup', { username: 'not-an-admin', password: 'correct horse battery staple', acceptTerms: true });
   assert.equal((await member.post('/api/admin/integrations/discord-commands')).status, 404);
@@ -297,7 +297,7 @@ test('admin console registers the slash commands (no command line needed)', asyn
 test('slash command definitions: store choices from the retailers, /restock admin-only', () => {
   const defs = commandDefinitions(env.app.retailers);
   const names = defs.map((d) => d.name);
-  assert.deepEqual(names, ['watch', 'unwatch', 'watchlist', 'buy', 'status', 'restock']);
+  assert.deepEqual(names, ['watch', 'unwatch', 'watchlist', 'buy', 'status', 'restock', 'monitor', 'restocks']);
   const store = defs[0].options.find((o) => o.name === 'store');
   assert.ok(store.choices.some((c) => c.value === 'kmart' && c.name === 'Kmart'));
   assert.ok(store.choices.some((c) => c.value === 'bigw'));

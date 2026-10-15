@@ -16,6 +16,7 @@
 // Every item keeps its own status, so each member gets their own alert when
 // their SKU goes from out of stock (or not listed) to in stock / pre-order.
 
+import { PRODUCTS_FOR_PAGE } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { DEFAULT_ALERTS } from '../schema.js';
 import { serialize } from '../retailers/index.js';
@@ -26,7 +27,6 @@ import { STATUS, isOrderable } from './status.js';
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
 const KNOWN = new Set(Object.values(STATUS));
-const ANNOUNCE_GAP_MS = 10 * 60 * 1000;
 
 const ITEMS_FOR_PAGE = `(c.kind = 'product' AND i.url = c.url) OR (c.kind = 'search' AND i.url = '' AND i.store = c.store AND i.sku = c.sku COLLATE NOCASE)`;
 
@@ -45,14 +45,14 @@ export function pathHasSku(url, sku) {
 }
 
 export class Monitor {
-  constructor({ cfg, repo, retailers, notifier, hub, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
-    Object.assign(this, { cfg, repo, retailers, notifier, hub, fetch: fetchImpl, now });
+  constructor({ cfg, repo, retailers, notifier, hub, catalog, feed, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
+    Object.assign(this, { cfg, repo, retailers, notifier, hub, catalog, feed, fetch: fetchImpl, now });
     this.db = repo.db;
     this.hostNext = new Map();
     this.inFlight = new Set();
-    this.announced = new Map();
     this.timer = null;
     this.ticks = 0;
+    this.lastTickAt = null;
   }
 
   start() {
@@ -70,6 +70,20 @@ export class Monitor {
     return this.cfg.monitor.urlIntervalSeconds * 1000;
   }
 
+  /**
+   * How often to check a page: the default for members' SKUs, or the shortest interval a
+   * monitor on it asks for (never below MONITOR_MIN_INTERVAL).
+   */
+  pageInterval(url) {
+    const m = this.db.get(`SELECT MIN(COALESCE(m.interval_seconds, :def)) AS s, COUNT(*) AS n FROM products p JOIN monitors m ON m.product_id = p.id, page_checks c
+      WHERE c.url = :url AND m.paused = 0 AND ${PRODUCTS_FOR_PAGE}`, { url, def: this.cfg.monitor.urlIntervalSeconds });
+    if (!m || !m.n) return this.interval;
+    // Members watching the same page still get it checked at the default interval.
+    const members = this.db.get(`SELECT 1 AS y FROM items i, page_checks c WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 LIMIT 1`, { url });
+    const s = members ? Math.min(m.s, this.cfg.monitor.urlIntervalSeconds) : m.s;
+    return Math.max(this.cfg.monitor.minIntervalSeconds, s) * 1000;
+  }
+
   get browserInterval() {
     return this.cfg.monitor.browserIntervalSeconds * 1000;
   }
@@ -79,15 +93,19 @@ export class Monitor {
   // -------------------------------------------------------------------------
   async tick() {
     const now = this.now();
+    this.lastTickAt = now;
     if (this.ticks++ % 300 === 0) {
-      // Forget pages nobody watches any more.
-      this.db.run("DELETE FROM page_checks WHERE kind = 'product' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = page_checks.url)");
-      this.db.run("DELETE FROM page_checks WHERE kind = 'search' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = '' AND i.store = page_checks.store AND i.sku = page_checks.sku COLLATE NOCASE)");
+      // Forget pages nobody watches any more (members' SKUs and monitors), and old log lines.
+      const monitored = `EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id, page_checks c WHERE c.url = page_checks.url AND ${PRODUCTS_FOR_PAGE})`;
+      this.db.run(`DELETE FROM page_checks WHERE kind = 'product' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = page_checks.url) AND NOT ${monitored}`);
+      this.db.run(`DELETE FROM page_checks WHERE kind = 'search' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = '' AND i.store = page_checks.store AND i.sku = page_checks.sku COLLATE NOCASE) AND NOT ${monitored}`);
+      this.catalog.prune(this.cfg.monitor.logDays);
     }
     const due = this.db.all(`SELECT c.* FROM page_checks c
-      WHERE c.next_check_at <= :now AND EXISTS (
+      WHERE c.next_check_at <= :now AND (EXISTS (
         SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
         WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
+        OR EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id WHERE m.paused = 0 AND ${PRODUCTS_FOR_PAGE}))
       ORDER BY c.next_check_at LIMIT 25`, { now });
     const jobs = [];
     for (const page of due) {
@@ -127,7 +145,13 @@ export class Monitor {
           if (p && Array.isArray(p.variants)) {
             const avail = p.variants.some((v) => v.available);
             const v = p.variants.find((x) => x.available) || p.variants[0];
-            return { status: avail ? STATUS.IN_STOCK : STATUS.OUT_OF_STOCK, title: p.title || null, price: v && typeof v.price === 'number' ? v.price / 100 : null, decidedBy: 'shopify-json' };
+            let image = p.featured_image || (Array.isArray(p.images) && p.images[0]) || null;
+            if (image && typeof image === 'object') image = image.src || null;
+            if (typeof image === 'string' && image.startsWith('//')) image = `https:${image}`;
+            return {
+              status: avail ? STATUS.IN_STOCK : STATUS.OUT_OF_STOCK, title: p.title || null, price: v && typeof v.price === 'number' ? v.price / 100 : null,
+              image: typeof image === 'string' ? image : null, variantId: v && v.id ? String(v.id) : null, decidedBy: 'shopify-json',
+            };
           }
         }
         if (res.status === 404) return { status: STATUS.NOT_FOUND };
@@ -142,7 +166,9 @@ export class Monitor {
     if (!res.ok) return { status: STATUS.ERROR, error: `HTTP ${res.status}` };
     const html = (await res.text()).slice(0, 3_000_000);
     const r = extractProduct(html, { url, hints: (retailer && retailer.hints) || {} });
-    return { status: r.status, title: r.title, price: r.price, decidedBy: r.decidedBy, error: r.blocked ? 'The store showed a bot check instead of the page' : '' };
+    let image = r.image || null;
+    try { if (image) image = new URL(image, url).href; } catch { image = null; }
+    return { status: r.status, title: r.title, price: r.price, image, decidedBy: r.decidedBy, error: r.blocked ? 'The store showed a bot check instead of the page' : '' };
   }
 
   /** Look for a SKU on the store's search page. */
@@ -170,21 +196,31 @@ export class Monitor {
     if (!prev) return null;
     const retailer = this.retailers.get(prev.store) || this.retailers.forUrl(url);
     let r;
+    const started = Date.now();
     try {
       r = prev.kind === 'search' ? await this.readSearch(prev, retailer) : await this.read(url, retailer);
     } catch (e) {
       r = { status: STATUS.ERROR, error: e instanceof BlockedUrlError ? e.message : e.name === 'TimeoutError' ? 'The store took too long to answer' : "Couldn't reach the store" };
     }
+    const ms = Date.now() - started;
     const now = this.now();
     const failed = FAILED.has(r.status);
     const failCount = failed ? prev.fail_count + 1 : 0;
-    const next = now + (failed ? Math.min(MAX_BACKOFF_MS, this.interval * 2 ** Math.min(failCount, 6)) : this.interval);
+    const interval = this.pageInterval(url);
+    const next = now + (failed ? Math.min(MAX_BACKOFF_MS, interval * 2 ** Math.min(failCount, 6)) : interval);
+    if (failed) this.cfg.log(JSON.stringify({ evt: 'monitor.check_failed', store: prev.store, url, status: r.status, error: r.error || '', fails: failCount, ms }));
     // A failed check keeps the last known stock status (so a block doesn't look like a restock later).
     const status = failed && prev.status && !FAILED.has(prev.status) && failCount < 3 ? prev.status : r.status;
     this.db.run(`UPDATE page_checks SET status = :status, title = COALESCE(:title, title), price = COALESCE(:price, price), signals = :sig,
       checked_at = :now, next_check_at = :next, fail_count = :fails, error = :err, found_url = COALESCE(:found, found_url) WHERE url = :url`,
     { url, status, title: r.title || null, price: r.price ?? null, sig: r.decidedBy || null, now, next, fails: failCount, err: r.error || '', found: r.foundUrl || null });
 
+    // The shared feed: every monitored product on this page.
+    for (const product of this.catalog.productsForPage(url)) {
+      if (prev.kind === 'search' && r.foundUrl) continue;
+      // What this check really saw: the feed keeps the last confirmed status itself.
+      await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
+    }
     if (prev.kind === 'search' && r.foundUrl) {
       this.resolveSku(prev.store, prev.sku, r.foundUrl);
       return { status: 'found', url: r.foundUrl };
@@ -203,6 +239,7 @@ export class Monitor {
     const waiting = this.db.all(`SELECT id, user_id FROM items WHERE ${where}`, { s: store, k: sku, u: userId });
     // Status stays "not listed" until the product page itself is read, so that read counts as "listed".
     this.db.run(`UPDATE items SET url = :url, status = 'not_listed', updated_at = :t, browser_next_at = 0 WHERE ${where}`, { url: foundUrl, s: store, k: sku, u: userId, t: this.now() });
+    if (!userId) this.catalog.resolveProduct(store, sku, foundUrl);
     this.repo.ensurePage(foundUrl, 'product', store, sku);
     this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url: foundUrl });
     for (const w of waiting) this.hub.publish(w.user_id, 'watch', { id: w.id, url: foundUrl });
@@ -256,16 +293,15 @@ export class Monitor {
     return true;
   }
 
-  /** Post a restock in the members' Discord channel (once per SKU per 10 minutes). */
+  /** An admin's 📣 SKU restocked: post it in the Discord channels (through the feed, with its cooldown). */
   async announce(item, info) {
-    const key = `${item.store}:${String(item.sku).toLowerCase()}`;
-    const last = this.announced.get(key) || 0;
-    if (this.now() - last < ANNOUNCE_GAP_MS) return false;
-    this.announced.set(key, this.now());
-    return this.notifier.announce(item, info);
+    const product = this.catalog.upsertProduct({ store: item.store, sku: item.sku, url: item.url, name: item.name });
+    const fresh = this.catalog.updateProduct(product.id, { status: info.status || STATUS.IN_STOCK, ...(typeof info.price === 'number' ? { price: info.price } : {}) });
+    const alert = await this.feed.alert(fresh, 'restock', { announce: true, note: info.note || '' });
+    return !!(alert && alert.posted.length);
   }
 
-  /** An admin says a SKU is in stock: ping everyone watching it (and the server channel). */
+  /** An admin says a SKU is in stock: ping everyone watching it (and the server channels). */
   async broadcastRestock({ store, sku, note = '', url = '', name = '' }) {
     const now = this.now();
     const items = this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id
@@ -274,10 +310,11 @@ export class Monitor {
     for (const item of items) {
       if (await this.alertRestock({ ...item, announce: 0 }, { status: STATUS.IN_STOCK, price: item.last_price, source: 'manual', manual: true, note })) pinged += 1;
     }
-    const sample = items[0] || { store, sku, name: name || sku, url, quantity: 1 };
-    this.announced.set(`${store}:${String(sku).toLowerCase()}`, now);
-    const posted = await this.notifier.announce({ ...sample, url: sample.url || url, name: name || sample.name }, { status: STATUS.IN_STOCK, manual: true, note });
-    return { pinged, watchers: items.length, posted };
+    const sample = items[0] || { store, sku, name: name || sku, url };
+    const product = this.catalog.upsertProduct({ store, sku, url: sample.url || url, name: name || sample.name });
+    const fresh = this.catalog.updateProduct(product.id, { status: STATUS.IN_STOCK, status_source: 'manual', status_at: now });
+    const alert = await this.feed.alert(fresh, 'restock', { manual: true, note });
+    return { pinged, watchers: items.length, posted: !!(alert && alert.posted.length) };
   }
 
   // -------------------------------------------------------------------------
@@ -306,7 +343,60 @@ export class Monitor {
       this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + this.browserInterval, id: it.id });
       if (out.length >= 5) break;
     }
+    // Admins' browsers also check the shared monitors at stores that refuse the server (Kmart).
+    // Members' browsers never do: only the server and admins can change what everyone sees.
+    if (user.role === 'admin' && out.length < 5) {
+      const stores = this.retailers.list.filter((r) => r.id !== 'other' && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
+        && (!this.retailers.settings(r).serverChecks || this.serverStruggles(r.id))).map((r) => r.id);
+      for (const p of this.catalog.browserTargets(stores, now, 5 - out.length)) {
+        const r = this.retailers.get(p.store);
+        const url = p.url || this.retailers.searchUrl(r, p.sku);
+        this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.browserInterval, id: p.id });
+        if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null }));
+      }
+    }
     return out;
+  }
+
+  /** Is the server being refused by this store lately? (Then admins' browsers check its monitors.) */
+  serverStruggles(store) {
+    const r = this.db.get(`SELECT COUNT(*) AS n, SUM(CASE WHEN status IN ('blocked', 'error') THEN 1 ELSE 0 END) AS bad FROM check_log
+      WHERE store = :s AND source = 'server' AND at >= :since`, { s: store, since: this.now() - 30 * 60 * 1000 });
+    return !!r && r.n > 0 && r.bad / r.n >= 0.5;
+  }
+
+  /** What an admin's browser saw on a monitored product. */
+  async browserProductResult(user, res) {
+    if (user.role !== 'admin') return false;
+    const product = this.catalog.productById(String(res.id).slice(2));
+    if (!product) return false;
+    const now = this.now();
+    const status = KNOWN.has(res.status) ? res.status : STATUS.ERROR;
+    const failed = FAILED.has(status);
+    this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id',
+      { n: now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 4) : this.browserInterval), id: product.id });
+    const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';
+    if (!product.url && found) {
+      let ok = false;
+      try {
+        const u = new URL(found);
+        const r = this.retailers.forUrl(u);
+        ok = /^https?:$/.test(u.protocol) && !!r && r.id === product.store && pathHasSku(found, product.sku);
+      } catch { ok = false; }
+      if (ok) {
+        this.catalog.resolveProduct(product.store, product.sku, found);
+        this.repo.ensurePage(found, 'product', product.store, product.sku);
+      }
+      return ok;
+    }
+    if (!product.url && status !== STATUS.NOT_LISTED && !failed) return false;
+    const price = typeof res.price === 'number' && Number.isFinite(res.price) && res.price >= 0 && res.price < 100000 ? res.price : null;
+    const image = typeof res.image === 'string' && /^https:\/\//.test(res.image) ? res.image.slice(0, 1000) : null;
+    await this.feed.applyCheck(product, {
+      status, price, image, title: typeof res.title === 'string' ? res.title.slice(0, 200) : null,
+      error: failed ? (typeof res.error === 'string' && res.error ? res.error.slice(0, 200) : "The admin's browser couldn't read the page") : '',
+    }, { source: 'browser', url: product.url || '' });
+    return true;
   }
 
   searchStruggling(item) {
@@ -322,6 +412,10 @@ export class Monitor {
     let applied = 0;
     for (const res of results) {
       if (!res || typeof res !== 'object') continue;
+      if (typeof res.id === 'string' && res.id.startsWith('p:')) {
+        if (await this.browserProductResult(user, res)) applied += 1;
+        continue;
+      }
       const row = this.db.get('SELECT * FROM items WHERE id = :id AND user_id = :u', { id: String(res.id || ''), u: user.id });
       if (!row || !row.monitor) continue;
       const status = KNOWN.has(res.status) ? res.status : STATUS.ERROR;

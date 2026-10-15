@@ -20,6 +20,8 @@ export default {
   productPath: /^(\/jbhifi)?\/products\/[^/?#.]+$/,
   // On Shopify the handle is the code, so the product link can be built from it.
   productPathFromSku: '/products/{sku}',
+  // Shopify cart link: the product straight into the cart (Shopify's own feature).
+  cartPath: '/cart/{variant}:{qty}',
   searchPath: '/search?query={q}',
   monitor: { server: true, browser: true },
   flow: {

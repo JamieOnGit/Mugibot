@@ -123,6 +123,13 @@ export function loadConfig(overrides = {}, env = process.env) {
       userAgent: o.userAgent ?? `Mugibot/1.0 (restock alerts; +${baseUrl})`,
       // Only for testing with a store on your own computer: lets the monitor fetch private addresses.
       allowPrivateHosts: o.allowPrivateHosts ?? env.MONITOR_ALLOW_PRIVATE === '1',
+      // The Monitor feed (docs/MONITORING.md): the shortest interval a monitor may ask for,
+      // the cooldown before one product alerts the same kind again, the smallest price change
+      // that counts, and how long the check log is kept.
+      minIntervalSeconds: o.minIntervalSeconds ?? int(env.MONITOR_MIN_INTERVAL, 20),
+      alertCooldownSeconds: o.alertCooldownSeconds ?? int(env.MONITOR_ALERT_COOLDOWN, 600),
+      priceChangePercent: o.priceChangePercent ?? Number(env.MONITOR_PRICE_CHANGE_PERCENT || 1),
+      logDays: o.logDays ?? int(env.MONITOR_LOG_DAYS, 7),
     },
     // Background jobs: Discord role sync, Whop re-checks, expired trials.
     jobsEnabled: o.jobsEnabled ?? env.JOBS_ENABLED !== '0',
