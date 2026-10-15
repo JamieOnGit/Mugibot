@@ -50,7 +50,10 @@ You need: a Discord server you own, and Mugibot's address (`BASE_URL`, e.g.
      For testing on your computer, also add `http://localhost:8080/auth/discord/callback`.
 4. **Bot** page:
    - **Reset Token** → copy. This is `DISCORD_BOT_TOKEN`. Discord shows it only once.
-   - **Public Bot**: turn **off**, so only you can add it to servers.
+   - **Public Bot**: turn **off**, so only you can add it to servers. First go
+     to the **Installation** page and set **Install Link** to **None** (Save
+     Changes). Otherwise Discord refuses with "Private application cannot have
+     a default authorization link".
    - **Privileged Gateway Intents**: leave all **off**. Mugibot doesn't need them.
 
 ---
