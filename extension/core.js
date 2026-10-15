@@ -15,6 +15,13 @@ var MGBQuick = (function () {
   // Panels from other scripts (TCGBot, TCGCopBot, Tampermonkey) — ignored, and flagged if present.
   var OTHER_PANELS = ['tcgcopbot-qc', 'tcgbot-qc', 'tcgbot-quick-checkout', 'kmart-upc-quick-checkout'];
   var FLOW_MAX_AGE = 90000;
+  // After pressing Add, the bag is only opened once the store shows the item went in.
+  // If the page didn't react at all by QUIET_MS, the press came before the page was
+  // ready: press once more. CONFIRM_MS: the bag count still hasn't moved — press once
+  // more; or, if the count can't be read, open the bag anyway.
+  var QUIET_MS = 5000;
+  var CONFIRM_MS = 6000;
+  var ADDED_RE = /\badded to (your )?(bag|cart|basket|trolley)\b|\bitems? added\b/i;
   var RECOMMENDATIONS = '[class*="recommend" i], [id*="recommend" i], [class*="carousel" i], [class*="related" i], [class*="upsell" i], [class*="product-card" i], [class*="product-tile" i], [class*="also-like" i]';
   var DRAWER = '[role="dialog"], [aria-modal="true"], [class*="drawer" i], [class*="minicart" i], [class*="mini-cart" i], [class*="mini-bag" i], [class*="minibag" i], [class*="flyout" i], [class*="modal" i], [class*="side-cart" i], [class*="added-to" i], [class*="addedto" i]';
   var EXPRESS = /paypal|afterpay|zip ?pay|\bzip\b|klarna|humm|latitude|apple ?pay|google ?pay|shop ?pay|express|continue shopping/i;
@@ -117,10 +124,14 @@ var MGBQuick = (function () {
     return /\b((secure |proceed to )?check ?out( now)?)\b/i.test(t) || /^continue to (details|checkout)$/i.test(t);
   }
 
-  /** inPopupOnly: only accept a Checkout button inside the "added to bag" popup / mini-bag. */
-  function findCheckout(R, inPopupOnly) {
+  /**
+   * inPopupOnly: only accept a Checkout button inside the "added to bag" popup / mini-bag.
+   * before: buttons already showing before Add was pressed (a mini-bag that's always there
+   * isn't the "added" popup).
+   */
+  function findCheckout(R, inPopupOnly, before) {
     if (inPopupOnly) {
-      return controls().find(function (el) { return el.closest(DRAWER) && isCheckoutLabel(R, textOf(el), 'popup'); }) || null;
+      return controls().find(function (el) { return !(before && before.has(el)) && el.closest(DRAWER) && isCheckoutLabel(R, textOf(el), 'popup'); }) || null;
     }
     var list = controls().filter(function (el) { return isCheckoutLabel(R, textOf(el), 'bag'); });
     return list.find(function (el) { return !el.closest('header, nav'); }) || list[0] || null;
@@ -136,6 +147,57 @@ var MGBQuick = (function () {
       return /\b(view|open|my|shopping|go to)?\s*(bag|basket|cart|trolley)\b/.test(l);
     });
     return list.find(function (el) { return el.closest(DRAWER); }) || list[0] || null;
+  }
+
+  /**
+   * How many items the store's bag link says are in the bag (e.g. "Bag, 2 items" or a
+   * badge inside the link). null when no bag link shows a number.
+   */
+  function bagCount() {
+    var best = null;
+    toArray(document.querySelectorAll('a, button, [role="button"]')).forEach(function (el) {
+      if (inAnyPanel(el) || !isVisible(el)) return;
+      var label = labelOf(el);
+      if (label.length > 60 || /add to|check ?out|continue/i.test(label)) return;
+      var href = el.getAttribute('href') || '';
+      var isBag = /\/(cart|bag|basket|trolley)(\/|$|\?|#)/i.test(href)
+        || (!!el.closest('header, nav') && /\b(bag|cart|basket|trolley)\b/i.test(label));
+      if (!isBag) return;
+      var m = label.replace(/\$\s?\d[\d,]*(\.\d+)?/g, ' ').match(/\b(\d{1,3})\b/);
+      if (m) best = Math.max(best || 0, parseInt(m[1], 10));
+    });
+    return best;
+  }
+
+  /** Counts changes the store makes to its page (not to our panel). */
+  function watchPage() {
+    var n = 0;
+    var obs = new MutationObserver(function (list) {
+      list.forEach(function (m) { if (!inAnyPanel(m.target.nodeType === 1 ? m.target : m.target.parentElement || document.body)) n++; });
+    });
+    obs.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+    return { changes: function () { return n; }, stop: function () { obs.disconnect(); } };
+  }
+
+  /** A visible "Added to bag" message (popup, drawer, toast). */
+  function addedMessage(R) {
+    var mine = part(R, 'added').confirm;
+    return toArray(document.querySelectorAll(DRAWER + ', [role="alert"], [role="status"], [aria-live]')).some(function (el) {
+      if (inAnyPanel(el) || !isVisible(el)) return false;
+      var t = (el.innerText || '').slice(0, 300);
+      return (mine && mine.length && any(mine, t)) || ADDED_RE.test(t);
+    });
+  }
+
+  /** On a page that has only just opened, give the store's own code time to start. */
+  async function settle(R) {
+    var P = part(R, 'product');
+    var ms = P.settleMs == null ? 800 : P.settleMs;
+    var end = Date.now() + 15000;
+    while (document.readyState !== 'complete' && Date.now() < end) await wait(100);
+    var nav = performance.getEntriesByType ? performance.getEntriesByType('navigation')[0] : null;
+    var left = (nav && nav.loadEventEnd ? nav.loadEventEnd : 0) + ms - performance.now();
+    if (left > 0) await wait(Math.min(left, ms));
   }
 
   function onBagPage(R) {
@@ -331,6 +393,22 @@ var MGBQuick = (function () {
    * Resolves to 'checkout' | 'bag' | 'error' | 'stopped' | 'timeout'.
    */
   async function run(opts) {
+    var page = { before: null, watch: null }; // what was on the page before Add was pressed, and changes since
+    try {
+      return await steps(opts, page);
+    } finally {
+      if (page.watch) page.watch.stop();
+    }
+  }
+
+  function pressAdd(page, add) {
+    page.before = new Set(controls());
+    if (page.watch) page.watch.stop();
+    page.watch = watchPage();
+    add.click();
+  }
+
+  async function steps(opts, page) {
     var R = opts.retailer || null;
     var store = opts.store;
     var setStatus = opts.setStatus || function () {};
@@ -362,7 +440,10 @@ var MGBQuick = (function () {
         if (msg) setStatus(msg.charAt(0).toUpperCase() + msg.slice(1) + '.');
       }
       var checkout = await waitForEl(function () { return findCheckout(R, true) || findCheckout(R, false); }, 3000);
-      if (!checkout) { setStatus("Couldn't find the Checkout button on this page."); return 'error'; }
+      if (!checkout) {
+        setStatus(bagCount() === 0 ? 'Your bag is empty — the item wasn\'t added. Go back and press Add to bag yourself.' : "Couldn't find the Checkout button on this page.");
+        return 'error';
+      }
       return goCheckout(checkout);
     }
 
@@ -380,6 +461,9 @@ var MGBQuick = (function () {
         report('error', 'Add button not available', product);
         return 'error';
       }
+      setStatus('Waiting for the page to finish loading…');
+      await settle(R);
+      add = findAddToBag(R) || add;
       var needBagQty = false;
       var note = '';
       if (qty > 1) {
@@ -393,9 +477,9 @@ var MGBQuick = (function () {
         add = findAddToBag(R) || add; // the site may have re-drawn the button
       }
       // Save before clicking in case the site changes page straight away.
-      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, qty: qty, needBagQty: needBagQty });
+      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, qty: qty, needBagQty: needBagQty, countBefore: bagCount() });
       setStatus('Adding to your bag' + (needBagQty ? ' (quantity set in the bag next)' : '') + '…' + note);
-      add.click();
+      pressAdd(page, add);
       report('add', 'Clicked "' + textOf(add).slice(0, 40) + '"' + (qty > 1 ? ' (quantity ' + qty + (needBagQty ? ', setting it in the bag' : '') + ')' : ''), product);
     }
 
@@ -420,21 +504,51 @@ var MGBQuick = (function () {
         var since = Date.now() - (flow.clickedAt || flow.startedAt);
         // Give the bag a moment to update before trusting any Checkout button.
         if (since > 500 && !flow.needBagQty) {
-          var popupCheckout = findCheckout(R, true);
+          var popupCheckout = findCheckout(R, true, page.before);
           if (popupCheckout) return goCheckout(popupCheckout);
         }
         if (onBagPage(R)) {
+          // The store opened its bag by itself after adding.
           store.save(Object.assign({}, flow, { stage: 'bag-clicked', bagAt: Date.now() }));
           continue;
         }
-        if (since > (flow.needBagQty ? 700 : 1500)) {
-          var bag = findBag(R);
-          if (bag) {
-            store.save(Object.assign({}, flow, { stage: 'bag-clicked', bagAt: Date.now() }));
-            setStatus(flow.needBagQty ? 'Opening your bag to set the quantity…' : 'Opening your bag…');
-            report('basket', 'Opening the bag', product);
-            bag.click();
+        // Only open the bag once the store shows it was added: its bag count went up, or
+        // an "Added to bag" message. Opening it sooner leaves the page before the add finishes.
+        var count = bagCount();
+        var went = count != null && (flow.countBefore == null ? count > 0 : count > flow.countBefore);
+        if (!flow.added && (went || addedMessage(R))) {
+          flow = Object.assign({}, flow, { added: true, addedAt: Date.now() });
+          store.save(flow);
+          setStatus('Added — going to checkout…');
+        }
+        // Nothing on the page reacted to the press (we watched it), or the count didn't move.
+        var ignored = !!page.watch && page.watch.changes() === 0 && since > QUIET_MS;
+        var unmoved = count != null && flow.countBefore != null && count === flow.countBefore && since > CONFIRM_MS;
+        if (flow.added || (!ignored && !unmoved && since > CONFIRM_MS)) {
+          // Added: give the store's "added" popup a moment to show its Checkout button first.
+          var waited = flow.addedAt ? Date.now() - flow.addedAt : since;
+          if (flow.needBagQty || waited > 1500) {
+            var bag = findBag(R);
+            if (bag) {
+              store.save(Object.assign({}, flow, { stage: 'bag-clicked', bagAt: Date.now() }));
+              setStatus(flow.needBagQty ? 'Opening your bag to set the quantity…' : 'Opening your bag…');
+              report('basket', 'Opening the bag', product);
+              bag.click();
+            }
           }
+        } else if (ignored || unmoved) {
+          var again = flow.retried ? null : findAddToBag(R);
+          if (!again) {
+            store.clear();
+            setStatus("The store didn't add it to your bag. Press Add to bag yourself, then Checkout.");
+            report('error', 'The store did not add it to the bag', product);
+            return 'error';
+          }
+          // The first press came before the page was ready: press once more.
+          store.save(Object.assign({}, flow, { retried: true, clickedAt: Date.now() }));
+          setStatus('The page wasn\'t ready — pressing "' + textOf(again).slice(0, 30) + '" again…');
+          report('add', 'Pressed "' + textOf(again).slice(0, 40) + '" again (the page wasn\'t ready)', product);
+          pressAdd(page, again);
         }
       } else if (flow.stage === 'bag-clicked') {
         if (flow.needBagQty) {
@@ -649,6 +763,7 @@ var MGBQuick = (function () {
     findAddToBag: findAddToBag,
     findCheckout: findCheckout,
     findBag: findBag,
+    bagCount: bagCount,
     onCheckoutPage: onCheckoutPage,
     onBagPage: onBagPage,
     productForPage: productForPage,

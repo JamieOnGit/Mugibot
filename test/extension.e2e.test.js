@@ -198,6 +198,53 @@ test('Kmart flow (verified): ⚡ Buy ×2 → popup Checkout → details → deli
   await dash.close();
 });
 
+test('Kmart on a fresh, slow page: never opens the bag before the item is in it', async () => {
+  // Like kmart.com.au straight after ⚡ Buy opens it: "Add to bag" shows before the
+  // page's code has started (pressing it does nothing yet), and adding takes a while.
+  const S = store.shop('kmart');
+  S.hydrateMs = 2500;
+  S.addDelayMs = 2500;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB', 2);
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 40000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.deepEqual(S.bagViews.filter((n) => n === 0), [], 'the bag was never opened while empty');
+  assert.equal(S.cart.length, 1);
+  assert.equal(S.cart[0].qty, 2, 'added once with quantity 2 (not twice)');
+  assert.equal(ordersPlaced(), 0);
+  await shop.close();
+  await dash.close();
+});
+
+test('Kmart with a slow "Add to bag" (4 s): waits for it, adds once, never opens the bag early', async () => {
+  const S = store.shop('kmart');
+  S.addDelayMs = 4000;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB', 2);
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 40000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.deepEqual(S.bagViews, [], 'went from the "Added to bag" popup straight to checkout');
+  assert.equal(S.cart[0].qty, 2, 'added once');
+  await shop.close();
+  await dash.close();
+});
+
+test("when the store won't add it, Mugibot says so and doesn't open an empty bag", async () => {
+  const S = store.shop('kmart');
+  S.refuseAdds = true;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB', 1);
+  await shop.waitForFunction(() => /didn't add it to your bag/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 40000 });
+  assert.match(shop.url(), /\/kmart\/product\//, 'still on the product page');
+  assert.deepEqual(S.bagViews, [], 'the bag was never opened');
+  assert.equal(S.cart.length, 0);
+  await shop.close();
+  await dash.close();
+});
+
 test('Kmart with the card in a payment-provider frame (Adyen-style)', async () => {
   store.state.cardInIframe = true;
   await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
