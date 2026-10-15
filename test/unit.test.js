@@ -265,6 +265,19 @@ test('extension built for a server on your computer also runs on the dummy store
   assert.deepEqual(content.exclude_matches, ['http://127.0.0.1:8080/*'], 'but not on the dashboard itself');
 });
 
+test('extension works on every address of the site (a new domain and the old fly.dev one)', () => {
+  const cfg = loadConfig({ baseUrl: 'https://mugibot.example', extraOrigins: 'https://mugibot-live.fly.dev', dataKey: crypto.randomBytes(32) });
+  const m = extensionManifest(cfg);
+  const bridge = m.content_scripts.find((c) => c.js.includes('bridge.js'));
+  assert.deepEqual(bridge.matches, ['https://mugibot.example/*', 'https://mugibot-live.fly.dev/*'], 'the dashboard sees the extension on either address');
+  assert.ok(m.host_permissions.includes('https://mugibot-live.fly.dev/*'));
+  const ctx = { globalThis: {} };
+  vm.runInNewContext(extensionFiles(cfg).find((f) => f.name === 'config.js').data.toString(), ctx);
+  assert.equal(ctx.globalThis.MGB_CONFIG.server, 'https://mugibot.example', 'talks to the main address');
+  assert.deepEqual([...ctx.globalThis.MGB_CONFIG.appOrigins], ['https://mugibot.example', 'https://mugibot-live.fly.dev']);
+  assert.equal(extensionManifest(cfg, { version: '0.9.0' }).version, '0.9.0', 'tests can build an older version');
+});
+
 test('production refuses to start without an encryption key', () => {
   assert.throws(() => loadConfig({ env: 'production' }, {}), /DATA_ENCRYPTION_KEY/);
   assert.throws(() => loadConfig({}, { DATA_ENCRYPTION_KEY: 'too-short' }), /32 bytes/);

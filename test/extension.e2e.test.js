@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { writeExtension } from '../server/extension.js';
+import { EXTENSION_VERSION, writeExtension } from '../server/extension.js';
 import { startMockStore } from '../devtools/mockstore.js';
 import { Client, PASSWORD, discordOpts, startApp, startFakeDiscord, waitFor } from './helpers.js';
 
@@ -435,4 +435,53 @@ test("switching this browser to another account: their own details, the first ac
   await popup.waitForSelector('#signed-out:not([hidden])');
   await popup.close();
   await page.close();
+});
+
+test('the extension shows an Update button when there is a newer version, or the site has moved address', async () => {
+  // Two copies: an older version for this site, and the current one downloaded for another address of it.
+  const oldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-old-'));
+  const movedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-moved-'));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-chrome2-'));
+  writeExtension(env.app.cfg, oldDir, { version: '1.0.0' });
+  const elsewhere = env.url.replace('127.0.0.1', 'localhost');
+  writeExtension({ ...env.app.cfg, baseUrl: elsewhere, extraOrigins: [] }, movedDir);
+  const ctx2 = await chromium.launchPersistentContext(profile, {
+    channel: 'chromium',
+    headless: true,
+    args: [`--disable-extensions-except=${oldDir},${movedDir}`, `--load-extension=${oldDir},${movedDir}`],
+  });
+  try {
+    const extIds = () => [...new Set(ctx2.serviceWorkers().map((w) => w.url()).filter((u) => u.startsWith('chrome-extension://')).map((u) => new URL(u).host))];
+    await waitFor(() => extIds().length >= 2, { message: 'both extensions started' });
+    // Tell them apart by the version in the popup's footer: the older copy is 1.0.0.
+    const ids = {};
+    const popup = await ctx2.newPage();
+    for (const id of extIds()) {
+      await popup.goto(`chrome-extension://${id}/popup.html`);
+      await popup.waitForFunction(() => document.getElementById('foot').textContent.length > 0);
+      ids[/^v1\.0\.0 /.test(await popup.textContent('#foot')) ? env.url : elsewhere] = id;
+    }
+
+    await popup.goto(`chrome-extension://${ids[env.url]}/popup.html`);
+    await popup.locator('#update').waitFor({ state: 'visible' });
+    assert.equal(await popup.textContent('#update-title'), `Update available: v${EXTENSION_VERSION}`);
+    assert.match(await popup.textContent('#update-text'), /You have v1\.0\.0/);
+    assert.equal(await popup.getAttribute('#update-go', 'href'), `${env.url}/app#update`, 'Update opens the update steps on the dashboard');
+
+    await popup.goto(`chrome-extension://${ids[elsewhere]}/popup.html`);
+    await popup.locator('#update').waitFor({ state: 'visible' });
+    assert.equal(await popup.textContent('#update-title'), `Mugibot has moved to ${new URL(env.url).host}`);
+    assert.match(await popup.textContent('#update-text'), new RegExp(`downloaded for ${new URL(elsewhere).host.replace('.', '\\.')}`));
+    assert.equal(await popup.getAttribute('#update-go', 'href'), `${env.url}/app#update`);
+
+    // Update opens the update steps on the dashboard (signed in, in the main browser).
+    const dash = await ctx.newPage();
+    await dash.goto(`${env.url}/app#update`);
+    await dash.locator('#ext-update').waitFor({ state: 'visible' });
+    assert.equal(await dash.locator('[data-panel="extension"]').isVisible(), true, 'on the Extension tab');
+    await dash.close();
+  } finally {
+    await ctx2.close();
+    for (const d of [oldDir, movedDir, profile]) fs.rmSync(d, { recursive: true, force: true });
+  }
 });
