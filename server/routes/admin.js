@@ -6,6 +6,7 @@
 import { sendResetLink } from './auth.js';
 import { serialize } from '../retailers/index.js';
 import { commandDefinitions } from './discord.js';
+import { EXTENSION_VERSION, isStoreUrl, storeUrl, storeZip } from '../extension.js';
 import { HttpError, bad, bool, num, str } from '../schema.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -198,6 +199,37 @@ export function register(router, ctx) {
     if (!ok) throw new HttpError(502, "Couldn't post — run the setup check above");
     return { ok: true };
   }, opts);
+
+  // --- The browser extension: Chrome Web Store link, package, who's on which copy -------
+  // Copies from the Chrome Web Store update by themselves; downloaded ones don't.
+  // docs/CHROME-WEB-STORE.md walks through publishing it.
+  const extensionInfo = () => {
+    const setByAdmin = repo.getSetting('chrome_store_url') || '';
+    return {
+      version: EXTENSION_VERSION,
+      storeUrl: storeUrl(cfg, repo) || null,
+      storeUrlFrom: setByAdmin ? 'admin' : cfg.chromeStoreUrl ? 'env' : null,
+      browsers: repo.extensionCounts(repo.now() - 30 * DAY).map((r) => ({ version: r.version || '?', source: r.source || 'unknown', count: r.n })),
+      packageUrl: '/api/admin/extension/webstore.zip',
+      autoPublish: 'GitHub Actions publishes each new version when it is merged, once the CWS_* settings are added (docs/CHROME-WEB-STORE.md)',
+    };
+  };
+  router.get('/api/admin/extension', async () => extensionInfo(), opts);
+
+  router.put('/api/admin/extension', async (req) => {
+    const url = str(req.body.storeUrl, 300).trim();
+    if (url && !isStoreUrl(url)) throw bad('Paste the listing link from the Chrome Web Store (https://chromewebstore.google.com/detail/…)');
+    repo.setSetting('chrome_store_url', url || null);
+    repo.audit(req.user.id, null, 'extension-store-link', url || 'removed');
+    return extensionInfo();
+  }, opts);
+
+  // The package to upload to the Chrome Web Store (built for this site's addresses).
+  router.get('/api/admin/extension/webstore.zip', async () => ({
+    $raw: storeZip(cfg),
+    type: 'application/zip',
+    headers: { 'content-disposition': `attachment; filename="${cfg.appName.toLowerCase()}-webstore-${EXTENSION_VERSION}.zip"` },
+  }), opts);
 
   // --- Whop memberships (including ones nobody has linked yet) -------------------------
   router.get('/api/admin/whop/memberships', async (req) => ({ memberships: repo.listMemberships({ unlinked: req.query.get('unlinked') === '1' }) }), opts);

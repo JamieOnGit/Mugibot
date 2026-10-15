@@ -377,29 +377,26 @@ Open `https://<your address>/admin`:
 - **To start:** members download it from their dashboard (**Extension** tab).
   It's already set up for your address. They load it with Developer mode, as in
   step 2. Write this up in a pinned message in your Discord.
-- **Chrome Web Store (recommended once you have members):**
-  `BASE_URL=https://mugibot.com npm run build:extension` makes
-  `dist/mugibot-extension.zip`. Upload it in the
-  [Chrome Web Store developer console](https://chrome.google.com/webstore/devconsole)
-  (one-time US$5 fee). In the listing:
-  - **Single purpose:** "Checkout assist and restock checks for the user's own Mugibot account."
-  - **Permissions:** `storage` (the connection and the encrypted card), `alarms`
-    (in-browser restock checks once a minute), the store sites (filling in
-    checkout and checking the member's own SKUs), your server (the member's
-    account).
-  - **Privacy:** declare personal info (address) and financial info (card,
-    stored on the device only).
-  - Once approved: `fly secrets set CHROME_STORE_URL=<the listing URL>` and the
-    dashboard shows an **Add to Chrome** button.
+- **Then, the Chrome Web Store (recommended): the extension updates itself.**
+  Downloaded copies never update by themselves: members have to replace them
+  for each new version. A copy from the Chrome Web Store updates by itself.
+  Publish it once as **Unlisted** (only people with the link can install it),
+  following **[CHROME-WEB-STORE.md](CHROME-WEB-STORE.md)**:
+  - Admin → Setup check → **Download the Chrome Web Store package**, upload it
+    (one-time US$5 developer fee), and submit it for review. The listing texts
+    and images are ready in that guide and in `docs/store/`.
+  - Once approved, paste the listing link in Admin → Setup check → **Chrome Web
+    Store link**. Every downloaded copy then asks its member to move over, once,
+    and stays out of the way when both are installed.
+  - Add the `CWS_*` settings to GitHub once, and every new version is published
+    automatically when it's merged.
 
-  Bump `version` in `extension/manifest.json` with every update. The dashboard
-  tells members when their copy is out of date.
-
-**Updates.** When there's a new version (or your site moves to a new address),
-the extension's toolbar icon shows **NEW** and its popup shows an **Update**
-button. It opens the dashboard's update steps: download, copy the new files
-over the old folder, then press **Reload** in the popup. Their saved card and
-connection stay. Copies from the Chrome Web Store update by themselves.
+**Updates, before the Chrome Web Store.** When there's a new version (or your
+site moves to a new address), the extension's toolbar icon shows **NEW** and
+its popup shows an **Update** button. It opens the dashboard's update steps:
+download, copy the new files over the old folder, then press **Reload** in the
+popup. Their saved card and connection stay. Copies from the Chrome Web Store
+update by themselves.
 
 ---
 
@@ -449,7 +446,7 @@ Set these with `fly secrets set NAME=value` (or in `.env` on your computer).
 | `TRIAL_DAYS` | | Free trial days for new accounts. Default `0` (no trial). |
 | `SIGNUPS_OPEN` | | `0` closes sign-ups. |
 | `EXTRA_ORIGINS` | | Other addresses of the same app (e.g. your fly.dev address). |
-| `CHROME_STORE_URL` | | The extension's Chrome Web Store page, once published. |
+| `CHROME_STORE_URL` | | The extension's Chrome Web Store page, once published. Easier: paste it in Admin → Setup check (that wins). |
 | `WHOP_API_KEY` | yes (for memberships) | Whop Account API key. |
 | `WHOP_PLAN_ID` | yes (for memberships) | `plan_…` of the A$19.99/month pricing option. |
 | `WHOP_PRODUCT_ID` | recommended | `prod_…`. Accepts every plan of the product. |

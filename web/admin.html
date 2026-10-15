@@ -97,6 +97,18 @@
         </div>
         <ul class="checks" id="d-checks"></ul>
       </div>
+      <form class="card" id="x-form">
+        <h2>Browser extension</h2>
+        <p class="muted small">Copies installed from the <b>Chrome Web Store</b> update by themselves. Copies downloaded from the dashboard have to be replaced by hand each time. To publish it (once), follow <code>docs/CHROME-WEB-STORE.md</code>: download the package below, upload it on the Chrome Web Store as <b>Unlisted</b>, then paste the listing link here. Every member's extension then asks them to move over, once.</p>
+        <ul class="checks" id="x-info"></ul>
+        <label for="x-store">Chrome Web Store link</label>
+        <input id="x-store" type="url" placeholder="https://chromewebstore.google.com/detail/…" autocomplete="off">
+        <div class="form-actions">
+          <button class="btn primary" type="submit">Save link</button>
+          <a class="btn" id="x-package" href="/api/admin/extension/webstore.zip" download>Download the Chrome Web Store package</a>
+          <span class="msg" id="x-msg"></span>
+        </div>
+      </form>
     </section>
 
     <section data-panel="whop" hidden>

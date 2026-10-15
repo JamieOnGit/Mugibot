@@ -4,7 +4,7 @@
 
 import { discordBotConfigured, discordOAuthConfigured } from '../config.js';
 import { entitlement } from '../entitlement.js';
-import { EXTENSION_VERSION } from '../extension.js';
+import { EXTENSION_VERSION, storeUrl } from '../extension.js';
 import { DUMMY_PRODUCTS, STARTER_ITEMS, dummyProductPath } from '../presets.js';
 import { DEFAULT_ALERTS, HttpError, alerts as checkAlerts, bad, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
 import { publicUser } from './auth.js';
@@ -35,7 +35,7 @@ export function register(router, ctx) {
       limits: cfg.limits,
       extensionVersion: EXTENSION_VERSION,
       host: new URL(cfg.baseUrl).host,
-      chromeStoreUrl: cfg.chromeStoreUrl,
+      chromeStoreUrl: storeUrl(cfg, repo),
       monitorIntervalSeconds: cfg.monitor.urlIntervalSeconds,
       browserIntervalSeconds: cfg.monitor.browserIntervalSeconds,
       demo: !!cfg.demoStoreUrl,

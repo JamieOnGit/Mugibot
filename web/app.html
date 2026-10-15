@@ -252,16 +252,33 @@
         <div class="notice" id="ext-status-2">Checking for the extension…</div>
         <div class="card">
           <h3>1. Install</h3>
-          <p id="store-install" hidden><a class="btn primary" id="store-link" href="#" target="_blank" rel="noopener">Add to Chrome</a></p>
-          <ol id="zip-install">
-            <li><a class="btn small" href="/download/extension.zip">Download the extension</a> and unzip it.</li>
-            <li>Open <code>chrome://extensions</code> (Edge: <code>edge://extensions</code>) and turn on <b>Developer mode</b>.</li>
-            <li>Click <b>Load unpacked</b> and choose the unzipped <code>…-extension</code> folder.</li>
-            <li>Come back to this page and reload it.</li>
-          </ol>
+          <div id="store-install" hidden>
+            <p><a class="btn primary" id="store-link" href="#" target="_blank" rel="noopener">Add to Chrome</a></p>
+            <p class="muted small">From the Chrome Web Store. It <b>updates itself</b>, so you never have to replace it. Works in Chrome, Edge and Brave. Then come back to this page and reload it.</p>
+          </div>
+          <details id="zip-install-box" open>
+            <summary id="zip-install-summary" hidden>Or download it instead (it won't update itself)</summary>
+            <ol id="zip-install">
+              <li><a class="btn small" href="/download/extension.zip">Download the extension</a> and unzip it.</li>
+              <li>Open <code>chrome://extensions</code> (Edge: <code>edge://extensions</code>) and turn on <b>Developer mode</b>.</li>
+              <li>Click <b>Load unpacked</b> and choose the unzipped <code>…-extension</code> folder.</li>
+              <li>Come back to this page and reload it.</li>
+            </ol>
+          </details>
         </div>
         <div class="card" id="ext-update">
           <h3>Updating the extension</h3>
+          <div id="update-store" hidden>
+            <p class="muted">The copy from the Chrome Web Store updates itself. If yours was downloaded from this page, move to it once:</p>
+            <ol>
+              <li><a class="btn small primary" id="update-store-link" href="#" target="_blank" rel="noopener">Add to Chrome</a> from the Chrome Web Store.</li>
+              <li>Come back here, reload the page and press <b>Connect this browser</b> below.</li>
+              <li>Save your card in it: click its icon → <b>Add your card</b>.</li>
+              <li>Remove the old copy: its icon shows <b>OLD</b>. Click it → <b>Remove this copy</b> (or at <code>chrome://extensions</code>, press <b>Remove</b> on the Mugibot that isn't from the Chrome Web Store).</li>
+            </ol>
+            <p class="muted small">From then on, new versions install themselves.</p>
+          </div>
+          <div id="update-zip">
           <p class="muted">When there's a new version, the extension's icon in Chrome's toolbar shows <b>NEW</b> and its popup has an <b>Update</b> button that brings you here. Updating like this keeps your saved card.</p>
           <ol>
             <li><a class="btn small primary" href="/download/extension.zip">Download the latest version</a> and unzip it.</li>
@@ -269,6 +286,7 @@
             <li>Click the Mugibot icon in Chrome's toolbar → <b>Reload</b> (or the ↻ on Mugibot at <code>chrome://extensions</code>). If it asks, press <b>Connect this browser</b> below.</li>
           </ol>
           <p class="muted small">Or start fresh: at <code>chrome://extensions</code> press <b>Remove</b> on Mugibot, then <b>Load unpacked</b> and choose the new folder, press <b>Connect this browser</b> below, and save your card again.</p>
+          </div>
         </div>
         <div class="card">
           <h3>2. Connect it to your account</h3>

@@ -607,3 +607,104 @@ test('the extension shows an Update button when there is a newer version, or the
     for (const d of [oldDir, movedDir, profile]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+test('Chrome Web Store copy: downloaded copies are asked to move to it, and with both installed only the store copy acts', async () => {
+  const listing = 'https://chromewebstore.google.com/detail/mugibot/abcdefghijklmnopabcdefghijklmnop';
+  env.app.repo.setSetting('chrome_store_url', listing);
+  // Two copies in one browser: one downloaded from the dashboard, and one "from the Chrome Web Store"
+  // (Chrome adds update_url to the manifest of store copies).
+  const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-dl-'));
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-store-'));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-chrome3-'));
+  writeExtension(env.app.cfg, dlDir);
+  writeExtension(env.app.cfg, storeDir);
+  const manifest = JSON.parse(fs.readFileSync(path.join(storeDir, 'manifest.json'), 'utf8'));
+  manifest.update_url = 'https://clients2.google.com/service/update2/crx';
+  fs.writeFileSync(path.join(storeDir, 'manifest.json'), JSON.stringify(manifest));
+  const ctx3 = await chromium.launchPersistentContext(profile, {
+    channel: 'chromium',
+    headless: true,
+    viewport: { width: 1200, height: 900 },
+    args: [`--disable-extensions-except=${dlDir},${storeDir}`, `--load-extension=${dlDir},${storeDir}`],
+  });
+  try {
+    const extIds = () => [...new Set(ctx3.serviceWorkers().map((w) => w.url()).filter((u) => u.startsWith('chrome-extension://')).map((u) => new URL(u).host))];
+    await waitFor(() => extIds().length >= 2, { message: 'both extensions started' });
+    const ids = {};
+    const popup = await ctx3.newPage();
+    for (const id of extIds()) {
+      await popup.goto(`chrome-extension://${id}/popup.html`);
+      await popup.waitForFunction(() => document.getElementById('foot').textContent.length > 0);
+      ids[/updates itself/.test(await popup.textContent('#foot')) ? 'store' : 'download'] = id;
+    }
+    assert.ok(ids.store && ids.download, 'told the two copies apart');
+
+    // The downloaded copy asks to move to the Chrome Web Store copy.
+    await popup.goto(`chrome-extension://${ids.download}/popup.html`);
+    await popup.locator('#update').waitFor({ state: 'visible' });
+    assert.equal(await popup.textContent('#update-title'), 'Get Mugibot from the Chrome Web Store');
+    assert.equal(await popup.getAttribute('#update-go', 'href'), listing);
+    assert.equal(await popup.isVisible('#remove-copy'), true);
+    assert.equal(await popup.isVisible('#reload'), false);
+    // The store copy: nothing to update by hand.
+    await popup.goto(`chrome-extension://${ids.store}/popup.html`);
+    await popup.waitForFunction(() => /updates itself/.test(document.getElementById('foot').textContent));
+    assert.equal(await popup.isVisible('#update'), false);
+    assert.equal(await popup.isVisible('#reload2'), false, 'no Reload for the store copy');
+
+    // Misty connected the downloaded copy before installing the store copy.
+    const page = await ctx3.newPage();
+    await page.goto(`${env.url}/login`);
+    await page.fill('#li-username', 'misty');
+    await page.fill('#li-password', PASSWORD);
+    await page.click('#login button[type=submit]');
+    await page.waitForURL(/\/app/);
+    const code = await page.evaluate(async () => (await (await fetch('/api/devices/pair-code', { method: 'POST', headers: { 'x-mugibot': '1' } })).json()).code);
+    const opts = await ctx3.newPage();
+    await opts.goto(`chrome-extension://${ids.download}/options.html`);
+    await opts.waitForSelector('#acct-out:not([hidden])');
+    await opts.fill('#pair-code', code);
+    await opts.click('#pair-form button[type=submit]');
+    await opts.waitForFunction(() => document.querySelector('#who').textContent === 'misty');
+    await opts.close();
+
+    // The dashboard talks to the store copy; the downloaded copy stays quiet and is pointed out.
+    await page.goto(`${env.url}/app#extension`);
+    await page.waitForFunction(() => /installed but not connected/.test(document.querySelector('#ext-status-2').textContent));
+    assert.equal(await page.evaluate(() => !!document.documentElement.dataset.mugibotStore), true);
+    assert.equal(await page.isVisible('#store-link'), true, '"Add to Chrome" from the Chrome Web Store');
+    assert.equal(await page.getAttribute('#store-link', 'href'), listing);
+    await page.click('#pair-now');
+    await page.waitForFunction(() => /Extension connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 10000 });
+    assert.match(await page.textContent('#ext-status-2'), /from the Chrome Web Store \(it updates itself\)/);
+    assert.match(await page.textContent('#ext-status-2'), /The old downloaded copy is still installed/);
+    const devices = env.app.repo.listDevices(env.app.repo.userByUsername('misty').id);
+    assert.deepEqual(devices.map((d) => d.source).sort(), ['download', 'store']);
+
+    // The downloaded copy knows it's the old one now.
+    await waitFor(async () => {
+      await popup.goto(`chrome-extension://${ids.download}/popup.html`);
+      await popup.waitForFunction(() => document.getElementById('foot').textContent.length > 0);
+      return (await popup.textContent('#update-title')) === 'This is an old copy';
+    }, { message: 'the downloaded copy retired' });
+    assert.equal(await popup.isVisible('#remove-copy'), true);
+
+    // ⚡ Buy with both copies installed: one panel, added once.
+    await page.goto(`${env.url}/app#watch`);
+    const row = page.locator('#w-list li', { hasText: 'Misty KO' });
+    await row.locator('input.qty').fill('2');
+    await row.locator('input.qty').dispatchEvent('change');
+    const [shop] = await Promise.all([ctx3.waitForEvent('page'), row.getByRole('button', { name: '⚡ Buy' }).click()]);
+    await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 30000 });
+    await shop.waitForFunction(() => /Ready — review everything/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 40000 });
+    assert.equal(await shop.locator('#mugibot-qc').count(), 1, 'one Mugibot panel');
+    const S = store.shop('kmart');
+    assert.equal(S.cart.length, 1);
+    assert.equal(S.cart[0].qty, 2, 'added once, with quantity 2');
+    assert.equal(ordersPlaced(), 0);
+  } finally {
+    env.app.repo.setSetting('chrome_store_url', null);
+    await ctx3.close();
+    for (const d of [dlDir, storeDir, profile]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});

@@ -50,6 +50,7 @@ community. Built on TCGCopBot's working Kmart flow.
 | Send a retailer's checkout flow (BIG W, Target…) or change one | [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md) |
 | Run the community day to day (admin console) | [docs/ADMIN.md](docs/ADMIN.md) |
 | Set up the Monitor feed: products, alert channels, schedules | [docs/MONITORING.md](docs/MONITORING.md) |
+| Put the extension on the Chrome Web Store, so it updates itself | [docs/CHROME-WEB-STORE.md](docs/CHROME-WEB-STORE.md) |
 
 ## Quick start (on your computer)
 
@@ -140,7 +141,7 @@ their account, and is filled in at every store's checkout.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 110 tests in about two minutes:
+the 116 tests in about two minutes:
 
 ```bash
 npm install
@@ -170,8 +171,11 @@ npm test
   card saved without a passphrase and still ready after the browser restarts,
   a card from an older version moving over, the card in a payment frame, card
   boxes in separate frames that only take real typing or key presses (like
-  Adyen's), and a clear message when the card can't go in, the Discord ⚡ Buy
-  button, in-browser checks, and two accounts in one browser.
+  Adyen's), and a clear message when the card can't go in, the Chrome Web Store
+  copy taking over from a downloaded one (never both acting at once), the
+  Discord ⚡ Buy button, in-browser checks, and two accounts in one browser.
+- **Chrome Web Store:** the package, the admin's listing link, and the GitHub
+  job that publishes each new version (against a fake Chrome Web Store API).
 - **Website in a browser:** every dashboard and admin tab, including the
   Monitor tab (live alerts, product page with price chart, alert rules, light
   and dark themes), phone-sized screens, no JavaScript errors.
@@ -192,7 +196,7 @@ server/
 web/                landing, sign-in, dashboard, ⚡ Buy page, admin console, terms, privacy
 extension/          the browser extension (built per server by server/extension.js)
 devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, JB Hi-Fi-style)
-scripts/            demo, mockstore, discord-commands, make-admin, reset-link, backup, build-extension
+scripts/            demo, mockstore, discord-commands, make-admin, reset-link, backup, build-extension, publish-extension
 docs/               setup guides
 test/               node:test + Playwright
 ```

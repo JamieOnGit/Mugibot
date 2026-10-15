@@ -147,6 +147,7 @@ footer.site a { color: var(--muted); }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; font-size: 14px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; overflow-wrap: anywhere; }
+.wrap-anywhere { overflow-wrap: anywhere; }
 .code-big { font: 700 30px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; background: var(--surface-2); border-radius: 10px; padding: 10px 16px; display: inline-block; }
 .feed { list-style: none; padding: 0; margin: 0; }
 .feed li { padding: 9px 2px; border-top: 1px solid var(--line); display: flex; gap: 10px; font-size: 14px; }

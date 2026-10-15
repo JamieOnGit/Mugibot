@@ -27,7 +27,7 @@ const toItem = (r) => r && ({
   status: r.status, statusSource: r.status_source, statusAt: r.status_at, checkedAt: r.checked_at, title: r.title || '',
   lastPrice: r.last_price, error: r.error || '', lastAlertAt: r.last_alert_at, createdAt: r.created_at,
 });
-const toDevice = (r) => r && ({ id: r.id, name: r.name, version: r.version, host: r.host || '', createdAt: r.created_at, lastSeenAt: r.last_seen_at });
+const toDevice = (r) => r && ({ id: r.id, name: r.name, version: r.version, host: r.host || '', source: r.source || '', createdAt: r.created_at, lastSeenAt: r.last_seen_at });
 
 function isUniqueError(e) {
   return /UNIQUE constraint failed/i.test(String(e && e.message));
@@ -373,10 +373,16 @@ export class Repo {
     return { device: toDevice(row), user };
   }
 
-  /** The extension's version and the address it talks to (it's built for one address). */
-  setDeviceSeen(userId, id, { version, host }) {
-    this.db.run('UPDATE devices SET version = :v, host = :h WHERE user_id = :u AND id = :id',
-      { v: String(version || '').slice(0, 20), h: String(host || '').toLowerCase().slice(0, 100), u: userId, id });
+  /** The extension's version, the address it talks to (it's built for one address), and where it came from. */
+  setDeviceSeen(userId, id, { version, host, source }) {
+    this.db.run('UPDATE devices SET version = :v, host = :h, source = :s WHERE user_id = :u AND id = :id',
+      { v: String(version || '').slice(0, 20), h: String(host || '').toLowerCase().slice(0, 100), s: ['store', 'download'].includes(source) ? source : '', u: userId, id });
+  }
+
+  /** Connected browsers seen in the last 30 days, by extension version and where it came from (admin). */
+  extensionCounts(since) {
+    return this.db.all(`SELECT version, source, COUNT(*) AS n FROM devices WHERE last_seen_at > :since
+      GROUP BY version, source ORDER BY n DESC`, { since });
   }
 
   listDevices(userId) {

@@ -239,7 +239,33 @@ loaders.integrations = async () => {
     row(!!d.restockChannelId, 'Restock channel (DISCORD_RESTOCK_CHANNEL_ID)', d.restockChannelId ? `${d.restockChannelId}${d.restockRoleId ? ` · pings role ${d.restockRoleId}` : ''}` : 'Not set'),
     row(d.commands, 'Slash commands (DISCORD_PUBLIC_KEY)', `Interactions endpoint URL: ${d.interactionsUrl} — then press "Register slash commands" below`),
     row(!!d.inviteUrl, 'Invite link (DISCORD_INVITE_URL, optional)', d.inviteUrl || 'Shown to members on their Discord tab')));
+  renderExtension(await api('GET', '/api/admin/extension'));
 };
+
+// --- Browser extension: Chrome Web Store link, package, who's on which copy ---------------
+const SOURCE = { store: 'Chrome Web Store (updates itself)', download: 'downloaded copy', unknown: 'older copy' };
+function renderExtension(x) {
+  const list = $('#x-info');
+  list.textContent = '';
+  const row = (ok, label, detail) => h('li', {}, h('span', { class: ok ? 'ok-mark' : 'no-mark' }, ok ? '✓' : '✕'), h('div', {}, h('b', {}, label), detail ? h('div', { class: 'muted small' }, detail) : null));
+  list.append(
+    row(true, `Current version: ${x.version}`, 'Bump "version" in extension/manifest.json with each change to the extension.'),
+    row(!!x.storeUrl, 'Chrome Web Store listing', x.storeUrl ? h('a', { href: x.storeUrl, target: '_blank', rel: 'noopener', class: 'wrap-anywhere' }, x.storeUrl) : 'Not published yet: members download the extension from their dashboard and replace it by hand to update.'),
+    row(!!x.storeUrl, 'Automatic updates', x.storeUrl ? x.autoPublish : 'Start with the Chrome Web Store listing.'),
+    row(true, "Members' browsers (last 30 days)", x.browsers.length ? x.browsers.map((b) => `${b.count} × v${b.version}, ${SOURCE[b.source] || b.source}`).join(' · ') : 'None connected yet'));
+  $('#x-store').value = x.storeUrl || '';
+}
+$('#x-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    renderExtension(await api('PUT', '/api/admin/extension', { storeUrl: $('#x-store').value }));
+    $('#x-msg').textContent = $('#x-store').value ? 'Saved. Members are asked to move to the Chrome Web Store copy.' : 'Removed.';
+    $('#x-msg').className = 'msg ok';
+  } catch (err) {
+    $('#x-msg').textContent = err.message;
+    $('#x-msg').className = 'msg err';
+  }
+});
 
 $('#d-check').addEventListener('click', async () => {
   $('#d-msg').textContent = 'Checking…';

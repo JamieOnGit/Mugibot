@@ -317,6 +317,9 @@ const MIGRATIONS = [
     created_at INTEGER NOT NULL
   );
   `,
+  // 4 — where each connected extension came from: 'store' (the Chrome Web Store copy,
+  //     which updates itself) or 'download' (a copy loaded from the dashboard's zip).
+  `ALTER TABLE devices ADD COLUMN source TEXT NOT NULL DEFAULT '';`,
 ];
 
 export class Db {
