@@ -508,9 +508,16 @@ async function renderCard() {
   if (!ext.paired || ext.userId !== state.me.user.id) { box.className = 'notice warn'; box.textContent = 'Connect the extension to your account (Extension tab) first.'; return; }
   const r = await askExtension('cardStatus');
   const c = r && r.card;
-  if (!c || !c.saved) { box.className = 'notice warn'; box.textContent = 'No card saved in this browser yet.'; return; }
-  box.className = `notice ${c.unlocked ? 'ok' : ''}`;
-  box.textContent = `${c.brand} •••• ${c.last4} · expires ${c.expMonth}/${String(c.expYear).slice(-2)} — ${c.unlocked ? 'unlocked, ready for checkout' : 'locked (unlock it from the extension icon before you buy)'}`;
+  $('#card-open').textContent = c && c.saved ? 'Card settings' : 'Add your card';
+  if (!c || !c.saved) { box.className = 'notice warn'; box.textContent = 'No card saved in this browser yet. Press Add your card: save it once and every ⚡ Buy fills it in.'; return; }
+  const label = `${c.brand} •••• ${c.last4} · expires ${c.expMonth}/${String(c.expYear).slice(-2)}`;
+  // Extensions from 1.3 keep the card ready ("ready"); older ones have to be unlocked after every browser restart.
+  const ready = c.ready || (c.ready === undefined && c.unlocked);
+  box.className = `notice ${ready ? 'ok' : 'warn'}`;
+  box.textContent = ready ? `${label} — ready: ⚡ Buy fills it in at checkout${c.hasCvc === false ? ' (no CVV saved: you type that in)' : ''}.`
+    : c.needsPassphrase ? `${label} — saved by an older version. Press Card settings and enter its passphrase once, and it stays ready from then on.`
+      : c.unreadable ? `${label} — couldn't be read in this browser. Press Card settings and save it again.`
+        : `${label} — locked. Update the extension (Extension tab) and the card stays ready without unlocking.`;
 }
 $('#card-open').addEventListener('click', async () => {
   const r = await askExtension('openCardSettings');

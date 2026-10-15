@@ -86,9 +86,9 @@ or change it first with `open -e .env` (Mac) / `notepad .env` (Windows).
 2. **Extension** tab → **Download the extension** → unzip it → open
    `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → choose
    the unzipped folder. Reload the dashboard and press **Connect this browser**.
-3. **Checkout details** tab: fill in your name and address. Then press **Open card
-   settings** and save a test card, e.g. `4242 4242 4242 4242`, `12/30`, `123`,
-   with a passphrase. Unlock it.
+3. **Checkout details** tab: fill in your name and address. Then press **Add your
+   card** and save a test card, e.g. `4242 4242 4242 4242`, `12/30`, `123`. It
+   stays ready for every ⚡ Buy, even after you restart the browser.
 4. **Watchlist** tab → **Add dummy-store test items**.
 5. Open the dummy store's control panel (http://localhost:5055), press
    **in_stock** on a sold-out product, and watch your watchlist ping. Press
@@ -129,7 +129,7 @@ Discord and Whop are optional for this. Add them later with the guides.
 | Delivery addresses | Server, **encrypted with a key unique to that member** | The member and their connected extension |
 | Alert settings, Discord tokens | Server, encrypted per member | The member |
 | Watchlist, activity, connected browsers | Server, tied to the member | The member (admins see totals only) |
-| **Payment card** | **Only in the member's browser extension**, encrypted with their passphrase | The member. It's never sent to the server. |
+| **Payment card** | **Only in the member's browser extension**, encrypted with a key that only that browser's extension has | The member. It's never sent to the server. |
 | Membership payments | Whop | The member; you, on Whop |
 
 Card numbers are deliberately not stored on the server. Keeping them there would
@@ -140,7 +140,7 @@ their account, and is filled in at every store's checkout.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 104 tests in about two minutes:
+the 107 tests in about two minutes:
 
 ```bash
 npm install
@@ -167,8 +167,10 @@ npm test
   that refuse servers; `/monitor` and `/restocks`.
 - **The real extension in Chromium:** Kmart (verified), BIG W, EB Games and
   JB Hi-Fi flows each stop at their final button with nothing pressed, plus the
-  card in a payment frame, the Discord ⚡ Buy button, in-browser checks, and two
-  accounts in one browser.
+  card saved without a passphrase and still ready after the browser restarts,
+  a card from an older version moving over, the card in a payment frame (and a
+  clear message when a payment frame can't be reached), the Discord ⚡ Buy
+  button, in-browser checks, and two accounts in one browser.
 - **Website in a browser:** every dashboard and admin tab, including the
   Monitor tab (live alerts, product page with price chart, alert rules, light
   and dark themes), phone-sized screens, no JavaScript errors.

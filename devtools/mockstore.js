@@ -91,6 +91,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     // Kmart: a signed-in store account pre-fills the details step.
     account: null,
     // Kmart: card boxes in a payment-provider frame (Adyen-style) instead of on the page.
+    // 'mystery': a frame whose boxes Mugibot can't recognise.
     cardInIframe: false,
     requests: [],
   };
@@ -217,7 +218,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   function kmartCheckout() {
     const acc = state.account || {};
     const v = (x) => esc(x || '');
-    const cardFields = state.cardInIframe ? cardBoxes('kmart')
+    const cardFields = state.cardInIframe ? cardBoxes(state.cardInIframe === 'mystery' ? 'mystery' : 'kmart')
       : `<p><b>Pay with credit or debit card</b></p>
          <label>Card number <input name="cardNumber" inputmode="numeric"></label>
          <label>Expiry <input name="cardExpiry" placeholder="MM/YY"></label>
@@ -338,7 +339,10 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/card-frame') {
       const style = u.searchParams.get('style') || 'stripe';
-      const fields = style === 'kmart'
+      const fields = style === 'mystery'
+        // A payment widget Mugibot doesn't recognise (no names or labels it knows).
+        ? '<input name="f1" inputmode="numeric"><input name="f2"><input name="f3" inputmode="numeric">'
+        : style === 'kmart'
         ? '<label>Card number <input name="encryptedCardNumber" aria-label="Card number" inputmode="numeric"></label><label>Expiry <input name="encryptedExpiryDate" aria-label="Expiry date" placeholder="MM/YY"></label><label>CVV <input name="encryptedSecurityCode" aria-label="CVV" inputmode="numeric"></label>'
         : style === 'shopify'
           ? '<input name="number" placeholder="Card number" inputmode="numeric"><input name="name" placeholder="Name on card"><input name="expiry" placeholder="Expiration date (MM / YY)"><input name="verification_value" placeholder="Security code" inputmode="numeric">'

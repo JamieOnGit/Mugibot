@@ -149,7 +149,7 @@ test('Checkout details: several addresses, a default, validated; the card stays 
   assert.equal(saved.defaultId, saved.profiles[1].id, 'Work is the default');
   await page.reload();
   await page.waitForFunction(() => document.querySelector('#p-1-address1') && document.querySelector('#p-1-address1').value === '9 Pitt St');
-  assert.match(await page.textContent('[data-panel="checkout"]'), /never stored on our servers/);
+  assert.match(await page.textContent('[data-panel="checkout"]'), /never sent to our servers/);
   assert.match(await page.textContent('#card-state'), /Install the extension/);
   // Items can deliver to a chosen address.
   await page.click('a[data-tab="watch"]');

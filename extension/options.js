@@ -1,4 +1,4 @@
-// Mugibot extension settings: account connection and the card vault.
+// Mugibot extension settings: account connection and the card saved for checkout.
 const $ = (id) => document.getElementById(id);
 const MGB_CONFIG = globalThis.MGB_CONFIG;
 const ask = (msg) => new Promise((resolve) => chrome.runtime.sendMessage(msg, (r) => resolve(chrome.runtime.lastError ? null : r)));
@@ -29,9 +29,9 @@ async function render() {
   $('card-form-title').innerHTML = c.saved ? '<b>Replace card</b>' : '<b>Save a card</b>';
   if (c.saved) {
     $('card-label').textContent = `${c.brand} •••• ${c.last4} · expires ${c.expMonth}/${String(c.expYear).slice(-2)}${c.hasCvc ? '' : ' · no CVV saved'}`;
-    $('card-state').textContent = c.unlocked ? (c.until ? `Unlocked until ${new Date(c.until).toLocaleTimeString()}` : 'Unlocked') : 'Locked';
-    $('unlock-form').hidden = !!c.unlocked;
-    $('lock').hidden = !c.unlocked;
+    $('card-state').textContent = c.ready ? 'Ready for checkout' : c.needsPassphrase ? 'Needs your old passphrase once' : "Couldn't be read — save it again";
+    $('card-state').className = `pill ${c.ready ? 'ok' : 'warn'}`;
+    $('upgrade-form').hidden = !c.needsPassphrase;
   }
 }
 
@@ -47,17 +47,11 @@ $('unpair').addEventListener('click', async () => {
   render();
 });
 
-$('unlock-form').addEventListener('submit', async (e) => {
+$('upgrade-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const r = await ask({ type: 'vault', action: 'unlock', passphrase: $('unlock-pass').value, hours: Number($('unlock-hours').value) });
-  $('unlock-pass').value = '';
-  say('saved-msg', r && r.error ? r.error : 'Unlocked.', !(r && r.error));
-  render();
-});
-
-$('lock').addEventListener('click', async () => {
-  await ask({ type: 'vault', action: 'lock' });
-  say('saved-msg', 'Locked.', true);
+  const r = await ask({ type: 'vault', action: 'upgrade', passphrase: $('upgrade-pass').value });
+  $('upgrade-pass').value = '';
+  say('saved-msg', r && r.error ? r.error : 'Done. Your card is ready for every checkout now.', !(r && r.error));
   render();
 });
 
@@ -70,16 +64,14 @@ $('remove').addEventListener('click', async () => {
 
 $('card-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  if ($('c-pass').value !== $('c-pass2').value) return say('card-msg', "The passphrases don't match", false);
   const r = await ask({
     type: 'vault',
     action: 'save',
     card: { number: $('c-number').value, name: $('c-name').value, expiry: $('c-exp').value, cvc: $('c-cvc').value },
-    passphrase: $('c-pass').value,
   });
-  if (r && r.error) return say('card-msg', r.error, false);
-  for (const id of ['c-number', 'c-name', 'c-exp', 'c-cvc', 'c-pass', 'c-pass2']) $(id).value = '';
-  say('card-msg', 'Saved. Unlock it above when you want checkout to fill it in.', true);
+  if (!r || r.error) return say('card-msg', (r && r.error) || "Couldn't save the card. Reload this page and try again.", false);
+  for (const id of ['c-number', 'c-name', 'c-exp', 'c-cvc']) $(id).value = '';
+  say('card-msg', 'Saved. ⚡ Buy will fill it in at checkout from now on.', true);
   render();
 });
 

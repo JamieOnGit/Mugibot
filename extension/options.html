@@ -26,23 +26,18 @@
     </div>
 
     <h2>Card for checkout</h2>
-    <p class="muted">Your card is saved <b>only in this browser</b>, encrypted with a passphrase you choose, and only for the account above. It is never sent to Mugibot's servers. When you start a checkout, the extension types it into the store's own card form — and you still press the final button yourself.</p>
+    <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close and reopen the browser. Nothing to unlock. It's saved <b>only in this browser</b>, encrypted, and only for the account above. It is never sent to Mugibot's servers. You still press the store's final button yourself. On a shared computer, remove it when you're done: anyone using this browser profile could check out with it.</p>
     <div class="card" id="card-none-acct" hidden><p class="muted">Connect your account first.</p></div>
 
     <div class="card" id="card-saved" hidden>
       <p><b id="card-label"></b> <span id="card-state" class="pill"></span></p>
-      <form id="unlock-form">
-        <label for="unlock-pass">Passphrase</label>
-        <input id="unlock-pass" type="password" autocomplete="current-password">
-        <label for="unlock-hours">Keep unlocked</label>
-        <select id="unlock-hours">
-          <option value="0">Until I close the browser</option>
-          <option value="1">For 1 hour</option>
-          <option value="12">For 12 hours</option>
-        </select>
-        <p><button class="primary" type="submit">Unlock card</button></p>
+      <form id="upgrade-form" hidden>
+        <p class="muted">This card was saved by an older version of Mugibot, with a passphrase. Enter that passphrase once and the card stays ready from now on. Forgotten it? Just save the card again below.</p>
+        <label for="upgrade-pass">Passphrase</label>
+        <input id="upgrade-pass" type="password" autocomplete="current-password">
+        <p><button class="primary" type="submit">Keep my card ready</button></p>
       </form>
-      <p class="row"><button id="lock" hidden>Lock now</button><button id="remove">Remove card from this browser</button></p>
+      <p class="row"><button id="remove">Remove card from this browser</button></p>
       <div id="saved-msg" class="msg"></div>
     </div>
 
@@ -54,13 +49,9 @@
       <input id="c-name" autocomplete="cc-name">
       <div class="row">
         <div><label for="c-exp">Expiry (MM/YY)</label><input id="c-exp" placeholder="MM/YY" autocomplete="cc-exp"></div>
-        <div><label for="c-cvc">CVV (optional)</label><input id="c-cvc" inputmode="numeric" autocomplete="cc-csc" maxlength="4"></div>
+        <div><label for="c-cvc">CVV</label><input id="c-cvc" inputmode="numeric" autocomplete="cc-csc" maxlength="4"></div>
       </div>
-      <p class="muted" style="font-size:12px">Leave CVV blank to type it in at checkout yourself.</p>
-      <label for="c-pass">Passphrase (at least 6 characters — not your account password)</label>
-      <input id="c-pass" type="password" autocomplete="new-password">
-      <label for="c-pass2">Passphrase again</label>
-      <input id="c-pass2" type="password" autocomplete="new-password">
+      <p class="muted" style="font-size:12px">With the CVV saved, checkout needs nothing typed. Leave it blank if you'd rather type it in yourself each time.</p>
       <p><button class="primary" type="submit">Save card</button></p>
       <div id="card-msg" class="msg"></div>
     </form>

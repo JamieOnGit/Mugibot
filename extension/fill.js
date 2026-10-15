@@ -47,6 +47,12 @@ var MGBFill = (function () {
     ['fullName', /full.?name|\bname\b|recipient/],
   ];
   var CARD_KINDS = ['cardNumber', 'cardCvc', 'cardExpMonth', 'cardExpYear', 'cardExpiry', 'cardName'];
+  // Why the card wasn't filled in (from the background worker).
+  var CARD_ISSUE = {
+    none: ' No card saved in Mugibot: type it in yourself, or save it in the extension (icon → Card settings) for next time.',
+    passphrase: ' Your card was saved by an older version of Mugibot: open the extension (icon → Card settings) once to keep it ready, or type it in yourself.',
+    unreadable: " Your saved card couldn't be read: save it again in the extension (icon → Card settings), or type it in yourself.",
+  };
 
   // Buttons
   var FINAL_RE = /^(check ?out securely|place (my |your )?order( (and|&) pay| now)?|place your order|pay now|pay securely( now)?|complete (my |your )?(order|purchase|payment)|submit (my )?(order|payment)|confirm (and|&) pay|confirm (my )?(order|purchase|payment)|pay \$?\s?[\d,.]+( now)?|buy now( and pay)?|buy now and pay|complete checkout)$/;
@@ -131,7 +137,7 @@ var MGBFill = (function () {
     return null;
   }
 
-  /** What we can type, from your delivery details and (if unlocked) your card. */
+  /** What we can type, from your delivery details and your saved card. */
   function fieldValues(profile, card) {
     profile = profile || {};
     var v = {
@@ -153,7 +159,10 @@ var MGBFill = (function () {
   function setNative(el, value) {
     var proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    // Like typing (payment widgets such as Adyen's read inputType/data).
+    var ev;
+    try { ev = new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(value) }); } catch (e) { ev = new Event('input', { bubbles: true }); }
+    el.dispatchEvent(ev);
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
@@ -351,7 +360,7 @@ var MGBFill = (function () {
   }
 
   /**
-   * Walk through the checkout. opts: { values, flow (the store's checkout flow), storeName, setStatus, report, isActive(), hasCard, cardLocked }
+   * Walk through the checkout. opts: { values, flow (the store's checkout flow), storeName, setStatus, report, isActive(), hasCard, cardIssue }
    * Resolves to 'ready' | 'needs_you' | 'stopped' | 'timeout' | 'done'.
    */
   async function assist(opts) {
@@ -412,7 +421,7 @@ var MGBFill = (function () {
         await wait(400); // let the last fields settle
         fillFields(document, opts.values, { flow: C });
         var fin = finals.find(function (b) { return !b.disabled; }) || finals[0];
-        var card = opts.cardLocked ? ' Your card is locked — unlock it in the Mugibot extension, or type it in yourself.' : !opts.hasCard ? '' : fill.missingCard ? ' Check the card details.' : '';
+        var card = opts.hasCard ? (fill.missingCard ? ' Type in anything still empty on the card (like the CVV).' : '') : (CARD_ISSUE[opts.cardIssue] || '');
         var msg = 'Ready — review everything and press "' + fin.text + '" yourself.' + card;
         highlight(fin.el, 'Mugibot: ' + msg);
         setStatus(msg);
@@ -443,6 +452,7 @@ var MGBFill = (function () {
   }
 
   return {
+    isVisible: isVisible,
     classifyButton: classifyButton,
     classifyField: classifyField,
     fieldValues: fieldValues,
