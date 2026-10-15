@@ -150,6 +150,11 @@ now** to do it immediately).
 fly auth login
 ```
 
+Then add a payment card to your Fly account: https://fly.io/dashboard → **Billing**.
+Fly won't start any machine until you do (the deploy fails with "We require
+your billing information"). Mugibot's one small machine and 1 GB volume cost
+about US$5 a month.
+
 ### 3b. Create the app, its storage and its secrets
 
 Every `fly` command from here on reads `fly.toml`, so run them **inside the
