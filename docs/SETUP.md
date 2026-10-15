@@ -268,6 +268,26 @@ in as admin.
 Run **one** machine only. The database is a single file on the volume. Fly
 snapshots volumes daily. For an extra backup, see [ADMIN.md](ADMIN.md#backups).
 
+### 3d. Automatic deploys from GitHub (no more Terminal)
+
+Once this is set up, every change merged into `main` on GitHub is tested and
+put live by itself. Pull requests show their test results before you merge.
+It's all done in the browser:
+
+1. **Make a Fly deploy token.** https://fly.io/dashboard → **mugibot-live** →
+   **Tokens** → **Create token** (a deploy token). Name it `github`, and copy the
+   whole token: it starts with `FlyV1`. (Or in Terminal, once:
+   `fly tokens create deploy -a mugibot-live`.)
+2. **Give it to GitHub.** Your repository on GitHub → **Settings** → **Secrets
+   and variables** → **Actions** → **New repository secret**. Name:
+   `FLY_API_TOKEN`. Secret: paste the token. **Add secret**.
+3. **Make `main` the default branch.** **Settings** → **General** → **Default
+   branch** → switch to `main` → **Update**.
+
+To put a change live: open its pull request on GitHub → **Merge pull request**.
+The **Actions** tab shows it being tested and deployed, which takes about 5
+minutes. If a deploy fails, nothing changes on the live site.
+
 ---
 
 ## 4. Discord

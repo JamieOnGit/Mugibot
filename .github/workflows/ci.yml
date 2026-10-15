@@ -1,0 +1,47 @@
+# Tests every pull request. When something is merged into main, tests it again
+# and puts it live on Fly.io — nothing to run on your own computer.
+# One-time setup: the FLY_API_TOKEN secret (docs/SETUP.md, "Automatic deploys").
+
+name: Test and deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium for the browser tests
+        run: npx playwright install --with-deps chromium
+      - run: npm test
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency: deploy-production
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    steps:
+      - name: Check the Fly token is set
+        if: env.FLY_API_TOKEN == ''
+        run: |
+          echo "::error::Add the FLY_API_TOKEN secret to deploy automatically (docs/SETUP.md, 'Automatic deploys')."
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only --ha=false
