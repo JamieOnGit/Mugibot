@@ -25,6 +25,7 @@
   const retailer = MGBFlows.forLocation(retailers, location);
   if (!retailer) return; // not a store Mugibot has a flow for (or a page outside it)
   const checkoutFlow = MGBFlows.part(retailer, 'checkout');
+  MGBFill.startFocusBroker(); // payment frames ask the page to focus their card boxes
 
   // The ⚡ Buy code: grabbed by capture.js as the page started loading (or still in the address).
   let goCode = null;
@@ -85,7 +86,8 @@
   async function checkCard() {
     const onPage = () => [...document.querySelectorAll('input, select')]
       .some((el) => /^card(Number|Expiry|ExpMonth)$/.test(MGBFill.classifyField(el, checkoutFlow) || '') && MGBFill.isVisible(el) && el.value);
-    for (let i = 0; i < 10; i++) {
+    // Payment frames type one box at a time (and try each box a few times), so give them a while.
+    for (let i = 0; i < 20; i++) {
       if (!assistFlag.active()) return;
       if (onPage()) return;
       const frames = (await ask({ type: 'cardFrames' })) || [];
@@ -99,7 +101,9 @@
       ? `Your card didn't go into the card boxes (from ${reached[0].host}). Type it in yourself.`
       : `Mugibot couldn't reach the card boxes on this page${others.length ? ` (the payment form may be in a frame from ${others.slice(0, 3).join(', ')})` : ''}. Type your card in yourself.`;
     panel.setNote(msg);
-    report('error', `Card not filled in at ${retailer.name}: ${msg}`, null);
+    // What happened in each box (no card details), for fixing the store's flow.
+    const detail = reached.map((f) => `${f.host}: ${f.detail || 'no detail'}`).join('; ');
+    report('error', `Card not filled in at ${retailer.name}: ${msg}${detail ? ` [${detail}; page focused: ${document.hasFocus() ? 'yes' : 'no'}; extension ${chrome.runtime.getManifest().version}]` : ''}`, null);
   }
 
   async function go(fresh, extra = {}) {

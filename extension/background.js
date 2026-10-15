@@ -322,7 +322,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!sender.tab || !sender.frameId) return null;
         let host = '';
         try { host = new URL(sender.url).host; } catch { /* keep empty */ }
-        await chrome.storage.session.set({ [frameKey(sender.tab.id, sender.frameId)]: { host, seen: Number(msg.seen) || 0, filled: Number(msg.filled) || 0, at: Date.now() } });
+        await chrome.storage.session.set({ [frameKey(sender.tab.id, sender.frameId)]: { host, seen: Number(msg.seen) || 0, filled: Number(msg.filled) || 0, detail: String(msg.detail || '').slice(0, 300), at: Date.now() } });
         return { ok: true };
       }
       case 'cardFrames':

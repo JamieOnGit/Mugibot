@@ -166,16 +166,109 @@ var MGBFill = (function () {
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  /** Type into a field like a person would (so formatters and frameworks notice). */
+  /** One key at a time: keydown, keypress, beforeinput, the character, input, keyup. */
+  function typeKeys(el, value) {
+    var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    String(value).split('').forEach(function (ch) {
+      var kc = ch === '/' ? 191 : ch === ' ' ? 32 : ch.toUpperCase().charCodeAt(0);
+      var code = /\d/.test(ch) ? 'Digit' + ch : ch === '/' ? 'Slash' : ch === ' ' ? 'Space' : /[a-z]/i.test(ch) ? 'Key' + ch.toUpperCase() : '';
+      var key = { key: ch, code: code, keyCode: kc, which: kc, charCode: ch.charCodeAt(0), bubbles: true, cancelable: true };
+      if (el.dispatchEvent(new KeyboardEvent('keydown', key)) && el.dispatchEvent(new KeyboardEvent('keypress', key))
+        && el.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: ch, bubbles: true, cancelable: true }))) {
+        setter.call(el, el.value + ch);
+        el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: ch, bubbles: true }));
+      }
+      el.dispatchEvent(new KeyboardEvent('keyup', key));
+    });
+  }
+
+  /**
+   * Type into a field like a person would (so formatters, frameworks and payment
+   * widgets notice). Returns how it went in: 'typed' (the browser's own typing),
+   * 'keys' (key by key), 'set', or 'rejected' (the field wouldn't keep it).
+   */
   function typeInto(el, value, kind) {
+    var digits = function (s) { return String(s || '').replace(/\D/g, ''); };
+    var took = function () { return /^card(Number|Cvc|Expiry|ExpMonth|ExpYear)$/.test(kind) ? digits(el.value) === digits(value) : el.value === value; };
     el.focus();
+    var how = 'typed';
     var ok = false;
     try { if (el.select) el.select(); ok = document.execCommand('insertText', false, value); } catch (e) { ok = false; }
-    var digits = function (s) { return String(s || '').replace(/\D/g, ''); };
-    var stuck = /^card(Number|Cvc|Expiry|ExpMonth|ExpYear)$/.test(kind) ? digits(el.value) === digits(value) : el.value === value;
-    if (!ok || !stuck) setNative(el, value);
+    if (!ok || !took()) {
+      how = 'keys';
+      if (el.value) setNative(el, '');
+      if (el.tagName === 'INPUT') typeKeys(el, value);
+    }
+    if (!took()) { how = 'set'; setNative(el, value); }
+    if (!took()) how = 'rejected';
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+    return how;
+  }
+
+  // --- focus for payment frames ---------------------------------------------
+  // Card boxes in a payment provider's frame (Kmart's, for one) only keep what's
+  // typed into a focused box. A frame can't always focus itself, so it asks the
+  // page above to focus it (which asks its own parent first, if it's a frame too),
+  // one box at a time. Messages carry no card details.
+  var FOCUS = 'mugibot-focus:';
+
+  /** On a store page or a frame that holds other frames: focus a child frame when it asks. */
+  function startFocusBroker() {
+    if (window.__mugibotFocusBroker) return;
+    window.__mugibotFocusBroker = true;
+    var queue = [];
+    var current = null;
+    function frameOf(win) {
+      return toArray(document.querySelectorAll('iframe, frame')).find(function (f) { return f.contentWindow === win; });
+    }
+    function finish(job) {
+      if (current !== job) return;
+      clearTimeout(job.timer);
+      current = null;
+      if (job.release) job.release();
+      next();
+    }
+    function next() {
+      if (current || !queue.length) return;
+      var job = current = queue.shift();
+      job.timer = setTimeout(function () { finish(job); }, 6000); // a frame that never says it's done
+      requestFocus().then(function (release) { // our own frame first, if we're one
+        job.release = release;
+        try { job.frame.focus(); } catch (e) { /* ignore */ }
+        job.source.postMessage(FOCUS + 'go:' + job.id, '*');
+      });
+    }
+    window.addEventListener('message', function (e) {
+      if (typeof e.data !== 'string' || e.data.indexOf(FOCUS) !== 0 || !e.source) return;
+      var parts = e.data.slice(FOCUS.length).split(':');
+      if (parts[0] === 'ask') {
+        var frame = frameOf(e.source);
+        if (frame) { queue.push({ id: parts[1], source: e.source, frame: frame }); next(); }
+      } else if (parts[0] === 'done' && current && current.id === parts[1] && current.source === e.source) {
+        finish(current);
+      }
+    });
+  }
+
+  /** In a frame: have the page above focus this frame. Resolves to release(), to call when done typing. */
+  function requestFocus() {
+    if (window.top === window.self) return Promise.resolve(function () {});
+    return new Promise(function (resolve) {
+      var id = Math.random().toString(36).slice(2);
+      var settled = false;
+      var release = function () { try { window.parent.postMessage(FOCUS + 'done:' + id, '*'); } catch (e) { /* ignore */ } };
+      var settle = function () {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener('message', onMessage);
+        resolve(release);
+      };
+      var onMessage = function (e) { if (e.source === window.parent && e.data === FOCUS + 'go:' + id) settle(); };
+      window.addEventListener('message', onMessage);
+      try { window.parent.postMessage(FOCUS + 'ask:' + id, '*'); } catch (e) { /* ignore */ }
+      setTimeout(settle, 2000); // nobody above to help: type anyway
+    });
   }
 
   function chooseOption(kind, select, values) {
@@ -229,7 +322,8 @@ var MGBFill = (function () {
   }
 
   /**
-   * Fill empty, visible fields in `root`. opts.onlyCard: card fields only. opts.flow: the store's checkout flow.
+   * Fill empty, visible fields in `root`. opts.onlyCard: card fields only. opts.selectsOnly: drop-downs only.
+   * opts.flow: the store's checkout flow.
    * Returns { filled: [...kinds], kinds: {kind: true}, cardFieldsSeen, missingCard }.
    */
   function fillFields(root, values, opts) {
@@ -255,6 +349,7 @@ var MGBFill = (function () {
       if (isCard) out.cardFieldsSeen += 1;
       if (opts.onlyCard && !isCard) return;
       if (kind === 'addressLookup') return;
+      if (opts.selectsOnly && el.tagName !== 'SELECT') return;
       if (el.tagName === 'SELECT') {
         if (!placeholderSelected(el)) return;
         var v = chooseOption(kind, el, values);
@@ -453,6 +548,9 @@ var MGBFill = (function () {
 
   return {
     isVisible: isVisible,
+    typeInto: typeInto,
+    startFocusBroker: startFocusBroker,
+    requestFocus: requestFocus,
     classifyButton: classifyButton,
     classifyField: classifyField,
     fieldValues: fieldValues,

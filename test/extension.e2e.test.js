@@ -301,11 +301,68 @@ test('Kmart with the card in a payment-provider frame (Adyen-style)', async () =
   const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
   await waitReady(shop, 'Checkout securely');
   await waitFor(async () => (await cardFrame(shop).inputValue('input[name=encryptedCardNumber]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
+  // One box at a time: wait for the last one.
+  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=encryptedSecurityCode]')) === '123', { message: 'CVV in the frame' });
   assert.equal(await cardFrame(shop).inputValue('input[name=encryptedExpiryDate]'), '07 / 29');
-  assert.equal(await cardFrame(shop).inputValue('input[name=encryptedSecurityCode]'), '123');
   assert.equal(ordersPlaced(), 0);
   await shop.waitForTimeout(11000);
   assert.doesNotMatch(await panel(shop).textContent(), /couldn't reach the card boxes/, 'no false alarm when the frame took the card');
+  await shop.close();
+  await dash.close();
+});
+
+test('Kmart with Adyen-style secured fields (one frame per box, real typing only): the card still goes in', async () => {
+  store.state.cardInIframe = 'strict';
+  await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
+  await waitReady(shop, 'Checkout securely');
+  const box = (field) => shop.frames().find((f) => f.url().includes(`field=${field}`));
+  await waitFor(async () => (await box('number').inputValue('input')) === '4242 4242 4242 4242', { timeout: 20000, message: 'card number typed into its box' });
+  await waitFor(async () => (await box('cvc').inputValue('input')) === '123', { timeout: 10000, message: 'CVV typed into its box' });
+  assert.equal(await box('expiry').inputValue('input'), '07/29');
+  // Each box kept what was typed (it undoes anything that isn't real typing).
+  for (const [field, want] of [['number', '4242 4242 4242 4242'], ['expiry', '07/29'], ['cvc', '123']]) {
+    assert.equal(await box(field).evaluate(() => typed), want, `${field} accepted as typing`);
+  }
+  await shop.waitForTimeout(11000);
+  assert.doesNotMatch(await panel(shop).textContent(), /card boxes/, 'no "didn\'t go in" message');
+  assert.equal(ordersPlaced(), 0);
+  await shop.close();
+  await dash.close();
+});
+
+test('Kmart with card boxes that only take key presses: typed key by key', async () => {
+  store.state.cardInIframe = 'keys';
+  await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
+  await waitReady(shop, 'Checkout securely');
+  const box = (field) => shop.frames().find((f) => f.url().includes(`field=${field}`));
+  await waitFor(async () => (await box('number').evaluate(() => typed)) === '4242 4242 4242 4242', { timeout: 20000, message: 'card number typed key by key' });
+  await waitFor(async () => (await box('cvc').evaluate(() => typed)) === '123', { timeout: 10000, message: 'CVV typed key by key' });
+  assert.equal(await box('expiry').evaluate(() => typed), '07/29');
+  assert.equal(ordersPlaced(), 0);
+  await shop.close();
+  await dash.close();
+});
+
+test("Kmart with card boxes that won't take the card: tries each box 3 times, then says so, with what happened in each box", async () => {
+  store.state.cardInIframe = 'never';
+  await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
+  await waitReady(shop, 'Checkout securely');
+  await shop.waitForFunction(() => /Your card didn't go into the card boxes \(from [\w.-]+:\d+\)\. Type it in yourself/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 40000 });
+  const userId = env.app.repo.userByUsername('ash').id;
+  const ev = await waitFor(() => env.app.repo.listEvents(userId).find((e) => /Card not filled in at Kmart/.test(e.message)), { message: 'reported in Activity' });
+  assert.match(ev.message, /cardNumber empty \(rejected\)/);
+  assert.match(ev.message, /extension \d+\.\d+\.\d+/);
+  assert.doesNotMatch(ev.message, /4242/, 'no card details in the report');
+  const box = shop.frames().find((f) => f.url().includes('field=number'));
+  await shop.waitForTimeout(4000);
+  assert.ok(await box.evaluate(() => attempts) <= 3, 'stops taking the focus after 3 tries');
+  assert.equal(ordersPlaced(), 0);
   await shop.close();
   await dash.close();
 });
@@ -338,7 +395,7 @@ test('BIG W flow (beta): quantity dropdown → drawer "View cart" → "Proceed t
   assert.deepEqual({ ...S.data.address, addressSearch: undefined }, { firstName: 'Ash', lastName: 'Ketchum', phone: '0412345678', street: PROFILE_A.address1, unit: PROFILE_A.address2, suburb: 'Sydney', state: 'NSW', postcode: '2000', addressSearch: undefined });
   assert.equal(await shop.getAttribute('#b-cc', 'aria-pressed'), 'false', 'never Click & Collect');
   await waitFor(async () => (await cardFrame(shop).inputValue('input[name=cardnumber]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
-  assert.equal(await cardFrame(shop).inputValue('input[name=cvc]'), '123');
+  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=cvc]')) === '123', { message: 'CVV in the frame' });
   assert.match(await panel(shop).textContent(), /BIG W \(dummy store\) · beta flow/);
   if (shots) await shop.screenshot({ path: path.join(shots, 'bigw-ready.png') });
   await shop.waitForTimeout(1000);
@@ -383,7 +440,7 @@ test('JB Hi-Fi flow (beta, Shopify): quantity → add → cart → "Check out" �
   assert.equal(await shop.inputValue('select[name=zone]'), 'NSW');
   assert.equal(await shop.inputValue('input[name=postalCode]'), '2000');
   await waitFor(async () => (await cardFrame(shop).inputValue('input[name=number]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
-  assert.equal(await cardFrame(shop).inputValue('input[name=name]'), 'Ash Ketchum');
+  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=name]')) === 'Ash Ketchum', { message: 'name on card in the frame' });
   await shop.waitForTimeout(800);
   assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
   await shop.close();
