@@ -92,6 +92,9 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     account: null,
     // Kmart: card boxes in a payment-provider frame (Adyen-style) instead of on the page.
     // 'mystery': a frame whose boxes Mugibot can't recognise.
+    // 'strict': one frame per box (like Adyen), ignoring anything that isn't real typing.
+    // 'keys': one frame per box, taking key presses only.
+    // 'never': one frame per box, taking nothing.
     cardInIframe: false,
     requests: [],
   };
@@ -215,10 +218,17 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     return `<iframe id="card" src="${cardOrigin}/card-frame?style=${style}" width="360" height="190" style="border:1px solid #ccc"></iframe>`;
   }
 
+  // Like Adyen's secured fields: one frame per box, each ignoring anything that isn't real typing.
+  // mode 'keys': boxes that build their value from key presses only (like masked-input widgets).
+  function strictCardBoxes(mode) {
+    const box = (field, label) => `<label>${label}<br><iframe class="sf" data-field="${field}" src="${cardOrigin}/card-frame?style=strict&mode=${mode}&field=${field}" width="300" height="44" style="border:1px solid #ccc"></iframe></label>`;
+    return `<p><b>Pay with credit or debit card</b></p>${box('number', 'Card number')}${box('expiry', 'Expiry')}${box('cvc', 'CVV')}`;
+  }
+
   function kmartCheckout() {
     const acc = state.account || {};
     const v = (x) => esc(x || '');
-    const cardFields = state.cardInIframe ? cardBoxes(state.cardInIframe === 'mystery' ? 'mystery' : 'kmart')
+    const cardFields = ['strict', 'keys', 'never'].includes(state.cardInIframe) ? strictCardBoxes(state.cardInIframe) : state.cardInIframe ? cardBoxes(state.cardInIframe === 'mystery' ? 'mystery' : 'kmart')
       : `<p><b>Pay with credit or debit card</b></p>
          <label>Card number <input name="cardNumber" inputmode="numeric"></label>
          <label>Expiry <input name="cardExpiry" placeholder="MM/YY"></label>
@@ -339,6 +349,42 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/card-frame') {
       const style = u.searchParams.get('style') || 'stripe';
+      if (style === 'strict') {
+        const f = { number: ['encryptedCardNumber', 'cc-number', 'Card number field', '1234 5678 9012 3456'], expiry: ['encryptedExpiryDate', 'cc-exp', 'Expiry date field', 'MM/YY'], cvc: ['encryptedSecurityCode', 'cc-csc', 'Security code field', '3 digits'] }[u.searchParams.get('field')] || [];
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui">
+<input id="${f[0]}" type="text" inputmode="numeric" data-fieldtype="${f[0]}" autocomplete="${f[1]}" aria-label="${f[2]}" placeholder="${f[3]}" style="display:block;padding:8px;width:260px;border:0">
+<script>
+// Keeps its own copy of what was typed; anything that isn't real typing is undone.
+const el = document.querySelector('input');
+const format = (v) => {
+  if (el.dataset.fieldtype === 'encryptedCardNumber') return v.replace(/\\D/g, '').slice(0, 16).replace(/(\\d{4})(?=\\d)/g, '$1 ');
+  if (el.dataset.fieldtype === 'encryptedExpiryDate') { const d = v.replace(/\\D/g, '').slice(0, 4); return d.length > 2 ? d.slice(0, 2) + '/' + d.slice(2) : d; }
+  return v.replace(/\\D/g, '').slice(0, 4);
+};
+let typed = '';
+let attempts = 0;
+if (${JSON.stringify(u.searchParams.get('mode'))} === 'never') {
+  // Takes nothing at all (counts how often something tried).
+  el.addEventListener('focus', () => { attempts += 1; });
+  el.addEventListener('keydown', (e) => e.preventDefault());
+  el.addEventListener('beforeinput', (e) => e.preventDefault());
+  el.addEventListener('input', () => { el.value = ''; });
+} else if (${JSON.stringify(u.searchParams.get('mode'))} === 'keys') {
+  // Only key presses count: the browser's own text insertion is blocked.
+  el.addEventListener('beforeinput', (e) => e.preventDefault());
+  el.addEventListener('keydown', (e) => { if (/^[0-9]$/.test(e.key)) { typed = format(typed + e.key); el.value = typed; e.preventDefault(); } });
+  el.addEventListener('input', () => { el.value = typed; });
+} else {
+  el.addEventListener('input', (e) => {
+    if (!e.isTrusted) { el.value = typed; return; }
+    el.value = format(el.value);
+    typed = el.value;
+  });
+}
+</script></body></html>`);
+        return;
+      }
       const fields = style === 'mystery'
         // A payment widget Mugibot doesn't recognise (no names or labels it knows).
         ? '<input name="f1" inputmode="numeric"><input name="f2"><input name="f3" inputmode="numeric">'

@@ -140,7 +140,7 @@ their account, and is filled in at every store's checkout.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 107 tests in about two minutes:
+the 110 tests in about two minutes:
 
 ```bash
 npm install
@@ -168,8 +168,9 @@ npm test
 - **The real extension in Chromium:** Kmart (verified), BIG W, EB Games and
   JB Hi-Fi flows each stop at their final button with nothing pressed, plus the
   card saved without a passphrase and still ready after the browser restarts,
-  a card from an older version moving over, the card in a payment frame (and a
-  clear message when a payment frame can't be reached), the Discord ⚡ Buy
+  a card from an older version moving over, the card in a payment frame, card
+  boxes in separate frames that only take real typing or key presses (like
+  Adyen's), and a clear message when the card can't go in, the Discord ⚡ Buy
   button, in-browser checks, and two accounts in one browser.
 - **Website in a browser:** every dashboard and admin tab, including the
   Monitor tab (live alerts, product page with price chart, alert rules, light
