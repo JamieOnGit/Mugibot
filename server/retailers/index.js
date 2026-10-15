@@ -141,6 +141,17 @@ export class Retailers {
     return `${r.base}${r.productPathFromSku.replace('{sku}', encodeURIComponent(sku))}`;
   }
 
+  /**
+   * The store's own add-to-cart link, where it has one (Shopify cart links, Amazon's add-to-cart
+   * link): opens the store with the product already in the cart. null when the store has none.
+   */
+  cartUrl(storeId, { sku, variantId = '', qty = 1 } = {}) {
+    const r = this.get(storeId);
+    if (!r || !r.base || !r.cartPath) return null;
+    if (r.cartPath.includes('{variant}') && !variantId) return null;
+    return `${r.base}${r.cartPath.replace('{variant}', encodeURIComponent(variantId)).replace('{sku}', encodeURIComponent(sku || '')).replace('{qty}', String(qty))}`;
+  }
+
   /** Where to look for a SKU that doesn't have a product link yet. */
   searchUrl(r, sku) {
     if (!r || !r.base || !sku || !r.searchPath) return null;

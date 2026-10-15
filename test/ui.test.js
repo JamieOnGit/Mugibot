@@ -184,6 +184,67 @@ test('Discord tab: connect (the fake Discord sends straight back), pings, test p
   if (shots) await page.screenshot({ path: path.join(shots, 'discord.png'), fullPage: true });
 });
 
+test('Monitor tab: add a monitor, live alerts, product page with price history, alert rules; dark by default with a light switch', async () => {
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'dark theme by default');
+  await page.click('a[data-tab="monitor"]');
+  await page.waitForSelector('#m-stats .stat');
+  assert.match(await page.textContent('#m-stats'), /Monitors\s*0/);
+  await page.click('#m-add-toggle');
+  await page.fill('#ma-url', 'https://www.kmart.com.au/product/pokemon-tcg-30th-celebration-ultra-premium-collection-43818648/');
+  await page.selectOption('#ma-category', 'pokemon');
+  await page.click('#m-add button[type=submit]');
+  await page.waitForSelector('#m-products li.product');
+  assert.match(await page.textContent('#m-products'), /Waiting for first check/);
+
+  // A check and an alert while the page is open: the feed updates by itself.
+  const ownerId = env.app.repo.userByUsername('owner').id;
+  await waitFor(() => env.app.hub.userIds().includes(ownerId), { message: 'the page is connected for live updates' });
+  const cat = env.app.catalog;
+  const p = cat.productFor('kmart', '43818648');
+  cat.addPrice(p.id, 379);
+  cat.updateProduct(p.id, { name: 'Day UPC', status: 'in_stock', confirmed: 1, price: 360, previous_price: 379, status_at: Date.now() });
+  cat.addPrice(p.id, 360);
+  await env.app.feed.alert(cat.productById(p.id), 'restock');
+  await page.waitForSelector('#m-feed li.feed-item.kind-restock');
+  assert.match(await page.textContent('#m-feed'), /In stock.*Day UPC.*\$360\.00/s);
+  assert.match(await page.getAttribute('#m-feed li.feed-item a.btn.primary', 'href'), /^\/buy\?store=kmart&sku=43818648/);
+  await page.waitForFunction(() => /Day UPC/.test(document.querySelector('#m-products').textContent));
+
+  // The product page: price history (chart + table), alerts, and (admins) settings and the check log.
+  await page.click('#m-products li.product .name');
+  await page.waitForSelector('#m-detail[open] #md-chart svg path.series');
+  assert.equal(await page.evaluate(() => location.hash), `#monitor/${p.id}`);
+  assert.equal(await page.locator('#md-history tbody tr').count(), 2);
+  assert.equal(await page.isVisible('#md-settings'), true);
+  await page.focus('#md-chart svg');
+  assert.match(await page.textContent('.chart-tip'), /\$360\.00/, 'keyboard focus shows the readout');
+  await page.click('#md-pause');
+  await page.waitForFunction(() => /Resume/.test(document.querySelector('#md-pause').textContent));
+  assert.equal(cat.monitorForProduct(p.id).paused, 1);
+  if (shots) await page.screenshot({ path: path.join(shots, 'monitor-product.png') });
+  await page.click('#md-close');
+  // The dialog's close event (which puts the address back) fires just after the click.
+  await page.waitForFunction(() => location.hash === '#monitor');
+  await page.goto(`${env.url}/app#monitor/${p.id}`);
+  await page.waitForSelector('#m-detail[open]');
+  await page.click('#md-close');
+
+  // Discord alert rules.
+  await page.click('#mr-new');
+  await page.fill('#mr-name', 'Pokémon restocks');
+  await page.fill('#mr-channel', '123456789012345678');
+  await page.check('#mr-categories input[value="pokemon"]');
+  await page.click('#mr-form button[type=submit]');
+  await page.waitForFunction(() => /Pokémon restocks/.test(document.querySelector('#mr-list').textContent));
+  assert.match(await page.textContent('#mh-loop'), /switched off|Monitor loop/);
+  if (shots) await page.screenshot({ path: path.join(shots, 'monitor.png'), fullPage: true });
+
+  await page.click('#theme-toggle');
+  assert.equal(await page.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('mgb-theme')].join()), 'light,light');
+  await page.click('#theme-toggle');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+});
+
 test('Extension tab: install steps, browser checks switch, stores and their flows', async () => {
   await page.click('a[data-tab="extension"]');
   await page.waitForSelector('#stores li');
@@ -332,7 +393,7 @@ test('phone-sized screens: no sideways scrolling', async () => {
   }
   const c = await Client.signup(env.url, 'phoneuser');
   await phone.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
-  for (const tab of ['watch', 'checkout', 'discord', 'extension', 'membership', 'account']) {
+  for (const tab of ['watch', 'monitor', 'checkout', 'discord', 'extension', 'membership', 'account']) {
     await phone.goto(`${env.url}/app#${tab}`);
     await phone.waitForSelector(`[data-panel="${tab}"]:not([hidden])`);
     await phone.waitForTimeout(150);

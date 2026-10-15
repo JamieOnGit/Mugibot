@@ -14,7 +14,7 @@ if (!clientId || !botToken || !guildId) {
   console.error('Set DISCORD_CLIENT_ID, DISCORD_BOT_TOKEN and DISCORD_GUILD_ID first (see docs/DISCORD.md).');
   process.exit(1);
 }
-const commands = commandDefinitions(new Retailers({ ...cfg, demoStoreUrl: '' }));
+const commands = commandDefinitions(new Retailers({ ...cfg, demoStoreUrl: '' }), { minInterval: cfg.monitor.minIntervalSeconds });
 const res = await fetch(`${apiBase}/applications/${clientId}/guilds/${guildId}/commands`, {
   method: 'PUT',
   headers: { authorization: `Bot ${botToken}`, 'content-type': 'application/json' },

@@ -113,8 +113,9 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   }
   const bagCount = (shop) => shopOf(shop).cart.reduce((n, c) => n + c.qty, 0);
 
-  const ldFor = (p) => `<script type="application/ld+json">${JSON.stringify({
-    '@context': 'https://schema.org', '@type': 'Product', name: p.name, sku: p.sku,
+  const imagePath = (shop, p) => `/img/${shop}/${encodeURIComponent(p.sku)}.svg`;
+  const ldFor = (p, shop) => `<script type="application/ld+json">${JSON.stringify({
+    '@context': 'https://schema.org', '@type': 'Product', name: p.name, sku: p.sku, image: imagePath(shop, p),
     ...(LD_AVAIL[p.status] ? { offers: { '@type': 'Offer', price: p.price.toFixed(2), priceCurrency: 'AUD', availability: `https://schema.org/${LD_AVAIL[p.status]}` } } : {}),
   })}</script>`;
 
@@ -145,7 +146,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     if (shop === 'jbhifi') {
       return page(shop, `${p.name} | JB Hi-Fi (dummy)`, `<div class="product-detail"><h1>${esc(p.name)}</h1><div class="price">$${p.price.toFixed(2)}</div>
         <form action="/jbhifi/cart/add" method="get"><input type="hidden" name="id" value="${p.id}">${qtyControl(p)}
-        <button type="submit" name="add" ${orderable ? '' : 'disabled'}>${labels[p.status]}</button></form></div>`, { head: ldFor(p) });
+        <button type="submit" name="add" ${orderable ? '' : 'disabled'}>${labels[p.status]}</button></form></div>`, { head: ldFor(p, shop) });
     }
     const button = orderable ? `<button type="button" id="atc" class="add-to-cart">${labels[p.status]}</button>` : `<button type="button" class="add-to-cart" disabled>${labels[p.status]}</button>`;
     const drawer = {
@@ -182,7 +183,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           bag.innerHTML = '${shop === 'kmart' ? 'Bag' : 'Cart'} <span class="bag-count">' + d.items + '</span>';
           setTimeout(() => { document.getElementById('drawer-msg').textContent = d.count + ' item(s) in your ${shop === 'kmart' ? 'bag' : 'cart'}'; document.getElementById('drawer').classList.add('open'); }, 150);
         });
-      </script>`, { head: ldFor(p), bagCount: bagCount(shop) });
+      </script>`, { head: ldFor(p, shop), bagCount: bagCount(shop) });
   }
 
   function searchPage(shop, q) {
@@ -370,6 +371,15 @@ for (const el of document.querySelectorAll('input')) {
     const json = (status, obj) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     const redirect = (to) => { res.writeHead(302, { location: to }); res.end(); };
 
+    // Product pictures (a coloured card with the product's name).
+    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi)\/([^/]+)\.svg$/);
+    if (img) {
+      const prod = find(img[1], decodeURIComponent(img[2]));
+      if (!prod) return html(404, 'Not found');
+      res.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'max-age=3600' });
+      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300"><rect width="300" height="300" rx="24" fill="${SHOPS[img[1]].color}"/><text x="150" y="140" font-family="system-ui,sans-serif" font-size="22" fill="#fff" text-anchor="middle">${esc(prod.name.slice(0, 22))}</text><text x="150" y="172" font-family="system-ui,sans-serif" font-size="16" fill="#fff" opacity=".8" text-anchor="middle">${esc(SHOPS[img[1]].name)}</text></svg>`);
+    }
+
     // A store that refuses anything that isn't a browser (like Kmart's bot protection does for servers).
     if (state.blockNonBrowsers && !/Mozilla|Chrome/i.test(req.headers['user-agent'] || '') && !p.startsWith('/__admin')) {
       return html(403, '<html><head><title>Access Denied</title></head><body>Access Denied. Reference #18.abc123.1700000000</body></html>');
@@ -422,7 +432,11 @@ for (const el of document.querySelectorAll('input')) {
       if (js) {
         const prod = find(shop, js[1]);
         if (!prod || !prod.listed) return json(404, { error: 'not found' });
-        return json(200, { id: prod.id, handle: prod.sku, title: prod.name, available: prod.status === 'in_stock' || prod.status === 'preorder', variants: [{ id: prod.id, price: Math.round(prod.price * 100), available: prod.status === 'in_stock' || prod.status === 'preorder' }] });
+        return json(200, {
+          id: prod.id, handle: prod.sku, title: prod.name, available: prod.status === 'in_stock' || prod.status === 'preorder',
+          featured_image: `http://${req.headers.host}${imagePath(shop, prod)}`,
+          variants: [{ id: prod.id, price: Math.round(prod.price * 100), available: prod.status === 'in_stock' || prod.status === 'preorder' }],
+        });
       }
       sku = (sub.match(/^\/products\/([^/.]+)$/) || [])[1];
     }
@@ -439,6 +453,13 @@ for (const el of document.querySelectorAll('input')) {
       if (S.addDelayMs) await new Promise((r) => setTimeout(r, S.addDelayMs));
       const r = S.refuseAdds ? { ok: false } : addToCart(shop, b.sku, b.qty);
       return json(r.ok ? 200 : 409, r);
+    }
+    // Shopify cart links: /cart/<variant>:<quantity> puts the product in the cart and opens checkout.
+    const permalink = shop === 'jbhifi' && sub.match(/^\/cart\/(\d+):(\d+)$/);
+    if (permalink) {
+      const prod = S.products.find((x) => String(x.id) === permalink[1]);
+      if (prod) addToCart(shop, prod.sku, Number(permalink[2]) || 1);
+      return redirect('/jbhifi/checkouts/c/abc123');
     }
     if (sub === '/cart/add' && shop === 'jbhifi') {
       const prod = S.products.find((x) => String(x.id) === u.searchParams.get('id'));

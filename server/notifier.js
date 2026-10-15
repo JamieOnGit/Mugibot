@@ -1,7 +1,7 @@
 // Alerts for one member: their activity feed, their open dashboards, a
 // Discord DM from the Mugibot bot, their own Discord webhook and their own
-// email — never anyone else's. Plus restock posts in the members' Discord
-// channel for the SKUs admins announce.
+// email — never anyone else's. (Posts in the server's channels are the
+// Monitor feed's: server/monitor/feed.js.)
 
 import { purposeKey, signParts } from './crypto.js';
 import { DEFAULT_ALERTS } from './schema.js';
@@ -72,10 +72,11 @@ export class Notifier {
         title: String(ev.title || ev.message).slice(0, 250),
         description: `${ev.title ? String(ev.message) : ''}${linkText}`.slice(0, 4000) || undefined,
         url: /^https?:\/\//.test(ev.url || '') ? ev.url : undefined,
-        color: COLORS[ev.color || ev.level] || COLORS.info,
+        color: ev.embedColor ?? (COLORS[ev.color || ev.level] || COLORS.info),
         fields: ev.fields || undefined,
+        thumbnail: /^https?:\/\//.test(ev.image || '') ? { url: ev.image } : undefined,
         timestamp: new Date(this.now()).toISOString(),
-        footer: { text: this.cfg.appName },
+        footer: { text: ev.footer || this.cfg.appName },
       }],
     };
     if (useButtons && buttons.length) {
@@ -129,27 +130,5 @@ export class Notifier {
       message: `${meta}${info.note ? `\n${info.note}` : ''}\n${who}. Quantity set to ${qty} — press ⚡ Buy to go straight to checkout.`,
       name: item.name, sku: item.sku, url: item.url || null, buttons,
     });
-  }
-
-  /** Restock post in the members' Discord channel (SKUs admins announce). */
-  async announce(item, info = {}) {
-    if (!this.discord.botReady || !this.cfg.discord.restockChannelId) return false;
-    const storeName = this.retailers.name(item.store);
-    const label = STATUS_LABEL[info.status] || 'In stock';
-    const price = info.price ?? item.last_price ?? item.price;
-    const q = new URLSearchParams({ store: item.store, sku: item.sku });
-    if (item.url) q.set('url', item.url);
-    if (item.name) q.set('name', item.name);
-    const buttons = [{ label: '⚡ Buy with Mugibot', url: `${this.cfg.baseUrl}/buy?${q}` }];
-    if (item.url) buttons.push({ label: 'Open product', url: item.url });
-    const role = this.cfg.discord.restockRoleId;
-    const msg = this.message({
-      level: 'urgent',
-      title: `${info.status === 'preorder' ? '🟣' : '🟢'} ${label}: ${item.name}`,
-      message: [`${storeName} · SKU ${item.sku}${typeof price === 'number' ? ` · ${money(price)}` : ''}`, info.note, info.manual ? 'Reported by an admin.' : ''].filter(Boolean).join('\n'),
-      url: item.url,
-      buttons,
-    }, { mention: role ? `<@&${role}>` : '' });
-    return this.discord.post(this.cfg.discord.restockChannelId, msg);
   }
 }

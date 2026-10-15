@@ -149,7 +149,7 @@ Each one restarts Mugibot, which takes about a minute.
    make sure `DISCORD_PUBLIC_KEY` is set and the app has redeployed.
 2. Register the commands in your server: on your site, **Admin** → **Setup
    check** → **Register slash commands**. It says
-   `Registered /watch, /unwatch, /watchlist, /buy, /status, /restock`.
+   `Registered /watch, /unwatch, /watchlist, /buy, /status, /restock, /monitor, /restocks`.
 
 (Or from the command line. On Fly: `fly ssh console -C "node /app/scripts/discord-commands.js"`.
 On your computer, with the Discord settings in `.env`: `npm run discord:commands`.)

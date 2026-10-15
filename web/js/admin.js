@@ -1,6 +1,8 @@
 // Admin console: members, memberships, Discord, SKUs, stores and setup.
 // (No access to members' addresses, cards, watchlists or activity.)
-import { $, $$, api, h, toast, when } from './common.js';
+import { $, $$, api, h, initThemeToggle, toast, when } from './common.js';
+
+initThemeToggle($('#theme-toggle'));
 
 const PAGE = 50;
 let offset = 0;

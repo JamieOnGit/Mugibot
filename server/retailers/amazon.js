@@ -14,6 +14,8 @@ export default {
   skuFromPath: /\/(?:dp|gp\/product)\/([A-Z0-9]{10})/,
   productPath: /\/(dp|gp\/product)\/[A-Z0-9]{10}/,
   productPathFromSku: '/dp/{sku}',
+  // Amazon's own add-to-cart link.
+  cartPath: '/gp/aws/cart/add.html?ASIN.1={sku}&Quantity.1={qty}',
   searchPath: '/s?k={q}',
   monitor: { server: true, browser: true, hostGapSeconds: 10 },
   hints: { availabilityRe: /(^|[\s_-])(availability|outOfStock)([\s_-]|$)/i },

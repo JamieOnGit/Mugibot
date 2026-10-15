@@ -86,3 +86,16 @@ export async function busy(form, fn) {
     buttons.forEach((b) => { b.disabled = false; });
   }
 }
+
+/** The ☀/☾ button: light or dark, remembered in this browser (see theme.js). */
+export function initThemeToggle(button) {
+  if (!button) return;
+  const show = () => { button.textContent = document.documentElement.dataset.theme === 'light' ? '☾' : '☀'; };
+  show();
+  button.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('mgb-theme', next); } catch { /* storage blocked */ }
+    show();
+  });
+}

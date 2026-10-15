@@ -2,6 +2,7 @@
 // monitor and the background jobs (Discord roles, Whop re-checks).
 
 import http from 'node:http';
+import { Catalog } from './catalog.js';
 import { loadConfig } from './config.js';
 import { Db } from './db.js';
 import { Discord } from './discord.js';
@@ -9,6 +10,7 @@ import { entitlement } from './entitlement.js';
 import { Hub } from './hub.js';
 import { Router, RateLimiter, clientIp, parseCookies, parseJson, readBody, securityHeaders, sendJson } from './http.js';
 import { Mailer } from './mailer.js';
+import { Feed } from './monitor/feed.js';
 import { Monitor } from './monitor/index.js';
 import { Notifier } from './notifier.js';
 import { Repo } from './repo.js';
@@ -20,6 +22,7 @@ import * as auth from './routes/auth.js';
 import * as discordRoutes from './routes/discord.js';
 import * as ext from './routes/ext.js';
 import * as membership from './routes/membership.js';
+import * as monitorRoutes from './routes/monitor.js';
 import { servePage } from './routes/pages.js';
 import * as user from './routes/user.js';
 import { handleWebRoute } from './routes/web.js';
@@ -43,9 +46,11 @@ export async function createApp(options = {}) {
   const discord = new Discord({ cfg, repo, fetchImpl, now });
   const notifier = new Notifier({ cfg, repo, retailers, hub, mailer, discord, fetchImpl, now });
   const whop = new Whop({ cfg, repo, notifier, discord, fetchImpl, now });
-  const monitor = new Monitor({ cfg, repo, retailers, notifier, hub, fetchImpl, now });
+  const catalog = new Catalog({ db, repo, now });
+  const feed = new Feed({ cfg, repo, catalog, retailers, notifier, discord, hub, now });
+  const monitor = new Monitor({ cfg, repo, retailers, notifier, hub, catalog, feed, fetchImpl, now });
   const limiter = new RateLimiter(now);
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, limiter, pageCache: new Map() };
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, catalog, feed, limiter, pageCache: new Map() };
 
   const router = new Router();
   auth.register(router, ctx);
@@ -54,6 +59,7 @@ export async function createApp(options = {}) {
   membership.register(router, ctx);
   discordRoutes.register(router, ctx);
   admin.register(router, ctx);
+  monitorRoutes.register(router, ctx);
 
   const headers = securityHeaders(cfg);
   const allowedOrigins = () => new Set([new URL(cfg.baseUrl).origin, ...cfg.extraOrigins]);
@@ -194,6 +200,8 @@ export async function createApp(options = {}) {
     retailers,
     hub,
     monitor,
+    catalog,
+    feed,
     discord,
     whop,
     notifier,

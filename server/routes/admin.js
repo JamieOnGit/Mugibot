@@ -186,7 +186,7 @@ export function register(router, ctx) {
   router.post('/api/admin/integrations/discord-check', async () => ({ checks: await discord.check() }), opts);
 
   router.post('/api/admin/integrations/discord-commands', async (req) => {
-    const r = await discord.registerCommands(commandDefinitions(retailers));
+    const r = await discord.registerCommands(commandDefinitions(retailers, { minInterval: cfg.monitor.minIntervalSeconds }));
     repo.audit(req.user.id, null, 'discord-commands', r.ok ? r.names.join(' ') : r.error);
     if (!r.ok) throw new HttpError(502, r.error);
     return { commands: r.names };

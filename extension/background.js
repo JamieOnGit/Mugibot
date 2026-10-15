@@ -225,7 +225,7 @@ async function checkOne(c) {
   }
   const ex = extractProduct(html, { url: finalUrl, sku: c.sku });
   if (ex.blocked) return { id: c.id, status: 'blocked', error: 'The store showed a bot check — backing off' };
-  return { id: c.id, status: ex.status, price: ex.price, title: ex.title };
+  return { id: c.id, status: ex.status, price: ex.price, title: ex.title, image: ex.image && /^https:\/\//.test(ex.image) ? ex.image : null };
 }
 
 let checking = false;

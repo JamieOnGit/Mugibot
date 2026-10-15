@@ -7,6 +7,7 @@
 
 import crypto from 'node:crypto';
 import { entitlement } from '../entitlement.js';
+import { CATEGORIES } from '../catalog.js';
 import { STATUS_LABEL } from '../monitor/status.js';
 import { HttpError, bad, item as checkItem, num, str } from '../schema.js';
 
@@ -24,10 +25,15 @@ export function verifyDiscordSignature(publicKeyHex, signatureHex, timestamp, ra
   }
 }
 
-/** The slash commands, as registered with Discord (npm run discord:commands). */
-export function commandDefinitions(retailers) {
+const CATEGORY_CHOICES = Object.entries(CATEGORIES).map(([value, name]) => ({ name, value }));
+const ALERT_EMOJI = { restock: '🟢', listed: '🆕', sold_out: '🔴', price_drop: '📉', price_rise: '📈' };
+
+/** The slash commands, as registered with Discord (Admin → Setup check → Register slash commands). */
+export function commandDefinitions(retailers, { minInterval = 20 } = {}) {
   const stores = retailers.publicList().filter((r) => !r.demo).slice(0, 25).map((r) => ({ name: r.name, value: r.id }));
   const storeOpt = (required) => ({ type: 3, name: 'store', description: 'Which store (not needed if you paste a product link)', required, choices: stores });
+  const categoryOpt = (description) => ({ type: 3, name: 'category', description, choices: CATEGORY_CHOICES });
+  const target = [{ type: 3, name: 'target', description: 'The SKU, the product link, or the monitor ID', required: true }, storeOpt(false)];
   return [
     {
       name: 'watch', description: 'Watch a SKU — get a DM with a ⚡ Buy button when it restocks', dm_permission: true,
@@ -46,6 +52,32 @@ export function commandDefinitions(retailers) {
       name: 'restock', description: '(Admins) Ping everyone watching a SKU that it is in stock', dm_permission: false, default_member_permissions: '32',
       options: [storeOpt(true), { type: 3, name: 'sku', description: 'The SKU / keycode', required: true }, { type: 3, name: 'note', description: 'Anything to add (e.g. "online only, limit 2")' }],
     },
+    {
+      name: 'monitor', description: '(Admins) The Monitor feed: add, list, pause, resume, remove, status', dm_permission: false, default_member_permissions: '32',
+      options: [
+        {
+          type: 1, name: 'add', description: 'Monitor a product and post its restocks in your channels',
+          options: [
+            { type: 3, name: 'link', description: 'The product link (or a SKU, with the store option)', required: true },
+            categoryOpt('Pokémon, One Piece or Other (guessed from the name if left out)'),
+            storeOpt(false),
+            { type: 4, name: 'interval', description: `Seconds between checks (${minInterval}–3600; default 60)`, min_value: minInterval, max_value: 3600 },
+            { type: 3, name: 'name', description: "The name to show (default: the store page's)" },
+          ],
+        },
+        {
+          type: 1, name: 'list', description: 'Monitored products and their stock right now',
+          options: [categoryOpt('Only this category'), storeOpt(false), {
+            type: 3, name: 'status', description: 'Only these', choices: [{ name: 'Available now', value: 'available' }, { name: 'Not available', value: 'unavailable' }, { name: 'Having problems', value: 'problem' }, { name: 'Paused', value: 'paused' }],
+          }],
+        },
+        { type: 1, name: 'pause', description: 'Stop checking a product (and its alerts) for now', options: target },
+        { type: 1, name: 'resume', description: 'Start checking a paused product again', options: target },
+        { type: 1, name: 'remove', description: 'Stop monitoring a product (its history is kept)', options: target },
+        { type: 1, name: 'status', description: 'Monitoring health: checks, stores, latest alerts' },
+      ],
+    },
+    { name: 'restocks', description: 'The latest restocks and price changes from the Monitor', dm_permission: true, options: [categoryOpt('Only this category')] },
   ];
 }
 
@@ -120,7 +152,10 @@ export function register(router, ctx) {
 
   async function command(i, discordId) {
     const name = i.data && i.data.name;
-    const opts = Object.fromEntries(((i.data && i.data.options) || []).map((o) => [o.name, o.value]));
+    const first = ((i.data && i.data.options) || [])[0];
+    // /monitor <subcommand> carries its options one level down.
+    const sub = first && first.type === 1 ? first.name : null;
+    const opts = Object.fromEntries(((sub ? first.options : i.data && i.data.options) || []).map((o) => [o.name, o.value]));
     const user = repo.userByDiscordId(discordId);
     if (!user) return reply(`Your Discord isn't connected to a ${cfg.appName} account yet. Log in at ${cfg.baseUrl}/app#discord and press **Connect Discord**.`);
     if (user.disabled) return reply('Your account is suspended — contact support.');
@@ -200,6 +235,73 @@ export function register(router, ctx) {
       ctx.monitor.broadcastRestock({ store, sku, note: str(opts.note, 200) }).catch((e) => cfg.log('[discord] restock ping failed', e.message));
       return reply(`📣 Pinging ${watchers} member${watchers === 1 ? '' : 's'} watching ${retailers.name(store)} SKU ${sku}${cfg.discord.restockChannelId ? ', and posting in the restock channel' : ''}.`);
     }
+    if (name === 'monitor') {
+      if (user.role !== 'admin') return reply('Only Mugibot admins can manage monitors.');
+      return monitorCommand(sub, opts, user);
+    }
+
+    if (name === 'restocks') {
+      if (!ent.active) return reply(`The Monitor feed is for members: ${cfg.baseUrl}/app#membership`);
+      const alerts = ctx.catalog.recentAlerts({ limit: 10, category: str(opts.category, 20) });
+      if (!alerts.length) return reply(`No alerts yet. The live feed is at ${cfg.baseUrl}/app#monitor`);
+      const buyLink = (a) => `${cfg.baseUrl}/buy?${new URLSearchParams({ store: a.store, sku: a.sku, ...(a.url ? { url: a.url } : {}), name: a.name })}`;
+      const lines = alerts.map((a) => `${ALERT_EMOJI[a.kind] || '•'} **${a.name}** — ${retailers.name(a.store)}${typeof a.price === 'number' ? ` · $${a.price.toFixed(2)}` : ''} · <t:${Math.floor(a.at / 1000)}:R>${a.kind !== 'sold_out' ? ` · [⚡ Buy](${buyLink(a)})` : ''}`);
+      return reply('', { embeds: [{ title: 'Latest from the Monitor', description: lines.join('\n').slice(0, 4000), color: 0x16a34a, url: `${cfg.baseUrl}/app#monitor` }] });
+    }
     return reply('Unknown command.');
+  }
+
+  function monitorCommand(sub, opts, user) {
+    const { catalog, monitorAdmin: manage } = ctx;
+    const label = (s) => STATUS_LABEL[s] || (s === 'pending' ? 'Checking soon' : s);
+    const money = (n) => (typeof n === 'number' ? ` · $${n.toFixed(2)}` : '');
+    const find = () => {
+      const m = catalog.findMonitor(str(opts.target, 2000), opts.store ? str(opts.store, 40) : null);
+      if (!m) throw bad(`No monitor matches "${str(opts.target, 80)}". \`/monitor list\` shows them all.`);
+      if (m.ambiguous) throw bad(`${m.ambiguous} monitors match — add the \`store\` option, or use the monitor ID from the dashboard.`);
+      return m;
+    };
+    if (sub === 'add') {
+      const raw = str(opts.link, 2000);
+      const input = /^https?:\/\//i.test(raw) ? { url: raw } : { store: str(opts.store, 40), sku: raw };
+      if (!input.url && !input.store) return reply('Which store? Add the `store` option, or paste the product link.');
+      Object.assign(input, { category: opts.category, intervalSeconds: opts.interval, name: opts.name });
+      const r = manage.add(input, user);
+      const p = r.product;
+      return reply(r.created
+        ? `📡 Monitoring **${p.name || p.sku}** — ${retailers.name(p.store)} · SKU \`${p.sku}\` · ${CATEGORIES[p.category]} · every ${r.monitor.intervalSeconds || cfg.monitor.urlIntervalSeconds}s. First check in a moment.`
+        : `**${p.name || p.sku}** is already monitored (${r.monitor.paused ? 'paused' : 'active'}).`);
+    }
+    if (sub === 'list') {
+      const status = str(opts.status, 20);
+      const list = catalog.listMonitors({ category: str(opts.category, 20), store: str(opts.store, 40), status: status === 'paused' ? '' : status, paused: status === 'paused' ? true : null, limit: 200 });
+      if (!list.length) return reply(`No monitors${status || opts.category || opts.store ? ' match that' : ' yet — add one with `/monitor add`'}.`);
+      const icon = (p) => (p.monitor.paused ? '⏸' : p.status === 'in_stock' || p.status === 'preorder' ? '🟢' : p.confirmed ? '⚪' : '⚠️');
+      const lines = list.slice(0, 20).map((p) => `${icon(p)} **${p.name || p.sku}** — ${retailers.name(p.store)} · \`${p.sku}\`${money(p.price)} · ${label(p.status)}`);
+      if (list.length > 20) lines.push(`…and ${list.length - 20} more at ${cfg.baseUrl}/app#monitor`);
+      return reply('', { embeds: [{ title: `Monitors (${list.length})`, description: lines.join('\n').slice(0, 4000), color: 0x7c3aed, url: `${cfg.baseUrl}/app#monitor` }] });
+    }
+    if (sub === 'pause' || sub === 'resume') {
+      const r = manage.update(find().id, { paused: sub === 'pause' }, user);
+      return reply(`${sub === 'pause' ? '⏸ Paused' : '▶️ Resumed'} **${r.product.name || r.product.sku}** (${retailers.name(r.product.store)}).`);
+    }
+    if (sub === 'remove') {
+      const r = manage.remove(find().id, user);
+      return reply(`🗑 Stopped monitoring **${r.product.name || r.product.sku}** (${retailers.name(r.product.store)}). Its history is kept.`);
+    }
+    if (sub === 'status') {
+      const o = catalog.overview();
+      const stores = catalog.health();
+      const tick = ctx.monitor.lastTickAt;
+      const fields = [
+        { name: 'Monitors', value: `${o.monitors} active · ${o.paused} paused · ${o.available} available now` },
+        { name: 'Last 24 hours', value: `${o.restocks24h} restocks · ${o.priceChanges24h} price changes` },
+        { name: 'Last hour', value: o.checks1h ? `${o.checks1h} checks · ${o.okRate1h}% OK` : 'No checks yet' },
+        { name: 'Monitor loop', value: tick ? `Running · last tick <t:${Math.floor(tick / 1000)}:R>` : 'Not started' },
+      ];
+      if (stores.length) fields.push({ name: 'Stores (last hour)', value: stores.map((h) => `${retailers.name(h.store)}: ${h.ok}/${h.checks} OK${h.blocked ? ` · ${h.blocked} blocked` : ''}${h.errors ? ` · ${h.errors} errors` : ''}`).join('\n').slice(0, 1000) });
+      return reply('', { embeds: [{ title: 'Monitor status', color: o.okRate1h === null || o.okRate1h >= 80 ? 0x16a34a : 0xd97706, fields, url: `${cfg.baseUrl}/app#monitor` }] });
+    }
+    return reply('Unknown subcommand.');
   }
 }

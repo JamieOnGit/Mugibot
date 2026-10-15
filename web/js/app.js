@@ -1,5 +1,6 @@
 // The dashboard. Everything here is the signed-in member's own data.
-import { $, $$, ApiError, ago, api, busy, h, money, setMsg, toast, when } from './common.js';
+import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, money, setMsg, toast, when } from './common.js';
+import { setupMonitor } from './monitor.js';
 
 const STATUS = {
   in_stock: 'In stock', preorder: 'Pre-order open', out_of_stock: 'Sold out', coming_soon: 'Coming soon', not_listed: 'Not listed yet',
@@ -12,20 +13,32 @@ const state = { me: null, items: [], retailers: [], profiles: null, editing: nul
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
-const TABS = ['watch', 'checkout', 'discord', 'extension', 'membership', 'activity', 'account'];
+const TABS = ['watch', 'monitor', 'checkout', 'discord', 'extension', 'membership', 'activity', 'account'];
 const loaders = {};
 
 function showTab() {
-  const hash = location.hash.slice(1);
-  // #update (from the extension's Update button) is the Extension tab's update steps.
+  const [hash, productId] = location.hash.slice(1).split('/');
+  // #update (from the extension's Update button) is the Extension tab's update steps;
+  // #monitor/<product> (from a Discord alert's Price history button) opens that product.
   const tab = hash === 'update' ? 'extension' : TABS.includes(hash) ? hash : 'watch';
+  if (tab === 'monitor' && $$('.side a.active')[0]?.dataset.tab === 'monitor' && productId) {
+    monitorUI.openProduct(productId);
+    return;
+  }
   $$('[data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== tab; });
   $$('.side a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
   if (loaders[tab]) {
-    loaders[tab]().then(() => { if (hash === 'update') $('#ext-update').scrollIntoView({ block: 'start' }); }).catch(showError);
+    loaders[tab]().then(() => {
+      if (hash === 'update') $('#ext-update').scrollIntoView({ block: 'start' });
+      if (tab === 'monitor' && productId) monitorUI.openProduct(productId);
+    }).catch(showError);
   }
 }
 window.addEventListener('hashchange', showTab);
+
+const monitorUI = setupMonitor({ showError: (e) => showError(e) });
+loaders.monitor = () => monitorUI.load();
+initThemeToggle($('#theme-toggle'));
 
 function showError(e) {
   if (e instanceof ApiError && e.status === 401) return;
@@ -730,6 +743,8 @@ function connectStream() {
     clearTimeout(watchTimer);
     watchTimer = setTimeout(() => loadItems().catch(() => null), 300);
   });
+  es.addEventListener('monitor-feed', (e) => monitorUI.onFeed(JSON.parse(e.data)));
+  es.addEventListener('monitor-product', () => monitorUI.onProduct());
   es.addEventListener('devices', () => {
     if (!$('[data-panel="extension"]').hidden) loadDevices().catch(() => null);
     renderExtStatus().catch(() => null);

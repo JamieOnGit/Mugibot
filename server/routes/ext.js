@@ -27,7 +27,10 @@ export function register(router, ctx) {
   // Which version this extension is, and which of the site's addresses it was built for.
   const seen = (req, version = req.device.version) => {
     const host = String(req.headers.host || '').toLowerCase();
-    if (version !== req.device.version || host !== req.device.host) repo.setDeviceSeen(req.user.id, req.device.id, { version, host });
+    if (version !== req.device.version || host !== req.device.host) {
+      repo.setDeviceSeen(req.user.id, req.device.id, { version, host });
+      ctx.hub.publish(req.user.id, 'devices', {}); // an open dashboard can say "downloaded for another address" straight away
+    }
   };
 
   router.get('/api/ext/me', async (req) => {
