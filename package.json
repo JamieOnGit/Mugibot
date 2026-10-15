@@ -8,10 +8,10 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning server/index.js",
-    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
-    "demo": "node --disable-warning=ExperimentalWarning scripts/demo.js",
-    "mockstore": "node --disable-warning=ExperimentalWarning scripts/mockstore.js",
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "demo": "node scripts/demo.js",
+    "mockstore": "node scripts/mockstore.js",
     "build:extension": "node --disable-warning=ExperimentalWarning scripts/build-extension.js",
     "discord:commands": "node --disable-warning=ExperimentalWarning scripts/discord-commands.js",
     "make-admin": "node --disable-warning=ExperimentalWarning scripts/make-admin.js",

@@ -114,9 +114,16 @@ fly secrets set \
    make sure `DISCORD_PUBLIC_KEY` is set and the app has redeployed.
 2. Register the commands in your server:
 
+On Fly:
+
 ```bash
-fly ssh console -C "node /app/scripts/discord-commands.js"      # on Fly
-npm run discord:commands                                          # on your computer
+fly ssh console -C "node /app/scripts/discord-commands.js"
+```
+
+On your computer (with the Discord settings in `.env`):
+
+```bash
+npm run discord:commands
 ```
 
 It prints `Registered 6 commands in your server: /watch, /unwatch, /watchlist, /buy, /status, /restock`.

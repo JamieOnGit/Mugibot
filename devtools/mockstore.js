@@ -541,10 +541,21 @@ for (const el of document.querySelectorAll('input')) {
     return html(404, page(shop, 'Page not found', '<h1>Sorry, we can\'t find that page</h1>'));
   });
 
-  await new Promise((r) => cardServer.listen(cardPort, host, r));
-  cardOrigin = `http://${host}:${cardServer.address().port}`;
-  await new Promise((r) => server.listen(port, host, r));
-  const url = `http://${host}:${server.address().port}`;
+  const listen = (srv, p) => new Promise((resolve, reject) => {
+    srv.once('error', reject);
+    srv.listen(p, host, () => { srv.off('error', reject); resolve(); });
+  });
+  // Listening on every interface (0.0.0.0) still means "this computer" in links.
+  const linkHost = ['0.0.0.0', '::'].includes(host) ? 'localhost' : host;
+  await listen(cardServer, cardPort);
+  cardOrigin = `http://${linkHost}:${cardServer.address().port}`;
+  try {
+    await listen(server, port);
+  } catch (e) {
+    cardServer.close();
+    throw e;
+  }
+  const url = `http://${linkHost}:${server.address().port}`;
 
   return {
     url,

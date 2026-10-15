@@ -44,17 +44,32 @@ community. Built on TCGCopBot's working Kmart flow.
 
 ## Quick start (on your computer)
 
-You need **Node.js 22.13 or newer** and **Chrome** (or Edge or Brave).
+You need **Node.js 22.13 or newer** ([nodejs.org](https://nodejs.org), the LTS
+download) and **Chrome** (or Edge or Brave). Check Node in Terminal with
+`node -v`.
+
+**On a Mac, the easy way:** after cloning, open the `Mugibot` folder in Finder
+and double-click **`start-demo-mac.command`**. On Windows, double-click
+**`start-demo-windows.bat`**. Either one checks Node, creates `.env`, starts
+everything and opens the dashboard.
+
+**Or in Terminal**, paste these lines (one command per line):
 
 ```bash
 git clone https://github.com/JamieOnGit/Mugibot.git
 cd Mugibot
-cp .env.example .env          # set ADMIN_USERNAMES=<the username you'll sign up with>
-npm run demo                  # Mugibot on http://localhost:8080 + dummy stores on http://localhost:5055
+cp .env.example .env
+npm run demo
 ```
 
-1. Open http://localhost:8080 and **sign up** with the username you put in
-   `ADMIN_USERNAMES`. Admins always have access, so you don't need Whop to try it.
+`npm run demo` starts Mugibot on http://localhost:8080 and the dummy stores on
+http://localhost:5055, and opens the dashboard in your browser. Leave that
+Terminal window open while you use it (press Ctrl+C to stop). The admin
+username is set in `.env` (`ADMIN_USERNAMES=jamie`): either sign up as `jamie`,
+or change it first with `open -e .env` (Mac) / `notepad .env` (Windows).
+
+1. In the dashboard that opens (http://localhost:8080), **sign up** with the
+   username in `ADMIN_USERNAMES`. Admins always have access, so you don't need Whop to try it.
 2. **Extension** tab → **Download the extension** → unzip it → open
    `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → choose
    the unzipped folder. Reload the dashboard and press **Connect this browser**.
@@ -111,9 +126,12 @@ their account, and is filled in at every store's checkout.
 
 ## Tests
 
+`npm install` fetches Playwright (for the browser tests), then `npm test` runs
+the 85 tests in about a minute:
+
 ```bash
-npm install         # Playwright, for the browser tests
-npm test            # 85 tests, about a minute
+npm install
+npm test
 ```
 
 - **Accounts:** usernames, sessions, rate limits, resets by email, Discord DM or admin link.

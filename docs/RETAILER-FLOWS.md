@@ -139,10 +139,13 @@ Field names for `fields`: `email`, `phone`, `firstName`, `lastName`,
 `devtools/mockstore.js` has a copy of each beta store, shaped like the real
 site. `test/extension.e2e.test.js` runs the real extension through each one:
 
+Run every store's flow in a real Chrome (about 30 seconds):
+
 ```bash
-node --test test/extension.e2e.test.js     # every store's flow in a real Chrome (~30 seconds)
-npm run demo                                  # or try it by hand at http://localhost:5055
+node --test test/extension.e2e.test.js
 ```
+
+Or try it by hand with `npm run demo` (dummy stores at http://localhost:5055).
 
 When a real store's flow arrives, update **both** `server/retailers/<store>.js`
 and that store's dummy copy, so the test keeps proving the flow.

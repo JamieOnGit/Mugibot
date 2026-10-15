@@ -193,7 +193,10 @@ export async function createApp(options = {}) {
     server,
     url: null,
     async listen(port = cfg.port, host = cfg.host) {
-      await new Promise((resolve) => server.listen(port, host, resolve));
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, host, () => { server.off('error', reject); resolve(); });
+      });
       const addr = server.address();
       // Listening on every interface: "localhost" is the address people type.
       app.url = `http://${host === '0.0.0.0' || host === '::' ? 'localhost' : host}:${addr.port}`;

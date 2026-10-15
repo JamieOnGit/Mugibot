@@ -39,14 +39,30 @@ manager as you go. **Never** paste them into Discord, a GitHub issue, or the cod
 
 ## 1. Run it on your computer
 
+Open **Terminal** (Mac) or **PowerShell** (Windows) and check Node first:
+
+```bash
+node -v
+```
+
+It must say `v22.13.0` or higher (v23 and v24 are fine). If not, or if the
+command isn't found, install the **LTS** version from https://nodejs.org and
+open a new Terminal window.
+
+> **Pasting commands:** paste the lines in the boxes exactly as they are, one
+> command per line. Explanations are always outside the boxes. (On a Mac,
+> Terminal doesn't ignore `# notes` typed after a command, so they'd break it.)
+
 ```bash
 git clone https://github.com/JamieOnGit/Mugibot.git
 cd Mugibot
-npm install                  # only needed for the tests; the server itself has no dependencies
 cp .env.example .env
 ```
 
-Open `.env` in a text editor and set your admin username:
+(You don't need `npm install` to run Mugibot. The server has no dependencies.
+It's only for running the tests.)
+
+Open `.env` in a text editor (Mac: `open -e .env`, Windows: `notepad .env`) and set your admin username:
 
 ```
 ADMIN_USERNAMES=jamie
@@ -55,10 +71,10 @@ ADMIN_USERNAMES=jamie
 Start it:
 
 ```bash
-npm start                    # http://localhost:8080
+npm start
 ```
 
-Go to http://localhost:8080 → **Join** → sign up as `jamie`. You're an admin
+Leave that window open (Ctrl+C stops it). Go to http://localhost:8080 → **Join** → sign up as `jamie`. You're an admin
 (top right: **Admin**), and admins always have full access.
 
 **Done when:** you can sign in and see the Watchlist with the Kmart starter list.
@@ -70,9 +86,16 @@ Go to http://localhost:8080 → **Join** → sign up as `jamie`. You're an admin
 The dummy store is a set of fake shops shaped like Kmart, BIG W, EB Games and
 JB Hi-Fi. Nothing is real and no order can be placed.
 
+Stop `npm start` first (Ctrl+C), then:
+
 ```bash
-npm run demo                 # Mugibot on :8080 and the dummy stores on :5055
+npm run demo
 ```
+
+This starts Mugibot on http://localhost:8080 and the dummy stores on
+http://localhost:5055, and opens the dashboard. On a Mac you can instead
+double-click `start-demo-mac.command` in the Mugibot folder (Windows:
+`start-demo-windows.bat`).
 
 1. **Install the extension.** Dashboard → **Extension** tab → **Download the
    extension** → unzip it somewhere you'll keep it. Open `chrome://extensions`,
@@ -122,15 +145,28 @@ fly auth login
 
 From the `Mugibot` folder:
 
+Create the app. Choose a unique name instead of `mugibot-yourname`:
+
 ```bash
-fly apps create mugibot-yourname          # choose a unique name
+fly apps create mugibot-yourname
 ```
 
 Open `fly.toml` and change `app = "mugibot"` to the same name. Then:
 
 ```bash
 fly volumes create mugibot_data --region syd --size 1
-openssl rand -hex 32                      # → your DATA_ENCRYPTION_KEY. Save it in your password manager NOW.
+```
+
+Make your encryption key. The 64 characters it prints are your
+`DATA_ENCRYPTION_KEY`. **Save them in your password manager now.**
+
+```bash
+openssl rand -hex 32
+```
+
+Set the secrets (replace the `<…>` parts) and deploy:
+
+```bash
 fly secrets set \
   DATA_ENCRYPTION_KEY=<the 64 characters from openssl> \
   BASE_URL=https://mugibot-yourname.fly.dev \
@@ -151,7 +187,12 @@ Open `https://mugibot-yourname.fly.dev`, sign up as `jamie`, and you're the admi
 ### 3c. Your own domain (recommended, do it before members install the extension)
 
 ```bash
-fly certs add app.yourdomain.com          # then add the DNS records it prints, at your domain registrar
+fly certs add app.yourdomain.com
+```
+
+Add the DNS records it prints at your domain registrar, then:
+
+```bash
 fly secrets set BASE_URL=https://app.yourdomain.com EXTRA_ORIGINS=https://mugibot-yourname.fly.dev
 ```
 

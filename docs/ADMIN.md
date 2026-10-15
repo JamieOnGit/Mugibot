@@ -59,14 +59,15 @@ but haven't connected their account.
 
 ## Command line (on the server)
 
-On Fly.io, prefix with `fly ssh console -C "…"`:
+On Fly.io, run each through `fly ssh console -C "…"`, e.g.
+`fly ssh console -C "node /app/scripts/make-admin.js theirname"`.
 
-```bash
-node /app/scripts/make-admin.js theirname          # make someone admin
-node /app/scripts/reset-link.js theirname          # print a password-reset link
-node /app/scripts/discord-commands.js              # (re)register slash commands
-node /app/scripts/backup.js /data/mugibot.db       # make a backup copy of the database
-```
+| Command | What it does |
+|---|---|
+| `node /app/scripts/make-admin.js theirname` | Make someone admin |
+| `node /app/scripts/reset-link.js theirname` | Print a password-reset link |
+| `node /app/scripts/discord-commands.js` | (Re)register slash commands |
+| `node /app/scripts/backup.js /data/mugibot.db` | Make a backup copy of the database |
 
 ## Backups
 
