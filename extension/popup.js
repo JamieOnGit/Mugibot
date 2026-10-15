@@ -18,14 +18,41 @@ function checksText(l) {
 
 function renderUpdate(u) {
   const box = $('update');
-  box.hidden = !(u && u.available);
-  if (!u || !u.available) return;
+  // The Chrome Web Store copy updates itself: no Reload, nothing to replace.
+  $('reload2-wrap').hidden = !!(u && u.fromStore);
+  box.hidden = !(u && (u.available || u.retired));
+  if (box.hidden) return;
   const host = new URL(u.url).host;
-  $('update-title').textContent = u.moved ? `${CONFIG.appName} has moved to ${host}` : `Update available: v${u.latest}`;
-  $('update-text').textContent = u.moved
-    ? `This copy was downloaded for ${new URL(CONFIG.server).host}, so it can't work with your dashboard at ${host}. Download it again from there.`
-    : `You have v${u.current}. Press Update for the new version and how to install it.`;
-  $('update-go').href = u.store && !u.moved ? u.store : `${u.url}/app#update`;
+  let title;
+  let text;
+  let go = `${u.url}/app#update`;
+  let goLabel = 'Update';
+  let remove = false;
+  if (u.retired) {
+    title = 'This is an old copy';
+    text = `${CONFIG.appName} from the Chrome Web Store is installed in this browser and does everything now. Remove this copy.`;
+    go = null;
+    remove = true;
+  } else if (u.moved) {
+    title = `${CONFIG.appName} has moved to ${host}`;
+    text = `This copy was downloaded for ${new URL(CONFIG.server).host}, so it can't work with your dashboard at ${host}. ${u.store ? 'Get it from the Chrome Web Store instead: it updates itself.' : 'Download it again from there.'}`;
+    if (u.store) { go = u.store; goLabel = 'Open the Chrome Web Store'; remove = true; }
+  } else if (u.store && !u.fromStore) {
+    title = `Get ${CONFIG.appName} from the Chrome Web Store`;
+    text = 'That version updates itself, so you never have to replace it again. Install it, press Connect this browser on your dashboard, save your card in it, then remove this copy.';
+    go = u.store;
+    goLabel = 'Open the Chrome Web Store';
+    remove = true;
+  } else {
+    title = `Update available: v${u.latest}`;
+    text = `You have v${u.current}. Press Update for the new version and how to install it.`;
+  }
+  $('update-title').textContent = title;
+  $('update-text').textContent = text;
+  $('update-go').hidden = !go;
+  if (go) { $('update-go').href = go; $('update-go').textContent = goLabel; }
+  $('reload').hidden = remove;
+  $('remove-copy').hidden = !remove;
 }
 
 async function render() {
@@ -33,7 +60,7 @@ async function render() {
   $('open-dash').href = `${dash}#extension`;
   $('open-dash2').href = dash;
   const s = await ask({ type: 'status' });
-  $('foot').textContent = s ? `v${s.version} · ${new URL(s.server).host}` : '';
+  $('foot').textContent = s ? `v${s.version} · ${new URL(s.server).host}${s.update && s.update.fromStore ? ' · updates itself' : ''}` : '';
   renderUpdate(s && s.update);
   if (!s || !s.paired) {
     $('signed-out').hidden = false;
@@ -97,6 +124,7 @@ async function reload(e) {
   await ask({ type: 'reload' });
 }
 $('reload').addEventListener('click', reload);
+$('remove-copy').addEventListener('click', () => ask({ type: 'removeSelf' }));
 $('reload2').addEventListener('click', reload);
 
 $('check-update').addEventListener('click', async (e) => {
@@ -104,7 +132,7 @@ $('check-update').addEventListener('click', async (e) => {
   $('check-update').textContent = 'Checking…';
   const u = await ask({ type: 'update' });
   renderUpdate(u);
-  $('check-update').textContent = u && u.available ? 'Update available' : (u ? 'Up to date' : "Couldn't check");
+  $('check-update').textContent = u && u.available ? 'Update available' : u && u.fromStore ? 'Up to date (updates itself)' : (u ? 'Up to date' : "Couldn't check");
 });
 
 render();

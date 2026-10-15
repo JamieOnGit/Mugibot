@@ -118,7 +118,12 @@ async function detectExtension() {
   const version = document.documentElement.dataset.mugibotExtension || null;
   if (!version) return { installed: false };
   const hello = await askExtension('hello');
-  return { installed: true, version, paired: !!(hello && hello.paired), userId: hello && hello.userId, username: hello && hello.username };
+  return {
+    installed: true, version, paired: !!(hello && hello.paired), userId: hello && hello.userId, username: hello && hello.username,
+    fromStore: !!(hello && hello.fromStore),
+    // A downloaded copy still installed next to the Chrome Web Store copy (it stays out of the way).
+    oldCopy: document.documentElement.dataset.mugibotOldCopy || null,
+  };
 }
 
 async function renderExtStatus() {
@@ -144,10 +149,20 @@ async function renderExtStatus() {
     text = [h('b', {}, `This browser's extension is connected to another account (${ext.username}). `), 'Reconnect it to yours: ', h('button', { class: 'btn small primary', type: 'button' }, 'Connect to my account')];
   } else {
     level = 'ok';
-    text = [h('b', {}, '✓ Extension connected. '), `⚡ Buy runs automatically in this browser. Version ${ext.version}.`];
-    if (ext.version !== latest) {
+    const store = state.me.app.chromeStoreUrl;
+    text = [h('b', {}, '✓ Extension connected. '), `⚡ Buy runs automatically in this browser. Version ${ext.version}${ext.fromStore ? ', from the Chrome Web Store (it updates itself)' : ''}.`];
+    if (!ext.fromStore && store) {
       level = 'warn';
-      text.push(' ', h('b', {}, `Version ${latest} is available — `), h('a', { href: '#update' }, 'update it'));
+      text.push(' ', h('b', {}, 'This copy was downloaded, so it won\'t update itself. '), h('a', { href: store, target: '_blank', rel: 'noopener' }, 'Get it from the Chrome Web Store'), ' once, then remove this one (', h('a', { href: '#update' }, 'how'), ').');
+    } else if (ext.oldCopy) {
+      level = 'warn';
+      text.push(' ', h('b', {}, 'The old downloaded copy is still installed. '), 'Click its icon (it shows OLD) → Remove this copy.');
+    } else if (ext.version !== latest) {
+      if (ext.fromStore) text.push(` Version ${latest} is on its way: Chrome installs it by itself within a few hours.`);
+      else {
+        level = 'warn';
+        text.push(' ', h('b', {}, `Version ${latest} is available — `), h('a', { href: '#update' }, 'update it'));
+      }
     }
   }
   for (const id of ['#ext-status', '#ext-status-2']) {
@@ -220,9 +235,14 @@ async function loadAlerts() {
 }
 
 loaders.extension = async () => {
+  // With a Chrome Web Store listing: that copy first (it updates itself), the download folded away.
   const store = state.me.app.chromeStoreUrl;
   $('#store-install').hidden = !store;
-  if (store) $('#store-link').href = store;
+  $('#zip-install-summary').hidden = !store;
+  $('#zip-install-box').open = !store;
+  $('#update-store').hidden = !store;
+  $('#update-zip').hidden = !!store;
+  if (store) { $('#store-link').href = store; $('#update-store-link').href = store; }
   const [retailers, alerts] = await Promise.all([loadRetailers(), loadAlerts(), renderExtStatus(), loadDevices()]);
   $('#b-checks').checked = alerts.browserChecks;
   const list = $('#stores');

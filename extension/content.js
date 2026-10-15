@@ -19,6 +19,13 @@
     }
   });
 
+  // A downloaded copy, with the Chrome Web Store copy installed too: that one does everything.
+  if (!chrome.runtime.getManifest().update_url) {
+    const storeCopy = document.documentElement.hasAttribute('data-mugibot-store');
+    ask({ type: 'storeCopy', present: storeCopy });
+    if (storeCopy) return;
+  }
+
   const state = await ask({ type: 'state' });
   const items = (state && state.items) || [];
   const retailers = MGBFlows.revive((state && state.flows) || []);

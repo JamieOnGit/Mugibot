@@ -1,6 +1,9 @@
 # Tests every pull request. When something is merged into main, tests it again
-# and puts it live on Fly.io — nothing to run on your own computer.
-# One-time setup: the FLY_API_TOKEN secret (docs/SETUP.md, "Automatic deploys").
+# and puts it live on Fly.io — nothing to run on your own computer. Then, if the
+# extension's version went up, publishes it on the Chrome Web Store, so every
+# member's extension updates by itself.
+# One-time setup: the FLY_API_TOKEN secret (docs/SETUP.md, "Automatic deploys"),
+# and for the Chrome Web Store the CWS_* settings (docs/CHROME-WEB-STORE.md).
 
 name: Test and deploy
 
@@ -45,3 +48,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy --remote-only --ha=false
+
+  publish-extension:
+    needs: deploy
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency: publish-extension
+    env:
+      CWS_SERVICE_ACCOUNT_KEY: ${{ secrets.CWS_SERVICE_ACCOUNT_KEY }}
+      CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+      CWS_ITEM_ID: ${{ vars.CWS_ITEM_ID }}
+      SITE_URL: ${{ vars.SITE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Does nothing until it's set up, or when the store already has this version.
+      - name: Publish a new extension version on the Chrome Web Store
+        run: node --disable-warning=ExperimentalWarning scripts/publish-extension.js

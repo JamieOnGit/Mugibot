@@ -83,6 +83,30 @@ export function writeExtension(cfg, outDir, opts = {}) {
   return outDir;
 }
 
+/**
+ * The extension's Chrome Web Store listing: set by an admin (Admin → Setup check),
+ * else CHROME_STORE_URL. Empty until the extension is published there.
+ */
+export function storeUrl(cfg, repo) {
+  return (repo && repo.getSetting('chrome_store_url')) || cfg.chromeStoreUrl || '';
+}
+
+/** A Chrome Web Store listing link (chromewebstore.google.com/detail/…, or the older chrome.google.com/webstore/detail/…). */
+export function isStoreUrl(u) {
+  try {
+    const url = new URL(u);
+    return url.protocol === 'https:' && ((url.hostname === 'chromewebstore.google.com' && url.pathname.startsWith('/detail/'))
+      || (url.hostname === 'chrome.google.com' && url.pathname.startsWith('/webstore/detail/')));
+  } catch {
+    return false;
+  }
+}
+
+/** The package to upload to the Chrome Web Store: the same files, with manifest.json at the top of the zip. */
+export function storeZip(cfg) {
+  return makeZip(extensionFiles(cfg));
+}
+
 let cached = null;
 export function extensionZip(cfg) {
   const key = `${cfg.baseUrl}|${(cfg.extraOrigins || []).join(',')}|${cfg.demoStoreUrl}`;

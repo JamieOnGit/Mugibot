@@ -25,6 +25,10 @@ const SERVER_ORIGIN = new URL(SERVER).origin;
 // Every address of your Mugibot site (the dashboard can be opened on any of them).
 const APP_ORIGINS = new Set([SERVER_ORIGIN, ...(CONFIG.appOrigins || [])]);
 const VERSION = chrome.runtime.getManifest().version;
+// Installed from the Chrome Web Store (Chrome adds update_url): that copy updates itself.
+// A copy downloaded from the dashboard doesn't, and steps aside once the store copy is installed.
+const FROM_STORE = !!chrome.runtime.getManifest().update_url;
+const SOURCE = FROM_STORE ? 'store' : 'download';
 const PASS_TTL = 15 * 60 * 1000;
 const CHECK_ALARM = 'mgb-checks';
 
@@ -72,7 +76,7 @@ async function pair(code) {
     res = await fetch(`${SERVER}/api/ext/pair`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code, name: browserName(), version: VERSION }),
+      body: JSON.stringify({ code, name: browserName(), version: VERSION, source: SOURCE }),
     });
   } catch {
     return { ok: false, error: `Can't reach ${CONFIG.appName} — check your internet connection` };
@@ -89,7 +93,7 @@ async function getState() {
   const auth = await getAuth();
   if (!auth) return { items: [], flows: [], online: false, paired: false };
   const cacheKey = `state:${auth.user.id}`;
-  const res = await api('GET', '/api/ext/items');
+  const res = await api('GET', `/api/ext/items?src=${SOURCE}`);
   if (res.status === 200 && res.body) {
     const st = { items: res.body.items, flows: res.body.flows, active: res.body.active, browserChecks: res.body.browserChecks };
     await chrome.storage.local.set({ [cacheKey]: { ...st, at: Date.now() } });
@@ -175,24 +179,41 @@ async function updateInfo(force = false) {
       }
     } catch { /* offline: use what we knew */ }
   }
-  const info = { current: VERSION, latest: VERSION, url: SERVER, moved: false, available: false, store: null };
+  const { retired } = await chrome.storage.local.get('retired');
+  const info = { current: VERSION, latest: VERSION, url: SERVER, moved: false, available: false, store: null, fromStore: FROM_STORE, retired: !FROM_STORE && !!retired };
   if (appInfo && appInfo.server === SERVER) {
     let moved = false;
     try { moved = new URL(appInfo.url).origin !== SERVER_ORIGIN; } catch { /* keep false */ }
     Object.assign(info, { latest: appInfo.version || VERSION, url: appInfo.url, moved, store: appInfo.store });
-    info.available = moved || newer(info.latest, VERSION);
+    // The store copy updates itself; a downloaded copy is asked to move to the store copy once there is one.
+    info.available = moved || (!FROM_STORE && (newer(info.latest, VERSION) || !!info.store));
   }
-  chrome.action.setBadgeText({ text: info.available ? 'NEW' : '' });
-  if (info.available) chrome.action.setBadgeBackgroundColor({ color: '#d97706' });
-  chrome.action.setTitle({ title: info.available ? `${CONFIG.appName} — update available` : CONFIG.appName });
+  const badge = info.retired ? 'OLD' : info.available ? 'NEW' : '';
+  chrome.action.setBadgeText({ text: badge });
+  if (badge) chrome.action.setBadgeBackgroundColor({ color: info.retired ? '#6b7280' : '#d97706' });
+  chrome.action.setTitle({ title: info.retired ? `${CONFIG.appName} — old copy, remove it` : info.available ? `${CONFIG.appName} — update available` : CONFIG.appName });
   return info;
+}
+
+/**
+ * A downloaded copy, when the Chrome Web Store copy is installed in this browser too
+ * (its pages say so): stays out of the way — no checkout, no checks — until it's removed.
+ */
+async function setRetired(on) {
+  if (FROM_STORE) return;
+  const { retired } = await chrome.storage.local.get('retired');
+  if (!!retired === on) return;
+  await chrome.storage.local.set({ retired: on });
+  if (on) await chrome.alarms.clear(CHECK_ALARM);
+  else ensureAlarm();
+  updateInfo().catch(() => null);
 }
 
 async function status() {
   const update = await updateInfo().catch(() => null);
   const auth = await getAuth();
   if (!auth) return { paired: false, server: SERVER, appName: CONFIG.appName, version: VERSION, update };
-  const me = await api('GET', `/api/ext/me?v=${encodeURIComponent(VERSION)}`);
+  const me = await api('GET', `/api/ext/me?v=${encodeURIComponent(VERSION)}&src=${SOURCE}`);
   const still = await getAuth();
   if (!still) return { paired: false, server: SERVER, appName: CONFIG.appName, version: VERSION, disconnected: true, update };
   const { lastChecks } = await chrome.storage.local.get('lastChecks');
@@ -245,6 +266,7 @@ async function checkOne(c) {
 let checking = false;
 async function runChecks() {
   if (checking) return { busy: true };
+  if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return { retired: true };
   const auth = await getAuth();
   if (!auth) return { paired: false };
   checking = true;
@@ -270,7 +292,10 @@ async function runChecks() {
 }
 
 function ensureAlarm() {
-  chrome.alarms.get(CHECK_ALARM, (a) => { if (!a) chrome.alarms.create(CHECK_ALARM, { periodInMinutes: 0.5, delayInMinutes: 0.1 }); });
+  chrome.storage.local.get('retired').then(({ retired }) => {
+    if (retired && !FROM_STORE) return;
+    chrome.alarms.get(CHECK_ALARM, (a) => { if (!a) chrome.alarms.create(CHECK_ALARM, { periodInMinutes: 0.5, delayInMinutes: 0.1 }); });
+  });
 }
 chrome.runtime.onInstalled.addListener(ensureAlarm);
 chrome.runtime.onStartup.addListener(ensureAlarm);
@@ -327,6 +352,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case 'cardFrames':
         return sender.tab && sender.frameId === 0 ? cardFrames(sender.tab.id) : null;
+      case 'storeCopy':
+        // From this copy's own scripts on a store page or the dashboard: is the Chrome Web Store copy there too?
+        await setRetired(!!msg.present);
+        return { ok: true };
       case 'endFill':
         if (sender.tab) {
           await chrome.storage.session.remove(passKey(sender.tab.id));
@@ -338,7 +367,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'appHello': {
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
         const auth = await getAuth();
-        return { version: VERSION, server: SERVER, paired: !!auth, userId: auth ? auth.user.id : null, username: auth ? auth.user.username : null };
+        return { version: VERSION, server: SERVER, fromStore: FROM_STORE, paired: !!auth, userId: auth ? auth.user.id : null, username: auth ? auth.user.username : null };
       }
       case 'pair':
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
@@ -361,6 +390,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return fromExtensionPage(sender) ? status() : null;
       case 'update':
         return fromExtensionPage(sender) ? updateInfo(true) : null;
+      case 'removeSelf':
+        // A downloaded copy, after moving to the Chrome Web Store copy (Chrome asks to confirm).
+        if (!fromExtensionPage(sender) || FROM_STORE) return null;
+        chrome.management.uninstallSelf({ showConfirmDialog: true }, () => void chrome.runtime.lastError);
+        return { ok: true };
       case 'reload':
         // Loads the extension's files again — after you've copied a new version over them.
         if (!fromExtensionPage(sender)) return null;

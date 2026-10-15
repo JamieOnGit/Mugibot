@@ -11,7 +11,7 @@
   <div id="update" class="card update" hidden>
     <b id="update-title">Update available</b>
     <p id="update-text" class="muted"></p>
-    <p class="row"><a class="btn primary" id="update-go" href="#" target="_blank">Update</a> <button id="reload" type="button" title="Load the extension's files again, after copying a new version over them">Reload</button></p>
+    <p class="row"><a class="btn primary" id="update-go" href="#" target="_blank">Update</a> <button id="reload" type="button" title="Load the extension's files again, after copying a new version over them">Reload</button> <button id="remove-copy" type="button" hidden>Remove this copy</button></p>
   </div>
 
   <section id="signed-out" hidden>
@@ -39,7 +39,7 @@
     <p class="row" style="margin-top:10px"><a class="btn" id="open-dash2" href="#" target="_blank">Dashboard ↗</a> <a class="btn" href="options.html" target="_blank">Settings</a></p>
   </section>
   <p class="muted" id="foot" style="font-size:11px;margin-top:10px"></p>
-  <p class="muted" style="font-size:11px;margin:2px 0 0"><a href="#" id="check-update">Check for updates</a> · <a href="#" id="reload2">Reload extension</a></p>
+  <p class="muted" style="font-size:11px;margin:2px 0 0"><a href="#" id="check-update">Check for updates</a><span id="reload2-wrap"> · <a href="#" id="reload2">Reload extension</a></span></p>
   <script src="config.js"></script>
   <script src="popup.js"></script>
 </body>

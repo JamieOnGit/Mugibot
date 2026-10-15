@@ -3,7 +3,7 @@
 // Card details are not part of this API: they stay in the extension.
 
 import { entitlement } from '../entitlement.js';
-import { EXTENSION_VERSION } from '../extension.js';
+import { EXTENSION_VERSION, appOrigins, storeUrl } from '../extension.js';
 import { DEFAULT_ALERTS, HttpError, bad, str } from '../schema.js';
 
 const EVENT_TYPES = { add: 'info', basket: 'info', step: 'info', checkout: 'success', ready: 'success', error: 'warn' };
@@ -19,29 +19,36 @@ export function register(router, ctx) {
     const user = repo.userById(userId);
     if (!user || user.disabled) throw new HttpError(403, 'This account is not available');
     const { token, device } = repo.addDevice(userId, str(req.body.name, 60) || 'Browser', str(req.body.version, 20));
+    // Which address it was built for, and where it came from (Chrome Web Store or download).
+    const source = ['store', 'download'].includes(req.body.source) ? req.body.source : '';
+    repo.setDeviceSeen(userId, device.id, { version: device.version, host: String(req.headers.host || ''), source });
+    Object.assign(device, { host: String(req.headers.host || '').toLowerCase(), source });
     repo.addEvent(userId, { type: 'device', level: 'success', message: `Extension connected: ${device.name}` });
     ctx.hub.publish(userId, 'devices', {});
     return { token, device, user: { id: user.id, username: user.username } };
   }, { auth: 'none', csrf: false });
 
-  // Which version this extension is, and which of the site's addresses it was built for.
-  const seen = (req, version = req.device.version) => {
+  // Which version this extension is, which of the site's addresses it was built for,
+  // and where it came from (the Chrome Web Store, or the dashboard's download).
+  const seen = (req, version = req.device.version, source = req.device.source) => {
     const host = String(req.headers.host || '').toLowerCase();
-    if (version !== req.device.version || host !== req.device.host) {
-      repo.setDeviceSeen(req.user.id, req.device.id, { version, host });
+    if (version !== req.device.version || host !== req.device.host || source !== req.device.source) {
+      repo.setDeviceSeen(req.user.id, req.device.id, { version, host, source });
       ctx.hub.publish(req.user.id, 'devices', {}); // an open dashboard can say "downloaded for another address" straight away
     }
   };
 
   router.get('/api/ext/me', async (req) => {
-    seen(req, str(req.query.get('v'), 20) || req.device.version);
+    const src = str(req.query.get('src'), 10);
+    seen(req, str(req.query.get('v'), 20) || req.device.version, ['store', 'download'].includes(src) ? src : req.device.source);
     return { user: { id: req.user.id, username: req.user.username }, device: req.device, entitlement: entitlement(req.user, repo.now()) };
   }, { auth: 'device' });
 
-  // For the extension's update check: the newest version, and the site's address
-  // (an extension downloaded before the site moved still talks to the old one).
+  // For the extension's update check: the newest version, the site's address (an
+  // extension downloaded before the site moved still talks to the old one), and the
+  // Chrome Web Store listing, once there is one (that copy updates itself).
   router.get('/api/ext/app', async () => ({
-    name: cfg.appName, url: cfg.baseUrl, extensionVersion: EXTENSION_VERSION, chromeStoreUrl: cfg.chromeStoreUrl || null,
+    name: cfg.appName, url: cfg.baseUrl, origins: appOrigins(cfg), extensionVersion: EXTENSION_VERSION, chromeStoreUrl: storeUrl(cfg, repo) || null,
   }), { auth: 'none' });
 
   router.post('/api/ext/unpair', async (req) => {
@@ -52,7 +59,8 @@ export function register(router, ctx) {
 
   // Your watchlist and the checkout flow of every store.
   router.get('/api/ext/items', async (req) => {
-    seen(req);
+    const src = str(req.query.get('src'), 10);
+    seen(req, req.device.version, ['store', 'download'].includes(src) ? src : req.device.source);
     const settings = { ...DEFAULT_ALERTS, ...(repo.getData(req.user.id, 'alerts', {}) || {}) };
     return {
       items: repo.listItems(req.user.id).map((it) => ({
