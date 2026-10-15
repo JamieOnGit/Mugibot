@@ -67,16 +67,39 @@
         flow: checkoutFlow,
         storeName: retailer.name,
         hasCard: !!data.card,
-        cardLocked: !!data.cardLocked,
+        cardIssue: data.cardIssue || null,
         setStatus: panel.setStatus,
         report: (type, message) => report(type === 'ready' ? 'ready' : type === 'error' ? 'error' : 'step', message, null),
         isActive: assistFlag.active,
       });
       if (result !== 'ready' && result !== 'stopped') assistFlag.off();
       if (result === 'done') ask({ type: 'endFill' });
+      if (result === 'ready' && data.card && checkoutFlow && checkoutFlow.payment === 'card') checkCard();
     } finally {
       assisting = false;
     }
+  }
+
+  // The card goes into boxes on the page (fill.js) or into the payment provider's
+  // frames (frame.js). If it went in nowhere, say so, and where the payment form came from.
+  async function checkCard() {
+    const onPage = () => [...document.querySelectorAll('input, select')]
+      .some((el) => /^card(Number|Expiry|ExpMonth)$/.test(MGBFill.classifyField(el, checkoutFlow) || '') && MGBFill.isVisible(el) && el.value);
+    for (let i = 0; i < 10; i++) {
+      if (!assistFlag.active()) return;
+      if (onPage()) return;
+      const frames = (await ask({ type: 'cardFrames' })) || [];
+      if (frames.some((f) => f.filled > 0)) return;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    const reached = ((await ask({ type: 'cardFrames' })) || []).filter((f) => f.seen > 0);
+    const hostOf = (src) => { try { return new URL(src, location.href).host; } catch { return ''; } };
+    const others = [...new Set([...document.querySelectorAll('iframe')].map((f) => hostOf(f.src)))].filter((h) => h && h !== location.host);
+    const msg = reached.length
+      ? `Your card didn't go into the card boxes (from ${reached[0].host}). Type it in yourself.`
+      : `Mugibot couldn't reach the card boxes on this page${others.length ? ` (the payment form may be in a frame from ${others.slice(0, 3).join(', ')})` : ''}. Type your card in yourself.`;
+    panel.setNote(msg);
+    report('error', `Card not filled in at ${retailer.name}: ${msg}`, null);
   }
 
   async function go(fresh, extra = {}) {

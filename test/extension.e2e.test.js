@@ -31,14 +31,11 @@ let extId;
 let sw;
 let dirs = [];
 
-before(async () => {
-  store = await startMockStore();
-  discord = await startFakeDiscord();
-  env = await startApp({ demoStoreUrl: store.url, allowPrivateHosts: true, hostGapSeconds: 0, ...discordOpts(discord) });
-  const extDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-ext-'));
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-chrome-'));
-  dirs = [extDir, profileDir];
-  writeExtension(env.app.cfg, extDir);
+let extDir;
+let profileDir;
+
+/** Start Chromium with the extension (again: the same profile, like reopening the browser). */
+async function launch() {
   ctx = await chromium.launchPersistentContext(profileDir, {
     channel: 'chromium',
     headless: true,
@@ -47,6 +44,17 @@ before(async () => {
   });
   sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
   extId = new URL(sw.url()).host;
+}
+
+before(async () => {
+  store = await startMockStore();
+  discord = await startFakeDiscord();
+  env = await startApp({ demoStoreUrl: store.url, allowPrivateHosts: true, hostGapSeconds: 0, ...discordOpts(discord) });
+  extDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-ext-'));
+  profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-chrome-'));
+  dirs = [extDir, profileDir];
+  writeExtension(env.app.cfg, extDir);
+  await launch();
 });
 
 after(async () => {
@@ -128,31 +136,30 @@ test('sign up, install, connect the extension with one click', async () => {
   await page.close();
 });
 
-test('card is saved in the extension only — encrypted, tied to this account, never sent to the server', async () => {
+test('card: saved once in the extension (no passphrase), encrypted, tied to this account, never sent to the server', async () => {
   const opts = await ctx.newPage();
   await opts.goto(`chrome-extension://${extId}/options.html`);
   await opts.waitForSelector('#card-form:not([hidden])');
+  assert.equal(await opts.locator('input[type=password]:visible').count(), 0, 'nothing to choose or unlock');
   await opts.fill('#c-number', '4242 4242 4242 4242');
   await opts.fill('#c-name', 'Ash Ketchum');
   await opts.fill('#c-exp', '07/29');
   await opts.fill('#c-cvc', '123');
-  await opts.fill('#c-pass', 'pikachu-123');
-  await opts.fill('#c-pass2', 'pikachu-123');
   await opts.click('#card-form button[type=submit]');
   await opts.waitForSelector('#card-saved:not([hidden])');
   assert.match(await opts.textContent('#card-label'), /Visa •••• 4242/);
-  await opts.fill('#unlock-pass', 'wrong-pass');
-  await opts.click('#unlock-form button[type=submit]');
-  await opts.waitForFunction(() => /Wrong passphrase/.test(document.querySelector('#saved-msg').textContent));
-  await opts.fill('#unlock-pass', 'pikachu-123');
-  await opts.click('#unlock-form button[type=submit]');
-  await opts.waitForFunction(() => /Unlocked/.test(document.querySelector('#card-state').textContent));
+  assert.equal(await opts.textContent('#card-state'), 'Ready for checkout');
+  assert.match(await opts.textContent('#card-msg'), /⚡ Buy will fill it in at checkout from now on/);
+  if (shots) await opts.screenshot({ path: path.join(shots, 'card-settings.png'), fullPage: true });
   await opts.close();
 
   const userId = env.app.repo.userByUsername('ash').id;
   const local = await sw.evaluate(() => chrome.storage.local.get(null));
   assert.equal(local[`vault:${userId}`].last4, '4242');
-  assert.doesNotMatch(JSON.stringify(local), /4242 ?4242 ?4242|pikachu/, 'card number and passphrase are not stored in the clear');
+  assert.equal(local[`vault:${userId}`].v, 2);
+  assert.doesNotMatch(JSON.stringify(local), /4242 ?4242 ?4242/, 'the card number is not stored in the clear');
+  const session = await sw.evaluate(() => chrome.storage.session.get(null));
+  assert.doesNotMatch(JSON.stringify(session), /4242 ?4242 ?4242/, 'nor kept in the clear while the browser runs');
   const dump = JSON.stringify(env.app.db.all('SELECT * FROM user_data')) + JSON.stringify(env.app.db.all('SELECT * FROM events'));
   assert.doesNotMatch(dump, /4242|Ash Ketchum/);
 
@@ -161,8 +168,50 @@ test('card is saved in the extension only — encrypted, tied to this account, n
   await browserApi('PUT', '/api/profiles', { profiles: [PROFILE_A] });
   await dash.goto(`${env.url}/app#checkout`);
   await dash.waitForFunction(() => /Visa •••• 4242/.test(document.querySelector('#card-state').textContent));
-  assert.match(await dash.textContent('#card-state'), /unlocked, ready for checkout/);
+  assert.match(await dash.textContent('#card-state'), /ready: ⚡ Buy fills it in at checkout/);
+  assert.equal(await dash.textContent('#card-open'), 'Card settings');
   await dash.close();
+});
+
+test('the saved card is still ready after closing and opening the browser again', async () => {
+  await ctx.close();
+  await launch();
+  const popup = await ctx.newPage();
+  await popup.goto(`chrome-extension://${extId}/popup.html`);
+  await popup.waitForFunction(() => /Visa •••• 4242 — ready for checkout/.test(document.querySelector('#card-status').textContent));
+  if (shots) await popup.screenshot({ path: path.join(shots, 'popup-card.png') });
+  await popup.close();
+  // The checkouts below run in this reopened browser, and each one fills the card in.
+});
+
+test('a card saved with a passphrase by an older version: entering it once keeps it ready', async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  // What version 1.2 saved: the card encrypted with a passphrase (PBKDF2 → AES-GCM).
+  await sw.evaluate(async (id) => {
+    const enc = new TextEncoder();
+    const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const base = await crypto.subtle.importKey('raw', enc.encode('pikachu-123'), 'PBKDF2', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 310000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    const card = { number: '4242424242424242', name: 'Ash Ketchum', expMonth: '07', expYear: '2029', cvc: '123' };
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(`mugibot-card:${id}`) }, key, enc.encode(JSON.stringify(card)));
+    await chrome.storage.local.set({ [`vault:${id}`]: { v: 1, salt: b64(salt), iv: b64(iv), ct: b64(ct), last4: '4242', brand: 'Visa', expMonth: '07', expYear: '2029', hasCvc: true, savedAt: Date.now() } });
+  }, userId);
+  const opts = await ctx.newPage();
+  await opts.goto(`chrome-extension://${extId}/options.html`);
+  await opts.waitForSelector('#upgrade-form:not([hidden])');
+  assert.match(await opts.textContent('#card-state'), /old passphrase/);
+  await opts.fill('#upgrade-pass', 'wrong-pass');
+  await opts.click('#upgrade-form button[type=submit]');
+  await opts.waitForFunction(() => /Wrong passphrase/.test(document.querySelector('#saved-msg').textContent));
+  await opts.fill('#upgrade-pass', 'pikachu-123');
+  await opts.click('#upgrade-form button[type=submit]');
+  await opts.waitForFunction(() => document.querySelector('#card-state').textContent === 'Ready for checkout');
+  assert.equal(await opts.isHidden('#upgrade-form'), true);
+  await opts.close();
+  const local = await sw.evaluate((id) => chrome.storage.local.get(`vault:${id}`), userId);
+  assert.equal(local[`vault:${userId}`].v, 2, 'moved over to the new kind');
 });
 
 test('Kmart flow (verified): ⚡ Buy ×2 → popup Checkout → details → delivery → payment → stops at "Checkout securely"', async () => {
@@ -254,6 +303,22 @@ test('Kmart with the card in a payment-provider frame (Adyen-style)', async () =
   await waitFor(async () => (await cardFrame(shop).inputValue('input[name=encryptedCardNumber]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
   assert.equal(await cardFrame(shop).inputValue('input[name=encryptedExpiryDate]'), '07 / 29');
   assert.equal(await cardFrame(shop).inputValue('input[name=encryptedSecurityCode]'), '123');
+  assert.equal(ordersPlaced(), 0);
+  await shop.waitForTimeout(11000);
+  assert.doesNotMatch(await panel(shop).textContent(), /couldn't reach the card boxes/, 'no false alarm when the frame took the card');
+  await shop.close();
+  await dash.close();
+});
+
+test("Kmart: when the card boxes can't be reached, the panel says so and where the payment form came from", async () => {
+  store.state.cardInIframe = 'mystery'; // a payment frame Mugibot doesn't recognise
+  await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
+  await waitReady(shop, 'Checkout securely');
+  await shop.waitForFunction(() => /couldn't reach the card boxes on this page \(the payment form may be in a frame from [\w.-]+:\d+\)\. Type your card in yourself/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 30000 });
+  const userId = env.app.repo.userByUsername('ash').id;
+  await waitFor(() => env.app.repo.listEvents(userId).some((e) => /Card not filled in at Kmart/.test(e.message)), { message: 'reported in Activity' });
   assert.equal(ordersPlaced(), 0);
   await shop.close();
   await dash.close();

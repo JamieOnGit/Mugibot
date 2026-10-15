@@ -112,9 +112,9 @@ double-click `start-demo-mac.command` in the Mugibot folder (Windows:
    the unzipped `mugibot-extension` folder. Reload the dashboard.
 2. Press **Connect this browser**. The notice turns green: "✓ Extension connected".
 3. **Checkout details** tab: fill in your name, email, mobile and address, then
-   **Save delivery details**. Press **Open card settings**, save a test card
-   (`4242 4242 4242 4242`, expiry `12/30`, CVV `123`) with a passphrase, then
-   **Unlock card**.
+   **Save delivery details**. Press **Add your card** and save a test card
+   (`4242 4242 4242 4242`, expiry `12/30`, CVV `123`). That's all: it stays
+   ready for every ⚡ Buy, even after you restart the browser.
 4. **Watchlist** tab → **Add dummy-store test items**. You get two products from
    each dummy shop, e.g. "30th Celebration Ultra-Premium Collection (dummy
    kmart)". The sold-out ones show **Sold out** within a minute.
@@ -408,7 +408,8 @@ connection stay. Copies from the Chrome Web Store update by themselves.
 Use a cheap, in-stock Kmart item:
 
 1. Add its product link to your watchlist, set quantity 1.
-2. Make sure the extension is connected, and your details and card are saved and unlocked.
+2. Make sure the extension is connected, and your details and card are saved
+   (extension icon → Card: "ready for checkout").
 3. Press **⚡ Buy**. It should go Add to bag → Checkout → details → delivery → payment.
 4. **Stop at "Checkout securely".** Don't press it unless you actually want the item.
 
@@ -481,7 +482,7 @@ Set these with `fly secrets set NAME=value` (or in `.env` on your computer).
 | Extension says "Not connected" | Dashboard → Extension → **Connect this browser**. If you changed `BASE_URL`, download the extension again. |
 | ⚡ Buy opens the product but nothing happens | Is the extension connected in **this** browser? Is the membership active? Is the store switched on (Admin → Stores & flows)? |
 | Checkout stops early: "Stuck at …" | Something on the page needs you (e.g. a store login, a CAPTCHA). Finish it yourself. If it's every time, send the flow ([RETAILER-FLOWS.md](RETAILER-FLOWS.md)). |
-| Card not filled in | Unlock it (extension icon → Unlock). CVV not saved → type it in. |
+| Card not filled in | Extension icon → Card should say "ready for checkout". "Open Card settings once" means it was saved by an older version: enter its old passphrase once, or save it again. No CVV saved → type it in. If the panel says it couldn't reach the card boxes, it names where the payment form came from: send that to whoever looks after the store flows. |
 | SKU shows "Blocked by site" | The store refuses server checks. Members' browsers take over (Extension tab → In-browser checks). Admins can send manual restock pings. |
 | Member paid on Whop but isn't a member here | Admin → Whop memberships (look for "not linked") → Members → **Link Whop** on their row. Or they paste their membership ID / license key on their Membership tab. |
 | Member isn't in the Discord server | Their Discord tab → **Join the server**. Admin → Members → **Sync Discord** shows the exact error. Usually the bot's role is below `Member`. |

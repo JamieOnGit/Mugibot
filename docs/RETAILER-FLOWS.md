@@ -163,7 +163,9 @@ and that store's dummy copy, so the test keeps proving the flow.
    Shopify stores) to `server/retailers/<newstore>.js` and fill it in.
 2. Add it to `RETAILER_DEFS` in `server/retailers/index.js`.
 3. If the store's card boxes are in a frame from a payment provider that isn't
-   in `PAYMENT_HOSTS` (same file), add its address pattern.
+   in `PAYMENT_HOSTS` (same file), add its address pattern. You'll know: at
+   checkout the Mugibot panel says it "couldn't reach the card boxes" and names
+   the frame's address (it's also in the member's Activity).
 4. Bump `version` in `extension/manifest.json`, deploy, and tell members to
    update the extension (the dashboard tells them too).
 5. Admin → Setup check → **Register slash commands**, so `/watch` lists the new store.

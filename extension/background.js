@@ -3,9 +3,10 @@
 // Talks to your Mugibot account (the server in config.js) with this
 // browser's device token: your watchlist and every store's checkout flow,
 // ⚡ Buy codes, your delivery details for checkout, and what happened on the
-// store page. Your card comes from the vault in this browser (vault.js) and
-// is never sent to the server. Details are handed to a store page only while
-// a checkout you started is running in that tab, on that store.
+// store page. Your card comes from the vault in this browser (vault.js): saved
+// once, ready for every checkout, and never sent to the server. Details are
+// handed to a store page only while a checkout you started is running in that
+// tab, on that store.
 //
 // In-browser checks: about once a minute, this browser re-checks a few of
 // YOUR OWN SKUs at stores that refuse checks from Mugibot's server — the same
@@ -52,11 +53,10 @@ async function api(method, path, body, { token } = {}) {
 }
 
 async function forget() {
-  const auth = await getAuth();
-  if (auth) await Vault.lock(auth.user.id);
+  // The card stays saved (encrypted, under its account) for when that account connects again.
   await chrome.storage.local.remove('auth');
   const all = await chrome.storage.session.get(null);
-  await chrome.storage.session.remove(Object.keys(all).filter((k) => k.startsWith('fill:')));
+  await chrome.storage.session.remove(Object.keys(all).filter((k) => k.startsWith('fill:') || k.startsWith('cardframe:')));
 }
 
 function browserName() {
@@ -79,8 +79,6 @@ async function pair(code) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return { ok: false, error: data.error || `Couldn't connect (HTTP ${res.status})` };
-  const previous = await getAuth();
-  if (previous && previous.user.id !== data.user.id) await Vault.lock(previous.user.id);
   await chrome.storage.local.set({ auth: { token: data.token, user: data.user, device: data.device, server: SERVER, pairedAt: Date.now() } });
   ensureAlarm();
   return { ok: true, user: data.user };
@@ -107,6 +105,7 @@ const passKey = (tabId) => `fill:${tabId}`;
 
 async function savePass(tabId, host, userId, profileId = null) {
   if (tabId == null || !host) return;
+  await clearCardFrames(tabId); // a new checkout
   await chrome.storage.session.set({ [passKey(tabId)]: { host, userId, profileId, expires: Date.now() + PASS_TTL } });
 }
 
@@ -124,13 +123,28 @@ async function fillData(sender, part, profileId) {
   if (!pass || Date.now() > pass.expires || pass.userId !== auth.user.id) return null;
   // Only for the store the checkout was started on.
   if (tabHost(sender) !== pass.host) return null;
-  const card = await Vault.card(auth.user.id);
   const vault = await Vault.status(auth.user.id);
-  if (part === 'card') return { card, cardLocked: vault.saved && !vault.unlocked };
+  const card = vault.ready ? await Vault.card(auth.user.id) : null;
+  // Why there's no card, for the panel: none saved, saved by an older version (passphrase), or unreadable.
+  const cardIssue = card ? null : !vault.saved ? 'none' : vault.needsPassphrase ? 'passphrase' : 'unreadable';
+  if (part === 'card') return { card, cardIssue };
   const chosen = profileId || pass.profileId || '';
   const res = await api('GET', `/api/ext/profile${chosen ? `?profile=${encodeURIComponent(chosen)}` : ''}`);
   if (res.status !== 200 || !res.body) return null;
-  return { profile: res.body.profile, card, cardLocked: vault.saved && !vault.unlocked };
+  return { profile: res.body.profile, card, cardIssue };
+}
+
+// What each payment frame in a tab found and filled (so the page can say when the card didn't go in).
+const frameKey = (tabId, frameId) => `cardframe:${tabId}:${frameId}`;
+
+async function cardFrames(tabId) {
+  const all = await chrome.storage.session.get(null);
+  return Object.entries(all).filter(([k]) => k.startsWith(`cardframe:${tabId}:`)).map(([, v]) => v);
+}
+
+async function clearCardFrames(tabId) {
+  const all = await chrome.storage.session.get(null);
+  await chrome.storage.session.remove(Object.keys(all).filter((k) => k.startsWith(`cardframe:${tabId}:`)));
 }
 
 // --- updates -----------------------------------------------------------------
@@ -303,8 +317,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true };
       }
       case 'fillData': return fillData(sender, msg.part, typeof msg.profileId === 'string' ? msg.profileId : null);
+      case 'cardFrame': {
+        // A payment frame: how many card boxes it found, and how many it filled.
+        if (!sender.tab || !sender.frameId) return null;
+        let host = '';
+        try { host = new URL(sender.url).host; } catch { /* keep empty */ }
+        await chrome.storage.session.set({ [frameKey(sender.tab.id, sender.frameId)]: { host, seen: Number(msg.seen) || 0, filled: Number(msg.filled) || 0, at: Date.now() } });
+        return { ok: true };
+      }
+      case 'cardFrames':
+        return sender.tab && sender.frameId === 0 ? cardFrames(sender.tab.id) : null;
       case 'endFill':
-        if (sender.tab) await chrome.storage.session.remove(passKey(sender.tab.id));
+        if (sender.tab) {
+          await chrome.storage.session.remove(passKey(sender.tab.id));
+          await clearCardFrames(sender.tab.id);
+        }
         return { ok: true };
 
       // From your Mugibot dashboard (bridge.js) or the extension's own pages
@@ -350,9 +377,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const auth = await getAuth();
         if (!auth) return { error: 'Connect the extension to your account first' };
         try {
-          if (msg.action === 'save') return { status: await Vault.save(auth.user.id, msg.card, msg.passphrase) };
-          if (msg.action === 'unlock') return { status: await Vault.unlock(auth.user.id, msg.passphrase, Number(msg.hours) || 0) };
-          if (msg.action === 'lock') { await Vault.lock(auth.user.id); return { status: await Vault.status(auth.user.id) }; }
+          if (msg.action === 'save') return { status: await Vault.save(auth.user.id, msg.card) };
+          if (msg.action === 'upgrade') return { status: await Vault.upgrade(auth.user.id, msg.passphrase) };
           if (msg.action === 'remove') { await Vault.remove(auth.user.id); return { status: await Vault.status(auth.user.id) }; }
           return { status: await Vault.status(auth.user.id) };
         } catch (e) {
@@ -366,7 +392,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // reply asynchronously
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove(passKey(tabId)); });
+chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.storage.session.remove(passKey(tabId));
+  clearCardFrames(tabId).catch(() => null);
+});
 
 // For tests and the "Check now" button.
 globalThis.mugibotRunChecks = runChecks;

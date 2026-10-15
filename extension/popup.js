@@ -1,4 +1,4 @@
-// Mugibot toolbar popup: connect your account, unlock your card, see your watchlist.
+// Mugibot toolbar popup: connect your account, your card for checkout, your watchlist.
 const $ = (id) => document.getElementById(id);
 const ask = (msg) => new Promise((resolve) => chrome.runtime.sendMessage(msg, (r) => resolve(chrome.runtime.lastError ? null : r)));
 const CONFIG = globalThis.MGB_CONFIG;
@@ -6,8 +6,8 @@ const dash = `${CONFIG.server}/app`;
 const STATUS = { in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', not_listed: 'Not listed', not_found: 'Gone', blocked: 'Blocked', error: 'Error', pending: '…' };
 
 function cardText(c) {
-  if (!c || !c.saved) return 'Not saved in this browser';
-  return `${c.brand} •••• ${c.last4} — ${c.unlocked ? 'unlocked' : 'locked'}`;
+  if (!c || !c.saved) return 'Not saved yet: add it in Card settings';
+  return `${c.brand} •••• ${c.last4} — ${c.ready ? 'ready for checkout' : c.needsPassphrase ? 'open Card settings once' : 'save it again'}`;
 }
 
 function checksText(l) {
@@ -47,8 +47,7 @@ async function render() {
   $('plan').textContent = s.online ? (s.entitlement ? s.entitlement.label : '') : 'Offline';
   $('plan').className = `pill ${s.entitlement && !s.entitlement.active ? 'warn' : ''}`;
   $('card-status').textContent = cardText(s.card);
-  $('unlock-form').hidden = !(s.card && s.card.saved && !s.card.unlocked);
-  $('lock').hidden = !(s.card && s.card.unlocked);
+  $('card-settings').textContent = s.card && s.card.saved ? 'Card settings' : 'Add your card';
   $('checks-status').textContent = checksText(s.lastChecks);
   const st = await ask({ type: 'state' });
   const list = $('items');
@@ -83,21 +82,6 @@ $('pair-form').addEventListener('submit', async (e) => {
   $('pair-msg').textContent = r && r.ok ? `Connected as ${r.user.username}` : (r && r.error) || 'Couldn\'t connect';
   $('pair-msg').className = `msg ${r && r.ok ? 'ok' : 'err'}`;
   if (r && r.ok) render();
-});
-
-$('unlock-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const r = await ask({ type: 'vault', action: 'unlock', passphrase: $('unlock-pass').value, hours: 0 });
-  $('unlock-pass').value = '';
-  $('card-msg').textContent = r && r.error ? r.error : 'Unlocked until you close the browser.';
-  $('card-msg').className = `msg ${r && r.error ? 'err' : 'ok'}`;
-  render();
-});
-
-$('lock').addEventListener('click', async () => {
-  await ask({ type: 'vault', action: 'lock' });
-  $('card-msg').textContent = 'Locked.';
-  render();
 });
 
 $('check-now').addEventListener('click', async () => {

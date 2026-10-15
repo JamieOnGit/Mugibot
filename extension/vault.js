@@ -1,16 +1,21 @@
 /* Mugibot — your card, kept only in this browser.
 
-   The card is encrypted with a passphrase you choose (PBKDF2-SHA256 →
-   AES-256-GCM) and saved in the extension's own storage under the account
-   it belongs to. It is never sent to the Mugibot server. Unlocking keeps
-   the card in memory-only session storage (cleared when the browser closes,
-   or sooner if you choose), which web pages can't read. Another account
-   connected to this browser can't see or use it. */
+   Save it once and ⚡ Buy fills it in at checkout from then on, even after
+   the browser is closed and opened again. Nothing to unlock.
+
+   The card is encrypted (AES-256-GCM) with a key this browser's Mugibot
+   extension made for itself. The key can't be exported and is kept in the
+   extension's own database; the encrypted card is saved under the account it
+   belongs to. It is never sent to the Mugibot server, web pages can't read
+   it, and another account connected to this browser can't see or use it.
+
+   Cards saved by version 1.2 or older were encrypted with a passphrase.
+   Entering it once (or saving the card again) moves the card over. */
 
 globalThis.MGBVault = (function () {
   'use strict';
 
-  var ITERATIONS = 310000;
+  var ITERATIONS = 310000; // the old passphrase cards (PBKDF2-SHA256)
   var enc = new TextEncoder();
   var dec = new TextDecoder();
 
@@ -24,13 +29,52 @@ globalThis.MGBVault = (function () {
     return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); });
   }
   var vaultKey = function (userId) { return 'vault:' + userId; };
-  var openKey = function (userId) { return 'card:' + userId; };
+  var oldOpenKey = function (userId) { return 'card:' + userId; }; // an old card, unlocked before the update
+  var aad = function (userId) { return enc.encode('mugibot-card:' + userId); };
 
-  async function deriveKey(passphrase, salt) {
-    var base = await crypto.subtle.importKey('raw', enc.encode(String(passphrase).normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
-    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: ITERATIONS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  // --- this browser's own key ------------------------------------------------
+  function openDb() {
+    return new Promise(function (resolve, reject) {
+      var req = indexedDB.open('mugibot-vault', 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore('keys'); };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+  function inStore(db, mode, fn) {
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction('keys', mode);
+      var req = fn(tx.objectStore('keys'));
+      tx.oncomplete = function () { resolve(req.result); };
+      tx.onerror = tx.onabort = function () { reject(tx.error); };
+    });
+  }
+  async function loadOrMakeKey() {
+    var db = await openDb();
+    try {
+      var key = await inStore(db, 'readonly', function (s) { return s.get('card'); });
+      if (key) return key;
+      var made = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      try {
+        await inStore(db, 'readwrite', function (s) { return s.add(made, 'card'); });
+        return made;
+      } catch (e) {
+        // Made at the same moment elsewhere: use that one.
+        var other = await inStore(db, 'readonly', function (s) { return s.get('card'); });
+        if (other) return other;
+        throw e;
+      }
+    } finally {
+      db.close();
+    }
+  }
+  var keyPromise = null;
+  function browserKey() {
+    if (!keyPromise) keyPromise = loadOrMakeKey().catch(function (e) { keyPromise = null; throw e; });
+    return keyPromise;
   }
 
+  // --- card details ----------------------------------------------------------
   function luhn(num) {
     var sum = 0;
     for (var i = 0; i < num.length; i++) {
@@ -65,77 +109,94 @@ globalThis.MGBVault = (function () {
     return { number: number, name: name, expMonth: String(expMonth).padStart(2, '0'), expYear: String(expYear), cvc: cvc };
   }
 
-  async function save(userId, input, passphrase) {
-    if (!userId) throw new Error('Connect the extension to your account first');
-    if (String(passphrase || '').length < 6) throw new Error('Use a passphrase of at least 6 characters');
-    var card = normalizeCard(input);
-    var salt = crypto.getRandomValues(new Uint8Array(16));
+  async function record(userId) {
+    return (await chrome.storage.local.get(vaultKey(userId)))[vaultKey(userId)] || null;
+  }
+
+  async function store(userId, card) {
+    var key = await browserKey();
     var iv = crypto.getRandomValues(new Uint8Array(12));
-    var key = await deriveKey(passphrase, salt);
-    var ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: enc.encode('mugibot-card:' + userId) }, key, enc.encode(JSON.stringify(card)));
-    var record = {
-      v: 1, salt: b64(salt), iv: b64(iv), ct: b64(ct),
+    var ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: aad(userId) }, key, enc.encode(JSON.stringify(card)));
+    var set = {};
+    set[vaultKey(userId)] = {
+      v: 2, iv: b64(iv), ct: b64(ct),
       last4: card.number.slice(-4), brand: brandOf(card.number), expMonth: card.expMonth, expYear: card.expYear, hasCvc: !!card.cvc, savedAt: Date.now(),
     };
-    var set = {};
-    set[vaultKey(userId)] = record;
     await chrome.storage.local.set(set);
+    await chrome.storage.session.remove(oldOpenKey(userId));
+  }
+
+  /** The card in a saved record, or null if it can't be read (yet). */
+  async function open(userId, rec) {
+    if (rec.v === 2) {
+      try {
+        var key = await browserKey();
+        var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(rec.iv), additionalData: aad(userId) }, key, unb64(rec.ct));
+        return JSON.parse(dec.decode(pt));
+      } catch (e) {
+        return null;
+      }
+    }
+    // Saved with a passphrase by an older version. Unlocked before the update? Move it over now.
+    var old = (await chrome.storage.session.get(oldOpenKey(userId)))[oldOpenKey(userId)];
+    if (old && old.card) {
+      await store(userId, old.card);
+      return old.card;
+    }
+    return null;
+  }
+
+  async function save(userId, input) {
+    if (!userId) throw new Error('Connect the extension to your account first');
+    await store(userId, normalizeCard(input));
     return status(userId);
   }
 
-  /** hours: how long to stay unlocked (0 = until the browser closes). */
-  async function unlock(userId, passphrase, hours) {
-    var got = await chrome.storage.local.get(vaultKey(userId));
-    var rec = got[vaultKey(userId)];
+  /** A card saved with a passphrase by an older version: enter it once to move the card over. */
+  async function upgrade(userId, passphrase) {
+    var rec = await record(userId);
     if (!rec) throw new Error('No card saved for this account');
+    if (rec.v === 2) return status(userId);
     var card;
     try {
-      var key = await deriveKey(passphrase, unb64(rec.salt));
-      var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(rec.iv), additionalData: enc.encode('mugibot-card:' + userId) }, key, unb64(rec.ct));
+      var base = await crypto.subtle.importKey('raw', enc.encode(String(passphrase || '').normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
+      var key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: unb64(rec.salt), iterations: ITERATIONS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+      var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(rec.iv), additionalData: aad(userId) }, key, unb64(rec.ct));
       card = JSON.parse(dec.decode(pt));
     } catch (e) {
       throw new Error('Wrong passphrase');
     }
-    var set = {};
-    set[openKey(userId)] = { card: card, until: hours ? Date.now() + hours * 3600 * 1000 : null };
-    await chrome.storage.session.set(set);
+    await store(userId, card);
     return status(userId);
   }
 
-  async function lock(userId) {
-    await chrome.storage.session.remove(openKey(userId));
-  }
-
   async function remove(userId) {
-    await chrome.storage.session.remove(openKey(userId));
+    await chrome.storage.session.remove(oldOpenKey(userId));
     await chrome.storage.local.remove(vaultKey(userId));
   }
 
-  /** The unlocked card, or null. */
+  /** The card for checkout, or null. */
   async function card(userId) {
     if (!userId) return null;
-    var got = await chrome.storage.session.get(openKey(userId));
-    var open = got[openKey(userId)];
-    if (!open) return null;
-    if (open.until && Date.now() > open.until) {
-      await lock(userId);
-      return null;
-    }
-    return open.card;
+    var rec = await record(userId);
+    return rec ? open(userId, rec) : null;
   }
 
   async function status(userId) {
-    if (!userId) return { saved: false, unlocked: false };
-    var got = await chrome.storage.local.get(vaultKey(userId));
-    var rec = got[vaultKey(userId)];
-    if (!rec) return { saved: false, unlocked: false };
-    var openCard = await card(userId);
-    var s = await chrome.storage.session.get(openKey(userId));
+    if (!userId) return { saved: false, ready: false };
+    var rec = await record(userId);
+    if (!rec) return { saved: false, ready: false };
+    var ready = !!(await open(userId, rec));
+    if (ready && rec.v !== 2) rec = await record(userId);
     return {
-      saved: true, unlocked: !!openCard, until: openCard && s[openKey(userId)] ? s[openKey(userId)].until : null,
+      saved: true,
+      ready: ready,
+      unlocked: ready, // what dashboards from before 1.3 look for
+      needsPassphrase: !ready && rec.v !== 2,
+      unreadable: !ready && rec.v === 2,
       last4: rec.last4, brand: rec.brand, expMonth: rec.expMonth, expYear: rec.expYear, hasCvc: rec.hasCvc,
     };
   }
 
-  return { save: save, unlock: unlock, lock: lock, remove: remove, card: card, status: status, normalizeCard: normalizeCard };
+  return { save: save, upgrade: upgrade, remove: remove, card: card, status: status, normalizeCard: normalizeCard };
 })();
