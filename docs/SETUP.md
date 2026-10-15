@@ -152,15 +152,25 @@ fly auth login
 
 ### 3b. Create the app, its storage and its secrets
 
-From the `Mugibot` folder:
-
-Create the app. Choose a unique name instead of `mugibot-yourname`:
+Every `fly` command from here on reads `fly.toml`, so run them **inside the
+Mugibot folder**. Go there first:
 
 ```bash
-fly apps create mugibot-yourname
+cd ~/Mugibot
 ```
 
-Open `fly.toml` and change `app = "mugibot"` to the same name. Then:
+Create the app. This guide uses the name `mugibot-live`, which is already set
+in `fly.toml`:
+
+```bash
+fly apps create mugibot-live
+```
+
+(Fly names are unique across everyone. If yours has to be different, use it
+everywhere this guide says `mugibot-live`, including the `app = ` line in `fly.toml`.)
+
+Create the storage for the database. If Fly warns that a single volume has no
+copy and asks whether to go on, type `y`:
 
 ```bash
 fly volumes create mugibot_data --region syd --size 1
@@ -173,21 +183,23 @@ Make your encryption key. The 64 characters it prints are your
 openssl rand -hex 32
 ```
 
-Set the secrets (replace the `<…>` parts) and deploy:
+Set the secrets. Replace `PASTE-KEY-HERE` with those 64 characters, and
+`you@example.com` with the email members should contact for help:
 
 ```bash
-fly secrets set \
-  DATA_ENCRYPTION_KEY=<the 64 characters from openssl> \
-  BASE_URL=https://mugibot-yourname.fly.dev \
-  ADMIN_USERNAMES=jamie \
-  SUPPORT_EMAIL=you@yourdomain.com \
-  PRICE_DISPLAY='A$19.99 / month'
-fly deploy
+fly secrets set DATA_ENCRYPTION_KEY=PASTE-KEY-HERE BASE_URL=https://mugibot-live.fly.dev ADMIN_USERNAMES=jamie SUPPORT_EMAIL=you@example.com PRICE_DISPLAY='A$19.99 / month'
+```
+
+Deploy (one machine, since the database is a single file). The first deploy
+takes a few minutes:
+
+```bash
+fly deploy --ha=false
 ```
 
 (No `openssl`? In Node: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.)
 
-Open `https://mugibot-yourname.fly.dev`, sign up as `jamie`, and you're the admin.
+Open `https://mugibot-live.fly.dev`, sign up as `jamie`, and you're the admin.
 
 > **Keep `DATA_ENCRYPTION_KEY` safe.** Every member's saved addresses are
 > encrypted with keys protected by it. If it's lost or changed, those details
@@ -202,7 +214,7 @@ fly certs add app.yourdomain.com
 Add the DNS records it prints at your domain registrar, then:
 
 ```bash
-fly secrets set BASE_URL=https://app.yourdomain.com EXTRA_ORIGINS=https://mugibot-yourname.fly.dev
+fly secrets set BASE_URL=https://app.yourdomain.com EXTRA_ORIGINS=https://mugibot-live.fly.dev
 ```
 
 The address is built into the extension members download, so settle on it

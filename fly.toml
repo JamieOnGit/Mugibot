@@ -1,5 +1,5 @@
 # Fly.io — see docs/SETUP.md, step 3.
-app = "mugibot"   # change to your own app name
+app = "mugibot-live"   # must match the name in `fly apps create` (docs/SETUP.md, step 3b)
 primary_region = "syd"   # Sydney
 
 [build]
