@@ -1,0 +1,25 @@
+{
+  "name": "mugibot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mugibot — restock monitor by SKU, Discord pings and one-button checkout assist for collectors. Each member has their own login, watchlist, delivery details and card.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "demo": "node --disable-warning=ExperimentalWarning scripts/demo.js",
+    "mockstore": "node --disable-warning=ExperimentalWarning scripts/mockstore.js",
+    "build:extension": "node --disable-warning=ExperimentalWarning scripts/build-extension.js",
+    "discord:commands": "node --disable-warning=ExperimentalWarning scripts/discord-commands.js",
+    "make-admin": "node --disable-warning=ExperimentalWarning scripts/make-admin.js",
+    "reset-link": "node --disable-warning=ExperimentalWarning scripts/reset-link.js",
+    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"test/*.test.js\""
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

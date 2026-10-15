@@ -1,0 +1,60 @@
+# Render Blueprint — see docs/SETUP.md ("Deploy to Render instead").
+services:
+  - type: web
+    name: mugibot
+    runtime: docker
+    plan: starter          # needs a paid plan for the persistent disk
+    region: singapore      # Render's closest region to Australia
+    healthCheckPath: /healthz
+    numInstances: 1        # one instance: the database is a single SQLite file
+    disk:
+      name: mugibot-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PATH
+        value: /data/mugibot.db
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATA_ENCRYPTION_KEY
+        generateValue: true   # back this up somewhere safe — without it, saved details can't be read
+      - key: BASE_URL
+        sync: false           # e.g. https://mugibot.onrender.com or your own domain
+      - key: ADMIN_USERNAMES
+        sync: false
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: PRICE_DISPLAY
+        value: A$19.99 / month
+      - key: WHOP_API_KEY
+        sync: false
+      - key: WHOP_PLAN_ID
+        sync: false
+      - key: WHOP_PRODUCT_ID
+        sync: false
+      - key: WHOP_WEBHOOK_SECRET
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_PUBLIC_KEY
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_MEMBER_ROLE_ID
+        sync: false
+      - key: DISCORD_RESTOCK_CHANNEL_ID
+        sync: false
+      - key: DISCORD_RESTOCK_ROLE_ID
+        sync: false
+      - key: DISCORD_INVITE_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false

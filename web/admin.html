@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin — {{APP_NAME}}</title>
+  <link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <a class="logo" href="/app"><img src="/img/favicon.svg" alt=""> {{APP_NAME}} <span class="pill">Admin</span></a>
+      <nav><a class="link" href="/app">← Dashboard</a></nav>
+    </div>
+  </header>
+  <main class="wrap" id="admin">
+    <nav class="tabs" aria-label="Admin sections">
+      <a href="#overview" data-tab="overview">Overview</a>
+      <a href="#members" data-tab="members">Members</a>
+      <a href="#skus" data-tab="skus">SKUs &amp; restock pings</a>
+      <a href="#retailers" data-tab="retailers">Stores &amp; flows</a>
+      <a href="#integrations" data-tab="integrations">Setup check</a>
+      <a href="#whop" data-tab="whop">Whop memberships</a>
+      <a href="#audit" data-tab="audit">Audit log</a>
+    </nav>
+
+    <section data-panel="overview" hidden>
+      <div class="stats" id="stats"></div>
+      <div class="card" id="setup-hints"></div>
+    </section>
+
+    <section data-panel="members" hidden>
+      <div class="card">
+        <div class="tab-head"><h2>Members</h2>
+          <form id="search" class="status-row">
+            <input id="q" type="search" placeholder="Username, email, Discord or mem_…" aria-label="Search members">
+            <select id="plan-filter" aria-label="Filter by plan"><option value="">All plans</option><option>active</option><option>past_due</option><option>comped</option><option>trial</option><option>none</option><option>canceled</option></select>
+            <button class="btn small" type="submit">Search</button>
+          </form>
+        </div>
+        <p class="muted small">You can see accounts, memberships and Discord connections. Members' addresses, cards, watchlists and activity are private and not shown here.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Member</th><th>Membership</th><th>Discord</th><th>Joined</th><th>Last login</th><th>Usage</th><th>Actions</th></tr></thead>
+            <tbody id="users"></tbody>
+          </table>
+        </div>
+        <div class="form-actions"><button class="btn small" id="prev" type="button">← Previous</button><span class="muted small" id="page-info"></span><button class="btn small" id="next" type="button">Next →</button></div>
+      </div>
+    </section>
+
+    <section data-panel="skus" hidden>
+      <form class="card" id="restock-form">
+        <h2>Send a restock ping</h2>
+        <p class="muted">Seen something in stock yourself? Ping everyone watching that SKU (Discord DM with their own ⚡ Buy button), and post it in the restock channel.</p>
+        <div class="grid3">
+          <div><label for="r-store">Store</label><select id="r-store" required></select></div>
+          <div><label for="r-sku">SKU</label><input id="r-sku" required></div>
+          <div><label for="r-note">Note <span class="muted">(optional)</span></label><input id="r-note" placeholder="e.g. online only, limit 2"></div>
+        </div>
+        <div class="form-actions"><button class="btn primary" type="submit">📣 Send restock ping</button><span class="msg" id="r-msg"></span></div>
+      </form>
+      <div class="card">
+        <h2>What members are watching</h2>
+        <p class="muted small">Totals per SKU — not who. 📣 = announced in the Discord channel (from an admin's watchlist: press "📣 Announce" on a SKU in your own dashboard).</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>SKU</th><th>Watchers</th><th>Members' status</th><th>Server check</th><th></th></tr></thead>
+          <tbody id="skus"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <section data-panel="retailers" hidden>
+      <div class="card">
+        <h2>Stores and their checkout flows</h2>
+        <p class="muted small">Each store's flow lives in <code>server/retailers/&lt;store&gt;.js</code>. Fixing a flow there reaches every member's extension without a reinstall. <b>Verified</b> = tested on the real store · <b>Beta</b> = tested on the dummy store · <b>Draft</b> = untested. Switch a store off to hide it and stop its checks; switch off server checks for stores that block them (members' browsers check instead).</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Store</th><th>Flow</th><th>On</th><th>Server checks</th><th>Browser checks</th><th></th></tr></thead>
+          <tbody id="retailers"></tbody>
+        </table></div>
+        <pre class="flow-json" id="flow-json" hidden></pre>
+      </div>
+    </section>
+
+    <section data-panel="integrations" hidden>
+      <div class="card">
+        <h2>Setup check</h2>
+        <p class="muted small">Every setting the guide (docs/SETUP.md) asks for, and whether it works.</p>
+        <div id="integrations"></div>
+        <div class="form-actions">
+          <button class="btn primary" id="d-check" type="button">Check the Discord bot</button>
+          <button class="btn" id="d-post" type="button">Post a test message in the restock channel</button>
+          <span class="msg" id="d-msg"></span>
+        </div>
+        <ul class="checks" id="d-checks"></ul>
+      </div>
+    </section>
+
+    <section data-panel="whop" hidden>
+      <div class="card">
+        <div class="tab-head"><h2>Whop memberships</h2><label class="check small"><input type="checkbox" id="w-unlinked"> <span>Only ones nobody has linked yet</span></label></div>
+        <p class="muted small">Memberships Whop has told us about. One that isn't linked to an account usually means someone bought on Whop and hasn't signed up (or linked it) yet — use "Link Whop" on their row under Members.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Membership</th><th>Status</th><th>Whop user</th><th>Renews</th><th>Mugibot account</th></tr></thead>
+          <tbody id="memberships"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <section data-panel="audit" hidden>
+      <div class="card">
+        <h2>Audit log</h2>
+        <ul class="feed" id="audit"></ul>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/js/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{APP_NAME}} — SKU restock pings and one-button checkout</title>
+  <meta name="description" content="{{APP_NAME}} watches the SKUs you want around the clock, pings you on Discord the moment they restock, and takes you from the ping to a filled-in checkout with one button. You press the final buy button.">
+  <link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <a class="logo" href="/"><img src="/img/favicon.svg" alt=""> {{APP_NAME}}</a>
+      <nav>
+        <a class="link opt" href="#how">How it works</a>
+        <a class="link opt" href="#pricing">Membership</a>
+        <a class="link opt" href="#faq">FAQ</a>
+        <a class="link" href="/login">Log in</a>
+        <a class="btn primary small" href="/signup">Join</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <span class="badge">Pokémon TCG &amp; One Piece drops · Australia</span>
+        <h1>Pinged on restock. At checkout in one press.</h1>
+        <p class="lead">{{APP_NAME}} monitors the exact SKUs you want, pings you on Discord the moment one goes from sold out to in stock, and takes you from the ping straight to a filled-in checkout. You just press buy.</p>
+        <div class="ctas">
+          <a class="btn primary big" href="/signup">Become a member — {{PRICE}}</a>
+          <a class="btn big" href="#how">See how it works</a>
+        </div>
+        <p class="muted small mt">Members get the private Discord server{{TRIAL_NOTE}} · Cancel any time on Whop</p>
+      </div>
+    </section>
+
+    <section class="section" id="how">
+      <div class="wrap">
+        <h2>How it works</h2>
+        <p class="sub">Set it up once. On drop day, it's one button.</p>
+        <div class="steps">
+          <div class="card"><h3>Add your SKUs</h3><p class="muted">Paste a product link, or just the store and SKU — even before it's listed. Set how many you want. From the dashboard or with <code>/watch</code> in Discord.</p></div>
+          <div class="card"><h3>Get pinged</h3><p class="muted">Every SKU is checked around the clock. When it restocks or pre-orders open, the bot DMs you on Discord with a <b>⚡ Buy</b> button.</p></div>
+          <div class="card"><h3>Press ⚡ Buy</h3><p class="muted">The {{APP_NAME}} extension follows that store's own checkout flow: quantity, add to bag, checkout, your address and card — filled in.</p></div>
+          <div class="card"><h3>You press buy</h3><p class="muted">It stops at the store's final button ("Checkout securely", "Place order"), highlighted for you. You check and press it.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Everything for drop day</h2>
+        <p class="sub">Built for collectors who want a fair shot.</p>
+        <div class="features">
+          <div class="card feature"><div class="icon">🔎</div><h3>SKU monitor</h3><p class="muted">Watches each SKU for sold out → in stock, pre-orders opening, and new listings going live. Price limits per SKU.</p></div>
+          <div class="card feature"><div class="icon">💬</div><h3>Discord first</h3><p class="muted">DM pings with a ⚡ Buy button, a members-only server, and slash commands: <code>/watch</code>, <code>/watchlist</code>, <code>/buy</code>.</p></div>
+          <div class="card feature"><div class="icon">⚡</div><h3>One button to checkout</h3><p class="muted">Each store has its own flow — Kmart, BIG W, EB Games, JB Hi-Fi and more — so the right buttons get pressed in the right order.</p></div>
+          <div class="card feature"><div class="icon">🏠</div><h3>Ready for every shop</h3><p class="muted">Save your delivery details (more than one address if you like) and your card once. Checkout fills them in on any supported store.</p></div>
+          <div class="card feature"><div class="icon">🔒</div><h3>Private by design</h3><p class="muted">Your watchlist, addresses and alerts belong to your login only, encrypted. Your card never leaves your browser.</p></div>
+          <div class="card feature"><div class="icon">🔢</div><h3>Quantity control</h3><p class="muted">Choose how many before you press ⚡ Buy. If a store limits it, it adds the most allowed and tells you.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Fair play by design</h2>
+        <p class="sub">{{APP_NAME}} makes you fast. It doesn't cheat.</p>
+        <div class="fair">
+          <div><b>You press the final buy button.</b><br><span class="muted">It never places an order for you.</span></div>
+          <div><b>No CAPTCHA or queue skipping.</b><br><span class="muted">If a store asks "are you human?", that's yours to answer.</span></div>
+          <div><b>Store limits respected.</b><br><span class="muted">Your own account, the quantity the store allows.</span></div>
+          <div><b>Nothing hidden.</b><br><span class="muted">No proxies or disguised traffic. Server checks say who they are.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="pricing">
+      <div class="wrap">
+        <h2>Membership</h2>
+        <p class="sub">One plan with everything included.</p>
+        <div class="card price-card">
+          <div class="price">{{PRICE}}</div>
+          <p class="muted">paid securely through Whop</p>
+          <ul>
+            <li>Your own SKU watchlist, monitored around the clock</li>
+            <li>Discord DM pings with a ⚡ Buy button</li>
+            <li>Access to the members-only Discord server</li>
+            <li>One-button checkout with the browser extension, per-store flows</li>
+            <li>Saved addresses, and your card encrypted in your browser only</li>
+            <li>Cancel any time</li>
+          </ul>
+          <a class="btn primary big block" href="/signup">Join now</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section faq" id="faq">
+      <div class="wrap">
+        <h2>Questions</h2>
+        <details><summary>Which stores does it work with?</summary><p>Kmart's checkout flow is fully tested. BIG W, EB Games and JB Hi-Fi flows are in beta, and Target, Zing, Toys"R"Us and Amazon AU are being added — the dashboard shows each store's status. Stores change their sites from time to time; when that happens the flow is updated on our side, without you reinstalling anything.</p></details>
+        <details><summary>Does it buy things automatically?</summary><p>No. It gets you to a filled-in checkout and highlights the final button. You review your order and press it yourself, every time.</p></details>
+        <details><summary>How does it know when something restocks?</summary><p>Our monitor checks each SKU's product page about every minute. Some stores refuse checks from servers; for those, your own browser (with the extension open) re-checks your own SKUs about once a minute — just like refreshing the page yourself. When it changes, you get a Discord DM.</p></details>
+        <details><summary>How do I get into the Discord server?</summary><p>Become a member, then press <b>Connect Discord</b> in your dashboard. The bot adds you to the server with the members' role. If your membership ends, the role is removed.</p></details>
+        <details><summary>Is my card safe?</summary><p>Your card is never sent to our servers. You save it in the browser extension, encrypted with a passphrase only you know. Once unlocked, the extension types it into the store's own payment form.</p></details>
+        <details><summary>Does it work on my phone?</summary><p>Discord pings reach any device. One-button checkout needs the extension in Chrome, Edge or Brave on a computer.</p></details>
+        <details><summary>Is this allowed?</summary><p>Every store has its own terms of use, and it's up to you to follow them. {{APP_NAME}} keeps you in control: one account, the store's limits, no CAPTCHA or queue skipping, and you place every order yourself.</p></details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site">
+    <div class="wrap">
+      <span>© {{YEAR}} {{APP_NAME}}</span>
+      <a href="/terms">Terms</a>
+      <a href="/privacy">Privacy</a>
+      <a href="mailto:{{SUPPORT_EMAIL}}">Contact</a>
+      <span class="small">Not affiliated with any retailer, Whop, Discord, The Pokémon Company or Bandai.</span>
+    </div>
+  </footer>
+</body>
+</html>

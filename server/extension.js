@@ -1,0 +1,86 @@
+// Builds the Mugibot browser extension for this server: fills in the server
+// address and the stores the extension may run on, and adds the page reader
+// shared with the server's monitor (for in-browser checks). Used by the
+// dashboard's "Download extension" button and by `npm run build:extension`
+// (for the Chrome Web Store).
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { ROOT, loadConfig } from './config.js';
+import { PAYMENT_HOSTS, RETAILER_DEFS } from './retailers/index.js';
+import { makeZip } from './zip.js';
+
+export const EXTENSION_SRC = path.join(ROOT, 'extension');
+const TEMPLATE = JSON.parse(fs.readFileSync(path.join(EXTENSION_SRC, 'manifest.json'), 'utf8'));
+export const EXTENSION_VERSION = TEMPLATE.version;
+// The monitor's page reader, used by the extension's in-browser checks too.
+const SHARED = ['html.js', 'extract.js', 'status.js'].map((f) => ({ name: `lib/${f}`, from: path.join(ROOT, 'server', 'monitor', f) }));
+
+const isLocal = (u) => ['localhost', '127.0.0.1'].includes(new URL(u).hostname);
+
+export function extensionManifest(cfg) {
+  const app = new URL(cfg.baseUrl);
+  // Match patterns can't include a port; without one they match every port.
+  const appPattern = `${app.protocol}//${app.hostname}/*`;
+  const stores = [...new Set(RETAILER_DEFS.flatMap((r) => r.hosts).map((h) => `https://${h}/*`))];
+  const local = isLocal(cfg.baseUrl) || (cfg.demoStoreUrl && isLocal(cfg.demoStoreUrl));
+  // A server on your own computer also lets the extension work on the dummy store there.
+  const dev = local ? ['http://127.0.0.1/*', 'http://localhost/*'] : [];
+  if (cfg.demoStoreUrl && !isLocal(cfg.demoStoreUrl)) {
+    const d = new URL(cfg.demoStoreUrl);
+    dev.push(`${d.protocol}//${d.hostname}/*`);
+  }
+  const m = structuredClone(TEMPLATE);
+  m.name = cfg.appName === 'Mugibot' ? m.name : `${cfg.appName} Checkout`;
+  // The app (your account) and the stores (in-browser restock checks of your own SKUs).
+  m.host_permissions = [...new Set([appPattern, ...stores, ...dev])];
+  m.content_scripts = [
+    { matches: [appPattern], js: ['bridge.js'], run_at: 'document_start' },
+    { matches: [...stores, ...dev], js: ['capture.js'], run_at: 'document_start' },
+    { matches: [...stores, ...dev], js: ['flows.js', 'core.js', 'fill.js', 'content.js'], run_at: 'document_idle' },
+    { matches: [...PAYMENT_HOSTS, ...stores, ...dev], js: ['flows.js', 'fill.js', 'frame.js'], run_at: 'document_idle', all_frames: true },
+  ];
+  // The app's own pages aren't stores: keep the store scripts off them.
+  if (dev.length) for (const cs of m.content_scripts.slice(1)) cs.exclude_matches = [`${app.protocol}//${app.hostname}:${app.port || (app.protocol === 'https:' ? 443 : 80)}/*`];
+  return m;
+}
+
+export function extensionConfigJs(cfg) {
+  return `// Written by the ${cfg.appName} server — the account server this extension talks to.\nglobalThis.MGB_CONFIG = ${JSON.stringify({ server: cfg.baseUrl, appName: cfg.appName })};\n`;
+}
+
+/** All files of the extension built for this server: [{name, data}]. */
+export function extensionFiles(cfg) {
+  const files = [];
+  for (const name of fs.readdirSync(EXTENSION_SRC).sort()) {
+    const full = path.join(EXTENSION_SRC, name);
+    if (!fs.statSync(full).isFile() || name === 'manifest.json' || name === 'config.js') continue;
+    files.push({ name, data: fs.readFileSync(full) });
+  }
+  for (const f of SHARED) files.push({ name: f.name, data: fs.readFileSync(f.from) });
+  files.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(extensionManifest(cfg), null, 2)) });
+  files.push({ name: 'config.js', data: Buffer.from(extensionConfigJs(cfg)) });
+  return files;
+}
+
+export function writeExtension(cfg, outDir) {
+  fs.rmSync(outDir, { recursive: true, force: true });
+  fs.mkdirSync(outDir, { recursive: true });
+  for (const f of extensionFiles(cfg)) {
+    fs.mkdirSync(path.dirname(path.join(outDir, f.name)), { recursive: true });
+    fs.writeFileSync(path.join(outDir, f.name), f.data);
+  }
+  return outDir;
+}
+
+let cached = null;
+export function extensionZip(cfg) {
+  const key = `${cfg.baseUrl}|${cfg.demoStoreUrl}`;
+  if (!cached || cached.key !== key) {
+    const folder = `${cfg.appName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-extension`;
+    cached = { key, zip: makeZip(extensionFiles(cfg).map((f) => ({ name: `${folder}/${f.name}`, data: f.data }))) };
+  }
+  return cached.zip;
+}
+
+export { loadConfig };

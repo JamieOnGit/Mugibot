@@ -1,0 +1,102 @@
+// Web pages: the public site, sign-in pages, the dashboard and admin.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { ROOT } from '../config.js';
+import { extensionZip } from '../extension.js';
+import { sendFile } from '../http.js';
+
+export const WEB = path.join(ROOT, 'web');
+
+const PAGES = {
+  '/': { file: 'index.html' },
+  '/login': { file: 'auth.html' },
+  '/signup': { file: 'auth.html' },
+  '/forgot': { file: 'auth.html' },
+  '/reset': { file: 'auth.html' },
+  '/app': { file: 'app.html', auth: 'user' },
+  '/admin': { file: 'admin.html', auth: 'admin' },
+  '/buy': { file: 'buy.html', auth: 'user' },
+  '/terms': { file: 'terms.html' },
+  '/privacy': { file: 'privacy.html' },
+};
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function render(cfg, file, cache) {
+  if (cache.has(file) && cfg.production) return cache.get(file);
+  const vars = {
+    APP_NAME: cfg.appName,
+    PRICE: cfg.priceDisplay,
+    TRIAL_DAYS: String(cfg.trialDays),
+    TRIAL_NOTE: cfg.trialDays > 0 ? ` · ${cfg.trialDays}-day free trial` : '',
+    SUPPORT_EMAIL: cfg.supportEmail || 'support@example.com',
+    BASE_URL: cfg.baseUrl,
+    YEAR: String(new Date().getFullYear()),
+  };
+  const html = fs.readFileSync(path.join(WEB, file), 'utf8').replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in vars ? esc(vars[k]) : m));
+  cache.set(file, html);
+  return html;
+}
+
+/** Returns true if it answered the request. */
+export function servePage(ctx, req, res, url) {
+  const { cfg } = ctx;
+  const clean = url.pathname.replace(/\/+$/, '') || '/';
+  const page = PAGES[clean] || (/^\/buy\/[\w-]{4,60}$/.test(clean) ? PAGES['/buy'] : null);
+  if (page) {
+    if (page.auth && !req.user) {
+      res.writeHead(302, { location: `/login?next=${encodeURIComponent(url.pathname + url.search)}` });
+      res.end();
+      return true;
+    }
+    if (page.auth === 'admin' && req.user.role !== 'admin') {
+      res.writeHead(302, { location: '/app' });
+      res.end();
+      return true;
+    }
+    if ((url.pathname === '/login' || url.pathname === '/signup') && req.user) {
+      res.writeHead(302, { location: '/app' });
+      res.end();
+      return true;
+    }
+    let html = render(cfg, page.file, ctx.pageCache);
+    // Opened at a different address from BASE_URL (e.g. 127.0.0.1 vs localhost):
+    // say which one to use, because the browser extension only works with that one.
+    const known = new Set([new URL(cfg.baseUrl).host, ...cfg.extraOrigins.map((o) => { try { return new URL(o).host; } catch { return ''; } })]);
+    const host = String(req.headers.host || '').toLowerCase();
+    if (host && !known.has(host)) {
+      const target = cfg.baseUrl + url.pathname + url.search;
+      html = html.replace('<body>', `<body><div class="host-warning" role="alert">This site is set up for <a href="${esc(target)}">${esc(cfg.baseUrl)}</a> — please use that address (the browser extension only connects there).</div>`);
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(req.method === 'HEAD' ? undefined : html);
+    return true;
+  }
+  if (url.pathname === '/download/extension.zip') {
+    if (!req.user) {
+      res.writeHead(302, { location: '/login?next=/app%23extension' });
+      res.end();
+      return true;
+    }
+    const zip = extensionZip(cfg);
+    res.writeHead(200, { 'content-type': 'application/zip', 'content-length': zip.length, 'content-disposition': `attachment; filename="${cfg.appName.toLowerCase()}-extension.zip"`, 'cache-control': 'no-store' });
+    res.end(req.method === 'HEAD' ? undefined : zip);
+    return true;
+  }
+  if (url.pathname === '/healthz') {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ok');
+    return true;
+  }
+  if (url.pathname === '/robots.txt') {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('User-agent: *\nDisallow: /app\nDisallow: /admin\nDisallow: /buy\nDisallow: /api/\n');
+    return true;
+  }
+  if (/^\/(css|js|img)\//.test(url.pathname)) {
+    return sendFile(req, res, WEB, url.pathname, { cache: cfg.production ? 'public, max-age=3600' : 'no-cache' });
+  }
+  if (url.pathname === '/favicon.ico' || url.pathname === '/favicon.svg') return sendFile(req, res, WEB, '/img/favicon.svg', { cache: 'public, max-age=86400' });
+  return false;
+}

@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard — {{APP_NAME}}</title>
+  <link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap full">
+      <a class="logo" href="/app"><img src="/img/favicon.svg" alt=""> {{APP_NAME}}</a>
+      <nav>
+        <span id="plan-pill" class="pill"></span>
+        <a class="link opt" id="admin-link" href="/admin" hidden>Admin</a>
+        <span class="muted small opt" id="who"></span>
+        <button class="btn small" id="logout" type="button">Log out</button>
+      </nav>
+    </div>
+  </header>
+
+  <div class="app">
+    <nav class="side" aria-label="Sections">
+      <a href="#watch" data-tab="watch">🔔 Watchlist</a>
+      <a href="#checkout" data-tab="checkout">📦 Checkout details</a>
+      <a href="#discord" data-tab="discord">💬 Discord</a>
+      <a href="#extension" data-tab="extension">🧩 Extension</a>
+      <a href="#membership" data-tab="membership">⭐ Membership</a>
+      <a href="#activity" data-tab="activity">📋 Activity</a>
+      <a href="#account" data-tab="account">👤 Account</a>
+    </nav>
+
+    <main class="main">
+      <div id="banner"></div>
+
+      <!-- 🔔 Watchlist -->
+      <section data-panel="watch" hidden>
+        <div class="tab-head"><h2>Watchlist</h2><button class="btn small primary" id="w-add-toggle" type="button">+ Add SKU</button></div>
+        <div class="notice" id="ext-status">Checking for the extension…</div>
+        <form class="card" id="w-form" hidden>
+          <h3 id="w-form-title">Add a SKU</h3>
+          <p class="muted small">Paste the product link — or pick the store and type the SKU (handy before it's listed: Mugibot finds the page when it goes up).</p>
+          <label for="w-url">Product link <span class="muted">(optional if you enter the SKU)</span></label>
+          <input id="w-url" name="url" type="url" placeholder="https://www.kmart.com.au/product/…-43818648/">
+          <div class="grid2">
+            <div><label for="w-store">Store</label><select id="w-store" name="store"></select></div>
+            <div><label for="w-sku">SKU / keycode</label><input id="w-sku" name="sku" placeholder="e.g. 43818648" autocomplete="off"></div>
+          </div>
+          <p class="muted small" id="w-store-note"></p>
+          <div class="grid4">
+            <div><label for="w-name">Name</label><input id="w-name" name="name" placeholder="Shown on your list"></div>
+            <div><label for="w-qty">Quantity</label><input id="w-qty" name="quantity" type="number" min="1" max="10" value="1"></div>
+            <div><label for="w-price">Price ($)</label><input id="w-price" name="price" type="number" min="0" step="0.01"></div>
+            <div><label for="w-max">Ping me at or below ($)</label><input id="w-max" name="maxPrice" type="number" min="0" step="0.01" placeholder="Any price"></div>
+          </div>
+          <div class="grid2">
+            <div><label for="w-profile">Deliver to</label><select id="w-profile" name="profileId"></select></div>
+            <div id="w-announce-wrap" hidden><label class="check mt"><input type="checkbox" id="w-announce"> <span>📣 Announce restocks in the members' Discord channel</span></label></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn primary" type="submit" id="w-save">Add SKU</button>
+            <button class="btn" type="button" id="w-cancel">Cancel</button>
+            <span class="msg" id="w-msg"></span>
+          </div>
+        </form>
+        <div class="card">
+          <p class="muted small">Each SKU is checked about every <span id="w-interval">60</span> seconds. When it goes from sold out to <b>in stock</b> (or pre-orders open) you get a Discord DM with a <b>⚡ Buy</b> button. Press ⚡ Buy here or there: a new tab opens the product and the extension adds it to your bag, goes to checkout and fills it in. You press the final button.</p>
+          <ul class="items" id="w-list"></ul>
+          <div class="form-actions">
+            <button class="btn small" type="button" id="w-starter">Add the Kmart starter list</button>
+            <button class="btn small" type="button" id="w-demo" hidden>Add dummy-store test items</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 📦 Checkout details -->
+      <section data-panel="checkout" hidden>
+        <div class="tab-head"><h2>Checkout details</h2><button class="btn small" id="p-add" type="button">+ Add another address</button></div>
+        <p class="muted">Filled in at every store's checkout. Encrypted, and only for your account. Anything a store already filled in from your store account is left as it is.</p>
+        <form id="p-form">
+          <div id="p-list"></div>
+          <div class="form-actions"><button class="btn primary" type="submit">Save delivery details</button><span class="msg" id="p-msg"></span></div>
+        </form>
+        <div class="card mt">
+          <h3>Payment card</h3>
+          <p class="muted">Your card is <b>never stored on our servers</b>. It's saved in the {{APP_NAME}} extension in this browser, encrypted with a passphrase you choose, and tied to your account. Unlock it when you're ready to buy, and checkout fills it in at any store.</p>
+          <p id="card-state" class="notice">Checking this browser…</p>
+          <div class="form-actions"><button class="btn primary" type="button" id="card-open">Open card settings</button></div>
+        </div>
+      </section>
+
+      <!-- 💬 Discord -->
+      <section data-panel="discord" hidden>
+        <div class="tab-head"><h2>Discord</h2></div>
+        <div class="card">
+          <h3>Your Discord</h3>
+          <div id="d-status" class="notice">Loading…</div>
+          <div class="form-actions" id="d-actions"></div>
+          <p class="muted small">Connecting lets the bot add you to the members' server (while your membership is active), DM you restock pings, and answer your slash commands.</p>
+        </div>
+        <form class="card" id="a-form">
+          <h3>Pings</h3>
+          <label class="check"><input type="checkbox" id="a-dm"> <span>DM me when one of my SKUs is <b>in stock</b> or pre-orders open</span></label>
+          <label class="check"><input type="checkbox" id="a-dm-listed"> <span>DM me when a SKU I'm waiting for is first <b>listed</b></span></label>
+          <label class="check"><input type="checkbox" id="a-dm-checkout"> <span>DM me when checkout is filled in and waiting for me</span></label>
+          <details class="mt"><summary class="small">Also post to my own Discord server (webhook)</summary>
+            <label for="a-hook">Discord webhook</label>
+            <input id="a-hook" name="discordWebhook" type="url" placeholder="https://discord.com/api/webhooks/…">
+            <p class="muted small">In your own server: Server settings → Integrations → Webhooks → New webhook → Copy webhook URL.</p>
+            <label for="a-mention">Mention <span class="muted">(optional, e.g. &lt;@your-user-id&gt;)</span></label>
+            <input id="a-mention" name="discordMention">
+          </details>
+          <h3 class="mt">Email</h3>
+          <label class="check"><input type="checkbox" id="a-email-restock"> <span>Email me restocks too</span></label>
+          <label class="check"><input type="checkbox" id="a-email-checkout"> <span>Email me when checkout is waiting for me</span></label>
+          <p class="muted small" id="a-email-note"></p>
+          <div class="form-actions"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="a-test">Send a test ping</button><span class="msg" id="a-msg"></span></div>
+        </form>
+        <div class="card">
+          <h3>Slash commands</h3>
+          <ul class="plain">
+            <li><code>/watch sku:43818648 store:Kmart quantity:2</code> — watch a SKU (or paste a product link as the SKU)</li>
+            <li><code>/watchlist</code> — your SKUs and their stock, with ⚡ Buy links</li>
+            <li><code>/buy sku:43818648</code> — a ⚡ Buy button</li>
+            <li><code>/unwatch sku:43818648</code> · <code>/status</code></li>
+          </ul>
+          <p class="muted small">Replies are private — only you see them.</p>
+        </div>
+      </section>
+
+      <!-- 🧩 Extension -->
+      <section data-panel="extension" hidden>
+        <div class="tab-head"><h2>Browser extension</h2></div>
+        <div class="notice" id="ext-status-2">Checking for the extension…</div>
+        <div class="card">
+          <h3>1. Install</h3>
+          <p id="store-install" hidden><a class="btn primary" id="store-link" href="#" target="_blank" rel="noopener">Add to Chrome</a></p>
+          <ol id="zip-install">
+            <li><a class="btn small" href="/download/extension.zip">Download the extension</a> and unzip it.</li>
+            <li>Open <code>chrome://extensions</code> (Edge: <code>edge://extensions</code>) and turn on <b>Developer mode</b>.</li>
+            <li>Click <b>Load unpacked</b> and choose the unzipped <code>…-extension</code> folder.</li>
+            <li>Come back to this page and reload it.</li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3>2. Connect it to your account</h3>
+          <p class="muted">The extension only ever sees your account: your SKUs, your details, your ⚡ Buy codes.</p>
+          <div class="form-actions">
+            <button class="btn primary" id="pair-now" type="button">Connect this browser</button>
+            <button class="btn" id="pair-code-btn" type="button">Show a connection code</button>
+          </div>
+          <div id="pair-code-box" hidden>
+            <p>In the extension's popup or Settings, enter:</p>
+            <p><span class="code-big" id="pair-code"></span></p>
+            <p class="muted small" id="pair-expiry"></p>
+          </div>
+          <p class="msg" id="pair-msg"></p>
+        </div>
+        <div class="card">
+          <h3>3. Save your card (optional)</h3>
+          <p class="muted">Click the extension's icon → <b>Card settings</b> (or <a href="#checkout">Checkout details</a> → Open card settings). Your card stays in that browser, encrypted with your passphrase, and is never sent to us.</p>
+        </div>
+        <div class="card">
+          <h3>In-browser checks</h3>
+          <p class="muted">Some stores (Kmart, for one) refuse stock checks from servers. For those, this browser re-checks <b>your own</b> SKUs about every <span id="b-interval">60</span> seconds while it's open — the same as refreshing the page yourself. If a store shows a bot check, it backs off. It never tries to get past one.</p>
+          <label class="check"><input type="checkbox" id="b-checks"> <span>Let my browser check my SKUs at stores that refuse server checks</span></label>
+          <div class="form-actions"><button class="btn small" type="button" id="b-check-now">Check my SKUs now</button><span class="msg" id="b-msg"></span></div>
+        </div>
+        <div class="card">
+          <h3>Stores and their checkout flows</h3>
+          <p class="muted small">Each store has its own flow. <b>Verified</b> = tested end to end on the real store. <b>Beta</b> = tested on a copy of the store. <b>Draft</b> = not tested yet — watch each step.</p>
+          <ul class="items" id="stores"></ul>
+        </div>
+        <div class="card">
+          <h3>Connected browsers</h3>
+          <ul class="items" id="devices"></ul>
+        </div>
+      </section>
+
+      <!-- ⭐ Membership -->
+      <section data-panel="membership" hidden>
+        <div class="tab-head"><h2>Membership</h2></div>
+        <div class="card">
+          <dl class="kv" id="m-info"></dl>
+          <div class="form-actions">
+            <button class="btn primary" id="m-subscribe" type="button" hidden>Become a member — {{PRICE}}</button>
+            <button class="btn" id="m-manage" type="button" hidden>Manage membership on Whop</button>
+            <button class="btn" id="m-sync" type="button" hidden>Refresh from Whop</button>
+            <span class="msg" id="m-msg"></span>
+          </div>
+          <p class="muted small" id="m-note"></p>
+        </div>
+        <form class="card" id="m-claim">
+          <h3>Bought on Whop already?</h3>
+          <p class="muted">Paste your Whop membership ID (starts with <code>mem_</code>) or license key to link it to this account.</p>
+          <div class="status-row"><input id="m-claim-id" name="membership" placeholder="mem_… or license key" autocomplete="off"><button class="btn" type="submit">Link membership</button></div>
+          <p class="msg" id="m-claim-msg"></p>
+        </form>
+      </section>
+
+      <!-- 📋 Activity -->
+      <section data-panel="activity" hidden>
+        <div class="tab-head"><h2>Activity</h2></div>
+        <div class="card"><ul class="feed" id="feed"></ul><div class="form-actions"><button class="btn small" id="feed-more" type="button">Show more</button></div></div>
+      </section>
+
+      <!-- 👤 Account -->
+      <section data-panel="account" hidden>
+        <div class="tab-head"><h2>Account</h2></div>
+        <form class="card" id="acct-form">
+          <h3>Profile</h3>
+          <label for="acct-username">Username</label><input id="acct-username" disabled>
+          <label for="acct-email">Email <span class="muted">(optional — password resets and email alerts)</span></label><input id="acct-email" name="email" type="email" autocomplete="email">
+          <label for="acct-name">Name <span class="muted">(optional)</span></label><input id="acct-name" name="name" autocomplete="name">
+          <div class="form-actions"><button class="btn primary" type="submit">Save</button><span class="msg" id="acct-msg"></span></div>
+        </form>
+        <form class="card" id="pw-form">
+          <h3>Change password</h3>
+          <input type="text" name="username" autocomplete="username" id="pw-username" hidden>
+          <label for="pw-current">Current password</label><input id="pw-current" name="current" type="password" autocomplete="current-password" required>
+          <label for="pw-next">New password <span class="muted">(at least 10 characters)</span></label><input id="pw-next" name="next" type="password" autocomplete="new-password" minlength="10" required>
+          <div class="form-actions"><button class="btn primary" type="submit">Change password</button><span class="msg" id="pw-msg"></span></div>
+          <p class="muted small">Changing your password signs out your other browsers.</p>
+        </form>
+        <div class="card">
+          <h3>Your data</h3>
+          <p class="muted">Download everything stored about you: your account, delivery details, watchlist, alert settings, connected browsers and activity.</p>
+          <a class="btn" href="/api/me/export" download>Download my data</a>
+        </div>
+        <form class="card" id="del-form">
+          <h3>Delete account</h3>
+          <p class="muted">Deletes your account and everything in it, cancels your Whop membership and removes your members' role in Discord. This can't be undone.</p>
+          <label for="del-pw">Password</label><input id="del-pw" name="password" type="password" autocomplete="current-password" required>
+          <div class="form-actions"><button class="btn danger" type="submit">Delete my account</button><span class="msg" id="del-msg"></span></div>
+        </form>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

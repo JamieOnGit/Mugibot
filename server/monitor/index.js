@@ -1,0 +1,355 @@
+// Restock monitor for everyone's watchlists, by SKU.
+//
+// Server checks: each page is checked once per interval however many people
+// watch it (a popular SKU doesn't mean more requests to the store), with a
+// minimum gap between requests to the same store. Requests identify
+// themselves honestly as Mugibot. A SKU without a product link yet is looked
+// for on the store's search page ("Not listed yet" until it appears).
+//
+// In-browser checks: some stores refuse requests from servers (Kmart does).
+// For those, a member's own browser — with the extension — re-checks that
+// member's own SKUs about once a minute, the same as refreshing the page
+// yourself. Those results only ever update that member's own watchlist.
+// If a store shows a bot check, Mugibot backs off; it never tries to get
+// past bot protection.
+//
+// Every item keeps its own status, so each member gets their own alert when
+// their SKU goes from out of stock (or not listed) to in stock / pre-order.
+
+import { ENTITLED_SQL } from '../repo.js';
+import { DEFAULT_ALERTS } from '../schema.js';
+import { serialize } from '../retailers/index.js';
+import { extractProduct, extractProductLinks } from './extract.js';
+import { BlockedUrlError, safeFetch } from './safeurl.js';
+import { STATUS, isOrderable } from './status.js';
+
+const MAX_BACKOFF_MS = 30 * 60 * 1000;
+const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
+const KNOWN = new Set(Object.values(STATUS));
+const ANNOUNCE_GAP_MS = 10 * 60 * 1000;
+
+const ITEMS_FOR_PAGE = `(c.kind = 'product' AND i.url = c.url) OR (c.kind = 'search' AND i.url = '' AND i.store = c.store AND i.sku = c.sku COLLATE NOCASE)`;
+
+/** Does this link's path contain the SKU (as a whole code, not part of a longer number)? */
+export function pathHasSku(url, sku) {
+  let p;
+  try { p = decodeURIComponent(new URL(url).pathname).toLowerCase(); } catch { return false; }
+  const s = String(sku || '').toLowerCase();
+  if (!s) return false;
+  // A number must not run into more digits; a code must not run into more letters or digits.
+  const edge = /^\d+$/.test(s) ? /\d/ : /[a-z0-9]/;
+  for (let i = p.indexOf(s); i >= 0; i = p.indexOf(s, i + 1)) {
+    if (!edge.test(p[i - 1] || '') && !edge.test(p[i + s.length] || '')) return true;
+  }
+  return false;
+}
+
+export class Monitor {
+  constructor({ cfg, repo, retailers, notifier, hub, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
+    Object.assign(this, { cfg, repo, retailers, notifier, hub, fetch: fetchImpl, now });
+    this.db = repo.db;
+    this.hostNext = new Map();
+    this.inFlight = new Set();
+    this.announced = new Map();
+    this.timer = null;
+    this.ticks = 0;
+  }
+
+  start() {
+    if (this.timer || !this.cfg.monitor.enabled) return;
+    this.timer = setInterval(() => { this.tick().catch((e) => this.cfg.log('[monitor]', e.message)); }, this.cfg.monitor.tickMs);
+    this.timer.unref?.();
+  }
+
+  stop() {
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  get interval() {
+    return this.cfg.monitor.urlIntervalSeconds * 1000;
+  }
+
+  get browserInterval() {
+    return this.cfg.monitor.browserIntervalSeconds * 1000;
+  }
+
+  // -------------------------------------------------------------------------
+  // Server checks
+  // -------------------------------------------------------------------------
+  async tick() {
+    const now = this.now();
+    if (this.ticks++ % 300 === 0) {
+      // Forget pages nobody watches any more.
+      this.db.run("DELETE FROM page_checks WHERE kind = 'product' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = page_checks.url)");
+      this.db.run("DELETE FROM page_checks WHERE kind = 'search' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = '' AND i.store = page_checks.store AND i.sku = page_checks.sku COLLATE NOCASE)");
+    }
+    const due = this.db.all(`SELECT c.* FROM page_checks c
+      WHERE c.next_check_at <= :now AND EXISTS (
+        SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
+        WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
+      ORDER BY c.next_check_at LIMIT 25`, { now });
+    const jobs = [];
+    for (const page of due) {
+      const retailer = this.retailers.get(page.store) || this.retailers.forUrl(page.url);
+      if (retailer && !this.retailers.settings(retailer).serverChecks) {
+        // Switched off by an admin: members' browsers check these instead.
+        this.db.run("UPDATE page_checks SET next_check_at = :next, error = 'Server checks are off for this store' WHERE url = :url", { url: page.url, next: now + 10 * 60 * 1000 });
+        continue;
+      }
+      if (this.inFlight.has(page.url) || this.inFlight.size >= 4) continue;
+      if ((this.hostNext.get(page.host) || 0) > now) continue;
+      const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
+      this.hostNext.set(page.host, now + gap * 1000);
+      this.inFlight.add(page.url);
+      jobs.push(this.checkPage(page.url).finally(() => this.inFlight.delete(page.url)));
+    }
+    await Promise.all(jobs);
+    return jobs.length;
+  }
+
+  headers() {
+    return { 'user-agent': this.cfg.monitor.userAgent, accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8', 'accept-language': 'en-AU,en;q=0.9' };
+  }
+
+  get(target) {
+    return safeFetch(this.fetch, target, { headers: this.headers(), signal: AbortSignal.timeout(this.cfg.monitor.timeoutMs) }, { allowPrivate: this.cfg.monitor.allowPrivateHosts });
+  }
+
+  /** A product page's stock status (Shopify's product JSON first, for Shopify stores). */
+  async read(url, retailer) {
+    const u = new URL(url);
+    if (/\/products\/[^/]+\/?$/.test(u.pathname) && (!retailer || retailer.platform === 'shopify' || retailer.id === 'other')) {
+      try {
+        const res = await this.get(`${u.origin}${u.pathname.replace(/\/$/, '')}.js`);
+        if (res.ok && /json|javascript/.test(res.headers.get('content-type') || '')) {
+          const p = await res.json();
+          if (p && Array.isArray(p.variants)) {
+            const avail = p.variants.some((v) => v.available);
+            const v = p.variants.find((x) => x.available) || p.variants[0];
+            return { status: avail ? STATUS.IN_STOCK : STATUS.OUT_OF_STOCK, title: p.title || null, price: v && typeof v.price === 'number' ? v.price / 100 : null, decidedBy: 'shopify-json' };
+          }
+        }
+        if (res.status === 404) return { status: STATUS.NOT_FOUND };
+      } catch (e) {
+        if (e instanceof BlockedUrlError) throw e;
+        /* fall back to the page */
+      }
+    }
+    const res = await this.get(url);
+    if (res.status === 404 || res.status === 410) return { status: STATUS.NOT_FOUND };
+    if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store refused the server check (HTTP ${res.status})` };
+    if (!res.ok) return { status: STATUS.ERROR, error: `HTTP ${res.status}` };
+    const html = (await res.text()).slice(0, 3_000_000);
+    const r = extractProduct(html, { url, hints: (retailer && retailer.hints) || {} });
+    return { status: r.status, title: r.title, price: r.price, decidedBy: r.decidedBy, error: r.blocked ? 'The store showed a bot check instead of the page' : '' };
+  }
+
+  /** Look for a SKU on the store's search page. */
+  async readSearch(page, retailer) {
+    const res = await this.get(page.url);
+    if (res.status === 404 || res.status === 410) return { status: STATUS.NOT_LISTED };
+    if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store refused the server check (HTTP ${res.status})` };
+    if (!res.ok) return { status: STATUS.ERROR, error: `HTTP ${res.status}` };
+    const html = (await res.text()).slice(0, 3_000_000);
+    const finalUrl = res.url || page.url;
+    // Some stores send a search for an exact code straight to the product page.
+    if (retailer && retailer.productPath && retailer.productPath.test(new URL(finalUrl).pathname) && pathHasSku(finalUrl, page.sku)) {
+      return { status: STATUS.NOT_LISTED, foundUrl: finalUrl };
+    }
+    const links = extractProductLinks(html, finalUrl, (retailer && retailer.productPath) || /\/(product|products|p)\//i);
+    const hit = links.find((l) => pathHasSku(l.url, page.sku));
+    if (hit) return { status: STATUS.NOT_LISTED, foundUrl: hit.url, title: hit.name };
+    const ex = extractProduct(html, { url: finalUrl });
+    if (ex.blocked) return { status: STATUS.BLOCKED, error: 'The store showed a bot check instead of the page' };
+    return { status: STATUS.NOT_LISTED };
+  }
+
+  async checkPage(url) {
+    const prev = this.db.get('SELECT * FROM page_checks WHERE url = :url', { url });
+    if (!prev) return null;
+    const retailer = this.retailers.get(prev.store) || this.retailers.forUrl(url);
+    let r;
+    try {
+      r = prev.kind === 'search' ? await this.readSearch(prev, retailer) : await this.read(url, retailer);
+    } catch (e) {
+      r = { status: STATUS.ERROR, error: e instanceof BlockedUrlError ? e.message : e.name === 'TimeoutError' ? 'The store took too long to answer' : "Couldn't reach the store" };
+    }
+    const now = this.now();
+    const failed = FAILED.has(r.status);
+    const failCount = failed ? prev.fail_count + 1 : 0;
+    const next = now + (failed ? Math.min(MAX_BACKOFF_MS, this.interval * 2 ** Math.min(failCount, 6)) : this.interval);
+    // A failed check keeps the last known stock status (so a block doesn't look like a restock later).
+    const status = failed && prev.status && !FAILED.has(prev.status) && failCount < 3 ? prev.status : r.status;
+    this.db.run(`UPDATE page_checks SET status = :status, title = COALESCE(:title, title), price = COALESCE(:price, price), signals = :sig,
+      checked_at = :now, next_check_at = :next, fail_count = :fails, error = :err, found_url = COALESCE(:found, found_url) WHERE url = :url`,
+    { url, status, title: r.title || null, price: r.price ?? null, sig: r.decidedBy || null, now, next, fails: failCount, err: r.error || '', found: r.foundUrl || null });
+
+    if (prev.kind === 'search' && r.foundUrl) {
+      this.resolveSku(prev.store, prev.sku, r.foundUrl);
+      return { status: 'found', url: r.foundUrl };
+    }
+    const items = this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id, page_checks c
+      WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { url, now });
+    for (const item of items) {
+      await this.applyResult(item, { status, title: r.title || null, price: r.price ?? null, error: r.error || '' }, 'server');
+    }
+    return { status, previous: prev.status };
+  }
+
+  /** The product page for a SKU has been found: every item waiting for it gets the link. */
+  resolveSku(store, sku, foundUrl, userId = null) {
+    const where = `url = '' AND store = :s AND sku = :k COLLATE NOCASE${userId ? ' AND user_id = :u' : ''}`;
+    const waiting = this.db.all(`SELECT id, user_id FROM items WHERE ${where}`, { s: store, k: sku, u: userId });
+    // Status stays "not listed" until the product page itself is read, so that read counts as "listed".
+    this.db.run(`UPDATE items SET url = :url, status = 'not_listed', updated_at = :t, browser_next_at = 0 WHERE ${where}`, { url: foundUrl, s: store, k: sku, u: userId, t: this.now() });
+    this.repo.ensurePage(foundUrl, 'product', store, sku);
+    this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url: foundUrl });
+    for (const w of waiting) this.hub.publish(w.user_id, 'watch', { id: w.id, url: foundUrl });
+    return waiting.length;
+  }
+
+  // -------------------------------------------------------------------------
+  // One item's new status → its owner's alerts
+  // -------------------------------------------------------------------------
+  async applyResult(item, r, source) {
+    const now = this.now();
+    const prev = item.status;
+    const failed = FAILED.has(r.status);
+    if (source === 'server' && failed && item.status_source === 'browser' && item.browser_checked_at && now - item.browser_checked_at < 3 * this.browserInterval) {
+      // The member's browser is doing the checking for this store; keep what it saw.
+      return prev;
+    }
+    let status = r.status;
+    if (source === 'browser' && failed && prev && !FAILED.has(prev) && prev !== 'pending' && item.browser_fails < 2) status = prev;
+    const changed = status !== prev;
+    const error = r.error || '';
+    this.db.run(`UPDATE items SET status = :st, status_source = :src, status_at = CASE WHEN :changed = 1 THEN :now ELSE status_at END, checked_at = :now,
+        title = COALESCE(:title, title), last_price = COALESCE(:price, last_price), error = :err WHERE id = :id`,
+    { id: item.id, st: status, src: source, changed: changed ? 1 : 0, now, title: r.title || null, price: r.price ?? null, err: error });
+    if (changed || error !== (item.error || '')) {
+      this.hub.publish(item.user_id, 'watch', { id: item.id, status, source, checkedAt: now, price: r.price ?? item.last_price, error });
+    }
+    if (!changed) return status;
+    const fresh = { ...item, status, last_price: r.price ?? item.last_price, title: r.title || item.title };
+    if (isOrderable(status) && !isOrderable(prev)) {
+      await this.alertRestock(fresh, { status, price: r.price ?? item.last_price, source, wasListed: prev !== STATUS.NOT_LISTED });
+    } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.BLOCKED, STATUS.ERROR, STATUS.NOT_FOUND, 'pending'].includes(status)) {
+      await this.notifier.itemAlert(item.user_id, fresh, 'listed', { status, price: r.price ?? item.last_price });
+    } else if (isOrderable(prev) && !failed) {
+      this.repo.addEvent(item.user_id, { type: 'restock', level: 'info', message: `${item.name} is now ${status.replace(/_/g, ' ')}`, name: item.name, sku: item.sku, url: item.url || null });
+    }
+    return status;
+  }
+
+  async alertRestock(item, { status, price, source, manual = false, note = '' }) {
+    if (item.max_price !== null && item.max_price !== undefined && typeof price === 'number' && price > item.max_price) {
+      this.repo.addEvent(item.user_id, { type: 'restock', level: 'info', message: `${item.name} is available but $${price.toFixed(2)} is over your limit of $${item.max_price.toFixed(2)}`, name: item.name, sku: item.sku, url: item.url || null });
+      return false;
+    }
+    this.db.run('UPDATE items SET last_alert_at = :now WHERE id = :id', { now: this.now(), id: item.id });
+    await this.notifier.itemAlert(item.user_id, item, 'restock', { status, price, source, manual, note });
+    if (item.announce) {
+      const owner = this.repo.userById(item.user_id);
+      if (owner && owner.role === 'admin') await this.announce(item, { status, price, manual, note });
+    }
+    return true;
+  }
+
+  /** Post a restock in the members' Discord channel (once per SKU per 10 minutes). */
+  async announce(item, info) {
+    const key = `${item.store}:${String(item.sku).toLowerCase()}`;
+    const last = this.announced.get(key) || 0;
+    if (this.now() - last < ANNOUNCE_GAP_MS) return false;
+    this.announced.set(key, this.now());
+    return this.notifier.announce(item, info);
+  }
+
+  /** An admin says a SKU is in stock: ping everyone watching it (and the server channel). */
+  async broadcastRestock({ store, sku, note = '', url = '', name = '' }) {
+    const now = this.now();
+    const items = this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id
+      WHERE i.store = :s AND i.sku = :k COLLATE NOCASE AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { s: store, k: sku, now });
+    let pinged = 0;
+    for (const item of items) {
+      if (await this.alertRestock({ ...item, announce: 0 }, { status: STATUS.IN_STOCK, price: item.last_price, source: 'manual', manual: true, note })) pinged += 1;
+    }
+    const sample = items[0] || { store, sku, name: name || sku, url, quantity: 1 };
+    this.announced.set(`${store}:${String(sku).toLowerCase()}`, now);
+    const posted = await this.notifier.announce({ ...sample, url: sample.url || url, name: name || sample.name }, { status: STATUS.IN_STOCK, manual: true, note });
+    return { pinged, watchers: items.length, posted };
+  }
+
+  // -------------------------------------------------------------------------
+  // In-browser checks (the extension)
+  // -------------------------------------------------------------------------
+  /** Which of this member's SKUs their browser should check now (and lease them so two browsers don't both do it). */
+  browserDue(user) {
+    const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(user.id, 'alerts', {}) || {}) };
+    if (!settings.browserChecks) return [];
+    const now = this.now();
+    const rows = this.db.all(`SELECT i.*, c.status AS page_status, c.fail_count AS page_fails, c.checked_at AS page_checked, c.error AS page_error
+      FROM items i LEFT JOIN page_checks c ON c.url = i.url AND i.url != ''
+      WHERE i.user_id = :u AND i.monitor = 1 AND i.browser_next_at <= :now ORDER BY i.browser_next_at, i.position LIMIT 40`, { u: user.id, now });
+    const out = [];
+    for (const it of rows) {
+      const r = this.retailers.get(it.store);
+      if (!r || it.store === 'other' || !this.retailers.enabled(r) || !this.retailers.settings(r).browserChecks) continue;
+      const serverOff = !this.retailers.settings(r).serverChecks;
+      const serverStruggling = FAILED.has(it.page_status) || it.page_fails > 0 || /Server checks are off/.test(it.page_error || '');
+      const serverSilent = !it.page_checked && now - it.created_at > 90 * 1000;
+      const searchBlocked = !it.url && this.searchStruggling(it);
+      if (!(serverOff || serverStruggling || serverSilent || searchBlocked || it.status_source === 'browser')) continue;
+      const url = it.url || this.retailers.searchUrl(r, it.sku);
+      if (!url) continue;
+      out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null }));
+      this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + this.browserInterval, id: it.id });
+      if (out.length >= 5) break;
+    }
+    return out;
+  }
+
+  searchStruggling(item) {
+    const r = this.retailers.get(item.store);
+    const url = r && this.retailers.searchUrl(r, item.sku);
+    const page = url && this.db.get('SELECT status, fail_count, checked_at FROM page_checks WHERE url = :u', { u: url });
+    return !page || FAILED.has(page.status) || page.fail_count > 0 || (!page.checked_at && this.now() - item.created_at > 90 * 1000);
+  }
+
+  /** What this member's browser saw. Only ever changes this member's own items. */
+  async browserResults(user, results) {
+    const now = this.now();
+    let applied = 0;
+    for (const res of results) {
+      if (!res || typeof res !== 'object') continue;
+      const row = this.db.get('SELECT * FROM items WHERE id = :id AND user_id = :u', { id: String(res.id || ''), u: user.id });
+      if (!row || !row.monitor) continue;
+      const status = KNOWN.has(res.status) ? res.status : STATUS.ERROR;
+      const failed = FAILED.has(status);
+      const fails = failed ? row.browser_fails + 1 : 0;
+      const next = now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails, 5)) : this.browserInterval);
+      this.db.run('UPDATE items SET browser_checked_at = :now, browser_fails = :f, browser_next_at = :n WHERE id = :id', { now, f: fails, n: next, id: row.id });
+      const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';
+      if (!row.url && found) {
+        let ok = false;
+        try {
+          const u = new URL(found);
+          const r = this.retailers.forUrl(u);
+          ok = /^https?:$/.test(u.protocol) && !!r && r.id === row.store && pathHasSku(found, row.sku);
+        } catch { ok = false; }
+        if (ok) {
+          this.resolveSku(row.store, row.sku, found, user.id);
+          applied += 1;
+        }
+        continue;
+      }
+      if (!row.url && status !== STATUS.NOT_LISTED && !failed) continue; // a search result without a link tells us nothing more
+      const title = typeof res.title === 'string' ? res.title.slice(0, 200) : null;
+      const price = typeof res.price === 'number' && Number.isFinite(res.price) && res.price >= 0 && res.price < 100000 ? res.price : null;
+      const error = failed ? (typeof res.error === 'string' && res.error ? res.error.slice(0, 200) : 'Your browser couldn\'t read the page') : '';
+      await this.applyResult({ ...row, browser_fails: fails }, { status, title, price, error }, 'browser');
+      applied += 1;
+    }
+    return applied;
+  }
+}

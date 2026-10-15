@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>⚡ Buy — {{APP_NAME}}</title>
+  <link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap"><a class="logo" href="/app"><img src="/img/favicon.svg" alt=""> {{APP_NAME}}</a><nav><a class="link" href="/app">Dashboard</a></nav></div>
+  </header>
+  <main class="wrap">
+    <div class="card buy-card" id="buy">
+      <h1 id="b-title">⚡ Buy</h1>
+      <p class="muted" id="b-meta">Loading…</p>
+      <div class="status-row mt" id="b-row" hidden>
+        <label for="b-qty" class="small">Quantity</label>
+        <input id="b-qty" class="qty" type="number" min="1" max="10" value="1">
+        <button class="btn primary big" id="b-go" type="button">⚡ Buy</button>
+      </div>
+      <p class="msg" id="b-msg"></p>
+      <p class="muted small">Opens the product in this browser. With the {{APP_NAME}} extension connected, it adds it to your bag, goes to checkout and fills in your details. You press the final button.</p>
+    </div>
+  </main>
+  <script type="module" src="/js/buy.js"></script>
+</body>
+</html>
