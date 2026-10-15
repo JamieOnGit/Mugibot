@@ -5,6 +5,7 @@
 
 import { sendResetLink } from './auth.js';
 import { serialize } from '../retailers/index.js';
+import { commandDefinitions } from './discord.js';
 import { HttpError, bad, bool, num, str } from '../schema.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -183,6 +184,13 @@ export function register(router, ctx) {
   }), opts);
 
   router.post('/api/admin/integrations/discord-check', async () => ({ checks: await discord.check() }), opts);
+
+  router.post('/api/admin/integrations/discord-commands', async (req) => {
+    const r = await discord.registerCommands(commandDefinitions(retailers));
+    repo.audit(req.user.id, null, 'discord-commands', r.ok ? r.names.join(' ') : r.error);
+    if (!r.ok) throw new HttpError(502, r.error);
+    return { commands: r.names };
+  }, opts);
 
   router.post('/api/admin/integrations/discord-post', async (req) => {
     if (!discord.botReady || !cfg.discord.restockChannelId) throw bad('Set DISCORD_BOT_TOKEN, DISCORD_GUILD_ID and DISCORD_RESTOCK_CHANNEL_ID first');

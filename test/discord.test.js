@@ -276,6 +276,17 @@ test('admin setup check reads the bot, server, role order and channel', async ()
   assert.equal((await boss.post('/api/admin/integrations/discord-post')).status, 200);
 });
 
+test('admin console registers the slash commands (no command line needed)', async () => {
+  const boss = new Client(env.url);
+  await boss.post('/api/auth/login', { username: 'boss2', password: 'correct horse battery staple' });
+  const r = await boss.post('/api/admin/integrations/discord-commands');
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual(r.body.commands, ['/watch', '/unwatch', '/watchlist', '/buy', '/status', '/restock']);
+  const member = new Client(env.url);
+  await member.post('/api/auth/signup', { username: 'not-an-admin', password: 'correct horse battery staple', acceptTerms: true });
+  assert.equal((await member.post('/api/admin/integrations/discord-commands')).status, 404);
+});
+
 test('slash command definitions: store choices from the retailers, /restock admin-only', () => {
   const defs = commandDefinitions(env.app.retailers);
   const names = defs.map((d) => d.name);

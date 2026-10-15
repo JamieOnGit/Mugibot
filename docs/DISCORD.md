@@ -91,19 +91,34 @@ Discord tab. The bot adds members by itself, so this is just a convenience.
 
 ## 5. Set the secrets
 
-On Fly.io:
+Where each value comes from:
+
+| Setting | Where |
+|---|---|
+| `DISCORD_CLIENT_ID` | Developer Portal → General Information → **Application ID** |
+| `DISCORD_PUBLIC_KEY` | Developer Portal → General Information → **Public Key** |
+| `DISCORD_CLIENT_SECRET` | Developer Portal → OAuth2 → **Reset Secret** (shown once) |
+| `DISCORD_BOT_TOKEN` | Developer Portal → Bot → **Reset Token** (shown once) |
+| `DISCORD_GUILD_ID` | Right-click your server's icon → **Copy Server ID** |
+| `DISCORD_MEMBER_ROLE_ID` | Server Settings → Roles → right-click `Member` → **Copy Role ID** |
+| `DISCORD_RESTOCK_ROLE_ID` | Server Settings → Roles → right-click `Restock Pings` → **Copy Role ID** |
+| `DISCORD_RESTOCK_CHANNEL_ID` | Right-click `#restocks` → **Copy Channel ID** |
+
+The client secret and bot token are passwords: never paste them into a chat,
+Discord or GitHub. If one gets out, reset it and set the new one.
+
+On Fly, each command is **one line**. Swap the CAPITALS for your values (in
+Notes first, then paste the finished line into Terminal):
 
 ```bash
-fly secrets set \
-  DISCORD_CLIENT_ID=<Application ID> \
-  DISCORD_CLIENT_SECRET=<Client Secret> \
-  DISCORD_PUBLIC_KEY=<Public Key> \
-  DISCORD_BOT_TOKEN=<Bot token> \
-  DISCORD_GUILD_ID=<Server ID> \
-  DISCORD_MEMBER_ROLE_ID=<Member role ID> \
-  DISCORD_RESTOCK_CHANNEL_ID=<#restocks channel ID> \
-  DISCORD_RESTOCK_ROLE_ID=<Restock Pings role ID>
+fly secrets set DISCORD_CLIENT_ID=APPLICATION_ID DISCORD_PUBLIC_KEY=PUBLIC_KEY DISCORD_GUILD_ID=SERVER_ID DISCORD_MEMBER_ROLE_ID=MEMBER_ROLE_ID DISCORD_RESTOCK_ROLE_ID=RESTOCK_ROLE_ID DISCORD_RESTOCK_CHANNEL_ID=RESTOCKS_CHANNEL_ID
 ```
+
+```bash
+fly secrets set DISCORD_CLIENT_SECRET=CLIENT_SECRET DISCORD_BOT_TOKEN=BOT_TOKEN
+```
+
+Each one restarts Mugibot, which takes about a minute.
 
 (On your computer, put the same lines in `.env` and restart.)
 
@@ -115,22 +130,14 @@ fly secrets set \
    Endpoint URL** → `<BASE_URL>/api/discord/interactions` → **Save Changes**.
    Discord checks the address straight away. If it says it couldn't verify,
    make sure `DISCORD_PUBLIC_KEY` is set and the app has redeployed.
-2. Register the commands in your server:
+2. Register the commands in your server: on your site, **Admin** → **Setup
+   check** → **Register slash commands**. It says
+   `Registered /watch, /unwatch, /watchlist, /buy, /status, /restock`.
 
-On Fly:
+(Or from the command line. On Fly: `fly ssh console -C "node /app/scripts/discord-commands.js"`.
+On your computer, with the Discord settings in `.env`: `npm run discord:commands`.)
 
-```bash
-fly ssh console -C "node /app/scripts/discord-commands.js"
-```
-
-On your computer (with the Discord settings in `.env`):
-
-```bash
-npm run discord:commands
-```
-
-It prints `Registered 6 commands in your server: /watch, /unwatch, /watchlist, /buy, /status, /restock`.
-Run it again whenever you add a store, because the store list is part of the
+Press it again whenever you add a store, because the store list is part of the
 commands. `/restock` is only shown to people with **Manage Server**, and
 Mugibot also checks that they're an admin in Mugibot.
 

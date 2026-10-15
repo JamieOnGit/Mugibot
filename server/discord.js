@@ -249,6 +249,14 @@ export class Discord {
     return r.status === 200;
   }
 
+  /** Register (or replace) the slash commands in our server. */
+  async registerCommands(commands) {
+    if (!this.botReady || !this.d.clientId) return { ok: false, error: 'Set DISCORD_CLIENT_ID, DISCORD_BOT_TOKEN and DISCORD_GUILD_ID first' };
+    const r = await this.api('PUT', `/applications/${this.d.clientId}/guilds/${this.d.guildId}/commands`, commands);
+    if (r.status !== 200 || !Array.isArray(r.body)) return { ok: false, error: explain(r.status, r.body, 'add the slash commands') };
+    return { ok: true, names: r.body.map((c) => `/${c.name}`) };
+  }
+
   // -------------------------------------------------------------------------
   // Setup check (admin → Integrations)
   // -------------------------------------------------------------------------

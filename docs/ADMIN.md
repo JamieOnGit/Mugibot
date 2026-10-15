@@ -49,7 +49,8 @@ yet. Also lists anything still to set up.
 
 **Setup check.** Every setting with ✓ / ✕, the exact URLs for Discord and
 Whop, the last Whop webhook received, **Check the Discord bot** (token, server,
-role order, channel) and **Post a test message**.
+role order, channel), **Post a test message** and **Register slash commands**
+(press it again after adding a store).
 
 **Whop memberships.** Every membership Whop has reported, and which account
 it belongs to. Tick "only ones nobody has linked yet" to find people who paid

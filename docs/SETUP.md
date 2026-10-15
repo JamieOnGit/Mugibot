@@ -280,14 +280,9 @@ Follow **[DISCORD.md](DISCORD.md)**. In short, you'll:
 3. Create its bot, copy the token, and invite it with **Manage Roles**.
 4. Drag the bot's role above `Member`.
 5. Copy the server, role and channel IDs.
-6. Set the `DISCORD_…` secrets, set the Interactions Endpoint URL, and run the
-   command registration.
-
-```bash
-fly secrets set DISCORD_CLIENT_ID=… DISCORD_CLIENT_SECRET=… DISCORD_PUBLIC_KEY=… DISCORD_BOT_TOKEN=… \
-  DISCORD_GUILD_ID=… DISCORD_MEMBER_ROLE_ID=… DISCORD_RESTOCK_CHANNEL_ID=… DISCORD_RESTOCK_ROLE_ID=…
-fly ssh console -C "node /app/scripts/discord-commands.js"
-```
+6. Set the `DISCORD_…` secrets (DISCORD.md step 5 says where each one comes
+   from), set the Interactions Endpoint URL, then Admin → **Setup check** →
+   **Register slash commands**.
 
 **Done when:** Admin → **Setup check** → **Check the Discord bot** is all ✓, and
 your dashboard's **Discord** tab → **Connect Discord** puts you in the server.

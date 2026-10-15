@@ -235,7 +235,7 @@ loaders.integrations = async () => {
     row(d.bot, 'Bot (DISCORD_BOT_TOKEN / DISCORD_GUILD_ID)', d.guildId ? `Server ${d.guildId}` : 'Not set'),
     row(!!d.memberRoleId, 'Member role (DISCORD_MEMBER_ROLE_ID)', d.memberRoleId ? `${d.memberRoleId}${d.kickOnExpire ? ' · members are removed from the server when their membership ends' : ' · the role is removed when a membership ends'}` : 'Not set'),
     row(!!d.restockChannelId, 'Restock channel (DISCORD_RESTOCK_CHANNEL_ID)', d.restockChannelId ? `${d.restockChannelId}${d.restockRoleId ? ` · pings role ${d.restockRoleId}` : ''}` : 'Not set'),
-    row(d.commands, 'Slash commands (DISCORD_PUBLIC_KEY)', `Interactions endpoint URL: ${d.interactionsUrl} — then run "npm run discord:commands"`),
+    row(d.commands, 'Slash commands (DISCORD_PUBLIC_KEY)', `Interactions endpoint URL: ${d.interactionsUrl} — then press "Register slash commands" below`),
     row(!!d.inviteUrl, 'Invite link (DISCORD_INVITE_URL, optional)', d.inviteUrl || 'Shown to members on their Discord tab')));
 };
 
@@ -250,6 +250,10 @@ $('#d-check').addEventListener('click', async () => {
 $('#d-post').addEventListener('click', async () => {
   const r = await post('/api/admin/integrations/discord-post', {});
   if (r) { $('#d-msg').textContent = 'Posted — check the channel.'; $('#d-msg').className = 'msg ok'; }
+});
+$('#d-commands').addEventListener('click', async () => {
+  const r = await post('/api/admin/integrations/discord-commands', {});
+  if (r) { $('#d-msg').textContent = `Registered ${r.commands.join(', ')}. Type / in your server to see them.`; $('#d-msg').className = 'msg ok'; }
 });
 
 // --- Whop memberships ---------------------------------------------------------------------

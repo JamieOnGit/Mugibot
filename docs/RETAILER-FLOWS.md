@@ -159,4 +159,4 @@ and that store's dummy copy, so the test keeps proving the flow.
    in `PAYMENT_HOSTS` (same file), add its address pattern.
 4. Bump `version` in `extension/manifest.json`, deploy, and tell members to
    update the extension (the dashboard tells them too).
-5. `npm run discord:commands` so `/watch` lists the new store.
+5. Admin → Setup check → **Register slash commands**, so `/watch` lists the new store.
