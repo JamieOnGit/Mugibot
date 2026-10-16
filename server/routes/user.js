@@ -156,6 +156,24 @@ export function register(router, ctx) {
   // --- Connected browsers (the extension) -----------------------------------
   router.get('/api/devices', async (req) => ({ devices: repo.listDevices(req.user.id) }));
 
+  // The store login monitor: each store, and whether you're signed in there (the latest any of your
+  // browsers saw), with where to sign in. Signed in, ⚡ Buy's checkout is faster.
+  router.get('/api/logins', async (req) => {
+    const devices = repo.listDevices(req.user.id);
+    const stores = retailers.list.filter((r) => r.account && retailers.enabled(r) && (!r.demo || cfg.demoStoreUrl)).map((r) => {
+      let best = null;
+      for (const d of devices) {
+        const l = d.logins && d.logins[r.id];
+        if (l && (!best || l.at > best.at)) best = { ...l, device: d.name };
+      }
+      return {
+        id: r.id, name: r.name, demo: !!r.demo, signInUrl: `${r.base}${r.account.signIn || ''}`,
+        checked: !!r.account.check, status: best ? best.status : null, at: best ? best.at : null, how: best ? best.how : null, device: best ? best.device : null,
+      };
+    });
+    return { stores, browsers: devices.length };
+  });
+
   router.post('/api/devices/pair-code', async (req) => {
     if (!limiter.hit(`paircode:${req.user.id}`, 20, 60 * 60 * 1000)) throw new HttpError(429, 'Too many codes — try again later');
     return repo.createPairCode(req.user.id);

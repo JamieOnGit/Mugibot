@@ -223,6 +223,39 @@ the channel.
 
 ---
 
+## Store channels
+
+Monitor alerts (🆕 new drops, 🟢 restocks, 📉 price drops) can go to a channel
+per store and game. Dashboard → **Monitor → Settings → Discord alert
+channels** → **Set up store channels** makes them in one go:
+
+| Channel | Gets |
+|---|---|
+| `kmart-pokemon`, `kmart-one-piece` | Kmart's Pokémon / One Piece alerts |
+| `bigw-…`, `target-…`, `jbhifi-…`, `ebgames-…`, `zing-…`, `toysrus-…` | The same for BIG W, Target, JB Hi-Fi, EB Games, Zing and Toys"R"Us |
+| `premium-bandai` | Everything from Premium Bandai |
+| `pokemon-center` | Everything from Pokémon Center |
+| `misc-retailers` | Everything no other channel takes: other stores (Trainer Town, Amazon AU, The Games Cube, Gamerholic…) and other games (Gundam, Dragon Ball, Riftbound…) at the split stores |
+
+- The bot uses channels with those names that are **already there** (it also
+  finds `kmart-onepiece` and `misc-retailer`), and makes the rest in a
+  **Mugibot alerts** category. To make channels it needs the **Manage
+  Channels** permission (Server Settings → Roles → the bot's role); or make
+  the channels yourself and press the button again.
+- Each channel gets a rule (named after it, e.g. `#kmart-pokemon`) for new
+  drops and restocks; tick 📉 price drops on a rule to add them. **Role to
+  ping** (optional) pings that role in every channel. Pressing the button again
+  is safe: it brings the same rules back in line and keeps the alert kinds
+  you chose.
+- **Remove my other rules** deletes the rules that aren't for these channels.
+  Leave it unticked to keep them (an alert then also goes to those).
+- `misc-retailers` is a **catch-all** rule: it only gets an alert no other rule
+  took. Any rule can be a catch-all (tick **Catch-all** on it).
+- The bot needs **View Channel**, **Send Messages** and **Embed Links** in each
+  channel (in the category's permissions, they apply to all of them).
+
+---
+
 ## Alternative: Whop's own Discord app
 
 Whop has a Discord app that can give roles to buyers by itself (Whop dashboard →

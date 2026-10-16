@@ -61,6 +61,9 @@ export async function startFakeDiscord() {
     roles: [{ id: 'guild-1', name: '@everyone', position: 0, permissions: '0' }, { id: 'role-member', name: 'Member', position: 1, permissions: '0' }, { id: 'role-bot', name: 'Mugibot', position: 5, permissions: String(1n | (1n << 10n) | (1n << 11n) | (1n << 14n) | (1n << 28n)) }],
     botRoles: ['role-bot'],
     rateLimitNext: 0,
+    // The server's channels (text 0, category 4); the bot may make more when it can Manage Channels.
+    channels: [{ id: '700000000000000001', name: 'general', type: 0 }],
+    canManageChannels: true,
   };
   const fake = jsonServer(async (c, reply, res) => {
     if (state.rateLimitNext > 0 && c.path.includes('/messages')) {
@@ -100,6 +103,15 @@ export async function startFakeDiscord() {
     let m;
     if ((m = p.match(/^\/guilds\/([^/]+)$/))) return m[1] === state.guild.id ? reply(200, state.guild) : reply(404, { message: 'Unknown Guild', code: 10004 });
     if ((m = p.match(/^\/guilds\/([^/]+)\/roles$/))) return reply(200, state.roles);
+    if ((m = p.match(/^\/guilds\/([^/]+)\/channels$/))) {
+      if (c.method === 'GET') return reply(200, state.channels);
+      if (c.method === 'POST') {
+        if (!state.canManageChannels) return reply(403, { message: 'Missing Permissions', code: 50013 });
+        const ch = { id: String(700000000000000001n + BigInt(state.channels.length)), name: c.body.name, type: c.body.type ?? 0, parent_id: c.body.parent_id || null, topic: c.body.topic || null };
+        state.channels.push(ch);
+        return reply(201, ch);
+      }
+    }
     if ((m = p.match(/^\/guilds\/([^/]+)\/members\/([^/]+)$/))) {
       const uid = m[2];
       if (uid === 'bot-1') return reply(200, { user: { id: 'bot-1' }, roles: state.botRoles });

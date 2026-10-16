@@ -118,6 +118,16 @@ export function register(router, ctx) {
     return { ok: true };
   }, admin);
 
+  // Reset one store (body.store) or every store that's being swept: see Sweeper.reset.
+  router.post('/api/monitor/sweep/reset', async (req) => {
+    if (!limiter.hit(`sweepreset:${req.user.id}`, 20, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const store = str(req.body.store, 40) || null;
+    if (store && !retailers.get(store)) throw bad('No such store');
+    const reset = sweeper.reset(store, req.user);
+    if (store && !reset.length) throw bad('That store has no sweeps');
+    return { ok: true, reset };
+  }, admin);
+
   // --- Admins: health and the check log --------------------------------------------------
   router.get('/api/monitor/health', async () => {
     const now = ctx.repo.now();
@@ -144,6 +154,12 @@ export function register(router, ctx) {
   }), admin);
 
   router.post('/api/monitor/routes', async (req) => ({ route: manage.saveRoute(null, req.body) }), admin);
+  // "Set up store channels": a channel per store and game, made by the bot where missing (manage.js).
+  router.post('/api/monitor/routes/setup', async (req) => {
+    if (!limiter.hit(`rsetup:${req.user.id}`, 5, 10 * 60 * 1000)) throw new HttpError(429, 'Try again in a few minutes');
+    const out = await manage.setupChannels({ roleId: req.body.roleId, replace: req.body.replace === true }, req.user);
+    return { ...out, routes: catalog.listRoutes() };
+  }, admin);
   router.put('/api/monitor/routes/:id', async (req) => ({ route: manage.saveRoute(req.params.id, req.body) }), admin);
   router.delete('/api/monitor/routes/:id', async (req) => ({ ok: catalog.deleteRoute(req.params.id) }), admin);
 

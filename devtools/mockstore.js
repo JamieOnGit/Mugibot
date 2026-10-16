@@ -88,8 +88,18 @@ button[disabled]{background:#999;cursor:default}label{display:block;margin:8px 0
 .tile{display:inline-block;border:1px solid #ddd;padding:10px;margin:6px;width:200px;vertical-align:top}.err{color:#c00;font-weight:600}
 .choice[aria-pressed=true]{outline:3px solid #0a0}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style>${head}</head>
 <body><div class="dummy">⚠ Dummy store for testing Mugibot — nothing here is real. <a href="/">Control panel</a></div>
-<header><a href="${base}/">${esc(s.name)}</a> · ${bagLink(shop, bagCount)}</header><main>${body}</main>
+<header><a href="${base}/">${esc(s.name)}</a> · ${bagLink(shop, bagCount)} · <!--mgb-account--></header><main>${body}</main>
 <footer>${esc(s.name)} is a fake store for testing.</footer></body></html>`;
+}
+
+// Signed in at the shop or not (state.signedIn[shop]), the way each kind of store shows it: Shopify's
+// customer number in __st, CrystalCommerce's "not-logged-in" header, Premium Bandai's USER_DATA,
+// and otherwise the header's "Sign in" link or "Hi, Ash" / "Sign out" (the store login monitor reads these).
+function accountBits(shop, on) {
+  if (SHOPIFY.has(shop)) return `<script>var __st={"a":1,"offset":36000,"p":"home","u":"dummy"${on ? ',"cid":4242' : ''}};</script><a href="/${shop}/account">${on ? 'Account' : 'Sign in'}</a>`;
+  if (shop === 'thegamescube') return `<a href="/thegamescube/user/${on ? 'logout' : 'login'}" class="account ${on ? 'logged-in' : 'not-logged-in'}">${on ? 'Logout' : 'Login'}</a>`;
+  if (shop === 'pbandai') return `<script>USER_DATA = {"loadTime":"now","csrfToken":"dummy"${on ? ',"loggedInMember":{"memberNo":"1"}' : ''}}</script><a href="/pbandai/login">${on ? 'My page' : 'Sign In'}</a>`;
+  return on ? `<span class="hi">Hi, Ash</span> <a href="/${shop}/logout">Sign out</a>` : `<a href="/${shop}/login">Sign in</a>`;
 }
 
 // The header's bag link, with the item count like real stores show it.
@@ -130,6 +140,10 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     // 'keys': one frame per box, taking key presses only.
     // 'never': one frame per box, taking nothing.
     cardInIframe: false,
+    // Signed in at each shop (the store login monitor): shop → true.
+    signedIn: {},
+    // Shops answering 429 with Retry-After: shop → seconds.
+    tooMany: {},
     requests: [],
   };
   let cardOrigin = '';
@@ -556,7 +570,11 @@ for (const el of document.querySelectorAll('input')) {
     const p = u.pathname;
     state.requests.push({ method: req.method, path: p, ua: req.headers['user-agent'] || '' });
     if (state.requests.length > 4000) state.requests.splice(0, 2000);
-    const html = (status, body) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' }); res.end(body); };
+    const html = (status, body) => {
+      const sm = p.match(SHOP_RE);
+      res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(sm ? String(body).replace('<!--mgb-account-->', accountBits(sm[1], !!state.signedIn[sm[1]])) : body);
+    };
     const json = (status, obj) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     const redirect = (to) => { res.writeHead(302, { location: to }); res.end(); };
 
@@ -613,6 +631,11 @@ for (const el of document.querySelectorAll('input')) {
     const shop = m[1];
     const sub = m[2] || '/';
     const S = shopOf(shop);
+    // A shop answering "too many requests, wait N seconds" (state.tooMany[shop] = N), like Shopify's 429.
+    if (state.tooMany && state.tooMany[shop] && !sub.startsWith('/img/')) {
+      res.writeHead(429, { 'content-type': 'text/plain', 'retry-after': String(state.tooMany[shop]) });
+      return res.end('Too many requests');
+    }
 
     if (sub === '/' || sub === '') {
       return html(200, page(shop, SHOPS[shop].name, `<h1>${esc(SHOPS[shop].name)}</h1>${S.products.filter((x) => x.listed).map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}">${esc(x.name)}</a><div>$${x.price.toFixed(2)} · ${x.status.replace(/_/g, ' ')}</div></div>`).join('')}`));
@@ -631,10 +654,12 @@ for (const el of document.querySelectorAll('input')) {
       if (js) {
         const prod = find(shop, js[1]);
         if (!prod || !prod.listed) return json(404, { error: 'not found' });
+        // A marketplace seller's product (seller set): like JB Hi-Fi's, a "Seller" option naming them.
+        const option = prod.seller ? { name: 'Seller', position: 1, values: [prod.seller] } : { name: 'Title', position: 1, values: ['Default Title'] };
         return json(200, {
           id: prod.id, handle: prod.sku, title: prod.name, available: prod.status === 'in_stock' || prod.status === 'preorder',
-          featured_image: `http://${req.headers.host}${imagePath(shop, prod)}`,
-          variants: [{ id: prod.id, price: Math.round(prod.price * 100), available: prod.status === 'in_stock' || prod.status === 'preorder' }],
+          featured_image: `http://${req.headers.host}${imagePath(shop, prod)}`, options: [option],
+          variants: [{ id: prod.id, title: option.values[0], price: Math.round(prod.price * 100), available: prod.status === 'in_stock' || prod.status === 'preorder' }],
         });
       }
       sku = (sub.match(/^\/products\/([^/.]+)$/) || [])[1];

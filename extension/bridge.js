@@ -45,6 +45,7 @@
     else if (d.type === 'cardStatus') reply = await ask({ type: 'cardStatus' });
     else if (d.type === 'openCardSettings') reply = await ask({ type: 'openCardSettings' });
     else if (d.type === 'checkNow') reply = await ask({ type: 'checkNow' });
+    else if (d.type === 'checkLogins') reply = await ask({ type: 'checkLogins' });
     else return;
     window.postMessage({ source: 'mugibot-ext', type: d.type, id: d.id, reply }, location.origin);
   });

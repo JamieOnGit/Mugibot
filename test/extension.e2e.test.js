@@ -15,6 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { EXTENSION_VERSION, writeExtension } from '../server/extension.js';
+import { RETAILER_DEFS } from '../server/retailers/index.js';
 import { startMockStore } from '../devtools/mockstore.js';
 import { Client, PASSWORD, discordOpts, startApp, startFakeDiscord, waitFor } from './helpers.js';
 
@@ -34,13 +35,18 @@ let dirs = [];
 let extDir;
 let profileDir;
 
+// Tests never touch the real stores: this browser can't reach any store's address (the
+// extension's own checks, like the store login monitor's, go to every store it knows), and
+// it connects directly (a proxy from the environment would look the addresses up itself).
+const NO_STORES = [`--host-resolver-rules=${[...new Set(RETAILER_DEFS.flatMap((r) => r.hosts))].map((h) => `MAP ${h} 127.0.0.1`).join(', ')}`, '--no-proxy-server'];
+
 /** Start Chromium with the extension (again: the same profile, like reopening the browser). */
 async function launch() {
   ctx = await chromium.launchPersistentContext(profileDir, {
     channel: 'chromium',
     headless: true,
     viewport: { width: 1200, height: 900 },
-    args: [`--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`],
+    args: [`--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`, ...NO_STORES],
   });
   sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
   extId = new URL(sw.url()).host;
@@ -658,7 +664,7 @@ test("live sweeps from an admin's browser: a store that refuses the server is se
   }
 });
 
-test("BIG W's search page builds its products once it's open: an admin's browser opens it in a window of its own, waits, and reads them", async () => {
+test("BIG W's search page builds its products once it's open: an admin's browser opens it in a window of its own, waits, and reads them; ↻ Reset opens it afresh", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;
   const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
@@ -684,10 +690,22 @@ test("BIG W's search page builds its products once it's open: an admin's browser
     assert.equal(tabs.length, 1);
     await tabs[0].waitForTimeout(1500);
     assert.equal(await tabs[0].evaluate((id) => !!document.getElementById(id), 'mugibot-qc'), false);
+
+    // ↻ Reset: the store's tab is closed and opened again at its front page, then searched as before.
+    const fronts = () => store.state.requests.filter((x) => x.path === '/bigw' || x.path === '/bigw/').length;
+    const frontsBefore = fronts();
+    sweeper.reset('demo-bigw');
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => tabs[0].isClosed(), { timeout: 20000, message: 'the old tab closed' });
+    await waitFor(() => fronts() > frontsBefore, { timeout: 20000, message: 'opened again at the front page' });
+    await waitFor(() => ctx.pages().some((pg) => pg.url().includes('/bigw/search')), { timeout: 30000, message: 'searched again in the new tab' });
+    await waitFor(() => sweeper.stat('demo-bigw').lastOkAt > sweeper.stat('demo-bigw').resetAt, { timeout: 30000, message: 'a search after the reset' });
+    assert.equal(ctx.pages().filter((pg) => pg.url().includes('/bigw/')).length, 1, 'still one tab for the store');
   } finally {
     env.app.repo.updateUser(userId, { role: 'user' });
     store.shop('bigw').clientSearch = false;
     sweeper.save({ stores: off }, null);
+    Object.assign(sweeper.stat('demo-bigw'), { slowUntil: 0 });
   }
 });
 
@@ -811,6 +829,81 @@ test("Pokémon Center: its bot check's page comes first and reloads the search p
     store.shop('pokemoncenter').botCheck = false;
     sweeper.save({ stores: off }, null);
   }
+});
+
+test("store login monitor: the extension sees where you're signed in (its checks and the store pages you open), and the dashboard and popup show it", async () => {
+  const loginsNow = async () => {
+    const { body } = await browserApi('GET', '/api/logins');
+    return Object.fromEntries(body.stores.map((x) => [x.id, x]));
+  };
+  // Signed in at the dummy JB Hi-Fi (Shopify) and The Games Cube; not at Trainer Town or Premium Bandai.
+  store.state.signedIn = { jbhifi: true, thegamescube: true };
+  await sw.evaluate(() => chrome.storage.local.remove(['logins', 'loginsCheckedAt']));
+  const checked = await sw.evaluate(() => globalThis.mugibotCheckLogins({ force: true }));
+  assert.ok(checked >= 4, `stores whose pages say so, checked: ${checked}`);
+  await waitFor(async () => {
+    const l = await loginsNow();
+    return l['demo-jbhifi'].status === 'in' && l['demo-thegamescube'].status === 'in' && l['demo-trainertown'].status === 'out' && l['demo-pbandai'].status === 'out';
+  }, { message: 'the checked stores reach the account' });
+  let l = await loginsNow();
+  assert.equal(l['demo-jbhifi'].how, 'check');
+  assert.equal(l['demo-kmart'].status, null, "Kmart's pages don't say, so it isn't checked in the background");
+  assert.equal(l['demo-kmart'].checked, false);
+  // Within 10 minutes it doesn't ask again (the alarm runs every 30 s).
+  assert.equal(await sw.evaluate(() => globalThis.mugibotCheckLogins()), 0);
+
+  // A store whose pages don't say so: read from the page you open. The header's "Sign in"…
+  const page = await ctx.newPage();
+  await page.goto(store.productUrl('kmart', '43818648'));
+  await waitFor(async () => (await loginsNow())['demo-kmart'].status === 'out', { message: 'Kmart: signed out' });
+  // …and "Hi, Ash" / "Sign out" once you're in.
+  store.state.signedIn.kmart = true;
+  await page.reload();
+  await waitFor(async () => (await loginsNow())['demo-kmart'].status === 'in', { message: 'Kmart: signed in' });
+  l = await loginsNow();
+  assert.equal(l['demo-kmart'].how, 'page');
+  assert.ok(l['demo-kmart'].device, 'which browser saw it');
+
+  // The dashboard's Extension tab: signed out first, with where to sign in.
+  await page.goto(`${env.url}/app#extension`);
+  await page.waitForSelector('#logins li.login');
+  assert.equal(await page.locator('#logins li.login.in[data-store="demo-kmart"]').count(), 1);
+  const pb = page.locator('#logins li.login.out[data-store="demo-pbandai"]');
+  assert.equal(await pb.count(), 1);
+  assert.equal(await pb.locator('a', { hasText: 'Sign in' }).getAttribute('href'), `${store.url}/pbandai`);
+  assert.equal(await page.locator('#logins li.login.in a', { hasText: 'Sign in' }).count(), 0, 'no Sign in where you are signed in');
+  assert.match(await page.textContent('#logins-sum'), /^Signed in at 3 of \d+ stores\. Signed out at .*Trainer Town \(dummy store\)/);
+  assert.doesNotMatch(await page.textContent('#logins-sum'), /JB Hi-Fi,|JB Hi-Fi\.$/, 'the real stores were never reached');
+  assert.equal(await page.getAttribute('#logins li.login:first-child', 'class'), 'login out', 'signed out first');
+  // "Check now" asks the extension to look again now.
+  store.state.signedIn.trainertown = true;
+  await sw.evaluate(() => chrome.storage.local.remove('loginsCheckedAt'));
+  await page.click('#logins-check');
+  await page.waitForFunction(() => /Checked \d+ stores?/.test(document.querySelector('#logins-msg').textContent), null, { timeout: 20000 });
+  await page.waitForSelector('#logins li.login.in[data-store="demo-trainertown"]');
+
+  // The watchlist nudges you about a store you watch where you're signed out.
+  store.state.signedIn.kmart = false;
+  const shop = await ctx.newPage();
+  await shop.goto(store.productUrl('kmart', '43818648'));
+  await waitFor(async () => (await loginsNow())['demo-kmart'].status === 'out', { message: 'Kmart: signed out again' });
+  await shop.close();
+  await useItems([{ url: store.productUrl('kmart', '43818648'), name: 'Login nudge UPC' }]);
+  await page.goto(`${env.url}/app#watch`);
+  const nudge = page.locator('#w-list li.login-nudge');
+  await nudge.waitFor();
+  assert.match(await nudge.textContent(), /signed out at Kmart \(dummy store\)/);
+  assert.equal(await nudge.locator('a').first().getAttribute('href'), `${store.url}/kmart`);
+
+  // The extension's popup lists them too.
+  const popup = await ctx.newPage();
+  await popup.goto(`chrome-extension://${extId}/popup.html`);
+  await popup.waitForFunction(() => /Trainer Town/.test(document.querySelector('#logins')?.textContent || ''));
+  assert.match(await popup.locator('#logins-list li', { hasText: 'JB Hi-Fi (dummy store)' }).textContent(), /✓ Signed in/);
+  assert.match(await popup.locator('#logins-list li', { hasText: 'Premium Bandai (dummy store)' }).textContent(), /Not signed in/);
+  await popup.close();
+  await page.close();
+  store.state.signedIn = {};
 });
 
 test("another account's ⚡ Buy link does nothing in this browser", async () => {

@@ -23,22 +23,27 @@ const DAY = 86400000;
 const SVG = 'http://www.w3.org/2000/svg';
 
 export function setupMonitor({ showError }) {
-  const m = { admin: false, stores: [], alerts: [], products: [], current: null, loaded: false, timer: null };
+  const m = { admin: false, stores: [], alerts: [], products: [], current: null, loaded: false, timer: null, sweep: null };
+  // The Monitor's pages: Live (everyone), Settings and Check log (admins).
   const panelOpen = () => !$('[data-panel="monitor"]').hidden;
+  const settingsOpen = () => !$('[data-panel="monitor-settings"]').hidden;
   const storeName = (id) => (m.stores.find((s) => s.id === id) || {}).name || id;
   const filters = () => ({ q: $('#m-q').value.trim(), category: $('#m-category').value, store: $('#m-store').value, status: $('#m-status').value });
   const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v)).toString();
   const buyUrl = (a) => `/buy?${qs({ store: a.store, sku: a.sku, url: a.url, name: a.name })}`;
   const live = setupLive({
-    storeName, buyUrl, panelOpen, openProduct: (id) => openProduct(id),
+    storeName, buyUrl, panelOpen: () => panelOpen() || settingsOpen(), openProduct: (id) => openProduct(id),
     sampleProduct: () => m.products.find((p) => p.image && p.price) || m.products[0] || null,
     onSettings: (d) => { fillSweepForm(d); renderSweep(d); },
+    resetStore: (id, button) => resetStore(id, button),
+    setMode: (id, mode) => setMode(id, mode),
   });
 
   // ---------------------------------------------------------------------------
   // Loading
   // ---------------------------------------------------------------------------
-  async function load() {
+  /** What every Monitor page needs: the stores, and whether you're an admin. False: not a member yet. */
+  async function base() {
     let data;
     try {
       data = await api('GET', '/api/monitor');
@@ -48,7 +53,7 @@ export function setupMonitor({ showError }) {
       box.textContent = '';
       box.append(h('div', { class: 'notice warn' }, h('b', {}, 'The live monitor is for members. '), h('a', { href: '#membership' }, 'Start your membership'), ' to see every store\'s searches, new drops and restocks as they happen.'));
       $('#sn-shell').hidden = true;
-      return;
+      return false;
     }
     $('#m-paywall').textContent = '';
     $('#sn-shell').hidden = false;
@@ -58,8 +63,28 @@ export function setupMonitor({ showError }) {
     m.loaded = true;
     $('#m-add-toggle').hidden = !m.admin;
     $('#ms-now').hidden = !m.admin;
-    $('#m-admin').hidden = !m.admin;
-    await Promise.all([live.load(), loadProducts(), m.admin ? loadAdmin() : null]);
+    $$('.mon-tabs').forEach((n) => { n.hidden = !m.admin; });
+    return true;
+  }
+
+  // Live: the sonar, the stores, the feed and the products.
+  async function load() {
+    if (!(await base())) return;
+    await Promise.all([live.load(), loadProducts()]);
+  }
+
+  // Settings (admins): the stores and where they're searched from, keywords, alerts, Discord channels.
+  async function loadSettings() {
+    if (!(await base())) return;
+    if (!m.admin) { location.hash = '#monitor'; return; }
+    await Promise.all([live.load(), loadSweep(), loadRoutes()]);
+  }
+
+  // Check log (admins): page checks and how each store answered.
+  async function loadChecks() {
+    if (!(await base())) return;
+    if (!m.admin) { location.hash = '#monitor'; return; }
+    await Promise.all([loadHealth(), loadLog()]);
   }
 
   async function loadProducts() {
@@ -340,16 +365,11 @@ export function setupMonitor({ showError }) {
   // ---------------------------------------------------------------------------
   // Admins
   // ---------------------------------------------------------------------------
-  async function loadAdmin() {
-    await Promise.all([loadSweep(), loadRoutes(), loadHealth(), loadLog()]);
-  }
-
   // --- The live sweeps ---------------------------------------------------------
   function fillSweepForm(d) {
     const s = d.settings;
     m.sweepDefaults = d.defaults;
     $('#ms-enabled').checked = s.enabled;
-    $('#ms-keywords').value = s.keywords.join(', ');
     $('#ms-every').value = s.everySeconds;
     $('#ms-bevery').value = s.browserEverySeconds;
     $('#ms-drop').value = s.priceDropPercent;
@@ -361,16 +381,15 @@ export function setupMonitor({ showError }) {
     $('#ms-tcg').checked = s.tcgOnly;
     $('#ms-terms-input').value = s.tcgTerms.join(', ');
     $('#ms-notcard-input').value = (s.notCardTerms || []).join(', ');
-    const box = $('#ms-stores');
-    $$('.store-mode', box).forEach((e) => e.remove());
-    for (const st of d.stores) {
-      const sel = h('select', { 'aria-label': `${st.name}: searched from`, dataset: { store: st.id || st.store } },
-        ...Object.entries(MODES).map(([v, label]) => h('option', { value: v, selected: st.mode === v }, `${label}${v === st.defaultMode ? ' (default)' : ''}`)));
-      box.append(h('label', { class: 'store-mode' }, `${st.name}`, sel));
-    }
   }
 
+  const retryIn = (at) => {
+    const secs = Math.round((at - Date.now()) / 1000);
+    return secs <= 1 ? 'trying again now' : secs < 90 ? `trying again in ${secs} s` : `trying again in ${Math.round(secs / 60)} min`;
+  };
+
   function renderSweep(d) {
+    m.sweep = d;
     const live = d.stores.filter((s) => s.mode !== 'off');
     const state = $('#ms-state');
     state.className = `pill ${!d.monitorEnabled || !d.settings.enabled ? '' : live.some((s) => s.fails > 2) ? 'warn' : 'ok'}`;
@@ -380,18 +399,23 @@ export function setupMonitor({ showError }) {
     for (const s of d.stores) {
       const rate = s.requests1h ? Math.round((s.ok1h / s.requests1h) * 100) : null;
       const status = s.mode === 'off' ? h('span', { class: 'muted' }, '—')
-        : s.fails ? h('span', { class: `pill ${s.fails > 2 ? 'err' : 'warn'}`, title: s.lastError }, `${s.lastError || 'Failing'}${s.nextAt ? ` · retry ${ago(s.nextAt)}` : ''}`)
-          : s.slowedUntil ? h('span', { class: 'pill warn', title: 'The store refused a search lately, so it is searched at a third of the pace for a while' }, `Slowed after a refusal · until ${new Date(s.slowedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
+        : s.fails ? h('span', { class: `pill ${s.fails > 2 ? 'err' : 'warn'}`, title: s.lastError }, `${s.lastError || 'Failing'}${s.nextAt ? ` · ${retryIn(s.nextAt)}` : ''}`)
+          : s.slowedUntil ? h('span', { class: 'pill warn', title: 'Searched at a third of the pace for a while (after a refusal, or a reset)' }, `Gentle until ${new Date(s.slowedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
             : s.lastOkAt ? h('span', { class: 'pill ok', title: s.lastError || '' }, s.lastError || 'OK')
             : h('span', { class: 'pill' }, s.mode === 'browser' ? "Waiting for an admin's browser" : 'Starting');
-      body.append(h('tr', { class: s.mode === 'off' ? 'muted' : '' },
-        h('td', {}, s.name),
-        h('td', {}, MODES[s.mode]),
+      const id = s.id || s.store;
+      // Where it's searched from: changes straight away.
+      const sel = h('select', { 'aria-label': `${s.name}: searched from`, dataset: { store: id } },
+        ...Object.entries(MODES).map(([v, label]) => h('option', { value: v, selected: s.mode === v }, `${label}${v === s.defaultMode ? ' (default)' : ''}`)));
+      sel.addEventListener('change', () => setMode(id, sel.value));
+      body.append(h('tr', { class: s.mode === 'off' ? 'muted' : '', dataset: { store: id } },
+        h('td', {}, h('b', {}, s.name), s.avgMs ? h('div', { class: 'muted small' }, `answers in ${(s.avgMs / 1000).toFixed(1)} s`) : null),
+        h('td', {}, sel),
+        h('td', {}, status),
         h('td', {}, s.lastAt ? h('time', { title: when(s.lastAt) }, ago(s.lastAt)) : '—'),
         h('td', {}, String(s.products24h)),
         h('td', {}, s.requests1h ? `${s.requests1h}${rate !== null ? ` · ${rate}% OK` : ''}` : '—'),
-        h('td', {}, s.avgMs ? `${(s.avgMs / 1000).toFixed(1)} s` : '—'),
-        h('td', {}, status)));
+        h('td', {}, s.mode === 'off' ? '' : h('button', { class: 'btn small', type: 'button', title: `Start ${s.name}'s searches again`, onclick: (e) => resetStore(id, e.currentTarget) }, '↻ Reset'))));
     }
     const terms = $('#ms-terms tbody');
     terms.textContent = '';
@@ -412,10 +436,38 @@ export function setupMonitor({ showError }) {
     renderSweep(d);
   }
 
+  // Reset a store (or every store: id null) that keeps failing: see Sweeper.reset on the server.
+  async function resetStore(id, button) {
+    if (button) button.disabled = true;
+    try {
+      await api('POST', '/api/monitor/sweep/reset', id ? { store: id } : {});
+      toast(id ? `Reset ${storeName(id)}` : 'Reset every store', 'Searching again now, gently for 10 minutes. Anything the store asked to wait for is still waited for.', 'success');
+      setTimeout(() => { if (settingsOpen()) loadSweep({ form: false }).catch(() => null); }, 1500);
+    } catch (err) {
+      toast("Couldn't reset", err.message, 'warn');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  // Where a store is searched from (server, an admin's browser, or off): saved straight away.
+  async function setMode(id, mode) {
+    try {
+      const current = m.sweep ? m.sweep.settings.stores : (await api('GET', '/api/monitor/sweep')).settings.stores;
+      const d = await api('PUT', '/api/monitor/sweep', { stores: { ...current, [id]: mode } });
+      renderSweep(d);
+      live.setSettings(d.settings);
+      toast(`${storeName(id)}: ${MODES[mode].toLowerCase()}`, mode === 'browser' ? "Searched from an admin's browser with the extension from now on." : mode === 'off' ? 'No more searches there.' : "Searched from Mugibot's server from now on.", 'success');
+    } catch (err) {
+      toast("Couldn't change that", err.message, 'warn');
+      if (m.sweep) renderSweep(m.sweep);
+    }
+  }
+
   // Each search: the live console straight away; the admins' table at most every 2 seconds.
   function onSweep(ev) {
     live.onSweep(ev);
-    if (!m.admin || !panelOpen() || m.sweepTimer) return;
+    if (!m.admin || !settingsOpen() || m.sweepTimer) return;
     m.sweepTimer = setTimeout(() => { m.sweepTimer = null; loadSweep({ form: false }).catch(() => null); }, 2000);
   }
 
@@ -430,10 +482,10 @@ export function setupMonitor({ showError }) {
     const list = $('#mr-list');
     list.textContent = '';
     for (const r of routes) {
-      const scope = [r.categories.length ? r.categories.map((c) => CATEGORY[c]).join(', ') : 'All categories', r.stores.length ? r.stores.map(storeName).join(', ') : 'all stores'].join(' · ');
+      const scope = r.fallback ? 'Whatever no other rule takes' : [r.categories.length ? r.categories.map((c) => CATEGORY[c]).join(', ') : 'All categories', r.stores.length ? r.stores.map(storeName).join(', ') : 'all stores'].join(' · ');
       list.append(h('li', { class: r.enabled ? '' : 'off' },
         h('div', { class: 'info' },
-          h('div', { class: 'name' }, r.name, r.enabled ? '' : ' (off)'),
+          h('div', { class: 'name' }, r.name, r.fallback ? h('span', { class: 'pill info' }, 'catch-all') : null, r.enabled ? '' : ' (off)'),
           h('div', { class: 'meta' }, `#${r.channelId}${r.roleId ? ` · pings @${r.roleId}` : ''} · ${r.kinds.map((k) => KINDS[k].emoji).join(' ')} · ${scope}${r.keywords ? ` · names with: ${r.keywords}` : ''}`)),
         h('div', { class: 'acts' },
           h('button', { class: 'btn small', type: 'button', onclick: (e) => testRoute(r, e.target) }, 'Test'),
@@ -466,6 +518,7 @@ export function setupMonitor({ showError }) {
     $('#mr-role').value = r ? r.roleId : '';
     $('#mr-keywords').value = r ? r.keywords : '';
     $('#mr-enabled').checked = r ? r.enabled : true;
+    $('#mr-catchall').checked = !!(r && r.fallback);
     tick($('#mr-kinds'), r ? r.kinds : ['restock', 'listed']);
     tick($('#mr-categories'), r ? r.categories : []);
     tick($('#mr-stores'), r ? r.stores : []);
@@ -548,6 +601,7 @@ export function setupMonitor({ showError }) {
       const body = {
         name: $('#mr-name').value, channelId: $('#mr-channel').value.trim(), roleId: $('#mr-role').value.trim(), keywords: $('#mr-keywords').value,
         enabled: $('#mr-enabled').checked, kinds: ticked($('#mr-kinds')), categories: ticked($('#mr-categories')), stores: ticked($('#mr-stores')),
+        fallback: $('#mr-catchall').checked,
       };
       try {
         await api(id ? 'PUT' : 'POST', id ? `/api/monitor/routes/${id}` : '/api/monitor/routes', body);
@@ -563,17 +617,16 @@ export function setupMonitor({ showError }) {
   $('#ms-form').addEventListener('submit', (e) => {
     e.preventDefault();
     busy(e.target, async () => {
-      const stores = Object.fromEntries($$('#ms-stores select').map((sel) => [sel.dataset.store, sel.value]));
       try {
         const d = await api('PUT', '/api/monitor/sweep', {
-          enabled: $('#ms-enabled').checked, keywords: $('#ms-keywords').value, everySeconds: $('#ms-every').value, browserEverySeconds: $('#ms-bevery').value,
+          enabled: $('#ms-enabled').checked, everySeconds: $('#ms-every').value, browserEverySeconds: $('#ms-bevery').value,
           priceDropPercent: $('#ms-drop').value, newAlerts: $('#ms-new').checked, restockAlerts: $('#ms-restock').checked, priceAlerts: $('#ms-price').checked, restockOncePerDay: $('#ms-once').checked,
-          skipMarketplace: $('#ms-market').checked, tcgOnly: $('#ms-tcg').checked, tcgTerms: $('#ms-terms-input').value, notCardTerms: $('#ms-notcard-input').value, stores,
+          skipMarketplace: $('#ms-market').checked, tcgOnly: $('#ms-tcg').checked, tcgTerms: $('#ms-terms-input').value, notCardTerms: $('#ms-notcard-input').value,
         });
         fillSweepForm(d);
         renderSweep(d);
         live.setSettings(d.settings);
-        setMsg($('#ms-msg'), 'Saved. New keywords and filters start by noting what\'s already there, so the first search of each doesn\'t alert.', true);
+        setMsg($('#ms-msg'), 'Saved. New filters start by noting what\'s already there, so the first search after doesn\'t alert.', true);
       } catch (err) {
         setMsg($('#ms-msg'), err.message);
       }
@@ -583,6 +636,24 @@ export function setupMonitor({ showError }) {
     if (!m.sweepDefaults) return;
     $('#ms-terms-input').value = m.sweepDefaults.tcgTerms.join(', ');
     $('#ms-notcard-input').value = m.sweepDefaults.notCardTerms.join(', ');
+  });
+  $('#ms-reset-all').addEventListener('click', (e) => resetStore(null, e.currentTarget));
+  // "Set up store channels": the bot finds or makes a channel per store and game, with a rule each.
+  $('#mr-setup').addEventListener('click', async (e) => {
+    const replace = $('#mr-setup-replace').checked;
+    if (replace && !confirm('Remove your other Discord alert rules, so only the store channels get alerts?')) return;
+    const button = e.currentTarget;
+    button.disabled = true;
+    setMsg($('#mr-setup-msg'), 'Setting up…', true);
+    try {
+      const r = await api('POST', '/api/monitor/routes/setup', { roleId: $('#mr-setup-role').value.trim(), replace });
+      setMsg($('#mr-setup-msg'), `Done: ${r.channels.length} channels (${r.made} made, ${r.channels.length - r.made} already there), ${r.added} new rule${r.added === 1 ? '' : 's'}${r.removed ? `, ${r.removed} removed` : ''}. Alerts go to each store's channel now; everything else to #misc-retailers.`, true);
+      await loadRoutes();
+    } catch (err) {
+      setMsg($('#mr-setup-msg'), err.message);
+    } finally {
+      button.disabled = false;
+    }
   });
   $('#ms-now').addEventListener('click', async (e) => {
     e.target.disabled = true;
@@ -675,5 +746,5 @@ export function setupMonitor({ showError }) {
     }, 600);
   }
 
-  return { load, openProduct, onFeed, onProduct, onSweep };
+  return { load, loadSettings, loadChecks, openProduct, onFeed, onProduct, onSweep };
 }

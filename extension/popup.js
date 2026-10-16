@@ -86,6 +86,7 @@ async function render() {
     li.className = x.ok ? '' : 'muted';
     $('sweeps-list').appendChild(li);
   }
+  renderLogins(await ask({ type: 'logins' }));
   const st = await ask({ type: 'state' });
   const list = $('items');
   list.textContent = '';
@@ -110,6 +111,32 @@ async function render() {
     li.append(a, meta);
     list.appendChild(li);
   }
+}
+
+// The store login monitor: signed in, not signed in, or not seen yet — with a link to sign in.
+function renderLogins(d) {
+  const list = $('logins-list');
+  list.textContent = '';
+  const stores = (d && d.stores) || [];
+  $('logins').hidden = !stores.length;
+  let signedIn = 0;
+  for (const r of stores) {
+    const l = d.logins[r.id];
+    if (l && l.status === 'in') signedIn += 1;
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = r.name;
+    const state = document.createElement('a');
+    state.href = r.signIn;
+    state.target = '_blank';
+    state.rel = 'noopener';
+    state.className = l && l.status === 'in' ? 'ok' : 'muted';
+    state.textContent = !l ? 'Not seen yet — open it' : l.status === 'in' ? '✓ Signed in' : 'Not signed in — sign in';
+    if (l && l.status === 'in') state.removeAttribute('href');
+    li.append(name, state);
+    list.appendChild(li);
+  }
+  $('logins-sum').textContent = stores.length ? `${signedIn} of ${stores.length}` : '';
 }
 
 $('pair-form').addEventListener('submit', async (e) => {

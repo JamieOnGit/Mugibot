@@ -61,7 +61,7 @@ export function toAlert(r) {
 export function toRoute(r) {
   return r && {
     id: r.id, name: r.name, channelId: r.channel_id, roleId: r.role_id, categories: json(r.categories, []), stores: json(r.stores, []),
-    kinds: json(r.kinds, ['restock', 'listed']), keywords: r.keywords, enabled: !!r.enabled, createdAt: r.created_at,
+    kinds: json(r.kinds, ['restock', 'listed']), keywords: r.keywords, enabled: !!r.enabled, fallback: !!r.fallback, createdAt: r.created_at,
   };
 }
 
@@ -351,6 +351,7 @@ export class Catalog {
     const row = {
       name: r.name, channel_id: r.channelId, role_id: r.roleId || '', categories: JSON.stringify(r.categories || []),
       stores: JSON.stringify(r.stores || []), kinds: JSON.stringify(r.kinds || ['restock', 'listed']), keywords: r.keywords || '', enabled: r.enabled === false ? 0 : 1,
+      fallback: r.fallback ? 1 : 0,
     };
     if (id) {
       this.db.run(`UPDATE alert_routes SET ${Object.keys(row).map((c) => `${c} = :${c}`).join(', ')} WHERE id = :id`, { ...row, id });

@@ -77,22 +77,26 @@
         </div>
       </section>
 
-      <!-- 📡 Monitor -->
+      <!-- 📡 Monitor: live (everyone) -->
       <section data-panel="monitor" hidden>
-        <div class="tab-head sn-head">
-          <h2>Monitor</h2>
-          <span class="live" id="m-live" title="Updates as they happen">Live</span>
-          <span class="sn-clock">Local <b id="sn-clock">--:--:--</b></span>
-          <span class="sn-clock">Up <b id="sn-uptime">—</b></span>
-          <span class="sn-grow"></span>
-          <button class="btn small" id="sn-arm" type="button" aria-pressed="false" title="Sound and desktop notifications for new drops and restocks">🔔 Arm alerts</button>
-          <button class="btn small" id="sn-test" type="button" title="Runs the alert in this browser only, so you can check the sound and pop-up">⚡ Test alert</button>
-          <button class="btn small" id="ms-now" type="button" hidden>Sweep now</button>
-          <button class="btn small primary" id="m-add-toggle" type="button" hidden>+ Add monitor</button>
+        <div class="mon-head">
+          <div class="mon-titles">
+            <div class="mon-title"><h2>Monitor</h2><span class="live" id="m-live" title="Updates as they happen">Live</span></div>
+            <p class="mon-sub" id="mon-sub">Every store's search, read every few seconds.</p>
+          </div>
+          <div class="mon-actions">
+            <button class="btn small" id="sn-arm" type="button" aria-pressed="false" title="Sound and desktop notifications for new drops and restocks">🔔 Arm alerts</button>
+            <details class="menu" id="sn-prefs-menu">
+              <summary class="btn small" aria-label="Alert settings for this browser" title="Alert settings for this browser">⚙</summary>
+              <div class="menu-panel" id="sn-prefs" role="group" aria-label="Alerts in this browser"></div>
+            </details>
+            <button class="btn small" id="ms-now" type="button" hidden>⟳ Sweep now</button>
+            <button class="btn small primary" id="m-add-toggle" type="button" hidden>+ Add monitor</button>
+          </div>
         </div>
-        <p class="muted small sn-intro">Every store's search, read every few seconds. New drops, restocks and price drops show up here the moment a search sees them, with a pop-up and a sound once you press <b>Arm alerts</b>. ⚡ Buy adds the product to your watchlist and runs your checkout with the extension.</p>
+        <nav class="mon-tabs" aria-label="Monitor pages" hidden><a href="#monitor" data-mtab="monitor">Live</a><a href="#monitor-settings" data-mtab="monitor-settings">Settings</a><a href="#monitor-log" data-mtab="monitor-log">Check log</a></nav>
         <div id="m-paywall"></div>
-
+        <div class="mon-attn" id="sn-attention" role="status" hidden></div>
         <form class="card" id="m-add" hidden>
           <h3>Add a monitor</h3>
           <div class="grid2">
@@ -106,59 +110,35 @@
           <div class="form-actions"><button class="btn primary" type="submit">Add monitor</button><span class="msg" id="ma-msg"></span></div>
         </form>
 
-        <div class="sn-shell" id="sn-shell">
-          <aside class="sn-rail" aria-label="Stores and settings">
-            <section class="sn-panel">
-              <h3 class="sn-sec"><span class="idx">01</span> Live sonar <span class="meta sn-livedot" id="sn-sweeping">sweeping</span></h3>
+        <div class="mon-grid" id="sn-shell">
+          <aside class="mon-side" aria-label="Stores">
+            <section class="mon-card mon-sonar">
+              <header class="mon-card-hd"><h3>Live sonar</h3><span class="sn-livedot" id="sn-sweeping">sweeping</span></header>
               <div class="sn-sonarwrap">
                 <div class="sn-sonar"><canvas id="sn-sonar" aria-hidden="true"></canvas></div>
-                <div class="sn-cap"><span>Stores <b id="sn-active">0</b></span><span>Pings <b id="sn-pings">0</b></span></div>
+                <div class="sn-cap"><span><b id="sn-active">0</b> stores</span><span><b id="sn-pings">0</b> answers</span></div>
               </div>
             </section>
-            <section class="sn-panel">
-              <h3 class="sn-sec"><span class="idx">02</span> Stores <span class="meta" id="sn-stores-meta"></span></h3>
-              <div id="sn-channels"></div>
-            </section>
-            <section class="sn-panel">
-              <h3 class="sn-sec"><span class="idx">03</span> Keywords <span class="meta" id="sn-kw-count"></span></h3>
-              <div class="sn-watch">
-                <div class="sn-chips" id="sn-chips"></div>
-                <form class="sn-addrow" id="sn-kw-form" hidden>
-                  <input id="sn-kw-input" type="text" placeholder="add a keyword…" maxlength="60" autocomplete="off" aria-label="Add a keyword">
-                  <button class="btn small" type="submit">Add</button>
-                </form>
-                <p class="sn-note" id="sn-kw-note"></p>
-              </div>
-            </section>
-            <section class="sn-panel">
-              <h3 class="sn-sec"><span class="idx">04</span> Tuning</h3>
-              <div class="sn-settings" id="sn-tuning"></div>
+            <section class="mon-card">
+              <header class="mon-card-hd"><h3>Stores</h3><span class="mon-meta" id="sn-stores-meta"></span><button class="btn small ghost" id="sn-reset-all" type="button" hidden title="Start every store's searches again">↻ Reset all</button></header>
+              <div id="sn-channels" class="store-list"></div>
             </section>
           </aside>
 
-          <div class="sn-stage">
-            <div class="sn-stats" id="m-stats"></div>
+          <div class="mon-main">
+            <div class="mon-stats" id="m-stats"></div>
 
-            <section class="sn-panel">
-              <div class="sn-stage-hd"><h3 class="sn-sec"><span class="idx">05</span> Response times</h3><span class="sn-grow"></span><span class="sn-meta">How long each store took to answer · last 5 minutes</span></div>
-              <div class="sn-chart" id="sn-chart"></div>
-              <div class="sn-legend" id="sn-legend"></div>
-              <details class="sn-table"><summary class="small">Show as a table</summary>
-                <div class="table-wrap"><table class="table" id="sn-lat-table"><thead><tr><th>Store</th><th>Last answer</th><th>Average</th><th>Slowest</th><th>Searches</th></tr></thead><tbody></tbody></table></div>
-              </details>
-            </section>
-
-            <section class="sn-panel">
-              <div class="sn-stage-hd">
-                <h3 class="sn-sec"><span class="idx">06</span> Event log</h3><span class="sn-livedot">Live</span><span class="sn-grow"></span>
-                <select id="m-kind" aria-label="Show in the event log"><option value="">Everything</option><option value="alerts">Alerts only</option><option value="listed">New drops</option><option value="restock">Restocks</option><option value="price">Price changes</option><option value="searches">Searches</option><option value="problems">Problems</option></select>
-              </div>
-              <div class="sn-feed" id="m-log" role="log" aria-label="Event log"></div>
+            <section class="mon-card">
+              <header class="mon-card-hd">
+                <h3>Live feed</h3><span class="sn-livedot">Live</span>
+                <label class="mon-show">Show <select id="m-kind"><option value="alerts">Drops &amp; restocks</option><option value="">Everything</option><option value="listed">New drops</option><option value="restock">Restocks</option><option value="price">Price changes</option><option value="searches">Searches</option><option value="problems">Problems</option></select></label>
+              </header>
+              <div class="sn-feed" id="m-log" role="log" aria-label="Live feed"></div>
               <div class="sn-more"><button class="btn small" id="m-more" type="button" hidden>Older alerts</button></div>
             </section>
 
-            <section class="sn-panel">
-              <div class="sn-stage-hd"><h3 class="sn-sec"><span class="idx">07</span> Tracked products</h3><span class="sn-grow"></span><span class="sn-meta" id="m-count"></span></div>
+            <section class="mon-card">
+              <header class="mon-card-hd"><h3>Tracked products</h3><span class="mon-meta" id="m-count"></span></header>
               <div class="filters sn-filters" role="search">
                 <input id="m-q" type="search" placeholder="Search name or SKU" aria-label="Search products">
                 <select id="m-category" aria-label="Category"><option value="">All categories</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select>
@@ -170,43 +150,75 @@
             </section>
           </div>
         </div>
+      </section>
 
-        <div id="m-admin" hidden>
-          <div class="card" id="ms-card">
-            <div class="card-head"><h3>Sweep settings and every search</h3><span class="pill" id="ms-state"></span></div>
-            <p class="muted small">Each store's search for each keyword, read in full every few seconds. A product that wasn't there before is a 🆕 new drop; out of stock → in stock is a 🟢 restock (once a day per product); a price that falls by the set amount is a 📉 price drop. Alerts go out straight away: here, in the Discord channels whose rules match, and to every member watching that SKU. Stores that refuse servers are searched from an admin's browser with the extension (keep one open with Chrome running).</p>
-            <div class="table-wrap"><table class="table" id="ms-table"><thead><tr><th>Store</th><th>Searched from</th><th>Last search</th><th>Products</th><th>Searches (1 h)</th><th>Avg time</th><th>Status</th></tr></thead><tbody></tbody></table></div>
+      <!-- ⚙ Monitor settings (admins) -->
+      <section data-panel="monitor-settings" hidden>
+        <div class="mon-head"><div class="mon-titles"><div class="mon-title"><h2>Monitor settings</h2><span class="pill" id="ms-state"></span></div><p class="mon-sub">Where each store is searched from, what counts, and where alerts go. Admins only.</p></div></div>
+        <nav class="mon-tabs" aria-label="Monitor pages" hidden><a href="#monitor" data-mtab="monitor">Live</a><a href="#monitor-settings" data-mtab="monitor-settings">Settings</a><a href="#monitor-log" data-mtab="monitor-log">Check log</a></nav>
+        <div class="mon-settings">
+          <section class="mon-card" id="ms-card">
+            <header class="mon-card-hd"><h3>Stores</h3><span class="mon-meta">Searched from, and how each is doing</span><button class="btn small" id="ms-reset-all" type="button" title="Start every store's searches again">↻ Reset all</button></header>
+            <p class="mon-help">A store that keeps refusing gets <b>Reset</b>: its errors and backoff are cleared and it's searched again now, gently (at a third of the pace) for 10 minutes. A store the server can't reach can be searched from an admin's browser instead (keep Chrome open with the extension).</p>
+            <div class="table-wrap"><table class="table" id="ms-table"><thead><tr><th>Store</th><th>Searched from</th><th>Status</th><th>Last search</th><th>Products</th><th>Searches (1 h)</th><th></th></tr></thead><tbody></tbody></table></div>
             <details class="ms-terms"><summary class="small">Every search</summary><div class="table-wrap"><table class="table" id="ms-terms"><thead><tr><th>Store</th><th>Keyword</th><th>Page</th><th>Found</th><th>Kept</th><th>Last OK</th><th>Problem</th></tr></thead><tbody></tbody></table></div></details>
-            <form id="ms-form">
-              <h4>Settings</h4>
-              <label class="check"><input type="checkbox" id="ms-enabled"> Sweeps on</label>
-              <div class="grid2">
-                <div class="span2"><label for="ms-keywords">Keywords (comma-separated)</label><input id="ms-keywords" placeholder="pokemon, one piece" autocomplete="off"><p class="muted small">Each is searched at every store. A product counts when its name has every word of the keyword in it.</p></div>
-                <div><label for="ms-every">Seconds between searches at one store</label><input id="ms-every" type="number" min="3" max="600" required></div>
-                <div><label for="ms-bevery">…from an admin's browser</label><input id="ms-bevery" type="number" min="5" max="600" required></div>
-                <div><label for="ms-drop">Price drop alert from (% lower)</label><input id="ms-drop" type="number" min="1" max="90" step="1" required></div>
-              </div>
-              <fieldset class="kinds" id="ms-stores"><legend>Where each store is searched from</legend></fieldset>
+          </section>
+
+          <section class="mon-card">
+            <header class="mon-card-hd"><h3>Keywords</h3><span class="mon-meta" id="sn-kw-count"></span></header>
+            <div class="sn-watch">
+              <div class="sn-chips" id="sn-chips"></div>
+              <form class="sn-addrow" id="sn-kw-form" hidden>
+                <input id="sn-kw-input" type="text" placeholder="Add a keyword, e.g. dragon ball" maxlength="60" autocomplete="off" aria-label="Add a keyword">
+                <button class="btn small primary" type="submit">Add</button>
+              </form>
+              <p class="mon-help" id="sn-kw-note"></p>
+            </div>
+          </section>
+
+          <form class="mon-card" id="ms-form">
+            <header class="mon-card-hd"><h3>Alerts, speed and what counts</h3></header>
+            <div class="ms-grid">
+              <fieldset class="kinds"><legend>Sweeps</legend>
+                <label class="check"><input type="checkbox" id="ms-enabled"> Sweeps on</label>
+                <div class="grid2">
+                  <div><label for="ms-every">Seconds between searches at a store</label><input id="ms-every" type="number" min="3" max="600" required></div>
+                  <div><label for="ms-bevery">…from an admin's browser</label><input id="ms-bevery" type="number" min="5" max="600" required></div>
+                </div>
+              </fieldset>
               <fieldset class="kinds"><legend>Alerts</legend>
                 <label class="check inline"><input type="checkbox" id="ms-new"> 🆕 New drops</label>
                 <label class="check inline"><input type="checkbox" id="ms-restock"> 🟢 Restocks</label>
                 <label class="check inline"><input type="checkbox" id="ms-price"> 📉 Price drops</label>
                 <label class="check inline"><input type="checkbox" id="ms-once"> At most one restock alert a day per product</label>
+                <div class="grid2"><div><label for="ms-drop">Price drop alert from (% lower)</label><input id="ms-drop" type="number" min="1" max="90" step="1" required></div></div>
               </fieldset>
-              <fieldset class="kinds"><legend>Which products count</legend>
-                <label class="check inline"><input type="checkbox" id="ms-market"> Skip marketplace sellers</label>
-                <label class="check inline"><input type="checkbox" id="ms-tcg"> Trading cards only</label>
-                <label for="ms-terms-input" class="small">Trading-card words (a name needs one of them)</label>
-                <textarea id="ms-terms-input" rows="3"></textarea>
-                <label for="ms-notcard-input" class="small">Not trading cards (a name with one of these is left out, unless it says TCG, trading card or card game)</label>
-                <textarea id="ms-notcard-input" rows="3"></textarea>
-              </fieldset>
-              <div class="form-actions"><button class="btn primary" type="submit">Save sweep settings</button><button class="btn" type="button" id="ms-reset-terms">Default card words</button><span class="msg" id="ms-msg"></span></div>
-            </form>
-          </div>
-          <div class="card">
-            <div class="card-head"><h3>Discord alert channels</h3><button class="btn small" id="mr-new" type="button">+ Add rule</button></div>
-            <p class="muted small">Each rule sends matching alerts to one channel, with an optional role ping. Copy IDs in Discord with Developer Mode on (right-click → Copy Channel ID / Copy Role ID). Give the bot View Channel, Send Messages and Embed Links there.</p>
+            </div>
+            <fieldset class="kinds"><legend>Which products count</legend>
+              <label class="check inline"><input type="checkbox" id="ms-market"> Skip marketplace sellers</label>
+              <label class="check inline"><input type="checkbox" id="ms-tcg"> Trading cards only</label>
+              <label for="ms-terms-input" class="small">Trading-card words (a name needs one of them)</label>
+              <textarea id="ms-terms-input" rows="3"></textarea>
+              <label for="ms-notcard-input" class="small">Not trading cards (a name with one of these is left out, unless it says TCG, trading card or card game)</label>
+              <textarea id="ms-notcard-input" rows="3"></textarea>
+            </fieldset>
+            <div class="form-actions"><button class="btn primary" type="submit">Save settings</button><button class="btn" type="button" id="ms-reset-terms">Default card words</button><span class="msg" id="ms-msg"></span></div>
+          </form>
+
+          <section class="mon-card">
+            <header class="mon-card-hd"><h3>Discord alert channels</h3><button class="btn small" id="mr-new" type="button">+ Add rule</button></header>
+            <div class="mr-setup">
+              <div>
+                <b>Store channels in one go</b>
+                <p class="mon-help">A channel for each store and game — <code>kmart-pokemon</code>, <code>kmart-one-piece</code>, <code>bigw-pokemon</code>… for Kmart, BIG W, Target, JB Hi-Fi, EB Games, Zing and Toys"R"Us — plus <code>premium-bandai</code>, <code>pokemon-center</code>, and <code>misc-retailers</code> for everything else. The bot uses channels with those names that are already there, and makes the rest (it needs the Manage Channels permission).</p>
+                <div class="mr-setup-row">
+                  <input id="mr-setup-role" inputmode="numeric" placeholder="Role to ping (optional ID)" aria-label="Role to ping in every channel (optional)">
+                  <label class="check small"><input type="checkbox" id="mr-setup-replace"> Remove my other rules</label>
+                  <button class="btn primary" id="mr-setup" type="button">Set up store channels</button>
+                </div>
+                <p class="msg" id="mr-setup-msg"></p>
+              </div>
+            </div>
             <div class="notice" id="mr-fallback" hidden></div>
             <ul class="rules" id="mr-list"></ul>
             <form id="mr-form" hidden>
@@ -220,20 +232,38 @@
               <fieldset class="kinds" id="mr-kinds"><legend>Alerts</legend></fieldset>
               <fieldset class="kinds" id="mr-categories"><legend>Categories (none ticked = all)</legend></fieldset>
               <fieldset class="kinds" id="mr-stores"><legend>Stores (none ticked = all)</legend></fieldset>
+              <label class="check"><input type="checkbox" id="mr-catchall"> Catch-all: only alerts no other rule takes (like misc-retailers)</label>
               <label class="check"><input type="checkbox" id="mr-enabled" checked> On</label>
               <div class="form-actions"><button class="btn primary" type="submit">Save rule</button><button class="btn" type="button" id="mr-cancel">Cancel</button><span class="msg" id="mr-msg"></span></div>
             </form>
-          </div>
-          <div class="card">
-            <div class="card-head"><h3>Health</h3><button class="btn small" id="mh-refresh" type="button">Refresh</button></div>
-            <p class="muted small" id="mh-loop"></p>
-            <div class="table-wrap"><table class="table" id="mh-table"><thead><tr><th>Store</th><th>Checks (1 h)</th><th>OK</th><th>Blocked</th><th>Errors</th><th>Avg time</th><th>Last OK</th><th>Server checks</th></tr></thead><tbody></tbody></table></div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h3>Check log</h3><label class="check small"><input type="checkbox" id="ml-errors" checked> Problems only</label></div>
-            <div class="table-wrap"><table class="table" id="ml-table"><thead><tr><th>When</th><th>Product</th><th>Store</th><th>From</th><th>Result</th><th>Price</th><th>Time</th></tr></thead><tbody></tbody></table></div>
-          </div>
+            <p class="mon-help">Copy IDs in Discord with Developer Mode on (right-click → Copy Channel ID / Copy Role ID). The bot needs View Channel, Send Messages and Embed Links in each channel.</p>
+          </section>
+
+          <section class="mon-card">
+            <header class="mon-card-hd"><h3>Response times</h3><span class="mon-meta">How long each store took to answer · last 5 minutes</span></header>
+            <div class="sn-chart" id="sn-chart"></div>
+            <div class="sn-legend" id="sn-legend"></div>
+            <details class="sn-table"><summary class="small">Show as a table</summary>
+              <div class="table-wrap"><table class="table" id="sn-lat-table"><thead><tr><th>Store</th><th>Last answer</th><th>Average</th><th>Slowest</th><th>Searches</th></tr></thead><tbody></tbody></table></div>
+            </details>
+          </section>
         </div>
+      </section>
+
+      <!-- 🧾 Check log (admins) -->
+      <section data-panel="monitor-log" hidden>
+        <div class="mon-head"><div class="mon-titles"><div class="mon-title"><h2>Check log</h2></div><p class="mon-sub">Every page check of a monitored product, and how each store answered. Admins only.</p></div></div>
+        <nav class="mon-tabs" aria-label="Monitor pages" hidden><a href="#monitor" data-mtab="monitor">Live</a><a href="#monitor-settings" data-mtab="monitor-settings">Settings</a><a href="#monitor-log" data-mtab="monitor-log">Check log</a></nav>
+        <section class="mon-card">
+          <header class="mon-card-hd"><h3>Page checks</h3><button class="btn small" id="mh-refresh" type="button">Refresh</button></header>
+          <p class="mon-help" id="mh-loop"></p>
+          <div class="table-wrap"><table class="table" id="mh-table"><thead><tr><th>Store</th><th>Checks (1 h)</th><th>OK</th><th>Blocked</th><th>Errors</th><th>Avg time</th><th>Last OK</th><th>Server checks</th></tr></thead><tbody></tbody></table></div>
+        </section>
+        <section class="mon-card">
+          <header class="mon-card-hd"><h3>Check log</h3><label class="check small"><input type="checkbox" id="ml-errors" checked> Problems only</label></header>
+          <div class="table-wrap"><table class="table" id="ml-table"><thead><tr><th>When</th><th>Product</th><th>Store</th><th>From</th><th>Result</th><th>Price</th><th>Time</th></tr></thead><tbody></tbody></table></div>
+        </section>
+      </section>
 
         <dialog class="detail" id="m-detail" aria-labelledby="md-name">
           <div class="detail-head">
@@ -273,7 +303,6 @@
             <div class="table-wrap"><table class="table" id="md-log"><thead><tr><th>When</th><th>From</th><th>Result</th><th>Price</th><th>Time</th></tr></thead><tbody></tbody></table></div>
           </div>
         </dialog>
-      </section>
 
       <!-- 📦 Checkout details -->
       <section data-panel="checkout" hidden>
@@ -389,6 +418,13 @@
         <div class="card">
           <h3>3. Save your card (optional)</h3>
           <p class="muted">Click the extension's icon → <b>Add your card</b> (or <a href="#checkout">Checkout details</a> → Add your card). Save it once and every ⚡ Buy fills it in, even after you restart the browser. It stays in that browser, encrypted, and is never sent to us.</p>
+        </div>
+        <div class="card" id="logins-card">
+          <div class="card-head"><h3>4. Sign in at the stores</h3><button class="btn small" id="logins-check" type="button">Check now</button></div>
+          <p class="muted">Signed in at a store, ⚡ Buy's checkout is faster: the store fills in your saved address (and often your card) itself. The extension notices whether you're signed in whenever you open a store, and checks the stores that show it in their pages every 10 minutes. It only looks: nothing is clicked or typed.</p>
+          <p class="logins-sum" id="logins-sum"></p>
+          <ul class="logins" id="logins"></ul>
+          <p class="msg" id="logins-msg"></p>
         </div>
         <div class="card">
           <h3>In-browser checks</h3>

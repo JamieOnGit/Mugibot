@@ -181,6 +181,8 @@ export class Retailers {
     return this.list.filter((r) => this.enabled(r)).map((r) => serialize({
       id: r.id, name: r.name, hosts: r.hosts, pathPrefix: r.pathPrefix || null, flowStatus: r.flowStatus,
       skuFromPath: r.skuFromPath, productPath: r.productPath, cartPath: r.cartPath || null, flow: r.flow,
+      // The store login monitor: the store's address, and how to tell you're signed in there.
+      base: r.base, account: r.account || null,
     }));
   }
 }

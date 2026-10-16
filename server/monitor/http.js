@@ -85,3 +85,21 @@ export function storeFetch(url, init = {}) {
     req.end();
   });
 }
+
+/** Close the connections kept open to a store ("host" or "host:port"), so the next request opens a fresh one. */
+export function dropConnections(host) {
+  const [hostname, port] = String(host || '').toLowerCase().split(':');
+  if (!hostname) return 0;
+  let n = 0;
+  for (const [proto, agent] of Object.entries(agents)) {
+    // (A connection pool's name starts "host:port:".)
+    const prefix = `${hostname}:${port || (proto === 'https:' ? '443' : '80')}:`;
+    for (const pool of [agent.freeSockets, agent.sockets]) {
+      for (const [name, sockets] of Object.entries(pool || {})) {
+        if (!`${name}:`.startsWith(prefix)) continue;
+        for (const socket of sockets || []) { socket.destroy(); n += 1; }
+      }
+    }
+  }
+  return n;
+}

@@ -68,10 +68,20 @@ but haven't connected their account.
 
 ## The Monitor feed
 
-The live sweeps (keywords, how often, where each store is searched from,
-filters, each store's health, **Sweep now**), monitors, Discord alert
-channels, page-check health and the check log are on the dashboard's
-**Monitor** tab. Admins see the controls there, and members see the feed. In
+The dashboard's **Monitor** tab has three pages for admins (members see only
+**Live**):
+
+- **Live**: the sonar, each store's state with **↻ Reset** on each (and
+  **Reset all** when one needs attention), today's numbers, the live feed,
+  tracked products, **Sweep now** and **+ Add monitor**.
+- **Settings**: where each store is searched from, keywords, how often,
+  alerts and filters, Discord alert channels (with **Set up store channels**:
+  see [DISCORD.md](DISCORD.md#store-channels)), and response times.
+- **Check log**: page-check health per store and the log of every page check.
+
+**↻ Reset** starts a store that keeps failing again: errors and backoff
+cleared, searched now, then at a third of the pace for 10 minutes (see
+[MONITORING.md](MONITORING.md#-reset-when-a-store-keeps-failing)). In
 Discord: `/monitor add · list · pause · resume · remove · status`.
 
 BIG W, EB Games, Pokémon Center and Premium Bandai refuse Mugibot's server, so

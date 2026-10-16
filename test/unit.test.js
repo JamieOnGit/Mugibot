@@ -245,7 +245,7 @@ test('extension built for a live server: only that server and the stores; module
   const by = (f) => m.content_scripts.find((c) => c.js.includes(f));
   assert.deepEqual(by('bridge.js').matches, ['https://app.mugibot.example/*']);
   assert.equal(by('capture.js').run_at, 'document_start');
-  assert.deepEqual(by('content.js').js, ['flows.js', 'core.js', 'fill.js', 'content.js']);
+  assert.deepEqual(by('content.js').js, ['flows.js', 'core.js', 'fill.js', 'logins.js', 'content.js']);
   assert.equal(by('frame.js').all_frames, true);
 
   const files = extensionFiles(cfg);
@@ -272,6 +272,32 @@ test('extension built for a live server: only that server and the stores; module
     assert.equal(r.price, 360);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("store login monitor: each store's page says whether you're signed in (Shopify, CrystalCommerce, Premium Bandai, Amazon)", () => {
+  const ctx = { globalThis: {} };
+  vm.runInNewContext(fs.readFileSync(new URL('../extension/logins.js', import.meta.url), 'utf8'), ctx);
+  const { fromHtml } = ctx.globalThis.MGBLogins;
+  // As the extension gets them: through JSON, the RegExps as { re, f }.
+  const check = (id) => JSON.parse(JSON.stringify(serialize(RETAILER_DEFS.find((r) => r.id === id).account.check)));
+  const shopify = (cid) => `<script>var __st={"a":1,"offset":36000,"u":"x","p":"home"${cid ? ',"cid":12345' : ''}};</script>`;
+  for (const id of ['jbhifi', 'trainertown', 'gamerholic', 'toysrus']) {
+    assert.equal(fromHtml(shopify(true), 'https://x/', check(id)), 'in', id);
+    assert.equal(fromHtml(shopify(false), 'https://x/', check(id)), 'out', id);
+  }
+  assert.equal(fromHtml('<html>nothing to go on</html>', 'https://x/', check('jbhifi')), null, "can't tell: says nothing");
+  assert.equal(fromHtml('<body class="front not-logged-in"><a href="/user/login">Login</a>', '', check('thegamescube')), 'out');
+  assert.equal(fromHtml('<body class="front logged-in"><a href="/user/logout">Logout</a>', '', check('thegamescube')), 'in');
+  assert.equal(fromHtml('<script>USER_DATA = {"csrfToken":"x","loggedInMember":{"memberNo":"1"}}</script>', '', check('pbandai')), 'in');
+  assert.equal(fromHtml('<script>USER_DATA = {"csrfToken":"x","loggedInMember":null}</script>', '', check('pbandai')), 'out');
+  assert.equal(fromHtml('<form name="signIn">', 'https://www.amazon.com.au/ap/signin?openid.return_to=x', check('amazon')), 'out', 'sent to the sign-in page');
+  assert.equal(fromHtml('<span id="nav-link-accountList-nav-line-1" class="nav-line-1">Hello, Jamie</span>', 'https://www.amazon.com.au/gp/css/homepage.html', check('amazon')), 'in');
+  assert.equal(fromHtml('<span id="nav-link-accountList-nav-line-1" class="nav-line-1">Hello, sign in</span>', 'https://www.amazon.com.au/gp/css/homepage.html', check('amazon')), null);
+  // Stores whose pages don't say so: the page you open (its header) instead.
+  for (const id of ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'pokemoncenter']) {
+    const r = RETAILER_DEFS.find((x) => x.id === id);
+    assert.ok(r.account && !r.account.check, `${id}: from the page`);
   }
 });
 

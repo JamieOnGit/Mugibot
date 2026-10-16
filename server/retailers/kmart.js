@@ -36,6 +36,9 @@ export default {
     pagePath: '&page={page}',
     pages: 3,
   },
+  // Store login monitor: whether you're signed in here is read from the store's own page when you
+  // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
+  account: { signIn: '' },
   monitor: { server: true, browser: true },
   flow: {
     product: {

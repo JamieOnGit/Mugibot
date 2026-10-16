@@ -29,7 +29,7 @@ same products, the same alerts, the same ⚡ Buy.
 | Target | Mugibot's server | Target's search page, newest first: every page with results (up to 4 pages of 48), with stock for every colour and size |
 | JB Hi-Fi | Mugibot's server | JB Hi-Fi's search suggestions (Shopify): 10 products a search, with stock. "tcg" is added to each keyword ("pokemon tcg"), because "pokemon" alone finds plushies and games |
 | Toys"R"Us | Mugibot's server | Same as JB Hi-Fi (also a Shopify store) |
-| Trainer Town | Mugibot's server | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi) |
+| Trainer Town | Mugibot's server | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi). At most one read every 15 seconds: reading the whole collection every 5 seconds made Shopify answer **HTTP 429** (too many requests) |
 | Kmart | Mugibot's server | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online |
 | Amazon AU | Mugibot's server | Amazon's search, newest first (2 pages of 48), with "tcg" added to each keyword. At most one search every 20 seconds |
 | The Games Cube | Mugibot's server | Its search pages (CrystalCommerce, made on the server): a tile per product with each option's stock and price, up to 4 pages of 25–30. Pre-orders are the ones in its "… Pre-Orders" categories. The cards it buys from customers (its buylist) are left out |
@@ -81,7 +81,7 @@ block). Now:
   included there: put any you don't want on the **blacklist** (below).
 
 You can change where each store is searched from (server, admin's browser or
-off) in **Monitor → Live sweeps → Settings**.
+off) in **Monitor → Settings → Stores**.
 
 **Why the server can read Target and JB Hi-Fi now:** their CDNs refuse Node's
 built-in `fetch()` (403 and 429) but answer Node's own `https` client normally,
@@ -135,7 +135,27 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   new one only sets the scene.
 - **A refused or failed search never alerts** and keeps every product's last
   stock. The store waits twice as long after each failure (up to 15 minutes),
-  then tries again.
+  then tries again. When a store says how long to wait (**HTTP 429** or 503
+  with a `Retry-After`, like Shopify's), Mugibot waits at least that long (at
+  most 15 minutes): "The store refused the search (HTTP 429) — it asked to
+  wait 60 s". **Reset** (below) starts a failing store again.
+- **Marketplace sellers** are left out (with **Skip marketplace sellers** on,
+  the default), store by store:
+  - **JB Hi-Fi**: its search results don't say who sells a product, but each
+    product's own data does (the "Seller" option: *JB Hi-Fi*, or a marketplace
+    seller like *Gameology*). Mugibot asks **once per product**, never as part
+    of a search, so sweeps aren't any slower: right before a product's first
+    alert, and slowly in between (at most one product every 20 seconds). A
+    marketplace seller's product never alerts and leaves the lists; the answer
+    is remembered, so it's never asked again.
+  - **Kmart**: the search provider's own seller field (sold by Kmart or Target
+    only).
+  - **EB Games** (and Zing) and **BIG W**: only when the store's data says so
+    (a marketplace or third-party flag, or a seller that isn't the store).
+    Nothing is guessed from a product's name, so no Pokémon, One Piece,
+    Gundam, Dragon Ball or Riftbound product is dropped by mistake.
+  - **Target** has no marketplace in its results. **Amazon AU**'s results don't
+    say who sells each product: use the blacklist there.
 - **Members' SKUs**: when a sweep comes across a SKU a member watches (any
   product, not only cards), it updates their watchlist straight away. A SKU
   waiting to be listed gets its product page as soon as it shows up. While a
@@ -155,7 +175,7 @@ With the defaults (2 keywords, a search every 5 seconds per store):
   change can take a minute or two to show up there. Mugibot doesn't try to
   get around their cache.
 - JB Hi-Fi and Toys"R"Us: each keyword every ~10 s.
-- Trainer Town: each keyword's whole collection every ~10 s.
+- Trainer Town: each keyword's whole collection every ~30 s (one read every 15 s).
 - Kmart: each keyword every ~10 s.
 - Amazon AU: each keyword every ~60 s (page 1), page 2 now and then.
 - The Games Cube: each keyword every ~10 s (page 1), the later pages now and then.
@@ -180,12 +200,13 @@ its own loop, so a slow store never holds up the others.
    New drops are the 🆕 kind, restocks 🟢, price drops 📉; tick the kinds each
    channel should get. With no rules, restocks and new drops go to
    `DISCORD_RESTOCK_CHANNEL_ID`.
-4. **Monitor → Live sweeps → Settings**:
-   - **Keywords**: what to search for at every store.
+4. **Monitor → Settings** (admins):
+   - **Stores**: where each store is searched from (changes straight away), how
+     it's doing, and **↻ Reset** for each store (or **Reset all**).
+   - **Keywords**: what to search for at every store (type + **Add**, × to remove).
    - **Seconds between searches at one store**: 5 to start with (3 at least).
    - **…from an admin's browser**: 15 to start with.
    - **Price drop alert from**: 10% to start with; 0 turns price drop alerts off.
-   - **Where each store is searched from**.
    - **Alerts**: new drops, restocks, and "at most one restock alert a day per product".
    - **Which products count**: skip marketplace sellers, trading cards only, the trading-card words, and the "not trading cards" words.
 
@@ -207,36 +228,67 @@ which kept pinging the restock channel.
 
 ## 4. Running it day to day: the live monitor
 
-Dashboard → **Monitor** is a live console, laid out like DropSonar and
-styled like the rest of Mugibot. Everything on it is real: it comes from the
-sweeps as they happen.
+Dashboard → **Monitor** has three pages. Members see **Live**; admins also get
+**Settings** and the **Check log** (the switch under the title). Everything on
+them is real: it comes from the sweeps as they happen.
+
+**Live**
 
 | Part | What it shows |
 |---|---|
-| **01 Live sonar** | A sweeping radar with a blip per store; a blip rings each time that store answers a search (red when a search fails). |
-| **02 Stores** | Each store: searching / slowed / retrying / waiting (for an admin's browser), searches so far, how long its last answer took, when its next search is, and where it's searched from. |
-| **03 Keywords** | What every store is searched for. Admins add (type + **Add**) and remove (×) keywords right here. |
-| **04 Tuning** | Admins: how often stores are searched (server stores 3–15 s, browser stores 5–60 s) and which alerts go out (new drops, restocks, price drops). Everyone: this browser's **Sound**, **Desktop notifications** and **Pop-up**. |
-| **Numbers** | Uptime, searches (and per hour), drops caught in 24 h, mean alert time (from a store's answer to your screen), errors / OK-in-a-row, available now. |
-| **05 Response times** | How long each store took to answer over the last 5 minutes, one line per store (hover or use the arrow keys for the exact times; **Show as a table** for the numbers). |
-| **06 Event log** | Every search ("Target · "pokemon" — 48 products · 412 ms"), fault, setting change and product that drops out of the results, plus every alert with the product's picture, price (and old price), **⚡ Buy** and a link to the store. Filter: everything, alerts only, new drops, restocks, price changes, searches, problems. |
-| **07 Tracked products** | Every product the sweeps track: picture, name, store, price (and old price), stock, the last price change, **⚡ Buy**. 🆕 marks products found in the last 24 hours. Click a name for its price history. |
+| **Title** | What's being searched for, where (e.g. "Searching 9 stores every few seconds for **pokemon** and **one piece**"). On the right: **🔔 Arm alerts**, **⚙** (this browser's alerts), and for admins **⟳ Sweep now** and **+ Add monitor**. |
+| **Needs attention** | Only when a store keeps failing: which ones, and (admins) **↻ Reset all**. |
+| **Live sonar** | A sweeping radar with a blip per store; a blip rings each time that store answers a search (red when a search fails). |
+| **Stores** | One line per store: its colour, name and state (searching / slowed / retrying / waiting for an admin's browser), and underneath what it's doing ("Answered in 412 ms · next in 3 s") or what's wrong ("The store refused the search (HTTP 429)"). Click a store for the details: searches, last answer, next search, where it's searched from, how long the store asked to wait. Admins: **↻** on each line resets that store. |
+| **The four numbers** | Drops today (new drops and restocks in 24 h), available now, alert speed (from a store's answer to your screen), searches per hour (and failures). |
+| **Live feed** | New drops and restocks as they're found, with the picture, price (and old price), **⚡ Buy** and a link to the store. **Show** switches to everything (each search, fault, setting change and product that drops out of the results), new drops, restocks, price changes, searches or problems. |
+| **Tracked products** | Every product the sweeps track: picture, name, store, price (and old price), stock, **⚡ Buy**. 🆕 marks products found in the last 24 hours. Click a name for its price history. |
+
+**⚙** holds this browser's **Sound**, **Desktop notifications** and **Pop-up
+for drops and restocks**, and **⚡ Send a test alert** (runs the whole chain in
+your browser only, to check the sound and pop-up).
+
+**Settings** (admins): the **Stores** table (where each is searched from, its
+status, last search, products, searches in the last hour, **↻ Reset**, and
+**Every search** underneath), **Keywords**, **Alerts, speed and what counts**,
+**Discord alert channels** (with **Set up store channels**, see
+`docs/DISCORD.md`), and **Response times** (each store over the last 5
+minutes; hover or use the arrow keys, or **Show as a table**).
+
+**Check log** (admins): page checks per store in the last hour, and every page
+check of a monitored product (**Problems only** to start with).
 
 **Alerts:** a new drop or restock pops up on whatever dashboard tab you're on,
 with the picture, price, SKU, how fast it was alerted, **⚡ Buy**, **Open
 product** and **Dismiss** (it closes by itself after 10 seconds; more than one
 queue up). Press **🔔 Arm alerts** once per visit so the browser lets the
 monitor play a sound and show desktop notifications; the tab title also
-flashes while you're on another tab. **⚡ Test alert** runs the whole chain in
-your browser only, to check the sound and pop-up.
+flashes while you're on another tab.
 
 **⚡ Buy** is one click: a new tab opens straight at the store (no page in
 between), with the product added to your watchlist and your checkout started by
 the extension. So is **⚡ Buy with Mugibot** in the Discord channels' alerts.
 
-**Admins** also get **Sweep now** (search everything again straight away),
-**+ Add monitor**, and below the console: the full sweep settings and **Every
-search**, Discord alert channels, page-check health and the check log.
+### ↻ Reset: when a store keeps failing
+
+A store that keeps refusing (Trainer Town's **HTTP 429**, Amazon's **HTTP 503**)
+backs off further after each failure, up to 15 minutes between tries. **Reset**
+(a store's **↻** on the Live page, **↻ Reset** in Settings → Stores, or
+**Reset all**) starts it again:
+
+- its failures, error and backoff are cleared, and it's searched **now**;
+- for the next **10 minutes** it's searched gently, at a third of the pace, so
+  a store that was overwhelmed isn't hit straight back at full speed;
+- a store searched from the server gets fresh connections; a store searched
+  from an admin's browser gets a fresh tab, opened at the store's front page
+  first (like a visitor arriving), then the search;
+- a wait the store asked for (`Retry-After`) is still respected.
+
+It's written to the event log ("boss reset Trainer Town: searching it again
+now, gently for 10 minutes") and the audit log. If a store the server
+searches is still refused after a reset, its details offer **Search it from an
+admin's browser**. Reset never gets around a bot check: it only stops Mugibot
+waiting and starts politely again.
 
 **Discord**: `/monitor list`, `/monitor status`, `/restocks` as before.
 
@@ -258,7 +310,9 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 
 | You see | Do this |
 |---|---|
-| A store's status says **refused** (server) | The store is refusing Mugibot's server. Set it to **Admin's browser** in Live sweeps → Settings, and keep an admin's browser with the extension open. Don't make the searches more frequent: that makes it worse. |
+| **The store refused the search (HTTP 429)** — "it asked to wait 60 s" | The store is asking Mugibot to slow down. It waits what the store asked, then tries again. Trainer Town now reads its collections at most every 15 s, which should stop it; if it keeps happening, press **↻ Reset** on the store (it restarts gently, at a third of the pace for 10 minutes). |
+| **HTTP 503** at Amazon AU (or another store), again and again | **↻ Reset** the store. If it's still refused after that, open its details and press **Search it from an admin's browser** (or set it in Settings → Stores), and keep an admin's browser with the extension open. Don't make the searches more frequent: that makes it worse. |
+| A store's status says **refused** (server) | The store is refusing Mugibot's server. Try **↻ Reset** first; if that doesn't help, set it to **Admin's browser** in Monitor → Settings → Stores, and keep an admin's browser with the extension open. |
 | **Waiting for an admin's browser** (BIG W, EB Games: nothing coming through) | No admin's browser is sweeping. Open Chrome with the extension (1.7.0 or later — Extension tab → Download, or the Chrome Web Store copy) connected to an **admin** account, and leave it open. The popup should show **Live sweeps from this browser** within 30 seconds, and a small minimised window appears with a BIG W and an EB Games tab: leave it be. |
 | **refused the admin's browser** | Open that store's website in the admin's browser once (so it gets the store's cookies), then wait. It tries again on its own, waiting longer each time. |
 | **Needs Mugibot's extension 1.8.1 or newer** (Pokémon Center, Premium Bandai) | The admin's browser has an older copy of the extension: Chrome doesn't let it open stores added after it was made, and 1.8.0 couldn't read either store. Update it (Extension tab → Download, or wait for the Chrome Web Store copy to update itself). The store is searched again within 30 seconds of the updated browser asking. |
@@ -268,9 +322,10 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | A product keeps pinging that you don't want | Open it (the **Price history** button in the Discord post) and press **🚫 Blacklist**, or add it in **Admin → Blacklist** (by SKU or product link, or a whole store). |
 | "In stock" pings for something that never sold out | Fixed in 1.6.0: when a store refused the checks for a while and then answered again, that counted as a restock. Now it's compared with the last check that could read the page. |
 | A Target product shows **Out of stock** but it's on the site | It was missing from Target's results for 6 minutes. The next sweep that finds it puts it back (and alerts a restock). If it keeps happening, the keyword has more results than Mugibot reads: use a more specific keyword. |
-| A product you expect isn't tracked | Its name needs every word of the keyword and a trading-card word, no "not trading cards" word (unless it says TCG, trading card or card game), and it must be sold by the store itself. Adjust the word lists in the sweep settings. |
+| A product you expect isn't tracked | Its name needs every word of the keyword and a trading-card word, no "not trading cards" word (unless it says TCG, trading card or card game), and it must be sold by the store itself. Adjust the word lists in Monitor → Settings. |
+| A JB Hi-Fi **Marketplace** product still pinged | Its first alert is held until its seller is known; if JB Hi-Fi didn't answer that question, the alert goes out as before. Blacklist it (🚫), or tell me the product link. |
 | Clothes or toys in the list | MugiWatch's card words include "pack" and "sleeve", so "3 Pack Socks" looks like cards. Add the word (e.g. "onesie") to **Not trading cards**; products that no longer count leave the list when you save. |
-| No sound | Press **🔔 Arm alerts** (browsers only play sound after a click on the page), and check **Sound** is on under Tuning. |
+| No sound | Press **🔔 Arm alerts** (browsers only play sound after a click on the page), and check **Sound** is on under **⚙**. |
 | No desktop notifications | Allow notifications for mugibot.com in the browser (the icon left of the address), then **Arm alerts** again. |
 | Lots of new drops after changing settings | Shouldn't happen: a changed keyword or filter sets the scene again first. If it does, tell me which store and keyword. |
 | Alerts in the dashboard but not in Discord | Admin → Setup check → **Check the Discord bot**, then **Post a test message**. Check the rule's channel ID, that it ticks 🆕 / 🟢 / 📉, and that the bot can post there. |
@@ -286,9 +341,10 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Alerts, Discord embeds, live dashboard updates | `server/monitor/feed.js` |
 | Page checks of single products and members' SKUs | `server/monitor/index.js` |
 | Catalogue, price history, alert history | `server/catalog.js`; `products`, `sweep_terms`, `price_history`, `feed_alerts` (`server/db.js`, migration 5) |
-| Admin API | `GET/PUT /api/monitor/sweep`, `POST /api/monitor/sweep/now` (`server/routes/monitor.js`) |
+| Admin API | `GET/PUT /api/monitor/sweep`, `POST /api/monitor/sweep/now`, `POST /api/monitor/sweep/reset` (`{store}`, or nothing for every store), `POST /api/monitor/routes/setup` (store channels) (`server/routes/monitor.js`) |
 | Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
-| Dashboard | `web/app.html`, `web/js/live.js` (the live console: sonar, stores, chart, event log, alerts), `web/js/monitor.js` (products, product page, admin tools) |
+| Dashboard | `web/app.html` (Live, Settings and Check log pages), `web/js/live.js` (the live page: sonar, stores, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log) |
+| JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |
 | The live event log | `emit()` and `live()` in `server/monitor/sweep.js`; `GET /api/monitor/live`; `monitor-sweep` events on the dashboard's stream |
 | Tests | `test/sweep.test.js`, plus the Monitor tab in `test/ui.test.js` and the admin's-browser sweep in `test/extension.e2e.test.js` |
 

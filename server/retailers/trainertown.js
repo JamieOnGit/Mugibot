@@ -29,6 +29,9 @@ export default {
     collectionPath: '/collections/{collection}/products.json?limit=250',
     // A keyword without a collection: the search (it's a card shop, so no "tcg" added).
     path: '/search/suggest.json?q={q}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last',
+    // A whole collection is a big read (up to 250 products): every 5 s, Shopify answered 429
+    // (too many requests). At most one every 15 s, like Gamerholic's.
+    minSeconds: 15,
   },
   monitor: { server: true, browser: true },
 };

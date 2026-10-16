@@ -3,7 +3,7 @@
 // check input the same way.
 
 import { ALERT_KINDS, CATEGORIES, DEFAULT_KINDS, toMonitor, toProduct } from '../catalog.js';
-import { bad, bool, item as checkItem, num, str } from '../schema.js';
+import { HttpError, bad, bool, item as checkItem, num, str } from '../schema.js';
 
 const SNOWFLAKE = /^\d{5,25}$/;
 
@@ -111,13 +111,95 @@ export class MonitorAdmin {
       kinds: kindsFrom(src.kinds, { required: true }) || ['restock', 'listed'],
       keywords: str(src.keywords, 200),
       enabled: bool(src.enabled, true),
+      // A catch-all (misc-retailers): only what no other rule took.
+      fallback: bool(src.fallback, false),
     };
   }
 
   saveRoute(id, input) {
     const existing = id ? this.catalog.routeById(id) : null;
     if (id && !existing) throw bad('That alert rule no longer exists');
-    if (!id && this.catalog.listRoutes().length >= 25) throw bad('25 alert rules is the most');
+    if (!id && this.catalog.listRoutes().length >= MAX_ROUTES) throw bad(`${MAX_ROUTES} alert rules is the most`);
     return this.catalog.saveRoute(id, this.route(input, existing));
   }
+
+  /**
+   * "Set up store channels": a channel in the Discord server for each store and game (kmart-pokemon,
+   * kmart-one-piece, …), one each for Premium Bandai and Pokémon Center, and misc-retailers for
+   * everything else — found by name, or made by the bot (under "Mugibot alerts") — each with its
+   * alert rule. opts.roleId: a role every channel pings. opts.replace: remove the other rules.
+   */
+  async setupChannels(opts = {}, user = null) {
+    const { discord, cfg } = this.ctx;
+    if (!discord.botReady || !cfg.discord.guildId) throw new HttpError(503, "The Discord bot isn't set up yet (Admin → Setup check)");
+    const roleId = str(opts.roleId, 30);
+    if (roleId && !SNOWFLAKE.test(roleId)) throw bad('Role ID: Server Settings → Roles → right-click the role → Copy Role ID, or leave it empty');
+    const list = await discord.guildChannels();
+    if (list.status !== 200 || !Array.isArray(list.body)) throw new HttpError(502, `Couldn't read the server's channels (${discordProblem(list)})`);
+    const channels = list.body;
+    const byName = (names) => channels.find((c) => c && (c.type === 0 || c.type === 5) && names.includes(String(c.name || '').toLowerCase()));
+    let parent = channels.find((c) => c && c.type === 4 && /^mugibot alerts$/i.test(c.name || ''));
+    const made = [];
+    const make = async (body) => {
+      const r = await discord.createChannel(body);
+      // (No permission is for the admin to fix in Discord: a 409, not Discord failing.)
+      if (r.status === 403) throw new HttpError(409, "The bot can't make channels: give its role the Manage Channels permission (Server Settings → Roles), or make the channels yourself and press this again — it finds them by name");
+      if (r.status !== 200 && r.status !== 201) throw new HttpError(502, `Couldn't make #${body.name} (${discordProblem(r)})`);
+      channels.push(r.body);
+      return r.body;
+    };
+    const plan = channelPlan();
+    const out = [];
+    for (const want of plan) {
+      let ch = byName(want.names);
+      if (!ch) {
+        if (!parent) parent = await make({ name: 'Mugibot alerts', type: 4 });
+        ch = await make({ name: want.names[0], type: 0, parent_id: parent.id, topic: want.topic });
+        made.push(ch.name);
+      }
+      out.push({ ...want, channelId: String(ch.id), channelName: ch.name });
+    }
+    // Their rules: one per channel (an existing rule for that channel is brought in line).
+    const routes = this.catalog.listRoutes();
+    const keep = new Set();
+    let added = 0;
+    for (const w of out) {
+      const existing = routes.find((r) => r.channelId === w.channelId);
+      const rule = {
+        name: `#${w.channelName}`, channelId: w.channelId, roleId: roleId || (existing ? existing.roleId : ''), categories: w.categories, stores: w.stores,
+        kinds: existing ? existing.kinds : ['restock', 'listed'], keywords: '', enabled: true, fallback: w.fallback,
+      };
+      const saved = this.catalog.saveRoute(existing ? existing.id : null, this.route(rule));
+      if (!existing) added += 1;
+      keep.add(saved.id);
+    }
+    let removed = 0;
+    if (opts.replace) for (const r of routes) if (!keep.has(r.id) && this.catalog.deleteRoute(r.id)) removed += 1;
+    if (user) this.ctx.repo.audit(user.id, null, 'alert-channels-setup', `${out.length} channels (${made.length} made), ${added} rules added${removed ? `, ${removed} removed` : ''}`);
+    return { channels: out.map((w) => ({ name: w.channelName, id: w.channelId, made: made.includes(w.channelName), rule: `#${w.channelName}` })), made: made.length, added, removed };
+  }
+}
+
+const MAX_ROUTES = 40;
+
+// The store channels: the main stores split by game; Premium Bandai and Pokémon Center on their own;
+// everything else (other stores, other games) in misc-retailers.
+const SPLIT_STORES = [['kmart', 'Kmart'], ['bigw', 'BIG W'], ['target', 'Target'], ['jbhifi', 'JB Hi-Fi'], ['ebgames', 'EB Games'], ['zing', 'Zing'], ['toysrus', 'Toys"R"Us']];
+const GAMES = [['pokemon', ['pokemon'], 'Pokémon'], ['onepiece', ['one-piece', 'onepiece'], 'One Piece']];
+
+export function channelPlan() {
+  const plan = [];
+  for (const [store, storeName] of SPLIT_STORES) {
+    for (const [category, names, game] of GAMES) {
+      plan.push({ names: names.map((n) => `${store}-${n}`), stores: [store], categories: [category], fallback: false, topic: `${game} drops and restocks at ${storeName}, from Mugibot.` });
+    }
+  }
+  plan.push({ names: ['premium-bandai'], stores: ['pbandai'], categories: [], fallback: false, topic: 'Drops and restocks at Premium Bandai, from Mugibot.' });
+  plan.push({ names: ['pokemon-center'], stores: ['pokemoncenter'], categories: [], fallback: false, topic: 'Drops and restocks at Pokémon Center, from Mugibot.' });
+  plan.push({ names: ['misc-retailers', 'misc-retailer'], stores: [], categories: [], fallback: true, topic: 'Every other store and game, from Mugibot.' });
+  return plan;
+}
+
+function discordProblem(r) {
+  return r.status === 0 ? "Discord didn't answer" : `HTTP ${r.status}${r.body && r.body.message ? `: ${r.body.message}` : ''}`;
 }

@@ -25,7 +25,7 @@ before(async () => {
   // Never touch the real stores from tests — not even when Mugibot redirects there (⚡ Buy), which
   // the stubs below don't catch: this browser can't reach any store's address at all.
   const stores = [...new Set(RETAILER_DEFS.flatMap((r) => r.hosts))];
-  browser = await chromium.launch({ headless: true, args: [`--host-resolver-rules=${stores.map((h) => `MAP ${h} 127.0.0.1`).join(', ')}`] });
+  browser = await chromium.launch({ headless: true, args: [`--host-resolver-rules=${stores.map((h) => `MAP ${h} 127.0.0.1`).join(', ')}`, '--no-proxy-server'] });
   page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on('pageerror', (e) => errors.push(e.message));
   // (A 4xx answer to a form with a mistake in it is expected, not an error.)
@@ -244,6 +244,16 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   await page.waitForSelector('#m-detail[open]');
   await page.click('#md-close');
 
+  // Settings and the Check log are pages of their own (admins): Live · Settings · Check log.
+  assert.equal(await page.isVisible('[data-panel="monitor"] .mon-tabs'), true);
+  assert.equal(await page.isVisible('#mh-table'), false, 'no check log on the Live page');
+  await page.click('[data-panel="monitor"] .mon-tabs a[data-mtab="monitor-settings"]');
+  await page.waitForSelector('[data-panel="monitor-settings"]:not([hidden]) #ms-table tbody tr');
+  assert.equal(await page.evaluate(() => location.hash), '#monitor-settings');
+  assert.equal(await page.getAttribute('[data-panel="monitor-settings"] .mon-tabs a[aria-current="page"]', 'data-mtab'), 'monitor-settings');
+  assert.equal(await page.getAttribute('.side a.active', 'data-tab'), 'monitor', 'the sidebar keeps Monitor lit');
+  assert.equal(await page.isVisible('#m-log'), false, 'the live feed stays on the Live page');
+
   // Discord alert rules.
   await page.click('#mr-new');
   await page.fill('#mr-name', 'Pokémon restocks');
@@ -251,7 +261,28 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   await page.check('#mr-categories input[value="pokemon"]');
   await page.click('#mr-form button[type=submit]');
   await page.waitForFunction(() => /Pokémon restocks/.test(document.querySelector('#mr-list').textContent));
-  assert.match(await page.textContent('#mh-loop'), /switched off|Monitor loop/);
+
+  // The store channels, in one go: kmart-pokemon, bigw-one-piece… premium-bandai, pokemon-center and the misc-retailers catch-all.
+  discord.state.canManageChannels = false;
+  await page.click('#mr-setup');
+  await page.waitForFunction(() => /Manage Channels/.test(document.querySelector('#mr-setup-msg').textContent));
+  discord.state.canManageChannels = true;
+  await page.fill('#mr-setup-role', '555000111222333444');
+  await page.click('#mr-setup');
+  await page.waitForFunction(() => /Done: \d+ channels \(\d+ made/.test(document.querySelector('#mr-setup-msg').textContent), null, { timeout: 15000 });
+  await page.waitForFunction(() => /kmart-pokemon/.test(document.querySelector('#mr-list').textContent));
+  const list = await page.textContent('#mr-list');
+  for (const name of ['bigw-one-piece', 'premium-bandai', 'pokemon-center', 'misc-retailers', 'Pokémon restocks']) assert.match(list, new RegExp(name));
+  assert.equal(await page.locator('#mr-list li', { hasText: 'misc-retailers' }).locator('.pill', { hasText: 'catch-all' }).count(), 1);
+  assert.ok(discord.state.channels.some((c) => c.name === 'zing-pokemon' && c.type === 0 && c.parent_id), 'made in a "Mugibot alerts" category');
+
+  // The check log.
+  await page.click('[data-panel="monitor-settings"] .mon-tabs a[data-mtab="monitor-log"]');
+  await page.waitForFunction(() => /switched off|Monitor loop/.test(document.querySelector('#mh-loop').textContent));
+  assert.equal(await page.isVisible('#ml-table'), true);
+  if (shots) await page.screenshot({ path: path.join(shots, 'monitor-log.png'), fullPage: true });
+  await page.click('[data-panel="monitor-log"] .mon-tabs a[data-mtab="monitor"]');
+  await page.waitForSelector('[data-panel="monitor"]:not([hidden]) #m-stats .sn-stat');
   if (shots) await page.screenshot({ path: path.join(shots, 'monitor.png'), fullPage: true });
 
   await page.click('#theme-toggle');
@@ -270,18 +301,24 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await sw.ingest(target, term, { products: [found('70000001', 'Pokemon TCG: Test Booster Bundle', false, 50), found('70000002', 'Pokemon Plush Pikachu', true, 20)] }, { source: 'server', url, ms: 400 });
   await page.goto(`${env.url}/app#monitor`);
   await page.reload();
-  await page.waitForSelector('#ms-table tbody tr');
-  assert.match(await page.textContent('#ms-table'), /Target\s*Server/);
-  assert.match(await page.textContent('#ms-state'), /Off \(MONITOR_ENABLED=0\)/, '(tests run with the loops off)');
-  // The live console: each store with its state, its search in the event log, the response-time chart.
+  // The live page: each store with its state and what it's doing; a click shows the details.
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"]');
-  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"]'), /Target\s*Searching.*searches\s*1.*last answer\s*400 ms.*server · \/search\?sEngine=c&text=/s);
+  assert.match(await page.textContent('#mon-sub'), /Searching \d+ stores every few seconds for pokemon and one piece/);
+  const targetRow = page.locator('#sn-channels .sn-chan[data-store="target"]');
+  assert.match(await targetRow.locator('.hd').textContent(), /Target\s*Searching/);
+  assert.match(await targetRow.locator('.st-sub').textContent(), /Answered in 400 ms/);
+  assert.equal(await targetRow.locator('.sn-rows').isVisible(), false, 'details folded away');
+  await targetRow.locator('.st-toggle').click();
+  await page.waitForSelector('#sn-channels .sn-chan[data-store="target"].open .sn-rows:not([hidden])');
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"] .sn-rows'), /searches\s*1.*last answer\s*400 ms.*server · \/search\?sEngine=c&text=/s);
+  assert.equal(await page.getAttribute('#sn-channels .sn-chan[data-store="target"] .st-toggle', 'aria-expanded'), 'true');
   assert.match(await page.textContent('#sn-channels .sn-chan[data-store="bigw"]'), /BIG W\s*Waiting.*admin's browser/s);
   assert.match(await page.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /Kmart\s*Starting.*server · ac\.cnstrc\.com\/search\//s);
+  // The live feed shows drops and restocks; "Everything" adds each search.
+  assert.equal(await page.inputValue('#m-kind'), 'alerts');
+  assert.doesNotMatch(await page.textContent('#m-log'), /Target · "pokemon" — 2 products/);
+  await page.selectOption('#m-kind', '');
   assert.match(await page.textContent('#m-log'), /Search\s*Target · "pokemon" — 2 products · 1 count · first look \(no alerts\)\s*400 ms/);
-  await page.waitForSelector('#sn-chart svg circle.end.s3');
-  assert.match(await page.textContent('#sn-legend'), /Target\s*400 ms/);
-  assert.match(await page.textContent('#sn-chips'), /pokemon.*one piece/s);
   await page.waitForFunction(() => /Test Booster Bundle/.test(document.querySelector('#m-products').textContent));
   assert.doesNotMatch(await page.textContent('#m-products'), /Plush/, 'not a trading-card product');
   const ownerId = env.app.repo.userByUsername('owner').id;
@@ -300,7 +337,8 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await page.waitForFunction(() => /New drop.*Brand New ETB/s.test(document.querySelector('#m-log').textContent));
   assert.match(await page.textContent('#m-log'), /Restock.*Test Booster Bundle.*alerted in \d+ ms/s);
   assert.match(await page.textContent('#m-log'), /Target · "pokemon" — 2 products · 1 new · 1 restock\s*380 ms/);
-  assert.match(await page.textContent('#m-stats'), /Drops · 24 h\s*\d+/);
+  // The numbers keep up by themselves: today's drops and restocks.
+  await page.waitForFunction(() => /Drops today\s*\d+\s*[1-9]\d* new · [2-9]\d* restocks · 24 h/.test(document.querySelector('#m-stats').textContent));
   // The event log's filter.
   await page.selectOption('#m-kind', 'alerts');
   assert.equal(await page.locator('#m-log .sn-ev.k-hb').count(), 0);
@@ -312,7 +350,53 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await page.waitForFunction(() => document.querySelectorAll('#m-products li.product').length === 2);
   await page.selectOption('#m-status', '');
 
-  // Keywords and tuning, right in the console.
+  // ↻ Reset (admins): one store, from its row on the live page.
+  await page.click('#sn-channels .sn-chan[data-store="target"] .st-reset');
+  await page.waitForFunction(() => /Reset Target/.test(document.querySelector('#toasts')?.textContent || ''));
+  assert.ok(sw.stat('target').resetAt > 0);
+  assert.ok(sw.stat('target').slowUntil > sw.now(), 'gently for a while');
+  // A store that keeps failing: a banner above everything says so, with Reset all.
+  const amazon = env.app.retailers.get('amazon');
+  for (let i = 0; i < 3; i += 1) sw.record(amazon, term, { ok: false, blocked: true, error: 'The store refused the search (HTTP 503)', source: 'server', url: sw.urlFor(amazon, 'pokemon'), ms: 300 });
+  await page.waitForSelector('#sn-attention:not([hidden])');
+  assert.match(await page.textContent('#sn-attention'), /Amazon AU needs attention/);
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="amazon"] .st-sub'), /HTTP 503/);
+  await page.click('#sn-attention button');
+  await page.waitForFunction(() => /Reset every store/.test(document.querySelector('#toasts')?.textContent || ''));
+  assert.equal(sw.stat('amazon').fails, 0);
+  await page.waitForSelector('#sn-attention', { state: 'hidden' });
+
+  // Alerts in this browser: the ⚙ menu. No pop-up when switched off, and the test alert runs only here.
+  await page.click('#sn-prefs-menu > summary');
+  await page.click('#sn-prefs button[role=switch][aria-label="Pop-up for drops and restocks"]');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mgb-live')).popup), false);
+  await page.click('#sn-prefs button[role=switch][aria-label="Pop-up for drops and restocks"]');
+  await page.click('#sn-test');
+  await page.waitForSelector('#sn-overlay:not([hidden])');
+  assert.match(await page.textContent('#sn-ov-type'), /Test · New drop/);
+  await page.click('#sn-ov-dismiss');
+  await page.waitForSelector('#sn-overlay', { state: 'hidden' });
+  assert.match(await page.textContent('#m-log'), /test \(this browser only\)/);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => document.querySelector('#sn-prefs-menu').open), false, 'Escape closes the menu');
+  await page.click('#sn-arm');
+  await page.waitForFunction(() => /Alerts armed/.test(document.querySelector('#toasts')?.textContent || ''));
+
+  // Settings: where each store is searched from, keywords, alerts and what counts, the response times.
+  await page.click('[data-panel="monitor"] .mon-tabs a[data-mtab="monitor-settings"]');
+  await page.waitForSelector('#ms-table tbody tr');
+  assert.equal(await page.inputValue('#ms-table select[data-store="target"]'), 'server');
+  assert.match(await page.textContent('#ms-table tr[data-store="target"]'), /Gentle until/, 'reset a moment ago: searched gently for a while');
+  assert.match(await page.textContent('#ms-state'), /Off \(MONITOR_ENABLED=0\)/, '(tests run with the loops off)');
+  await page.waitForSelector('#sn-chart svg circle.end.s3');
+  assert.match(await page.textContent('#sn-legend'), /Target\s*\d+ ms/);
+  assert.match(await page.textContent('#sn-chips'), /pokemon.*one piece/s);
+  // Reset from the table, a store at a time.
+  sw.stat('target').resetAt = 0;
+  await page.click('#ms-table tr[data-store="target"] button');
+  await waitFor(() => sw.stat('target').resetAt > 0, { message: 'Target reset from Settings' });
+
+  // Keywords.
   await page.fill('#sn-kw-input', 'Lorcana');
   await page.click('#sn-kw-form button[type=submit]');
   await page.waitForFunction(() => /lorcana/.test(document.querySelector('#sn-chips').textContent));
@@ -320,41 +404,29 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await page.click('#sn-chips button[aria-label="Stop searching for lorcana"]');
   await page.waitForFunction(() => !/lorcana/.test(document.querySelector('#sn-chips').textContent));
   assert.deepEqual(sw.settings.keywords, ['pokemon', 'one piece']);
-  await page.click('#sn-tuning button[role=switch][aria-label^="Price drops"]');
-  await waitFor(() => sw.settings.priceAlerts === false, { message: 'price drop alerts off' });
-  await page.click('#sn-tuning button[role=switch][aria-label^="Price drops"]');
-  await waitFor(() => sw.settings.priceAlerts === true, { message: 'price drop alerts on' });
-  // This browser: no pop-up when switched off, and the test alert runs only here.
-  await page.click('#sn-tuning button[role=switch][aria-label="Pop-up for drops and restocks"]');
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mgb-live')).popup), false);
-  await page.click('#sn-tuning button[role=switch][aria-label="Pop-up for drops and restocks"]');
-  await page.click('#sn-test');
-  await page.waitForSelector('#sn-overlay:not([hidden])');
-  assert.match(await page.textContent('#sn-ov-type'), /Test · New drop/);
-  await page.click('#sn-ov-dismiss');
-  await page.waitForSelector('#sn-overlay', { state: 'hidden' });
-  assert.match(await page.textContent('#m-log'), /test \(this browser only\)/);
-  await page.click('#sn-arm');
-  await page.waitForFunction(() => /Alerts armed/.test(document.querySelector('#toasts')?.textContent || ''));
+  // The last keyword can't go while sweeps are on.
+  await page.click('#sn-chips button[aria-label="Stop searching for one piece"]');
+  await page.waitForFunction(() => !/one piece/.test(document.querySelector('#sn-chips').textContent));
+  await page.click('#sn-chips button[aria-label="Stop searching for pokemon"]');
+  await page.waitForFunction(() => /at least one keyword/.test(document.querySelector('#toasts')?.textContent || ''));
+  assert.deepEqual(sw.settings.keywords, ['pokemon']);
 
-  // Settings.
-  await page.fill('#ms-keywords', 'pokemon, one piece, dragon ball');
+  // Where a store is searched from changes straight away; the rest saves with the form.
+  await page.selectOption('#ms-table select[data-store="kmart"]', 'off');
+  await waitFor(() => sw.modeFor(env.app.retailers.get('kmart')) === 'off', { message: 'Kmart switched off' });
   await page.fill('#ms-every', '4');
-  await page.selectOption('#ms-stores select[data-store="kmart"]', 'off');
   await page.uncheck('#ms-once');
+  await page.uncheck('#ms-price');
   await page.click('#ms-form button[type=submit]');
   await page.waitForFunction(() => /Saved/.test(document.querySelector('#ms-msg').textContent));
-  assert.deepEqual(sw.settings.keywords, ['pokemon', 'one piece', 'dragon ball']);
   assert.equal(sw.settings.everySeconds, 4);
   assert.equal(sw.settings.restockOncePerDay, false);
-  assert.equal(sw.modeFor(env.app.retailers.get('kmart')), 'off');
-  await page.fill('#ms-keywords', ' ');
-  await page.click('#ms-form button[type=submit]');
-  await page.waitForFunction(() => /at least one keyword/.test(document.querySelector('#ms-msg').textContent));
+  assert.equal(sw.settings.priceAlerts, false);
+  assert.deepEqual(sw.settings.keywords, ['pokemon'], 'the form leaves the keywords alone');
   await page.click('details.ms-terms summary');
   assert.match(await page.textContent('#ms-terms'), /Target\s*pokemon\s*1/);
   if (shots) await page.screenshot({ path: path.join(shots, 'monitor-sweeps.png'), fullPage: true });
-  await sw.save({ keywords: 'pokemon, one piece', stores: { kmart: 'browser' }, everySeconds: 5, restockOncePerDay: true }, null);
+  await sw.save({ keywords: 'pokemon, one piece', stores: { kmart: 'browser' }, everySeconds: 5, restockOncePerDay: true, priceAlerts: true }, null);
 });
 
 test('Extension tab: install steps, browser checks switch, stores and their flows', async () => {
@@ -371,6 +443,16 @@ test('Extension tab: install steps, browser checks switch, stores and their flow
   assert.equal(env.app.repo.getData(owner.id, 'alerts').browserChecks, false);
   await page.check('#b-checks');
   await page.waitForFunction(() => /On/.test(document.querySelector('#b-msg').textContent));
+  // The store sign-ins: with no browser connected yet, each store with where to sign in.
+  await page.waitForSelector('#logins li.login');
+  assert.match(await page.textContent('#logins-sum'), /Connect the extension \(step 2\)/);
+  const bigw = page.locator('#logins li.login[data-store="bigw"]');
+  assert.match(await bigw.textContent(), /BIG W.*Not seen yet: open the store once/s);
+  assert.equal(await bigw.locator('a').getAttribute('href'), 'https://www.bigw.com.au');
+  assert.match(await page.textContent('#logins li.login[data-store="jbhifi"]'), /Not checked yet/);
+  assert.equal(await page.getAttribute('#logins li.login[data-store="jbhifi"] a', 'href'), 'https://www.jbhifi.com.au/account');
+  await page.click('#logins-check');
+  await page.waitForFunction(() => /Install the extension and connect it/.test(document.querySelector('#logins-msg').textContent));
 });
 
 test('an extension downloaded for the old address: the dashboard says so and links to the update steps', async () => {
@@ -571,6 +653,24 @@ test('phone-sized screens: no sideways scrolling', async () => {
     assert.ok(overflow <= 1, `#${tab} overflows by ${overflow}px`);
   }
   await phone.close();
+  // The admin's Monitor pages: Live, Settings and the Check log.
+  const admin = await browser.newPage({ viewport: { width: 375, height: 800 } });
+  admin.on('pageerror', (e) => errors.push(e.message));
+  await admin.context().addCookies(await page.context().cookies(env.url));
+  await admin.addInitScript(() => localStorage.setItem('mgb-live', JSON.stringify({ sound: false, notify: false, popup: false })));
+  for (const tab of ['monitor', 'monitor-settings', 'monitor-log']) {
+    await admin.goto(`${env.url}/app#${tab}`);
+    await admin.waitForSelector(`[data-panel="${tab}"]:not([hidden]) .mon-tabs:not([hidden])`);
+    await admin.waitForTimeout(300);
+    const overflow = await admin.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok(overflow <= 1, `#${tab} (admin) overflows by ${overflow}px`);
+  }
+  // The ⚙ menu fits too.
+  await admin.goto(`${env.url}/app#monitor`);
+  await admin.click('#sn-prefs-menu > summary');
+  const box = await admin.locator('#sn-prefs').boundingBox();
+  assert.ok(box.x >= 0 && box.x + box.width <= 375, `the menu fits: ${JSON.stringify(box)}`);
+  await admin.close();
 });
 
 test('log out', async () => {
@@ -579,6 +679,25 @@ test('log out', async () => {
   await page.waitForURL(`${env.url}/`);
   await page.goto(`${env.url}/app`);
   await page.waitForURL(/\/login\?next=/);
+});
+
+test("store login monitor: a store page's header — \"Sign in\" (signed out), \"Hi, Ash\" or \"Sign out\" (signed in)", async () => {
+  const p = await browser.newPage();
+  try {
+    await p.setContent('<header><a href="/account">Sign in / Register</a></header>');
+    await p.addScriptTag({ path: path.join(import.meta.dirname, '..', 'extension', 'logins.js') });
+    const read = (html) => p.evaluate((h) => { document.body.innerHTML = h; return globalThis.MGBLogins.fromPage(document, null); }, html);
+    assert.equal(await read('<header><a href="/account">Sign in / Register</a></header>'), 'out');
+    assert.equal(await read('<header><button>Hello, sign in</button></header>'), 'out', "Amazon-style");
+    assert.equal(await read('<header><a href="/account">Hi, Ash</a></header>'), 'in');
+    assert.equal(await read('<header><a href="/account">Hi, there</a></header>'), null, 'a greeting without a name says nothing');
+    assert.equal(await read('<header><a href="/account">Account</a><div hidden><a href="/logout">Sign out</a></div></header>'), 'in', 'a sign-out link in a closed account menu');
+    assert.equal(await read('<header><a href="/login">Log in</a><a href="/logout" style="display:none">Log out</a></header>'), 'out', 'a page carrying both, with "Log in" showing');
+    assert.equal(await read('<header><a href="/stores">Stores</a><a href="/help">Help</a></header>'), null, "can't tell");
+    assert.equal(await read('<main><p>Sign in to see your orders.</p></main>'), null, 'only the header and account links count');
+  } finally {
+    await p.close();
+  }
 });
 
 test('no JavaScript errors or blocked scripts/styles on any page', () => {

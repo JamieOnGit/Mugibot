@@ -148,17 +148,24 @@ export class Feed {
     return { ...alert, posted };
   }
 
-  /** The Discord alert rules that want this alert. With none set up, the restock channel gets restocks and listings. */
+  /**
+   * The Discord alert rules that want this alert. A catch-all rule (fallback: misc-retailers) only
+   * gets what no other rule took. With no rules, the restock channel gets restocks and listings.
+   * A rule for a store also takes its dummy-store copy's alerts.
+   */
   routesFor(alert) {
     let routes = this.catalog.listRoutes().filter((r) => r.enabled);
     if (!routes.length && this.cfg.discord.restockChannelId) {
       routes = [{ id: 'default', name: 'Restock channel', channelId: this.cfg.discord.restockChannelId, roleId: this.cfg.discord.restockRoleId || '', categories: [], stores: [], kinds: ['restock', 'listed'], keywords: '' }];
     }
     const name = String(alert.name || '').toLowerCase();
-    return routes.filter((r) => (!r.categories.length || r.categories.includes(alert.category))
-      && (!r.stores.length || r.stores.includes(alert.store))
+    const store = String(alert.store || '');
+    const wants = (r) => (!r.categories.length || r.categories.includes(alert.category))
+      && (!r.stores.length || r.stores.includes(store) || r.stores.includes(store.replace(/^demo-/, '')))
       && r.kinds.includes(alert.kind)
-      && (!r.keywords.trim() || r.keywords.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean).some((k) => name.includes(k))));
+      && (!r.keywords.trim() || r.keywords.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean).some((k) => name.includes(k)));
+    const taken = routes.filter((r) => !r.fallback && wants(r));
+    return taken.length ? taken : routes.filter((r) => r.fallback && wants(r));
   }
 
   async post(alert, product) {

@@ -242,6 +242,16 @@ export class Discord {
     return false;
   }
 
+  /** The server's channels (the alert channels are found by name). { status, body: [channel] } */
+  guildChannels() {
+    return this.api('GET', `/guilds/${this.d.guildId}/channels`);
+  }
+
+  /** Make a channel in the server (needs the Manage Channels permission). { status, body: channel } */
+  createChannel(body) {
+    return this.api('POST', `/guilds/${this.d.guildId}/channels`, body);
+  }
+
   async post(channelId, message) {
     if (!this.botReady || !channelId) return false;
     const r = await this.api('POST', `/channels/${channelId}/messages`, message);
