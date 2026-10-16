@@ -358,6 +358,11 @@ test('🆕 a new drop alerts the moment a sweep sees it: the feed, Discord (with
 });
 
 test('🟢 out of stock → in stock alerts a restock, once a day per product; no alert for sold out', async () => {
+  // "Once a day" is Sydney's calendar day: keep this test's 20 minutes clear of midnight there
+  // (well inside the 6 hours after which a search sets the scene again).
+  const sydney = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const [h, m] = sydney.format(Date.now() + clock.offset).split(':').map(Number);
+  if (h * 60 + m >= 22 * 60) clock.offset += 3 * 3600 * 1000;
   store.set('kmart', '43818648', { status: 'in_stock' });
   let r = await sweep('demo-kmart');
   assert.equal(r.restock, 1);
