@@ -89,11 +89,10 @@ const panel = (page) => page.locator('#mugibot-qc');
 const readyFor = (label) => new RegExp(`Ready — review everything and press "${label}"`);
 const ordersPlaced = () => Object.values(store.state.shops).reduce((n, s) => n + s.orders.length, 0);
 
-async function buyFromDashboard(page, name, qty) {
+async function buyFromDashboard(page, name) {
   await page.goto(`${env.url}/app#watch`);
   const row = page.locator('#w-list li', { hasText: name });
-  await row.locator('input.qty').fill(String(qty));
-  await row.locator('input.qty').dispatchEvent('change');
+  assert.equal(await row.locator('input.qty').count(), 0, 'no quantity box (one of each for now)');
   const [shop] = await Promise.all([ctx.waitForEvent('page'), row.getByRole('button', { name: '⚡ Buy' }).click()]);
   return shop;
 }
@@ -214,15 +213,16 @@ test('a card saved with a passphrase by an older version: entering it once keeps
   assert.equal(local[`vault:${userId}`].v, 2, 'moved over to the new kind');
 });
 
-test('Kmart flow (verified): ⚡ Buy ×2 → popup Checkout → details → delivery → payment → stops at "Checkout securely"', async () => {
+test('Kmart flow (verified): ⚡ Buy → added → straight to checkout → details → delivery → payment → stops at "Checkout securely"', async () => {
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'Kmart ETB', 2);
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
   await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 20000 });
   await waitReady(shop, 'Checkout securely');
 
   const S = store.shop('kmart');
-  assert.equal(S.cart[0].qty, 2, 'quantity from the dashboard');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['43818587', 1]], 'one of it, in the bag');
+  assert.deepEqual(S.bagViews, [], 'never opened the bag page on the way');
   assert.deepEqual(S.steps.map((x) => x.step), ['summary', 'details', 'delivery'], 'Continue to details → delivery → payment');
   assert.equal(S.data.details.email, KMART_ACCOUNT.email, 'kept what the store account already had');
   assert.equal(S.data.details.kmail, undefined, 'never ticks marketing boxes');
@@ -241,7 +241,7 @@ test('Kmart flow (verified): ⚡ Buy ×2 → popup Checkout → details → deli
   assert.equal(ordersPlaced(), 0, '"Checkout securely" was NOT pressed');
 
   const userId = env.app.repo.userByUsername('ash').id;
-  await waitFor(() => env.app.repo.listEvents(userId).some((e) => /Kmart ETB: Clicked "Add to bag" \(quantity 2\)/.test(e.message)), { message: 'add event' });
+  await waitFor(() => env.app.repo.listEvents(userId).some((e) => /Kmart ETB: Clicked "Add to bag"$/.test(e.message)), { message: 'add event' });
   await waitFor(() => env.app.repo.listEvents(userId).some((e) => /Kmart \(dummy store\) — waiting for you to press "Checkout securely"/.test(e.message)), { message: 'ready event' });
   await shop.close();
   await dash.close();
@@ -255,12 +255,12 @@ test('Kmart on a fresh, slow page: never opens the bag before the item is in it'
   S.addDelayMs = 2500;
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'Kmart ETB', 2);
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
   await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 40000 });
   await waitReady(shop, 'Checkout securely');
   assert.deepEqual(S.bagViews.filter((n) => n === 0), [], 'the bag was never opened while empty');
   assert.equal(S.cart.length, 1);
-  assert.equal(S.cart[0].qty, 2, 'added once with quantity 2 (not twice)');
+  assert.equal(S.cart[0].qty, 1, 'added once (not twice)');
   assert.equal(ordersPlaced(), 0);
   await shop.close();
   await dash.close();
@@ -271,11 +271,30 @@ test('Kmart with a slow "Add to bag" (4 s): waits for it, adds once, never opens
   S.addDelayMs = 4000;
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'Kmart ETB', 2);
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
   await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 40000 });
   await waitReady(shop, 'Checkout securely');
-  assert.deepEqual(S.bagViews, [], 'went from the "Added to bag" popup straight to checkout');
-  assert.equal(S.cart[0].qty, 2, 'added once');
+  assert.deepEqual(S.bagViews, [], 'straight to checkout once it was in the bag');
+  assert.equal(S.cart[0].qty, 1, 'added once');
+  await shop.close();
+  await dash.close();
+});
+
+test("Kmart's React page, slow to finish loading: Add is pressed the moment Kmart's code is ready, not when the page has loaded", async () => {
+  // Like kmart.com.au: its code wires up "Add to bag" well before the page has finished
+  // loading (pictures, adverts), and a press before that does nothing.
+  const S = store.shop('kmart');
+  S.reactMs = 700;
+  S.slowLoadMs = 9000;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 20000 });
+  assert.ok(S.addedAt - S.servedAt < 4000, `pressed ${S.addedAt - S.servedAt} ms after the page arrived — well before it finished loading (${S.slowLoadMs} ms)`);
+  assert.ok(S.addedAt - S.servedAt >= S.reactMs, 'and not before the page could take it');
+  assert.deepEqual(S.cart.map((c) => c.qty), [1], 'pressed once');
+  await waitReady(shop, 'Checkout securely');
+  assert.equal(ordersPlaced(), 0);
   await shop.close();
   await dash.close();
 });
@@ -285,7 +304,7 @@ test("when the store won't add it, Mugibot says so and doesn't open an empty bag
   S.refuseAdds = true;
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'Kmart ETB', 1);
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
   await shop.waitForFunction(() => /didn't add it to your bag/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 40000 });
   assert.match(shop.url(), /\/kmart\/product\//, 'still on the product page');
   assert.deepEqual(S.bagViews, [], 'the bag was never opened');
@@ -298,7 +317,7 @@ test('Kmart with the card in a payment-provider frame (Adyen-style)', async () =
   store.state.cardInIframe = true;
   await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
+  const shop = await buyFromDashboard(dash, 'Kmart KO');
   await waitReady(shop, 'Checkout securely');
   await waitFor(async () => (await cardFrame(shop).inputValue('input[name=encryptedCardNumber]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
   // One box at a time: wait for the last one.
@@ -315,7 +334,7 @@ test('Kmart with Adyen-style secured fields (one frame per box, real typing only
   store.state.cardInIframe = 'strict';
   await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
+  const shop = await buyFromDashboard(dash, 'Kmart KO');
   await waitReady(shop, 'Checkout securely');
   const box = (field) => shop.frames().find((f) => f.url().includes(`field=${field}`));
   await waitFor(async () => (await box('number').inputValue('input')) === '4242 4242 4242 4242', { timeout: 20000, message: 'card number typed into its box' });
@@ -336,7 +355,7 @@ test('Kmart with card boxes that only take key presses: typed key by key', async
   store.state.cardInIframe = 'keys';
   await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
+  const shop = await buyFromDashboard(dash, 'Kmart KO');
   await waitReady(shop, 'Checkout securely');
   const box = (field) => shop.frames().find((f) => f.url().includes(`field=${field}`));
   await waitFor(async () => (await box('number').evaluate(() => typed)) === '4242 4242 4242 4242', { timeout: 20000, message: 'card number typed key by key' });
@@ -351,7 +370,7 @@ test("Kmart with card boxes that won't take the card: tries each box 3 times, th
   store.state.cardInIframe = 'never';
   await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
+  const shop = await buyFromDashboard(dash, 'Kmart KO');
   await waitReady(shop, 'Checkout securely');
   await shop.waitForFunction(() => /Your card didn't go into the card boxes \(from [\w.-]+:\d+\)\. Type it in yourself/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 40000 });
   const userId = env.app.repo.userByUsername('ash').id;
@@ -371,7 +390,7 @@ test("Kmart: when the card boxes can't be reached, the panel says so and where t
   store.state.cardInIframe = 'mystery'; // a payment frame Mugibot doesn't recognise
   await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'Kmart KO', 1);
+  const shop = await buyFromDashboard(dash, 'Kmart KO');
   await waitReady(shop, 'Checkout securely');
   await shop.waitForFunction(() => /couldn't reach the card boxes on this page \(the payment form may be in a frame from [\w.-]+:\d+\)\. Type your card in yourself/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 30000 });
   const userId = env.app.repo.userByUsername('ash').id;
@@ -381,15 +400,15 @@ test("Kmart: when the card boxes can't be reached, the panel says so and where t
   await dash.close();
 });
 
-test('BIG W flow (beta): quantity dropdown → drawer "View cart" → "Proceed to checkout" → guest → "Home delivery" → manual address → card frame → stops at "Place order"', async () => {
+test('BIG W flow (beta): add → drawer "View cart" → "Proceed to checkout" → guest → "Home delivery" → manual address → card frame → stops at "Place order"', async () => {
   await useItems([{ url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle', price: 45 }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'BIG W Bundle', 3);
+  const shop = await buyFromDashboard(dash, 'BIG W Bundle');
   await shop.waitForURL(/\/bigw\/checkout$/, { timeout: 25000 });
   await waitReady(shop, 'Place order');
 
   const S = store.shop('bigw');
-  assert.equal(S.cart[0].qty, 3, 'quantity set with the dropdown on the product page');
+  assert.equal(S.cart[0].qty, 1, 'one of it (the quantity dropdown left alone)');
   assert.equal(S.data.contact.email, PROFILE_A.email, 'checkout email from delivery details');
   assert.equal(S.data.method.method, 'home', 'chose "Home delivery" (a BIG W flow step)');
   assert.deepEqual({ ...S.data.address, addressSearch: undefined }, { firstName: 'Ash', lastName: 'Ketchum', phone: '0412345678', street: PROFILE_A.address1, unit: PROFILE_A.address2, suburb: 'Sydney', state: 'NSW', postcode: '2000', addressSearch: undefined });
@@ -407,7 +426,7 @@ test('BIG W flow (beta): quantity dropdown → drawer "View cart" → "Proceed t
 test('EB Games flow (beta): mini-cart Checkout → "Continue as Guest" → address lookup → manual → delivery → payment + terms → stops at "Place Order"', async () => {
   await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'EB ETB' }]);
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'EB ETB', 1);
+  const shop = await buyFromDashboard(dash, 'EB ETB');
   await shop.waitForURL(/\/ebgames\/checkout\/payment$/, { timeout: 30000 });
   await waitReady(shop, 'Place Order');
   const S = store.shop('ebgames');
@@ -426,14 +445,20 @@ test('EB Games flow (beta): mini-cart Checkout → "Continue as Guest" → addre
   await dash.close();
 });
 
-test('JB Hi-Fi flow (beta, Shopify): quantity → add → cart → "Check out" → one-page checkout → stops at "Pay now"', async () => {
-  await useItems([{ store: 'demo-jbhifi', sku: 'pokemon-tcg-30th-celebration-etb', name: 'JB ETB' }]);
+test('JB Hi-Fi flow (beta, Shopify): the product page → Shopify\'s cart link → one-page checkout → stops at "Pay now"', async () => {
+  const handle = 'pokemon-tcg-30th-celebration-etb';
+  await useItems([{ store: 'demo-jbhifi', sku: handle, name: 'JB ETB' }]);
+  // Mugibot doesn't know the product's Shopify option yet: the store page looks it up.
+  const known = env.app.catalog.productFor('demo-jbhifi', handle);
+  if (known) env.app.catalog.updateProduct(known.id, { variant_id: '' });
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'JB ETB', 2);
+  const shop = await buyFromDashboard(dash, 'JB ETB');
   await shop.waitForURL(/\/jbhifi\/checkouts\/c\/abc123$/, { timeout: 30000 });
   await waitReady(shop, 'Pay now');
   const S = store.shop('jbhifi');
-  assert.equal(S.cart[0].qty, 2);
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+  assert.ok(store.state.requests.some((r) => r.path === `/jbhifi/products/${handle}.js`), 'looked up the option to buy');
+  assert.ok(!store.state.requests.some((r) => r.path === '/jbhifi/cart' || r.path === '/jbhifi/cart/add'), 'no Add to cart press, no cart page');
   assert.equal(await shop.inputValue('input[name=email]'), PROFILE_A.email);
   assert.equal(await shop.inputValue('input[name=address1]'), PROFILE_A.address1);
   assert.equal(await shop.inputValue('input[name=city]'), 'Sydney');
@@ -447,13 +472,19 @@ test('JB Hi-Fi flow (beta, Shopify): quantity → add → cart → "Check out" �
   await dash.close();
 });
 
-test('Trainer Town flow (draft, Shopify): add → cart → "Check out" → one-page checkout → stops at "Pay now"', async () => {
-  await useItems([{ store: 'demo-trainertown', sku: 'pokemon-tcg-ascended-heroes-elite-trainer-box', name: 'TT ETB' }]);
+test('Trainer Town flow (draft, Shopify): ⚡ Buy opens Shopify\'s cart link straight away (no product page) → one-page checkout → stops at "Pay now"', async () => {
+  const handle = 'pokemon-tcg-ascended-heroes-elite-trainer-box';
+  await useItems([{ store: 'demo-trainertown', sku: handle, name: 'TT ETB' }]);
+  // The monitor has seen the product, so Mugibot knows its Shopify option to buy.
+  const item = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'TT ETB');
+  const p = env.app.catalog.upsertProduct({ store: 'demo-trainertown', sku: handle, url: item.url, name: 'TT ETB' });
+  env.app.catalog.updateProduct(p.id, { variant_id: String(store.shop('trainertown').products.find((x) => x.sku === handle).id) });
   const dash = await ctx.newPage();
-  const shop = await buyFromDashboard(dash, 'TT ETB', 1);
+  const shop = await buyFromDashboard(dash, 'TT ETB');
   await shop.waitForURL(/\/trainertown\/checkouts\/c\/abc123$/, { timeout: 30000 });
   await waitReady(shop, 'Pay now');
-  assert.equal(store.shop('trainertown').cart[0].sku, 'pokemon-tcg-ascended-heroes-elite-trainer-box');
+  assert.deepEqual(store.shop('trainertown').cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+  assert.ok(!store.state.requests.some((r) => r.path === `/trainertown/products/${handle}`), 'the product page was never opened');
   assert.equal(await shop.inputValue('input[name=email]'), PROFILE_A.email);
   assert.equal(await shop.inputValue('input[name=postalCode]'), '2000');
   await waitFor(async () => (await cardFrame(shop).inputValue('input[name=number]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
@@ -469,7 +500,7 @@ test('the ⚡ Buy button in a Discord DM goes straight to the store and the flow
   discord.state.nextUser = 'd-ash';
   await page.goto(`${env.url}/auth/discord`);
   await page.waitForURL(/discord=linked/);
-  await useItems([{ url: store.productUrl('kmart', '43818648'), name: 'Kmart UPC', quantity: 2 }]);
+  await useItems([{ url: store.productUrl('kmart', '43818648'), name: 'Kmart UPC' }]);
   const userId = env.app.repo.userByUsername('ash').id;
   const row = env.app.db.get("SELECT * FROM items WHERE user_id = :u AND sku = '43818648'", { u: userId });
   store.set('kmart', '43818648', { status: 'in_stock' });
@@ -477,11 +508,11 @@ test('the ⚡ Buy button in a Discord DM goes straight to the store and the flow
   await env.app.monitor.applyResult({ ...row, status: 'out_of_stock' }, { status: 'in_stock', price: 360 }, 'server');
   const dm = discord.dmsTo('d-ash').slice(before)[0];
   const button = dm.body.components[0].components[0];
-  assert.equal(button.label, '⚡ Buy ×2');
+  assert.equal(button.label, '⚡ Buy');
   await page.goto(button.url);
   await page.waitForURL(/\/kmart\/checkout$/, { timeout: 25000 });
   await waitReady(page, 'Checkout securely');
-  assert.equal(store.shop('kmart').cart[0].qty, 2);
+  assert.equal(store.shop('kmart').cart[0].qty, 1);
   assert.equal(ordersPlaced(), 0);
   await page.close();
 });
@@ -583,12 +614,64 @@ test("BIG W's search page builds its products once it's open: an admin's browser
   }
 });
 
+test("EB Games: its search JSON, asked for from inside an EB Games page in the sweep window (servers refused, like its Cloudflare)", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-ebgames': 'browser' } }, null);
+  store.state.blockNonBrowsers = true;
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => env.app.catalog.productFor('demo-ebgames', '312346'), { timeout: 30000, message: 'EB Games products from its search JSON' });
+    const etb = env.app.catalog.productFor('demo-ebgames', '312346');
+    assert.equal(etb.status, 'in_stock');
+    assert.match(etb.url, /\/ebgames\/product\/toys-and-collectibles\/312346-/);
+    const asked = store.state.requests.filter((x) => x.path === '/ebgames/search/query');
+    assert.ok(asked.length >= 1 && asked.every((x) => /Chrome|Mozilla/.test(x.ua)), "asked by the browser, from EB Games' page");
+    assert.equal(sweeper.health().find((s) => s.store === 'demo-ebgames').terms[0].source, 'browser');
+    // A second search asks again from the same page: no page load in between.
+    const pages = () => store.state.requests.filter((x) => x.path === '/ebgames/search').length;
+    const before = pages();
+    const n = asked.length;
+    sweeper.sweepNow();
+    await waitFor(() => store.state.requests.filter((x) => x.path === '/ebgames/search/query').length > n, { timeout: 30000, message: 'the next search' });
+    assert.equal(pages(), before, 'the EB Games page stays open');
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    store.state.blockNonBrowsers = false;
+    sweeper.save({ stores: off }, null);
+  }
+});
+
+test("BIG W: products the page downloaded but hasn't drawn (a page in a hidden window) still count", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-bigw': 'browser' } }, null);
+  store.shop('bigw').clientSearch = 'data';
+  store.shop('bigw').products.push({ sku: '6012399', name: 'Pokémon TCG: Hidden Window Booster Bundle', price: 49, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'select', lateMs: 0, id: 4412399 });
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => env.app.catalog.productFor('demo-bigw', '6012399'), { timeout: 40000, message: "products from the data BIG W's page downloaded" });
+    const p = env.app.catalog.productFor('demo-bigw', '6012399');
+    assert.equal(p.status, 'in_stock');
+    assert.equal(p.price, 49);
+    assert.match(p.url, /\/bigw\/product\/.+\/p\/6012399$/);
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    store.shop('bigw').clientSearch = false;
+    sweeper.save({ stores: off }, null);
+  }
+});
+
 test("another account's ⚡ Buy link does nothing in this browser", async () => {
   const misty = await Client.signup(env.url, 'misty');
   env.app.repo.updateUser(misty.user.id, { plan: 'active' });
   await misty.post('/api/items', { url: store.productUrl('kmart', '43818556'), name: 'Misty KO' });
   const p = (await misty.get('/api/items')).body.items.find((x) => x.name === 'Misty KO');
-  const go = await misty.post(`/api/items/${p.id}/go`, { quantity: 1 });
+  const go = await misty.post(`/api/items/${p.id}/go`, {});
   const page = await ctx.newPage();
   await page.goto(go.body.url);
   await panel(page).waitFor();
@@ -620,7 +703,7 @@ test("switching this browser to another account: their own details, the first ac
 
   await browserApi('PUT', '/api/profiles', { profiles: [PROFILE_B] });
   store.state.account = null; // a guest checkout this time
-  const shop = await buyFromDashboard(page, 'Misty KO', 1);
+  const shop = await buyFromDashboard(page, 'Misty KO');
   await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 20000 });
   await waitReady(shop, 'Checkout securely');
   const S = store.shop('kmart');
@@ -777,15 +860,13 @@ test('Chrome Web Store copy: downloaded copies are asked to move to it, and with
     // ⚡ Buy with both copies installed: one panel, added once.
     await page.goto(`${env.url}/app#watch`);
     const row = page.locator('#w-list li', { hasText: 'Misty KO' });
-    await row.locator('input.qty').fill('2');
-    await row.locator('input.qty').dispatchEvent('change');
     const [shop] = await Promise.all([ctx3.waitForEvent('page'), row.getByRole('button', { name: '⚡ Buy' }).click()]);
     await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 30000 });
     await shop.waitForFunction(() => /Ready — review everything/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 40000 });
     assert.equal(await shop.locator('#mugibot-qc').count(), 1, 'one Mugibot panel');
     const S = store.shop('kmart');
     assert.equal(S.cart.length, 1);
-    assert.equal(S.cart[0].qty, 2, 'added once, with quantity 2');
+    assert.equal(S.cart[0].qty, 1, 'added once (two copies would have added two)');
     assert.equal(ordersPlaced(), 0);
   } finally {
     env.app.repo.setSetting('chrome_store_url', null);

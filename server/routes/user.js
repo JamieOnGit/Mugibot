@@ -102,12 +102,12 @@ export function register(router, ctx) {
     return { item: withStore(it) };
   });
 
-  // ⚡ Buy: a one-time code the extension redeems on the product page.
+  // ⚡ Buy: a one-time code the extension redeems on the store's page.
   router.post('/api/items/:id/go', async (req) => {
     if (!limiter.hit(`go:${req.user.id}`, 60, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     const it = repo.getItem(req.user.id, req.params.id);
     if (!it) throw notFound('SKU');
-    return startBuy(ctx, req.user, it, req.body.quantity);
+    return startBuy(ctx, req.user, it);
   }, { entitled: true });
 
   // "Check now": the next monitor pass (server and your browser) looks at it first.
@@ -167,12 +167,17 @@ export function register(router, ctx) {
   });
 }
 
-/** Make a ⚡ Buy code for one of this user's items: the link opens the product and the extension takes over. */
-export function startBuy(ctx, user, it, quantityInput) {
+/**
+ * Make a ⚡ Buy code for one of this user's items (one of it — no quantities for now). The link
+ * opens the store and the extension takes over. Shopify stores whose product option Mugibot
+ * knows: the store's own cart link, which opens checkout with the product already in the cart.
+ */
+export function startBuy(ctx, user, it) {
   if (!it.url) throw new HttpError(409, `The product page for SKU ${it.sku} hasn't been found yet — paste its link into the item, or wait for it to be listed`);
-  const quantity = num(quantityInput, { min: 1, max: 10, int: true, def: it.quantity });
-  if (quantity !== it.quantity) ctx.repo.db.run('UPDATE items SET quantity = :q, updated_at = :t WHERE id = :id AND user_id = :u', { q: quantity, t: ctx.repo.now(), id: it.id, u: user.id });
   const profile = ctx.repo.profileFor(user.id, it.profileId);
-  const code = ctx.repo.createGoCode(user.id, it, quantity, profile ? profile.id : null);
-  return { url: `${it.url}#mgb-go=${code}`, quantity, item: { ...it, quantity } };
+  const code = ctx.repo.createGoCode(user.id, it, 1, profile ? profile.id : null);
+  const r = ctx.retailers.get(it.store);
+  const known = r && r.cartPath && r.cartPath.includes('{variant}') && ctx.catalog ? ctx.catalog.productFor(it.store, it.sku) : null;
+  const cart = known && known.variant_id ? ctx.retailers.cartUrl(it.store, { sku: it.sku, variantId: known.variant_id, qty: 1 }) : null;
+  return { url: `${cart || it.url}#mgb-go=${code}`, item: it };
 }

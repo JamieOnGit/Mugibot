@@ -43,6 +43,11 @@ export function defaultShops() {
       // Like a real store on a fresh page: "Add" does nothing until the page's code has
       // started (hydrateMs after load), and the add itself can be slow (addDelayMs).
       hydrateMs: 0, addDelayMs: 0, refuseAdds: false,
+      // A React-style page (like Kmart's): its code wires up "Add" reactMs after the page
+      // opens, long before a slow picture lets the page finish loading (slowLoadMs).
+      reactMs: 0, slowLoadMs: 0,
+      // When the product page was last sent, and when the last add arrived.
+      servedAt: 0, addedAt: 0,
       // What the bag page showed each time it was opened (number of items in it).
       bagViews: [],
     };
@@ -170,6 +175,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <p>${shop === 'kmart' ? 'Keycode' : 'Product code'} ${p.sku}</p>
         ${qtyControl(p)}
         <div id="buybox">${p.lateMs ? '<p>Loading…</p>' : button}</div>
+        ${shopOf(shop).slowLoadMs ? `<img src="/slow.gif?ms=${Number(shopOf(shop).slowLoadMs)}" alt="" width="1" height="1">` : ''}
       </div>
       <section class="recommendations"><h3>You may also like</h3>
         ${other ? `<div class="tile"><a href="${pathFor(shop, other)}">${esc(other.name)}</a><button type="button" class="add-to-cart">${labels.in_stock}</button></div>` : ''}
@@ -179,8 +185,14 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         ${p.lateMs ? `setTimeout(() => { document.getElementById('buybox').innerHTML = ${JSON.stringify(button)}; }, ${Number(p.lateMs)});` : ''}
         ${stepperJs(p)}
         // Until the page's code has started, pressing Add does nothing (like a store that's still loading).
-        let started = ${shopOf(shop).hydrateMs ? 'false' : 'true'};
+        let started = ${shopOf(shop).hydrateMs || shopOf(shop).reactMs ? 'false' : 'true'};
         ${shopOf(shop).hydrateMs ? `addEventListener('load', () => setTimeout(() => { started = true; }, ${Number(shopOf(shop).hydrateMs)}));` : ''}
+        ${shopOf(shop).reactMs ? `window.__NEXT_DATA__ = {};
+        setTimeout(() => {
+          started = true;
+          const atc = document.getElementById('atc'); // what React leaves on a button it has taken over
+          if (atc) { atc.__reactFiber$mock = {}; atc.__reactProps$mock = { onClick() {} }; }
+        }, ${Number(shopOf(shop).reactMs)});` : ''}
         document.addEventListener('click', async (e) => {
           if (!e.target.closest('#atc') || !started) return;
           ${readQtyJs}
@@ -214,6 +226,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       <script>
         setTimeout(async () => {
           const d = await (await fetch('/${shop}/api/search?q=' + encodeURIComponent(${JSON.stringify(q)}))).json();
+          if (${JSON.stringify(shopOf(shop).clientSearch === 'data')}) return; // downloaded, not drawn yet (like a page in a hidden window)
           document.getElementById('results').innerHTML = d.products.map((x) => '<article class="product-card"><a href="' + x.url + '"><img src="' + x.image + '" alt="">' + x.name.replace(/</g, '&lt;') + '</a>'
             + '<div class="price">$' + x.price.toFixed(2) + '</div>' + (x.status === 'in_stock' ? '<button type="button">Add to cart</button>' : '<button type="button" disabled>Out of stock</button>') + '</article>').join('') || '<p>No results</p>';
         }, 400);
@@ -454,6 +467,13 @@ for (const el of document.querySelectorAll('input')) {
       return res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300"><rect width="300" height="300" rx="24" fill="${SHOPS[img[1]].color}"/><text x="150" y="140" font-family="system-ui,sans-serif" font-size="22" fill="#fff" text-anchor="middle">${esc(prod.name.slice(0, 22))}</text><text x="150" y="172" font-family="system-ui,sans-serif" font-size="16" fill="#fff" opacity=".8" text-anchor="middle">${esc(SHOPS[img[1]].name)}</text></svg>`);
     }
 
+    // A picture that takes a while (a page that's slow to finish loading).
+    if (p === '/slow.gif') {
+      await new Promise((r) => setTimeout(r, Math.min(20000, Number(u.searchParams.get('ms')) || 0)));
+      res.writeHead(200, { 'content-type': 'image/gif', 'cache-control': 'no-store' });
+      return res.end(Buffer.from('R0lGODlhAQABAAAAACw=', 'base64'));
+    }
+
     // A store that refuses anything that isn't a browser (like Kmart's bot protection does for servers).
     if (state.blockNonBrowsers && !/Mozilla|Chrome/i.test(req.headers['user-agent'] || '') && !p.startsWith('/__admin')) {
       return html(403, '<html><head><title>Access Denied</title></head><body>Access Denied. Reference #18.abc123.1700000000</body></html>');
@@ -517,6 +537,7 @@ for (const el of document.querySelectorAll('input')) {
     if (sku) {
       const prod = find(shop, sku);
       if (!prod || !prod.listed) return html(404, page(shop, 'Page not found', '<h1>Sorry, we can\'t find that page</h1>'));
+      S.servedAt = Date.now();
       return html(200, productPage(shop, prod));
     }
 
@@ -527,8 +548,22 @@ for (const el of document.querySelectorAll('input')) {
       return html(200, searchPage(shop, q));
     }
     if (sub === '/api/search') {
-      const tiles = searchHits(shop, u.searchParams.get('q')).map((x) => ({ name: x.name, url: pathFor(shop, x), image: imagePath(shop, x), price: x.price, status: x.status }));
+      const tiles = searchHits(shop, u.searchParams.get('q')).map((x) => ({ name: x.name, url: pathFor(shop, x), image: imagePath(shop, x), price: x.price, status: x.status, inStock: x.status === 'in_stock' || x.status === 'preorder' }));
       return json(200, { products: tiles });
+    }
+    // EB Games' search JSON (what its search page's own script asks for, and Mugibot's sweeps read).
+    if (shop === 'ebgames' && sub === '/search/query') {
+      const all = searchHits(shop, u.searchParams.get('q'));
+      const day = 86400000;
+      return json(200, {
+        totalResults: all.length,
+        aggregation: {},
+        results: all.map((x) => ({
+          sku: x.sku, title: x.name, productUrl: pathFor(shop, x).replace(/^\/ebgames/, ''), imageUrl: `http://${req.headers.host}${imagePath(shop, x)}`,
+          price: x.was || x.price, promotionPrice: x.was ? x.price : null, isOutOfStock: x.status === 'out_of_stock', isUnavailable: false,
+          isComingSoon: x.status === 'coming_soon', isPreowned: false, releaseDate: new Date(Date.now() + (x.status === 'preorder' ? 30 : -30) * day).toISOString(),
+        })),
+      });
     }
     // Kmart's search provider (Constructor.io) — what Mugibot's live sweeps read for Kmart: each
     // product with its sellers and the states it's out of stock in (every state: sold out online).
@@ -588,6 +623,7 @@ for (const el of document.querySelectorAll('input')) {
 
     if (sub === '/api/cart/add' && req.method === 'POST') {
       const b = await parseBody(req);
+      S.addedAt = Date.now();
       if (S.addDelayMs) await new Promise((r) => setTimeout(r, S.addDelayMs));
       const r = S.refuseAdds ? { ok: false } : addToCart(shop, b.sku, b.qty);
       return json(r.ok ? 200 : 409, r);

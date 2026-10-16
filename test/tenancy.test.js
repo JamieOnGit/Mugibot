@@ -109,19 +109,41 @@ test('⚡ Buy codes only work for the account that made them, once, for 2 minute
   const work = (await ash.get('/api/profiles')).body.profiles[1];
   const p = (await ash.get('/api/items')).body.items.find((x) => x.name === 'OP-18 Box');
   await ash.put(`/api/items/${p.id}`, { profileId: work.id });
-  const go = await ash.post(`/api/items/${p.id}/go`, { quantity: 3 });
+  const go = await ash.post(`/api/items/${p.id}/go`, {});
   assert.equal(go.status, 200);
   const code = new URL(go.body.url).hash.match(/^#mgb-go=([\w-]+)$/)[1];
-  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === p.id).quantity, 3, 'quantity saved');
   assert.equal((await mistyDevice.call('POST', '/api/ext/claim', { code })).status, 404, "Misty's extension can't use Ash's code");
   const claim = await ashDevice.call('POST', '/api/ext/claim', { code });
   assert.equal(claim.status, 200);
-  assert.deepEqual({ sku: claim.body.sku, quantity: claim.body.quantity, host: claim.body.host, profileId: claim.body.profileId }, { sku: '312345', quantity: 3, host: 'www.ebgames.com.au', profileId: work.id });
+  assert.deepEqual({ sku: claim.body.sku, host: claim.body.host, profileId: claim.body.profileId }, { sku: '312345', host: 'www.ebgames.com.au', profileId: work.id });
+  assert.equal(claim.body.quantity, undefined, 'one of it — no quantities for now');
   assert.equal((await ashDevice.call('POST', '/api/ext/claim', { code })).status, 404, 'single use');
   const go2 = await ash.post(`/api/items/${p.id}/go`, {});
   const code2 = new URL(go2.body.url).hash.split('=')[1];
   env.app.db.run('UPDATE go_codes SET expires_at = 0');
   assert.equal((await ashDevice.call('POST', '/api/ext/claim', { code: code2 })).status, 404, 'expired');
+});
+
+test("⚡ Buy at a Shopify store: Shopify's own cart link (straight to checkout) once Mugibot knows the product's option", async () => {
+  const add = await ash.post('/api/items', { store: 'jbhifi', sku: 'pokemon-tcg-test-etb', name: 'JB test ETB' });
+  assert.equal(add.status, 200);
+  const it = add.body;
+  // Not seen by the monitor yet: the product page (the extension finds the option there).
+  let go = await ash.post(`/api/items/${it.id}/go`, {});
+  assert.match(go.body.url, /^https:\/\/www\.jbhifi\.com\.au\/products\/pokemon-tcg-test-etb#mgb-go=[\w-]+$/);
+  const p = env.app.catalog.upsertProduct({ store: 'jbhifi', sku: 'pokemon-tcg-test-etb', url: it.url, name: 'JB test ETB' });
+  env.app.catalog.updateProduct(p.id, { variant_id: '4012345678' });
+  go = await ash.post(`/api/items/${it.id}/go`, {});
+  assert.match(go.body.url, /^https:\/\/www\.jbhifi\.com\.au\/cart\/4012345678:1#mgb-go=[\w-]+$/);
+  // Misty's copy of the same product gets the cart link too, with her own code.
+  const hers = (await misty.post('/api/items', { store: 'jbhifi', sku: 'pokemon-tcg-test-etb' })).body;
+  const mine = new URL(go.body.url).hash;
+  const theirs = (await misty.post(`/api/items/${hers.id}/go`, {})).body.url;
+  assert.match(theirs, /\/cart\/4012345678:1#mgb-go=/);
+  assert.notEqual(new URL(theirs).hash, mine);
+  // Other stores: always the product page.
+  const kmart = (await ash.get('/api/items')).body.items.find((x) => x.store === 'kmart' && x.url);
+  assert.equal(new URL((await ash.post(`/api/items/${kmart.id}/go`, {})).body.url).pathname, new URL(kmart.url).pathname);
 });
 
 test('in-browser check results only change your own items', async () => {

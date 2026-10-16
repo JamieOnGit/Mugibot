@@ -20,11 +20,13 @@ export default {
   sweep: { from: 'server', parser: 'target', path: '/search?sEngine=c&text={q}&sortBy=onlinedate&sortOrder=descending', pagePath: '&page={page}', pages: 4, goneMeansSoldOut: true },
   monitor: { server: true, browser: true },
   flow: {
-    product: { add: [/\badd to (cart|basket|bag)\b/i, /\bpre-?order\b/i], quantity: 'page', waitMs: 12000 },
+    product: { add: [/\badd to (cart|basket|bag)\b/i, /\bpre-?order\b/i], waitMs: 12000 },
     added: { checkout: [/^(secure )?check ?out( now)?$/i], viewBag: [/\bview (basket|cart|bag)\b/i] },
     bag: { path: /\/(basket|cart)(\/|$)/i, checkout: [/^(secure )?check ?out( now)?$/i, /^proceed to checkout$/i] },
     checkout: {
-      path: /\/checkout(\/|$)/i,
+      // target.com.au/checkout opens its one-page checkout at /spc/order.
+      path: /\/(checkout|spc\/order)(\/|$)/i,
+      url: '/checkout',
       guest: [/^continue as (a )?guest$/i, /^guest checkout$/i],
       steps: [/^continue( to (delivery|payment))?$/i, /^next$/i],
       final: [/\bplace (my |your )?order\b/i, /\bpay now\b/i],

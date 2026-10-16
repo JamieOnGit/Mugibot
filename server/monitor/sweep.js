@@ -691,6 +691,9 @@ export class Sweeper {
         productPath: r.productPath || null, skuFromPath: r.skuFromPath || null, storeName: r.name, storeBase: r.base,
         // Pages that build their product list once they're open (BIG W): the browser opens them and waits.
         render: !!r.sweep.render,
+        // A search the store's own page asks for (EB Games' JSON): asked from inside a page of the store.
+        inPage: !!r.sweep.inPage,
+        pageUrl: r.sweep.openPath ? `${r.base}${r.sweep.openPath.replace('{q}', encodeURIComponent(this.query(r, term.keyword)))}` : null,
       }));
     }
     return { terms, waitMs: next === null ? null : Math.max(1000, next - now) };

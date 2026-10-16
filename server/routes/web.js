@@ -41,7 +41,8 @@ export async function handleWebRoute(ctx, req, res, url) {
   }
 
   // --- ⚡ Buy links -----------------------------------------------------------------------
-  // /buy/<item>?qty=2&t=<signed>: from your own DM — goes straight to the store.
+  // /buy/<item>?qty=1&t=<signed>: from your own DM — goes straight to the store (one of it; the
+  // qty is only part of what was signed, so links from before quantities were dropped still work).
   // Without a valid signature (or from a channel post: /buy?store=…&sku=…) the
   // buy page asks you to press ⚡ Buy once.
   const m = p.match(/^\/buy\/([\w-]{4,60})$/);
@@ -52,7 +53,7 @@ export async function handleWebRoute(ctx, req, res, url) {
     const t = url.searchParams.get('t');
     if (it && it.url && t && entitlement(req.user, repo.now()).active
       && verifyParts(purposeKey(cfg.dataKey, 'buy-link'), [req.user.id, it.id, String(qty)], t, repo.now())) {
-      const { url: go } = startBuy(ctx, req.user, it, qty);
+      const { url: go } = startBuy(ctx, req.user, it);
       return redirect(res, go);
     }
     return false; // the buy page (pages.js) shows the item and a ⚡ Buy button

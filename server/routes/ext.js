@@ -64,7 +64,7 @@ export function register(router, ctx) {
     const settings = { ...DEFAULT_ALERTS, ...(repo.getData(req.user.id, 'alerts', {}) || {}) };
     return {
       items: repo.listItems(req.user.id).map((it) => ({
-        id: it.id, store: it.store, storeName: retailers.name(it.store), sku: it.sku, name: it.name, url: it.url, price: it.price, quantity: it.quantity, profileId: it.profileId, status: it.status,
+        id: it.id, store: it.store, storeName: retailers.name(it.store), sku: it.sku, name: it.name, url: it.url, price: it.price, profileId: it.profileId, status: it.status,
       })),
       flows: retailers.forExtension(),
       active: entitlement(req.user, repo.now()).active,
@@ -78,7 +78,7 @@ export function register(router, ctx) {
     if (!limiter.hit(`claim:${req.device.id}`, 60, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     const row = repo.claimGoCode(req.user.id, str(req.body.code, 100));
     if (!row) throw new HttpError(404, 'That ⚡ Buy link has expired — press ⚡ Buy again');
-    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, quantity: row.quantity, host: row.host, profileId: row.profile_id };
+    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, host: row.host, profileId: row.profile_id };
   }, { auth: 'device', entitled: true });
 
   // Delivery details for checkout autofill (the chosen set, else the default).

@@ -19,10 +19,10 @@ export class Notifier {
   }
 
   /** A ⚡ Buy link for a member's own item: opens the product with the extension ready to go. */
-  buyLink(userId, item, quantity = item.quantity || 1) {
+  buyLink(userId, item) {
     const exp = this.now() + BUY_LINK_TTL;
-    const t = signParts(this.buyKey, [userId, item.id, String(quantity)], exp);
-    return `${this.cfg.baseUrl}/buy/${encodeURIComponent(item.id)}?qty=${quantity}&t=${t}`;
+    const t = signParts(this.buyKey, [userId, item.id, '1'], exp);
+    return `${this.cfg.baseUrl}/buy/${encodeURIComponent(item.id)}?qty=1&t=${t}`;
   }
 
   /**
@@ -110,10 +110,9 @@ export class Notifier {
     const storeName = this.retailers.name(item.store);
     const label = STATUS_LABEL[info.status] || info.status;
     const price = info.price ?? item.last_price ?? item.price;
-    const qty = item.quantity || 1;
     const meta = [storeName, `SKU ${item.sku}`, money(price)].filter(Boolean).join(' · ');
     const buttons = [];
-    if (item.url) buttons.push({ label: `⚡ Buy ×${qty}`, url: this.buyLink(userId, item, qty) });
+    if (item.url) buttons.push({ label: '⚡ Buy', url: this.buyLink(userId, item) });
     if (item.url) buttons.push({ label: 'Open product', url: item.url });
     buttons.push({ label: 'Watchlist', url: `${this.cfg.baseUrl}/app#watch` });
     if (kind === 'listed') {
@@ -127,7 +126,7 @@ export class Notifier {
     return this.notify(userId, {
       type: 'restock', level: 'urgent', channel: 'restock',
       title: `${info.status === 'preorder' ? '🟣' : '🟢'} ${label}: ${item.name}`,
-      message: `${meta}${info.note ? `\n${info.note}` : ''}\n${who}. Quantity set to ${qty} — press ⚡ Buy to go straight to checkout.`,
+      message: `${meta}${info.note ? `\n${info.note}` : ''}\n${who}. Press ⚡ Buy to go straight to checkout.`,
       name: item.name, sku: item.sku, url: item.url || null, buttons,
     });
   }

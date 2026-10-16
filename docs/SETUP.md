@@ -121,13 +121,15 @@ double-click `start-demo-mac.command` in the Mugibot folder (Windows:
 5. Open http://localhost:5055 (the control panel). Next to a sold-out dummy
    product, press **in_stock**. Within about a minute your dashboard shows a
    🟢 **In stock** ping, and so does Discord once it's set up.
-6. Press **⚡ Buy** on that item (try quantity 2). A tab opens, and the
-   Mugibot panel (top left) works through that shop's flow. It stops with a
+6. Press **⚡ Buy** on that item. A tab opens, goes straight to that shop's
+   checkout with the item in the bag, and the Mugibot panel (top left) fills
+   checkout in. It stops with a
    green banner: **"Ready — review everything and press 'Checkout securely'
    yourself."** The control panel's "Orders placed" stays at **0**.
 7. Do the same for the BIG W, EB Games and JB Hi-Fi dummy items. Each follows
-   its own steps (BIG W: dropdown quantity → View cart → Proceed to checkout →
-   guest → Home delivery → address → card → stops at "Place order").
+   its own steps (BIG W: Add to cart → View cart → Proceed to checkout →
+   guest → Home delivery → address → card → stops at "Place order"; JB Hi-Fi:
+   Shopify's cart link straight into its one-page checkout).
 
 Want to see in-browser checks? In the control panel press **Refuse server
 checks (like Kmart)**. The server's checks get "Blocked by site", and your
@@ -409,10 +411,11 @@ update by themselves.
 
 Use a cheap, in-stock Kmart item:
 
-1. Add its product link to your watchlist, set quantity 1.
+1. Add its product link to your watchlist.
 2. Make sure the extension is connected, and your details and card are saved
    (extension icon → Card: "ready for checkout").
-3. Press **⚡ Buy**. It should go Add to bag → Checkout → details → delivery → payment.
+3. Press **⚡ Buy**. It should press Add to bag as soon as Kmart's page is ready,
+   go straight to checkout once it's in the bag, then details → delivery → payment.
 4. **Stop at "Checkout securely".** Don't press it unless you actually want the item.
 
 Do the same for BIG W, EB Games and JB Hi-Fi before you advertise them. Their

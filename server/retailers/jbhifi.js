@@ -2,8 +2,10 @@
 // (fast and light), and checkout is Shopify's one-page checkout. Tested
 // against the Shopify-style dummy store, not yet on jbhifi.com.au.
 //
-// Product page: "Add to cart" → cart → "Check out" → one-page checkout
-//   (contact, delivery address, shipping method, card frame) → STOP at "Pay now".
+// ⚡ Buy: Shopify's own cart link (/cart/<variant>:1) — straight into the one-page
+//   checkout with the product in the cart (contact, delivery address, shipping
+//   method, card frame) → STOP at "Pay now". (From the product page by hand:
+//   "Add to cart" → cart → "Check out".)
 
 export default {
   id: 'jbhifi',
@@ -30,7 +32,6 @@ export default {
   flow: {
     product: {
       add: [/\badd to cart\b/i, /\bpre-?order\b/i],
-      quantity: 'page',
       waitMs: 12000,
     },
     added: {

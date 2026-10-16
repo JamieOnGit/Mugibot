@@ -183,12 +183,13 @@ Mugibot also checks that they're an admin in Mugibot.
 
    > 🟢 **In stock: Day UPC**
    > Kmart · SKU 43818648 · $360.00
-   > Seen by the Mugibot monitor. Quantity set to 2 — press ⚡ Buy to go straight to checkout.
-   > [⚡ Buy ×2] [Open product] [Watchlist]
+   > Seen by the Mugibot monitor. Press ⚡ Buy to go straight to checkout.
+   > [⚡ Buy] [Open product] [Watchlist]
 
-   **⚡ Buy ×2** opens the product in their browser. With the extension
-   connected, it goes all the way to the final button. The link is signed for
-   that member, that SKU and that quantity, and it works for 30 minutes.
+   **⚡ Buy** opens the store in their browser. With the extension connected,
+   it goes straight to checkout with one of it in the bag, and fills checkout
+   in up to the final button. The link is signed for that member and that
+   SKU, and it works for 30 minutes.
 4. Slash commands work in the server and in DMs with the bot.
 
 If someone's membership ends, the bot takes the `Member` role away (within 10
@@ -209,7 +210,7 @@ When it restocks, the bot posts:
 > [⚡ Buy with Mugibot] [Open product]
 
 **⚡ Buy with Mugibot** opens a page on your site where each member presses ⚡ Buy
-once. It uses their own quantity and details, and adds the SKU to their
+once. It uses their own details, and adds the SKU to their
 watchlist if it wasn't there. A SKU is posted at most once every 10 minutes.
 
 Seen something in stock yourself? `/restock store:Kmart sku:43818648 note:online only`,

@@ -1,6 +1,6 @@
 // The stores Mugibot works with. Each retailer has its own file in this
 // folder with its own checkout flow: which buttons to press, in which order,
-// where quantity is set, and which button is the final one (never pressed).
+// where its checkout page is, and which button is the final one (never pressed).
 //
 // The flows are plain data. The server sends them to the browser extension,
 // so a retailer's flow can be fixed here and every member gets the fix
@@ -174,7 +174,7 @@ export class Retailers {
   forExtension() {
     return this.list.filter((r) => this.enabled(r)).map((r) => serialize({
       id: r.id, name: r.name, hosts: r.hosts, pathPrefix: r.pathPrefix || null, flowStatus: r.flowStatus,
-      skuFromPath: r.skuFromPath, productPath: r.productPath, flow: r.flow,
+      skuFromPath: r.skuFromPath, productPath: r.productPath, cartPath: r.cartPath || null, flow: r.flow,
     }));
   }
 }

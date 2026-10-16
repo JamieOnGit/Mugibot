@@ -56,7 +56,7 @@ Description:
 
 > Mugibot is the browser extension for Mugibot members. It needs a Mugibot account.
 >
-> • ⚡ Buy: from your Mugibot dashboard or a Discord restock ping, it opens the product, sets the quantity, adds it to your bag and goes to checkout, following each store's own steps.
+> • ⚡ Buy: from your Mugibot dashboard or a Discord restock ping, it takes you straight to the store's checkout with the product in your bag, following each store's own steps.
 > • Fills in your delivery details and your saved card at checkout, and stops at the store's final button. You always press "Place order" yourself.
 > • Checks your own watchlist at stores that refuse checks from servers, from your browser, about once a minute (you can switch this off).
 >

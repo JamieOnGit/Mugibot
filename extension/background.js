@@ -94,20 +94,52 @@ async function pair(code) {
   return { ok: true, user: data.user };
 }
 
-/** Your watchlist and the stores' flows (cached for when the server can't be reached). */
+// A copy of your watchlist from the last couple of minutes is used straight away (and
+// refreshed behind it), so store pages — ⚡ Buy above all — never wait on the server for it.
+const STATE_FRESH_MS = 2 * 60 * 1000;
+let refreshing = null;
+
+/** Your watchlist and the stores' flows, from the server (saved for when it can't be reached). */
+function refreshState(auth) {
+  if (!refreshing) {
+    refreshing = (async () => {
+      const res = await api('GET', `/api/ext/items?src=${SOURCE}`);
+      if (res.status !== 200 || !res.body) return null;
+      const st = { items: res.body.items, flows: res.body.flows, active: res.body.active, browserChecks: res.body.browserChecks };
+      await chrome.storage.local.set({ [`state:${auth.user.id}`]: { ...st, at: Date.now() } });
+      return st;
+    })().finally(() => { refreshing = null; });
+  }
+  return refreshing;
+}
+
 async function getState() {
   const auth = await getAuth();
   if (!auth) return { items: [], flows: [], online: false, paired: false };
   const cacheKey = `state:${auth.user.id}`;
-  const res = await api('GET', `/api/ext/items?src=${SOURCE}`);
-  if (res.status === 200 && res.body) {
-    const st = { items: res.body.items, flows: res.body.flows, active: res.body.active, browserChecks: res.body.browserChecks };
-    await chrome.storage.local.set({ [cacheKey]: { ...st, at: Date.now() } });
-    return { ...st, online: true, paired: true, user: auth.user };
-  }
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
+  const pick = (st) => ({ items: st.items, flows: st.flows, active: st.active, browserChecks: st.browserChecks });
+  if (cached && Date.now() - cached.at < STATE_FRESH_MS) {
+    refreshState(auth).catch(() => null);
+    return { ...pick(cached), online: true, paired: true, user: auth.user };
+  }
+  const st = await refreshState(auth);
+  if (st) return { ...st, online: true, paired: true, user: auth.user };
   const still = await getAuth();
   return { items: (still && cached && cached.items) || [], flows: (cached && cached.flows) || [], online: false, paired: !!still, user: still ? still.user : null };
+}
+
+// Delivery details asked for as a ⚡ Buy starts, ready for checkout a few seconds later.
+const PROFILE_FRESH_MS = 2 * 60 * 1000;
+const profiles = new Map();
+
+async function profileFor(chosen) {
+  const hit = profiles.get(chosen);
+  if (hit && Date.now() - hit.at < PROFILE_FRESH_MS) return hit.profile;
+  const res = await api('GET', `/api/ext/profile${chosen ? `?profile=${encodeURIComponent(chosen)}` : ''}`);
+  if (res.status !== 200 || !res.body) return null;
+  profiles.set(chosen, { profile: res.body.profile, at: Date.now() });
+  return res.body.profile;
 }
 
 // --- checkout passes: which tab may receive your details, for how long -----
@@ -138,10 +170,9 @@ async function fillData(sender, part, profileId) {
   // Why there's no card, for the panel: none saved, saved by an older version (passphrase), or unreadable.
   const cardIssue = card ? null : !vault.saved ? 'none' : vault.needsPassphrase ? 'passphrase' : 'unreadable';
   if (part === 'card') return { card, cardIssue };
-  const chosen = profileId || pass.profileId || '';
-  const res = await api('GET', `/api/ext/profile${chosen ? `?profile=${encodeURIComponent(chosen)}` : ''}`);
-  if (res.status !== 200 || !res.body) return null;
-  return { profile: res.body.profile, card, cardIssue };
+  const profile = await profileFor(profileId || pass.profileId || '');
+  if (!profile) return null;
+  return { profile, card, cardIssue };
 }
 
 // What each payment frame in a tab found and filled (so the page can say when the card didn't go in).
@@ -299,26 +330,44 @@ async function runChecks() {
 }
 
 // --- live sweeps (admins' browsers) --------------------------------------------
-// --- Pages that build their product list once they're open (BIG W) ---------------------
-// Opened in a minimised window of the extension's own (one tab, reused for every search), read
-// once the products are on the page, and left there until the next search. Closing the window
-// is fine: the next search opens it again.
+// --- Store pages kept open for live sweeps (BIG W, EB Games, Zing) ----------------------
+// A minimised window of the extension's own, with one tab per store, reused for every search.
+// Closing it is fine: the next search opens it again. Mugibot's store panel stays out of it.
+//   render (BIG W): the search page is opened and read once it has built its product list, with
+//     the product data the page itself downloaded (asked again from inside the page), so products
+//     the page hasn't drawn yet still count.
+//   inPage (EB Games, Zing): the store's own search JSON is asked for from inside a page of the
+//     store, the way that page does, so it passes the store's bot check like any visitor.
 const SWEEP_WINDOW = 'sweepWindow';
 
-async function sweepTabId() {
+async function sweepWindow() {
   const { [SWEEP_WINDOW]: saved } = await chrome.storage.session.get(SWEEP_WINDOW);
-  return saved ? saved.tabId : null;
+  return saved && saved.tabs ? saved : { windowId: null, tabs: {} };
 }
 
-async function sweepTab() {
-  const saved = await sweepTabId();
-  if (saved !== null) {
-    try { return (await chrome.tabs.get(saved)).id; } catch { /* the window was closed */ }
+async function isSweepTab(tabId) {
+  return Object.values((await sweepWindow()).tabs).includes(tabId);
+}
+
+/** The store's tab in the sweep window (opened if needed). */
+async function sweepTab(store) {
+  const saved = await sweepWindow();
+  if (saved.tabs[store] !== undefined) {
+    try { return await chrome.tabs.get(saved.tabs[store]); } catch { /* closed */ }
   }
-  const win = await chrome.windows.create({ url: 'about:blank', focused: false, state: 'minimized' });
-  const tabId = win.tabs[0].id;
-  await chrome.storage.session.set({ [SWEEP_WINDOW]: { windowId: win.id, tabId } });
-  return tabId;
+  let tab = null;
+  if (saved.windowId !== null) {
+    try { tab = await chrome.tabs.create({ windowId: saved.windowId, url: 'about:blank', active: false }); } catch { /* the window was closed */ }
+  }
+  if (!tab) {
+    const win = await chrome.windows.create({ url: 'about:blank', focused: false, state: 'minimized' });
+    saved.windowId = win.id;
+    saved.tabs = {};
+    tab = win.tabs[0];
+  }
+  saved.tabs[store] = tab.id;
+  await chrome.storage.session.set({ [SWEEP_WINDOW]: saved });
+  return tab;
 }
 
 function tabLoaded(tabId, timeoutMs) {
@@ -330,32 +379,85 @@ function tabLoaded(tabId, timeoutMs) {
   });
 }
 
-/** Runs in the store's page: how many product links it has so far, and the page itself. */
+async function openIn(tabId, url) {
+  const loaded = tabLoaded(tabId, 25000);
+  await chrome.tabs.update(tabId, { url });
+  await loaded;
+}
+
+/** Runs in the store's page: how many product links it has so far, the page, and the data it downloaded. */
 function readSweepPage(path) {
   const rx = path ? new RegExp(path[0], path[1]) : /\/(p|product|products)\//i;
   let products = 0;
   for (const a of document.querySelectorAll('a[href]')) {
     try { if (rx.test(new URL(a.href, location.href).pathname)) products += 1; } catch { /* not a link */ }
   }
-  return { products, url: location.href, title: document.title, html: document.documentElement.outerHTML };
+  const data = performance.getEntriesByType('resource')
+    .filter((e) => (e.initiatorType === 'fetch' || e.initiatorType === 'xmlhttprequest') && /search|product|listing|catalog|browse/i.test(e.name))
+    .map((e) => e.name).filter((u, i, all) => all.indexOf(u) === i).slice(-4);
+  const challenge = /just a moment|attention required|access denied|verify you are human/i.test(document.title);
+  return { products, data, challenge, url: location.href, title: document.title, html: document.documentElement.outerHTML };
 }
 
+/** Runs in the store's page: asks the store for something, the way the page itself does. */
+async function askInPage(urls) {
+  const out = [];
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { credentials: 'include', headers: { accept: 'application/json, text/plain, */*' } });
+      out.push({ url: r.url, status: r.status, type: r.headers.get('content-type') || '', text: (await r.text()).slice(0, 6000000) });
+    } catch (e) {
+      out.push({ url, status: 0, error: String(e && e.message || e) });
+    }
+  }
+  return out;
+}
+
+const inPage = (tabId, func, args) => chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func, args })
+  .then(([res]) => res && res.result);
+
 async function renderedPage(t) {
-  const tabId = await sweepTab();
-  const loaded = tabLoaded(tabId, 25000);
-  await chrome.tabs.update(tabId, { url: t.url });
-  await loaded;
+  const { id: tabId } = await sweepTab(t.store);
+  await openIn(tabId, t.url);
   const path = t.productPath ? [t.productPath.re, t.productPath.f || ''] : null;
   const until = Date.now() + 12000;
   let page = null;
+  let dataAt = 0;
   for (let seen = 0; ;) {
-    const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: readSweepPage, args: [path] });
-    page = res && res.result;
+    page = await inPage(tabId, readSweepPage, [path]);
     // Products on the page: one more look a moment later, so their prices have filled in too.
-    if (page && page.products) { if (seen++) break; } else if (Date.now() > until) break;
+    if (page && page.products) { if (seen++) break; } else if (Date.now() > until || (page && page.challenge)) break;
+    // The page downloaded its product data but hasn't drawn it (a page in a hidden window
+    // may never draw it): a moment longer for the drawing, then read the data instead.
+    if (page && !page.products && page.data.length) {
+      if (!dataAt) dataAt = Date.now();
+      else if (Date.now() - dataAt > 2000) break;
+    }
     await new Promise((r) => setTimeout(r, seen ? 600 : 800));
   }
+  if (!page) return null;
+  // The product data the page downloaded, asked for again from inside it: JSON only.
+  if (page.data.length) {
+    const got = (await inPage(tabId, askInPage, [page.data])) || [];
+    const json = got.filter((g) => g.status === 200 && /^\s*[[{]/.test(g.text || ''));
+    page.html += json.map((g) => `<script type="application/json" data-mugibot-sweep>${g.text.replace(/<\//g, '<\\/')}</script>`).join('');
+  }
   return page;
+}
+
+/** The store's own search JSON, asked for from inside a page of the store (opened first when needed). */
+async function askFromStorePage(t) {
+  const tab = await sweepTab(t.store);
+  const origin = new URL(t.url).origin;
+  const onStore = () => chrome.tabs.get(tab.id).then((x) => String(x.url || '').startsWith(origin)).catch(() => false);
+  if (!(await onStore())) await openIn(tab.id, t.pageUrl || origin);
+  let [res] = (await inPage(tab.id, askInPage, [[t.url]])) || [];
+  // The store's bot check: a real visit to its page passes it, then ask again.
+  if (res && (res.status === 403 || res.status === 503 || /just a moment|attention required/i.test(res.text || ''))) {
+    await openIn(tab.id, t.pageUrl || origin);
+    [res] = (await inPage(tab.id, askInPage, [[t.url]])) || [];
+  }
+  return res || null;
 }
 
 async function sweepOne(t) {
@@ -370,7 +472,19 @@ async function sweepOne(t) {
       return { ...base, ok: false, error: "This browser couldn't open the store's page", ms: Date.now() - started };
     }
     if (!page) return { ...base, ok: false, error: "This browser couldn't read the store's page", ms: Date.now() - started };
-    const parsed = parseListing(t.parser, page.html.slice(0, 6_000_000), opts(page.url));
+    const parsed = parseListing(t.parser, page.html.slice(0, 8_000_000), opts(page.url));
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem: page.challenge ? 'blocked' : parsed.problem, products: parsed.products.slice(0, 300) };
+  }
+  if (t.inPage) {
+    let res;
+    try {
+      res = await askFromStorePage(t);
+    } catch {
+      return { ...base, ok: false, error: "This browser couldn't open the store's page", ms: Date.now() - started };
+    }
+    if (!res || !res.status) return { ...base, ok: false, error: "This browser couldn't reach the store", ms: Date.now() - started };
+    if (res.status !== 200) return { ...base, ok: false, status: res.status, blocked: [401, 403, 429, 503].includes(res.status), ms: Date.now() - started };
+    const parsed = parseListing(t.parser, res.text, opts(res.url));
     return { ...base, ok: true, status: 200, ms: Date.now() - started, problem: parsed.problem, products: parsed.products.slice(0, 300) };
   }
   let res;
@@ -386,16 +500,28 @@ async function sweepOne(t) {
 }
 
 let sweeping = false;
+// Asked to start while running (the alarm, a new admin, new settings): ask the server again now,
+// rather than after the wait — or, if the loop was just stopping, keep going.
+let sweepAgain = false;
+let wakeSweeps = null;
 /** Runs while the server has searches for this browser (only admins get any); the alarm restarts it. */
 async function sweepLoop() {
-  if (sweeping) return;
+  if (sweeping) {
+    sweepAgain = true;
+    if (wakeSweeps) wakeSweeps();
+    return;
+  }
   if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return;
   if (!(await getAuth())) return;
   sweeping = true;
   try {
     for (;;) {
+      sweepAgain = false;
       const due = await api('GET', '/api/ext/sweeps');
-      if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) break;
+      if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) {
+        if (sweepAgain) continue;
+        break;
+      }
       for (const t of due.body.terms || []) {
         const result = await sweepOne(t);
         await api('POST', '/api/ext/sweeps', { results: [result] });
@@ -404,7 +530,13 @@ async function sweepLoop() {
       }
       // Waiting for the next search. Touching storage keeps this worker running meanwhile.
       await chrome.storage.session.set({ sweepBeat: Date.now() });
-      await new Promise((r) => setTimeout(r, Math.min(20000, Math.max(1000, due.body.waitMs))));
+      if (!sweepAgain) {
+        await new Promise((r) => {
+          wakeSweeps = r;
+          setTimeout(r, Math.min(20000, Math.max(1000, due.body.waitMs)));
+        });
+        wakeSweeps = null;
+      }
       if (!(await getAuth())) break;
     }
   } finally {
@@ -429,6 +561,45 @@ chrome.alarms.onAlarm.addListener((a) => {
   updateInfo().catch(() => null); // keeps the "NEW" badge on the toolbar icon up to date
 });
 
+// --- ⚡ Buy: is the store's Add button ready? ------------------------------------
+/**
+ * Runs in the store's page: has the page's own code wired up the Add button (marked
+ * data-mgb-add by the store-page script)? Pages built with React (Kmart's) or Vue show the
+ * button before their code has started, and a press then does nothing. Read only: it
+ * looks at the button and the page, and changes nothing. framework: null = can't tell.
+ */
+function addButtonReady() {
+  const el = document.querySelector('[data-mgb-add]');
+  if (!el) return null;
+  const HANDLERS = ['onClick', 'onClickCapture', 'onMouseDown', 'onMouseUp', 'onPointerDown', 'onPointerUp', 'onTouchEnd', 'onSubmit'];
+  let react = false;
+  for (let n = el, i = 0; n && n !== document.documentElement && i < 12; n = n.parentElement, i += 1) {
+    for (const k of Object.keys(n)) {
+      if (k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')) {
+        if (n === el) return { ready: true, framework: 'react' }; // React has taken the button over
+        react = true;
+      } else if (k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$')) {
+        const props = n[k] || {};
+        if (HANDLERS.some((h) => typeof props[h] === 'function')) return { ready: true, framework: 'react' };
+      } else if (k === '_vei' || k === '__vue__' || k === '__vueParentComponent') {
+        return { ready: true, framework: 'vue' };
+      }
+    }
+    if (typeof n.onclick === 'function') return { ready: true, framework: 'plain' };
+  }
+  const $ = window.jQuery;
+  if ($ && typeof $._data === 'function') {
+    for (let n = el, i = 0; n && i < 12; n = n.parentElement, i += 1) {
+      const ev = $._data(n, 'events');
+      if (ev && (ev.click || ev.submit)) return { ready: true, framework: 'jquery' };
+    }
+  }
+  // A React or Vue page whose code hasn't taken the button over yet.
+  if (react || window.__NEXT_DATA__ || window.__next_f || document.querySelector('[data-reactroot], script[src*="/_next/"]')) return { ready: false, framework: 'react' };
+  if (window.__NUXT__ || document.querySelector('[data-server-rendered], [data-v-app]')) return { ready: false, framework: 'vue' };
+  return { ready: false, framework: null };
+}
+
 // --- messages ---------------------------------------------------------------
 const fromApp = (sender) => {
   try { return !!sender.tab && sender.frameId === 0 && APP_ORIGINS.has(new URL(sender.url).origin); } catch { return false; }
@@ -443,7 +614,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // From store pages
       case 'state': {
         // The extension's own window for live sweeps: no panel, no checkout there.
-        if (sender.tab && sender.tab.id === (await sweepTabId())) return { items: [], flows: [], sweepTab: true };
+        if (sender.tab && (await isSweepTab(sender.tab.id))) return { items: [], flows: [], sweepTab: true };
         return getState();
       }
       case 'event': {
@@ -457,9 +628,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const res = await api('POST', '/api/ext/claim', { code: msg.code });
         if (res.status === 200 && res.body && res.body.ok) {
           await savePass(sender.tab.id, res.body.host === tabHost(sender) ? res.body.host : tabHost(sender), auth.user.id, res.body.profileId);
+          profileFor(res.body.profileId || '').catch(() => null); // for checkout, in a moment
           return res.body;
         }
         return { ok: false, status: res.status, error: res.body && res.body.error };
+      }
+      case 'probe': {
+        // Has the store page's own code wired up the Add button yet? (Looked at inside the page.)
+        if (!sender.tab) return null;
+        try {
+          const [r] = await chrome.scripting.executeScript({ target: { tabId: sender.tab.id, frameIds: [sender.frameId || 0] }, world: 'MAIN', func: addButtonReady });
+          return (r && r.result) || null;
+        } catch {
+          return null;
+        }
       }
       case 'startFill': {
         // You pressed the panel's button (a real click): allow autofill for this tab's store.
