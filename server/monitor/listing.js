@@ -13,6 +13,7 @@
 //   amazon           Amazon's search page: a tile per result, with its ASIN.
 //   ebgames          EB Games' and Zing's search JSON (what their search page fetches).
 //   crystal          A CrystalCommerce store's search page (The Games Cube): a tile per product.
+//   pbandai          Premium Bandai's search JSON (/api/search, what its search page fetches).
 //   generic          Any other store: product data in the page's scripts (Next.js
 //                    data, JSON-LD, embedded state), plus product tiles in the HTML.
 //
@@ -228,6 +229,35 @@ export function parseEbGames(text, { base, storeBase, now = Date.now() } = {}) {
     });
   }
   return { products, total: typeof j.totalResults === 'number' ? j.totalResults : null, perPage: j.results.length, problem: null };
+}
+
+// ---------------------------------------------------------------------------
+// Premium Bandai: its search JSON (/api/search?keyword=…, with the region in x-g1-area-code)
+// ---------------------------------------------------------------------------
+// productResults.products: productCode (the code in /<region>/item/<code>), productName.en,
+// fixedListPrice.amount, saleStatus (On, Waiting = not on sale yet, End), productType (PreOrder…),
+// flags (PRE_ORDER, PRE_ORDER_CLOSED, OUT_OF_STOCK…) and productImages[].fileUrl (under the site).
+export function parsePBandai(text, { base, storeBase } = {}) {
+  const j = typeof text === 'string' ? shopifyJson(text) : text;
+  if (j === undefined) return { products: [], problem: pageProblem(text) || 'layout' };
+  const r = j && j.productResults;
+  if (!r || !Array.isArray(r.products)) return { products: [], problem: 'layout' };
+  const site = (() => { try { return new URL(storeBase || base).origin; } catch { return ''; } })();
+  const products = [];
+  for (const p of r.products) {
+    const sku = p && typeof p.productCode === 'string' && /^[A-Z]\d{6,15}$/.test(p.productCode) ? p.productCode : null;
+    const name = p && p.productName && (p.productName.en || Object.values(p.productName).find((v) => typeof v === 'string'));
+    if (!sku || !name) continue;
+    const flags = Array.isArray(p.flags) ? p.flags.map(String) : [];
+    const image = Array.isArray(p.productImages) && p.productImages.find((x) => x && x.fileUrl && x.mediaType !== 'Video');
+    products.push({
+      sku, aliases: [], title: clean(name), price: money(p.fixedListPrice && p.fixedListPrice.amount), wasPrice: null,
+      inStock: p.saleStatus === 'On' && !flags.includes('OUT_OF_STOCK') && !flags.includes('PRE_ORDER_CLOSED'),
+      preorder: p.productType === 'PreOrder' || flags.includes('PRE_ORDER'),
+      url: storeLink(storeBase || base, `/item/${sku}`), image: image ? httpsUrl(image.fileUrl, `${site}/`) : '', marketplace: false,
+    });
+  }
+  return { products, total: typeof r.totalCount === 'number' ? r.totalCount : null, perPage: r.products.length, problem: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -545,7 +575,7 @@ export function parseGeneric(html, { base, productPath = null, skuFromPath = nul
   return { products: [...map.values()].slice(0, 300), problem: map.size ? null : 'empty' };
 }
 
-export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, crystal: parseCrystal, generic: parseGeneric };
+export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, crystal: parseCrystal, pbandai: parsePBandai, generic: parseGeneric };
 
 export function parseListing(parser, text, opts) {
   return (PARSERS[parser] || parseGeneric)(text, opts);

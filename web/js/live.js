@@ -158,7 +158,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
           h('div', { class: 'r' }, h('span', {}, 'next search'), h('b', { class: 'sn-next' }, nextText(s))),
           h('div', { class: 'r' }, h('span', {}, 'from'), h('b', {}, `${s.mode === 'browser' ? "admin's browser" : 'server'} · ${s.endpoint}`)),
           s.fails || s.lastError ? h('div', { class: 'r' }, h('span', {}, s.fails ? 'problem' : 'note'), h('b', {}, s.lastError || `${s.fails} failed`)) : null,
-          waiting ? h('div', { class: 'r' }, h('span', {}, ''), h('b', {}, "Keep Chrome open with the extension connected to an admin account")) : null)));
+          waiting && !/extension/i.test(s.lastError || '') ? h('div', { class: 'r' }, h('span', {}, ''), h('b', {}, "Keep Chrome open with the extension connected to an admin account")) : null)));
     }
   }
 
@@ -771,7 +771,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
       if (ev.type === 'hb') t.streak += 1;
       else { t.errors += 1; t.streak = 0; }
       ping(ev.store, ev.type === 'err');
-    } else if (ev.type === 'sys' && /changed the sweeps|started|switched off|searching it/.test(ev.message || '')) {
+    } else if (ev.type === 'sys' && /changed the sweeps|started|switched off|searching it|needs mugibot's extension/i.test(ev.message || '')) {
       refreshSoon();
     }
     addLog({ at: ev.at, ev });

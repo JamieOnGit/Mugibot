@@ -37,7 +37,8 @@
 // refuse servers (BIG W, EB Games) are swept from an admin's browser by the
 // extension, at a gentler pace; BIG W's page is opened and read once it has
 // built its product list. A refused or failed search backs off (twice as long each time, up to
-// 15 minutes) and never alerts.
+// 15 minutes) and never alerts. A store that needs a newer extension than an admin's browser has
+// (sweep.extension) isn't given to that browser: the live monitor says to update it.
 
 import { categoryFor, toProduct } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
@@ -47,6 +48,17 @@ import { storeFetch } from './http.js';
 import { mentions, norm, parseListing, termsRegex } from './listing.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
+
+/** Is extension version a older than b ("1.8.0" < "1.8.1")? Unknown counts as older. */
+export function olderVersion(a, b) {
+  if (!a) return true;
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0);
+  }
+  return false;
+}
 
 export const TCG_TERMS = [
   'card', 'cards', 'tcg', 'booster', 'pack', 'packs', 'bundle', 'starter deck', 'deck', 'elite trainer', 'etb',
@@ -314,8 +326,9 @@ export class Sweeper {
     if (collection) return `${r.base}${r.sweep.collectionPath.replace('{collection}', encodeURIComponent(collection))}`;
     let p = r.sweep.path.replace('{q}', encodeURIComponent(this.query(r, keyword)));
     if (page > 1 && r.sweep.pagePath) p += r.sweep.pagePath.replace('{page}', String(page));
-    // (A store whose search is answered by its search provider: Kmart's, at Constructor.io.)
-    return `${r.sweep.apiBase || r.base}${p}`;
+    // (A store whose search is answered by its search provider: Kmart's, at Constructor.io. Or by
+    // the site's own API, outside the region's pages: Premium Bandai's /api/search, not /au/….)
+    return `${r.sweep.apiBase || (r.sweep.fromOrigin && !r.demo ? new URL(r.base).origin : r.base)}${p}`;
   }
 
   /** The time between two searches at a store: the set pace, or the store's own slowest (Amazon: 20 s). */
@@ -671,8 +684,11 @@ export class Sweeper {
   // ---------------------------------------------------------------------------
   // Admins' browsers (the extension), for stores that refuse servers
   // ---------------------------------------------------------------------------
-  /** The next search at each store swept from browsers, for an admin's browser. Two admins' browsers share them. */
-  browserDue(user) {
+  /**
+   * The next search at each store swept from browsers, for an admin's browser. Two admins' browsers share them.
+   * browser.version: its copy of the extension. A store that needs a newer one is left for another browser.
+   */
+  browserDue(user, browser = {}) {
     if (!user || user.role !== 'admin') return { terms: [], waitMs: null };
     const now = this.now();
     const terms = [];
@@ -680,6 +696,12 @@ export class Sweeper {
     for (const { retailer: r, mode } of this.stores()) {
       if (mode !== 'browser') continue;
       const st = this.stat(r.id);
+      const needs = r.sweep.extension;
+      if (needs && olderVersion(browser.version, needs)) {
+        // (Unless another admin's browser, an up-to-date one, is searching it.)
+        if (!st.lastAt || now - st.lastAt > Math.max(60 * 1000, 4 * this.paceFor(r, true))) this.needsUpdate(r, st, needs, browser);
+        continue;
+      }
       if (st.browserNext > now) { next = Math.min(next ?? Infinity, st.browserNext); continue; }
       this.refreshCollections(r).catch(() => {});
       const term = this.nextTerm(r);
@@ -693,10 +715,24 @@ export class Sweeper {
         render: !!r.sweep.render,
         // A search the store's own page asks for (EB Games' JSON): asked from inside a page of the store.
         inPage: !!r.sweep.inPage,
-        pageUrl: r.sweep.openPath ? `${r.base}${r.sweep.openPath.replace('{q}', encodeURIComponent(this.query(r, term.keyword)))}` : null,
+        // (Which page: openPath, '' for the store's front page. None: the site's address.)
+        pageUrl: typeof r.sweep.openPath === 'string' ? `${r.base}${r.sweep.openPath.replace('{q}', encodeURIComponent(this.query(r, term.keyword)))}` : null,
+        // The headers the store's own code sends with it (Premium Bandai's region: x-g1-area-code).
+        headers: r.sweep.headers || null,
       }));
     }
     return { terms, waitMs: next === null ? null : Math.max(1000, next - now) };
+  }
+
+  /** An admin's browser whose extension is too old for a store (Chrome won't let it open that store's pages): say so, once. */
+  needsUpdate(r, st, needs, browser) {
+    const note = `Needs Mugibot's extension ${needs} or newer in an admin's browser${browser.version ? ` (${browser.who ? `${browser.who}'s has` : 'this one has'} ${browser.version})` : ''} — update it from the dashboard's Extension tab`;
+    const fresh = st.lastError !== note;
+    st.needsUpdateAt = this.now();
+    st.lastError = note;
+    st.fails = 0;
+    st.nextAt = null;
+    if (fresh) this.sys(`${r.name}: ${note}`, { store: r.id, level: 'warn' });
   }
 
   /** What an admin's browser found. Only admins' browsers can change the shared feed. */
@@ -770,6 +806,8 @@ export class Sweeper {
 
   /** A store's state in a word: ok, slowed, retrying, waiting (for an admin's browser) or starting. */
   statusOf(mode, st, now, r) {
+    // Waiting for an admin's browser with a newer extension (none has searched it since one asked).
+    if (mode === 'browser' && st.needsUpdateAt && st.needsUpdateAt > (st.lastAt || 0)) return 'waiting';
     if (!st.lastAt) return mode === 'browser' ? 'waiting' : 'starting';
     if (st.fails) return 'retrying';
     if (mode === 'browser' && now - st.lastAt > Math.max(60 * 1000, 4 * this.paceFor(r, true))) return 'waiting';
