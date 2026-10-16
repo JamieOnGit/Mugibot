@@ -427,6 +427,7 @@ dialog.detail h4 { margin: 18px 0 8px; font-size: 14px; text-transform: uppercas
 .sn-chart .s5 { stroke: var(--s5); } .sn-chart .s6 { stroke: var(--s6); } .sn-chart .s7 { stroke: var(--s7); } .sn-chart .s8 { stroke: var(--s8); }
 .sn-chart circle.s1 { fill: var(--s1); } .sn-chart circle.s2 { fill: var(--s2); } .sn-chart circle.s3 { fill: var(--s3); } .sn-chart circle.s4 { fill: var(--s4); }
 .sn-chart circle.s5 { fill: var(--s5); } .sn-chart circle.s6 { fill: var(--s6); } .sn-chart circle.s7 { fill: var(--s7); } .sn-chart circle.s8 { fill: var(--s8); }
+.sn-chart .s0 { stroke: var(--muted); } .sn-chart circle.s0 { fill: var(--muted); }
 .sn-chart circle.end { stroke: var(--surface); }
 .sn-chart .empty { font: 12px var(--mono); color: var(--muted); padding: 30px 0; text-align: center; }
 .sn-tip { position: absolute; top: 6px; transform: translateX(-50%); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: 11.5px var(--mono); pointer-events: none; box-shadow: var(--shadow); white-space: nowrap; z-index: 2; }

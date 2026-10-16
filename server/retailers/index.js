@@ -18,9 +18,10 @@ import jbhifi from './jbhifi.js';
 import kmart from './kmart.js';
 import target from './target.js';
 import toysrus from './toysrus.js';
+import trainertown from './trainertown.js';
 import zing from './zing.js';
 
-export const RETAILER_DEFS = [kmart, bigw, target, ebgames, zing, jbhifi, toysrus, amazon];
+export const RETAILER_DEFS = [kmart, bigw, target, ebgames, zing, jbhifi, toysrus, trainertown, amazon];
 
 // Card boxes are often in a frame hosted by the store's payment provider.
 export const PAYMENT_HOSTS = [

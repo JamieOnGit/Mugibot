@@ -10,7 +10,9 @@
 //   /ebgames  EB Games-style: "Add to Cart" → mini-cart "Checkout" → "Continue
 //             as Guest" → shipping → delivery → payment (+ terms) → "Place Order"
 //   /jbhifi   Shopify-style (JB Hi-Fi): product JSON, cart page "Check out",
-//             one-page checkout → "Pay now"
+//             one-page checkout → "Pay now"; search suggestions
+//   /trainertown  the same Shopify pages (Trainer Town), plus a collection per
+//             game with its product list (what the live sweeps read there)
 //
 // Open the root (/) for the control panel: restock, sell out, list or unlist
 // products and watch Mugibot react. A second server on another port serves
@@ -25,7 +27,10 @@ const SHOPS = {
   bigw: { name: 'BIG W (dummy)', color: '#0046be' },
   ebgames: { name: 'EB Games (dummy)', color: '#d22' },
   jbhifi: { name: 'JB Hi-Fi (dummy Shopify)', color: '#222' },
+  trainertown: { name: 'Trainer Town (dummy Shopify)', color: '#1d4e89' },
 };
+// The Shopify-style shops: the same product, cart and checkout pages.
+const SHOPIFY = new Set(['jbhifi', 'trainertown']);
 const LD_AVAIL = { in_stock: 'InStock', preorder: 'PreOrder', out_of_stock: 'OutOfStock' };
 const STATES = '<option value="">Select state</option><option value="NSW">New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option><option value="WA">Western Australia</option><option value="SA">South Australia</option><option value="TAS">Tasmania</option><option value="ACT">Australian Capital Territory</option><option value="NT">Northern Territory</option>';
 
@@ -145,11 +150,11 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       bigw: { in_stock: 'Add to cart', preorder: 'Pre-order', out_of_stock: 'Out of stock online', coming_soon: 'Coming soon' },
       ebgames: { in_stock: 'Add to Cart', preorder: 'Pre-order Now', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
       jbhifi: { in_stock: 'Add to cart', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon' },
-    }[shop];
+    }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     const orderable = p.status === 'in_stock' || p.status === 'preorder';
-    if (shop === 'jbhifi') {
-      return page(shop, `${p.name} | JB Hi-Fi (dummy)`, `<div class="product-detail"><h1>${esc(p.name)}</h1><div class="price">$${p.price.toFixed(2)}</div>
-        <form action="/jbhifi/cart/add" method="get"><input type="hidden" name="id" value="${p.id}">${qtyControl(p)}
+    if (SHOPIFY.has(shop)) {
+      return page(shop, `${p.name} | ${SHOPS[shop].name}`, `<div class="product-detail"><h1>${esc(p.name)}</h1><div class="price">$${p.price.toFixed(2)}</div>
+        <form action="/${shop}/cart/add" method="get"><input type="hidden" name="id" value="${p.id}">${qtyControl(p)}
         <button type="submit" name="add" ${orderable ? '' : 'disabled'}>${labels[p.status]}</button></form></div>`, { head: ldFor(p, shop) });
     }
     const button = orderable ? `<button type="button" id="atc" class="add-to-cart">${labels[p.status]}</button>` : `<button type="button" class="add-to-cart" disabled>${labels[p.status]}</button>`;
@@ -209,14 +214,14 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       const p = find(shop, c.sku);
       const max = Number(p && p.maxQty) || 10;
       const opts = Array.from({ length: max }, (_, i) => `<option value="${i + 1}" ${i + 1 === c.qty ? 'selected' : ''}>${i + 1}</option>`).join('');
-      const qty = shop === 'jbhifi' ? `<input type="number" name="updates[]" aria-label="Quantity" data-sku="${c.sku}" value="${c.qty}" min="1" style="width:60px">` : `<select aria-label="Quantity" data-sku="${c.sku}">${opts}</select>`;
+      const qty = SHOPIFY.has(shop) ? `<input type="number" name="updates[]" aria-label="Quantity" data-sku="${c.sku}" value="${c.qty}" min="1" style="width:60px">` : `<select aria-label="Quantity" data-sku="${c.sku}">${opts}</select>`;
       return `<li class="line-item"><div class="line-name"><a href="${p ? pathFor(shop, p) : '#'}">${esc(c.name)}</a></div><div class="line-qty">Qty ${qty}</div></li>`;
     }).join('');
-    const go = { kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>' }[shop];
+    const go = { kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>' }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || '<li>Empty</li>'}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
       <script>
         for (const s of document.querySelectorAll('[data-sku]')) s.addEventListener('change', () => fetch('/${shop}/api/cart/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: s.dataset.sku, qty: Number(s.value) }) }));
-        document.getElementById('to-checkout')?.addEventListener('click', () => { location.href = '${shop === 'jbhifi' ? '/jbhifi/checkouts/c/abc123' : `/${shop}/checkout`}'; });
+        document.getElementById('to-checkout')?.addEventListener('click', () => { location.href = '${SHOPIFY.has(shop) ? `/${shop}/checkouts/c/abc123` : `/${shop}/checkout`}'; });
       </script>`);
   }
 
@@ -429,7 +434,7 @@ for (const el of document.querySelectorAll('input')) {
     const redirect = (to) => { res.writeHead(302, { location: to }); res.end(); };
 
     // Product pictures (a coloured card with the product's name).
-    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi)\/([^/]+)\.svg$/);
+    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown)\/([^/]+)\.svg$/);
     if (img) {
       const prod = find(img[1], decodeURIComponent(img[2]));
       if (!prod) return html(404, 'Not found');
@@ -469,7 +474,7 @@ for (const el of document.querySelectorAll('input')) {
         <p>Orders placed (should stay 0 — Mugibot never presses the final button): <b>${orders}</b></p>`));
     }
 
-    const m = p.match(/^\/(kmart|bigw|ebgames|jbhifi)(\/.*|$)/);
+    const m = p.match(/^\/(kmart|bigw|ebgames|jbhifi|trainertown)(\/.*|$)/);
     if (!m) return html(404, page(null, 'Page not found', '<h1>Page not found</h1>'));
     const shop = m[1];
     const sub = m[2] || '/';
@@ -484,7 +489,7 @@ for (const el of document.querySelectorAll('input')) {
     if (shop === 'kmart') sku = (sub.match(/^\/product\/[^/]*-(\d{6,10})\/?$/) || [])[1];
     if (shop === 'bigw') sku = (sub.match(/^\/product\/[^/]+\/p\/(\d+)$/) || [])[1];
     if (shop === 'ebgames') sku = (sub.match(/^\/product\/[^/]+\/(\d+)-/) || [])[1];
-    if (shop === 'jbhifi') {
+    if (SHOPIFY.has(shop)) {
       const js = sub.match(/^\/products\/([^/]+)\.js$/);
       if (js) {
         const prod = find(shop, js[1]);
@@ -505,7 +510,7 @@ for (const el of document.querySelectorAll('input')) {
 
     if (sub === '/search' || sub === '/search/') return html(200, searchPage(shop, u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || ''));
     // Shopify's search suggestions (what Mugibot's live sweeps read at JB Hi-Fi).
-    if (shop === 'jbhifi' && sub === '/search/suggest.json') {
+    if (SHOPIFY.has(shop) && sub === '/search/suggest.json') {
       const hits = searchHits(shop, u.searchParams.get('q')).slice(0, 10);
       return json(200, {
         resources: {
@@ -518,6 +523,23 @@ for (const el of document.querySelectorAll('input')) {
         },
       });
     }
+    // Shopify's collections and each one's product list (what Mugibot's live sweeps read at Trainer Town):
+    // a collection per game, of the products whose name says it.
+    if (shop === 'trainertown' && (sub === '/collections.json' || /^\/collections\/[^/]+\/products\.json$/.test(sub))) {
+      const listed = shopOf(shop).products.filter((x) => x.listed);
+      const games = [['pokemon-cards', 'Pokémon Cards', 'pokemon'], ['one-piece-trading-card-game', 'One Piece Trading Card Game', 'one-piece']];
+      const inGame = (word) => listed.filter((x) => slugify(x.name).includes(word));
+      if (sub === '/collections.json') return json(200, { collections: games.map(([handle, title, word]) => ({ id: handle.length, handle, title, products_count: inGame(word).length })) });
+      const game = games.find(([handle]) => sub === `/collections/${handle}/products.json`);
+      if (!game) return json(404, { errors: 'Not Found' });
+      return json(200, {
+        products: inGame(game[2]).map((x) => ({
+          id: x.id, title: x.name, handle: x.sku, body_html: '<p>Dummy</p>', product_type: 'Trading Cards', tags: x.status === 'preorder' ? ['Pre-Order'] : [],
+          variants: [{ id: x.id, title: 'Default Title', price: x.price.toFixed(2), compare_at_price: x.was ? x.was.toFixed(2) : null, available: x.status === 'in_stock' || x.status === 'preorder' }],
+          images: [{ src: `http://${req.headers.host}${imagePath(shop, x)}` }],
+        })),
+      });
+    }
 
     if (sub === '/api/cart/add' && req.method === 'POST') {
       const b = await parseBody(req);
@@ -526,16 +548,16 @@ for (const el of document.querySelectorAll('input')) {
       return json(r.ok ? 200 : 409, r);
     }
     // Shopify cart links: /cart/<variant>:<quantity> puts the product in the cart and opens checkout.
-    const permalink = shop === 'jbhifi' && sub.match(/^\/cart\/(\d+):(\d+)$/);
+    const permalink = SHOPIFY.has(shop) && sub.match(/^\/cart\/(\d+):(\d+)$/);
     if (permalink) {
       const prod = S.products.find((x) => String(x.id) === permalink[1]);
       if (prod) addToCart(shop, prod.sku, Number(permalink[2]) || 1);
-      return redirect('/jbhifi/checkouts/c/abc123');
+      return redirect(`/${shop}/checkouts/c/abc123`);
     }
-    if (sub === '/cart/add' && shop === 'jbhifi') {
+    if (sub === '/cart/add' && SHOPIFY.has(shop)) {
       const prod = S.products.find((x) => String(x.id) === u.searchParams.get('id'));
       if (prod) addToCart(shop, prod.sku, Number(u.searchParams.get('quantity') || 1));
-      return redirect('/jbhifi/cart');
+      return redirect(`/${shop}/cart`);
     }
     if (sub === '/api/cart/update' && req.method === 'POST') {
       const b = await parseBody(req);
@@ -629,17 +651,17 @@ for (const el of document.querySelectorAll('input')) {
       }
     }
 
-    // ---------------- Shopify-style one-page checkout (JB Hi-Fi)
-    if (shop === 'jbhifi' && sub.startsWith('/checkouts/c/abc123')) {
+    // ---------------- Shopify-style one-page checkout (JB Hi-Fi, Trainer Town)
+    if (SHOPIFY.has(shop) && sub.startsWith('/checkouts/c/abc123')) {
       if (sub.endsWith('/thank-you')) return html(200, page(shop, 'Thank you', '<h1>Thank you for your purchase!</h1><p>Your order is confirmed.</p>'));
       if (req.method === 'POST') {
         const b = await parseBody(req);
         S.orders.push({ form: b, cart: S.cart.slice() });
         S.cart = [];
-        return redirect('/jbhifi/checkouts/c/abc123/thank-you');
+        return redirect(`/${shop}/checkouts/c/abc123/thank-you`);
       }
       S.data.checkoutOpened = Date.now();
-      return html(200, page(shop, 'Checkout - JB Hi-Fi (dummy)', `<h1>Checkout</h1><form method="post">
+      return html(200, page(shop, `Checkout - ${SHOPS[shop].name}`, `<h1>Checkout</h1><form method="post">
         <h3>Contact</h3><input name="email" type="email" autocomplete="email" placeholder="Email" required>
         <h3>Delivery</h3>
         <select name="countryCode" autocomplete="shipping country"><option value="AU" selected>Australia</option><option value="NZ">New Zealand</option></select>
@@ -653,7 +675,7 @@ for (const el of document.querySelectorAll('input')) {
         <input name="phone" autocomplete="shipping tel" placeholder="Phone" type="tel">
         <h3>Shipping method</h3><label><input type="radio" name="shipping" value="standard" checked> Standard $10.00</label>
         <h3>Payment</h3>${cardBoxes('shopify')}
-        <p>Total: $${(total('jbhifi') + 10).toFixed(2)}</p>
+        <p>Total: $${(total(shop) + 10).toFixed(2)}</p>
         <button type="submit" id="pay">Pay now</button></form>`));
     }
 

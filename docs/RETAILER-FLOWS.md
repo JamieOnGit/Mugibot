@@ -13,6 +13,7 @@ button is the **final one**. The final button is never pressed.
 | Target | `target.js` | 🟨 draft | Best guess, untested. |
 | Zing | `zing.js` | 🟨 draft | Uses the EB Games flow (same platform). |
 | Toys"R"Us | `toysrus.js` | 🟨 draft | Uses the Shopify flow. |
+| Trainer Town | `trainertown.js` | 🟨 draft | Uses the Shopify flow; tested on the Shopify-style dummy store (`/trainertown`), not on trainertown.com.au yet. |
 | Amazon AU | `amazon.js` | 🟨 draft | Adds to cart and opens checkout; Amazon fills your saved address and card. |
 
 - **verified**: tested on the real store.

@@ -29,6 +29,7 @@ same products, the same alerts, the same ⚡ Buy.
 | Target | Mugibot's server | Target's search page, newest first: every page with results (up to 4 pages of 48), with stock for every colour and size |
 | JB Hi-Fi | Mugibot's server | JB Hi-Fi's search suggestions (Shopify): 10 products a search, with stock. "tcg" is added to each keyword ("pokemon tcg"), because "pokemon" alone finds plushies and games |
 | Toys"R"Us | Mugibot's server | Same as JB Hi-Fi (also a Shopify store) |
+| Trainer Town | Mugibot's server | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi) |
 | Kmart, BIG W, EB Games, Zing | **An admin's browser** (the extension) | Their search pages: product tiles, and product data in the page's scripts |
 
 Kmart, BIG W, EB Games and Zing refuse requests from servers (403 / bot
@@ -80,6 +81,15 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   restock. This only happens when the pages Mugibot reads hold all of the
   results (up to 192 per keyword), and never in the first minutes after a
   restart.
+- **Trainer Town keeps each game in a collection of its own** (Pokémon
+  Cards, One Piece Trading Card Game, Lorcana…). Mugibot looks up the store's
+  collections (every 6 hours) and, for each keyword, reads the biggest
+  collection named after it, whole: every product in it, sold-out ones too.
+  So a new drop can't be hidden below the first 10 search results, and a sold
+  out product is seen as sold out (not just missing). Its alerts come with
+  Shopify's **Add to cart** link (the option to buy is in the list). When a
+  keyword moves between its collection and the search, the first read of the
+  new one only sets the scene.
 - **A refused or failed search never alerts** and keeps every product's last
   stock. The store waits twice as long after each failure (up to 15 minutes),
   then tries again.
@@ -102,6 +112,7 @@ With the defaults (2 keywords, a search every 5 seconds per store):
   change can take a minute or two to show up there. Mugibot doesn't try to
   get around their cache.
 - JB Hi-Fi and Toys"R"Us: each keyword every ~10 s.
+- Trainer Town: each keyword's whole collection every ~10 s.
 - Kmart, BIG W, EB Games, Zing (admin's browser): each keyword every ~30 s.
 
 More keywords means each one comes round a little less often. Each store has
@@ -113,7 +124,7 @@ its own loop, so a slow store never holds up the others.
    itself. Sweeps start on their own, with the keywords `pokemon` and
    `one piece`.
 2. **Admins' browsers** (for Kmart, BIG W, EB Games, Zing): install the
-   extension (version 1.5.0 or later), connect it to an **admin** account, and
+   extension (version 1.5.0 or later; 1.5.1 for ⚡ Buy at Trainer Town), connect it to an **admin** account, and
    keep Chrome open. If a store refuses that browser too, open the store's
    website in it once, then wait for the next search. The extension's popup
    shows **Live sweeps from this browser** with each store's last result.

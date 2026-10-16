@@ -17,7 +17,7 @@ community. Built on TCGCopBot's working Kmart flow.
   member to press.
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games and
   JB Hi-Fi are beta (tested on dummy copies of those stores). Target, Zing,
-  Toys"R"Us and Amazon are drafts. Flows live on the server, so fixing one
+  Toys"R"Us, Trainer Town and Amazon are drafts. Flows live on the server, so fixing one
   reaches everyone without reinstalling the extension. See
   [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md).
 - **Memberships on Whop (A$19.99/month).** Members pay through Whop, and their
@@ -32,8 +32,8 @@ community. Built on TCGCopBot's working Kmart flow.
   keywords (`pokemon`, `one piece`…) and alerts the moment it sees a 🆕 **new
   drop**, a 🟢 **restock** or a 📉 **price drop**: in the dashboard, in your
   Discord channels (image, store, price, stock and a ⚡ Buy button) and to
-  every member watching that SKU. Target, JB Hi-Fi and Toys"R"Us are searched
-  from the server; Kmart, BIG W, EB Games and Zing from an admin's browser
+  every member watching that SKU. Target, JB Hi-Fi, Toys"R"Us and Trainer Town
+  (each game's whole collection) are searched from the server; Kmart, BIG W, EB Games and Zing from an admin's browser
   with the extension. Admins can also monitor single products. Each channel
   gets what its rule asks for (by category, store, kind or keyword). The
   dashboard's **Monitor** tab is a live console: each store's searches and
@@ -182,8 +182,8 @@ npm test
   history, check log and health; pause, resume and intervals; Shopify cart
   links; blocked stores keep their last status; admins' browsers for stores
   that refuse servers; `/monitor` and `/restocks`.
-- **The real extension in Chromium:** Kmart (verified), BIG W, EB Games and
-  JB Hi-Fi flows each stop at their final button with nothing pressed, plus the
+- **The real extension in Chromium:** Kmart (verified), BIG W, EB Games,
+  JB Hi-Fi and Trainer Town flows each stop at their final button with nothing pressed, plus the
   card saved without a passphrase and still ready after the browser restarts,
   a card from an older version moving over, the card in a payment frame, card
   boxes in separate frames that only take real typing or key presses (like
@@ -214,7 +214,7 @@ server/
   routes/           auth, user, ext (extension API), membership, discord (+ slash commands), monitor, admin, web
 web/                landing, sign-in, dashboard, ⚡ Buy page, admin console, terms, privacy
 extension/          the browser extension (built per server by server/extension.js)
-devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, JB Hi-Fi-style)
+devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, JB Hi-Fi-, Trainer Town-style)
 scripts/            demo, mockstore, discord-commands, make-admin, reset-link, backup, build-extension, publish-extension
 docs/               setup guides
 test/               node:test + Playwright

@@ -32,6 +32,10 @@ export const DUMMY_PRODUCTS = {
     { sku: 'pokemon-tcg-30th-celebration-upc', name: 'Pokémon TCG 30th Celebration Ultra-Premium Collection', price: 359, status: 'out_of_stock' },
     { sku: 'pokemon-tcg-30th-celebration-etb', name: 'Pokémon TCG 30th Celebration Elite Trainer Box', price: 99, status: 'in_stock' },
   ],
+  trainertown: [
+    { sku: 'pokemon-tcg-ascended-heroes-elite-trainer-box', name: 'Pokémon - TCG - Ascended Heroes Elite Trainer Box', price: 129.95, status: 'in_stock' },
+    { sku: 'one-piece-tcg-op-14-booster-box', name: 'One Piece - TCG - OP-14 Booster Box', price: 189.95, status: 'out_of_stock' },
+  ],
 };
 
 export const slugify = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -43,6 +47,7 @@ export function dummyProductPath(store, p) {
     case 'bigw': return `/bigw/product/${slugify(p.name)}/p/${p.sku}`;
     case 'ebgames': return `/ebgames/product/toys-and-collectibles/${p.sku}-${slugify(p.name)}`;
     case 'jbhifi': return `/jbhifi/products/${p.sku}`;
+    case 'trainertown': return `/trainertown/products/${p.sku}`;
     default: return null;
   }
 }

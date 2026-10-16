@@ -8,6 +8,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createApp } from '../server/app.js';
+import { storeFetch } from '../server/monitor/http.js';
 import { signWebhook } from '../server/whop.js';
 
 export const PASSWORD = 'correct horse battery staple';
@@ -228,6 +229,12 @@ export async function startApp(opts = {}) {
     }
     return fetch(url, init);
   };
+  // Store requests (monitor checks, live sweeps): this computer only — tests never touch a real store.
+  const localStoreFetch = (url, init) => {
+    const host = new URL(String(url)).hostname;
+    if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host)) return Promise.reject(Object.assign(new Error(`Tests never touch real stores (${host})`), { name: 'RealStoreError' }));
+    return storeFetch(url, init);
+  };
   const app = await createApp({
     databasePath: path.join(dir, 'mugibot.db'),
     outbox,
@@ -236,6 +243,7 @@ export async function startApp(opts = {}) {
     signupsPerHour: 1000,
     log: () => {},
     fetch: fetchImpl,
+    storeFetch: localStoreFetch,
     ...opts,
   });
   const url = await app.listen(0, '127.0.0.1');
