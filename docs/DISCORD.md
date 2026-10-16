@@ -62,11 +62,17 @@ You need: a Discord server you own, and Mugibot's address (`BASE_URL`, e.g.
 
 1. **OAuth2** page → **OAuth2 URL Generator**:
    - Scopes: tick **bot** and **applications.commands**.
-   - Bot permissions: tick **Create Instant Invite**, **Manage Roles**, **View
-     Channels**, **Send Messages** and **Embed Links**. Also tick **Kick
-     Members** only if you'll set `DISCORD_KICK_ON_EXPIRE=1`. Don't tick
-     Administrator; the bot doesn't need it.
-2. Copy the generated URL at the bottom, open it, choose your server → **Authorize**.
+   - Bot permissions: tick **Create Instant Invite**, **Manage Roles**,
+     **Manage Channels**, **View Channels**, **Send Messages** and **Embed
+     Links**. Also tick **Kick Members** only if you'll set
+     `DISCORD_KICK_ON_EXPIRE=1`. Don't tick Administrator; the bot doesn't need it.
+   - Or skip the ticking: those six are the permissions integer **268454929**
+     (**268454931** with Kick Members). Put it in this link, with your
+     Application ID (General Information page):
+     `https://discord.com/oauth2/authorize?client_id=<Application ID>&scope=bot%20applications.commands&permissions=268454929`
+2. Copy the generated URL at the bottom (or the link above), open it, choose your
+   server → **Authorize**. Opening it again later, with a new permissions
+   integer, updates the bot's permissions the same way.
 3. Discord gives the bot its own role, named after the app ("Mugibot"), with
    those permissions. Don't give the bot any other roles (not `Member`, not
    `Restock Pings`).
@@ -76,7 +82,8 @@ You need: a Discord server you own, and Mugibot's address (`BASE_URL`, e.g.
 
 Already invited the bot without some of these? Server Settings → Roles →
 **Mugibot** → **Permissions**, and turn on **Create Invite**, **Manage Roles**,
-**View Channels**, **Send Messages** and **Embed Links**.
+**Manage Channels**, **View Channels**, **Send Messages** and **Embed Links**
+(or open the link above again).
 
 What each permission is for:
 
@@ -84,7 +91,8 @@ What each permission is for:
 |---|---|
 | Create Invite | Discord requires it for a bot to add people to the server |
 | Manage Roles | Give members the `Member` role, and take it away when their membership ends |
-| View Channels, Send Messages, Embed Links | Post restocks in `#restocks` |
+| Manage Channels | **Set up store channels** (Monitor → Settings) makes `kmart-pokemon`, `misc-retailers`… for you. Without it, make those channels yourself and press the button: it finds them by name |
+| View Channels, Send Messages, Embed Links | Post restocks in `#restocks` and the alert channels |
 | Kick Members (optional) | Only with `DISCORD_KICK_ON_EXPIRE=1`: remove people from the server when their membership ends |
 
 ---
