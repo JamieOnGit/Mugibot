@@ -847,19 +847,23 @@ test("store login monitor: the extension sees where you're signed in (its checks
   }, { message: 'the checked stores reach the account' });
   let l = await loginsNow();
   assert.equal(l['demo-jbhifi'].how, 'check');
-  assert.equal(l['demo-kmart'].status, null, "Kmart's pages don't say, so it isn't checked in the background");
-  assert.equal(l['demo-kmart'].checked, false);
+  assert.equal(l['demo-kmart'].checked, false, "Kmart's pages don't say, so it isn't checked in the background");
+  assert.notEqual(l['demo-kmart'].how, 'check');
   // Within 10 minutes it doesn't ask again (the alarm runs every 30 s).
   assert.equal(await sw.evaluate(() => globalThis.mugibotCheckLogins()), 0);
 
-  // A store whose pages don't say so: read from the page you open. The header's "Sign in"…
+  // A store whose pages don't say so: read from the page you open (the ⚡ Buy tests before this one
+  // opened Kmart already, so look for a fresh reading). The header's "Sign in"…
+  const seenSince = async (status, since) => { const k = (await loginsNow())['demo-kmart']; return k.status === status && k.at >= since; };
   const page = await ctx.newPage();
+  let since = Date.now();
   await page.goto(store.productUrl('kmart', '43818648'));
-  await waitFor(async () => (await loginsNow())['demo-kmart'].status === 'out', { message: 'Kmart: signed out' });
+  await waitFor(() => seenSince('out', since), { message: 'Kmart: signed out' });
   // …and "Hi, Ash" / "Sign out" once you're in.
   store.state.signedIn.kmart = true;
+  since = Date.now();
   await page.reload();
-  await waitFor(async () => (await loginsNow())['demo-kmart'].status === 'in', { message: 'Kmart: signed in' });
+  await waitFor(() => seenSince('in', since), { message: 'Kmart: signed in' });
   l = await loginsNow();
   assert.equal(l['demo-kmart'].how, 'page');
   assert.ok(l['demo-kmart'].device, 'which browser saw it');
@@ -885,8 +889,9 @@ test("store login monitor: the extension sees where you're signed in (its checks
   // The watchlist nudges you about a store you watch where you're signed out.
   store.state.signedIn.kmart = false;
   const shop = await ctx.newPage();
+  since = Date.now();
   await shop.goto(store.productUrl('kmart', '43818648'));
-  await waitFor(async () => (await loginsNow())['demo-kmart'].status === 'out', { message: 'Kmart: signed out again' });
+  await waitFor(() => seenSince('out', since), { message: 'Kmart: signed out again' });
   await shop.close();
   await useItems([{ url: store.productUrl('kmart', '43818648'), name: 'Login nudge UPC' }]);
   await page.goto(`${env.url}/app#watch`);
