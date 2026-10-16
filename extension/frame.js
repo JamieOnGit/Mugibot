@@ -1,10 +1,11 @@
 // Mugibot — runs inside payment frames (card number / expiry / CVV boxes
-// hosted by the store's payment provider, like Kmart's). Fills your saved card
-// only while a checkout you started is running in this tab, on that store
-// (checked by the background worker). Each box is focused through the page
-// above (these boxes only keep real typing into a focused box) and typed into
-// one at a time. Then it tells the page what went in, box by box, so the page
-// can say exactly why if the card didn't.
+// hosted by the store's payment provider, like Kmart's; or a whole checkout in
+// a frame, like Global-e's for Premium Bandai, where your delivery details go
+// in too). Fills your saved card only while a checkout you started is running
+// in this tab, on that store (checked by the background worker). Each card
+// box is focused through the page above (these boxes only keep real typing
+// into a focused box) and typed into one at a time. Then it tells the page
+// what went in, box by box, so the page can say exactly why if the card didn't.
 
 (async () => {
   'use strict';
@@ -16,8 +17,31 @@
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const kindOf = (el) => MGBFill.classifyField(el) || '';
   const cardBoxes = () => [...document.querySelectorAll('input, select')].filter((el) => MGBFill.CARD_KINDS.includes(kindOf(el)));
-  // Payment frames often draw their boxes a moment after loading.
-  for (let i = 0; i < 20 && !cardBoxes().length; i++) await wait(500);
+
+  // A whole checkout inside a frame (Global-e's, which runs Premium Bandai's): it asks for your
+  // delivery details too, and they go in as each of its steps shows them. Never a button: you go on.
+  const DETAIL_KINDS = ['email', 'phone', 'firstName', 'lastName', 'fullName', 'address1', 'suburb', 'postcode'];
+  const detailBoxes = () => [...document.querySelectorAll('input, select')].filter((el) => DETAIL_KINDS.includes(kindOf(el)) && MGBFill.isVisible(el));
+  (async () => {
+    const end = Date.now() + 4 * 60 * 1000;
+    let details = null;
+    while (Date.now() < end) {
+      if (detailBoxes().some((el) => !el.value)) {
+        if (!details) {
+          const data = await ask({ type: 'fillData', part: 'all' });
+          if (data && data.profile) details = MGBFill.fieldValues(data.profile, null);
+        }
+        if (details) MGBFill.fillFields(document, details, {});
+      }
+      await wait(1500);
+    }
+  })();
+
+  // Payment frames often draw their boxes a moment after loading (a whole checkout: at its payment step).
+  for (let i = 0; i < 480 && !cardBoxes().length; i++) {
+    if (i >= 20 && !detailBoxes().length) break;
+    await wait(500);
+  }
   if (!cardBoxes().length) return;
 
   // The checkout may not have reached this tab yet (or the frame loaded early): keep asking for a while.

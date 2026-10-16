@@ -74,11 +74,12 @@ channels, page-check health and the check log are on the dashboard's
 **Monitor** tab. Admins see the controls there, and members see the feed. In
 Discord: `/monitor add · list · pause · resume · remove · status`.
 
-BIG W and EB Games refuse Mugibot's server, so they're searched from an
-admin's browser: keep Chrome open with the extension (1.7.0 or later)
-connected to an admin account. (Zing's website now sends everyone to EB Games,
-so Zing's sweeps are off.) Kmart, Target, JB Hi-Fi, Toys"R"Us, Trainer
-Town and Amazon AU are searched from the server. See [MONITORING.md](MONITORING.md).
+BIG W, EB Games, Pokémon Center and Premium Bandai refuse Mugibot's server, so
+they're searched from an admin's browser: keep Chrome open with the extension
+(1.8.0 or later for Pokémon Center and Premium Bandai) connected to an admin
+account. (Zing's website now sends everyone to EB Games, so Zing's sweeps are
+off.) Kmart, Target, JB Hi-Fi, Toys"R"Us, Trainer Town, Amazon AU, The Games
+Cube and Gamerholic are searched from the server. See [MONITORING.md](MONITORING.md).
 
 ## Command line (on the server)
 

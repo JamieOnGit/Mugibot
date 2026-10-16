@@ -74,6 +74,13 @@
         panel.setStatus('Couldn\'t get your delivery details from your account — fill in checkout yourself.');
         return;
       }
+      if (checkoutFlow && checkoutFlow.inFrame) {
+        // The whole checkout is in a frame (Global-e's): frame.js fills your details and card in there.
+        panel.setStatus(`${retailer.name}'s checkout is in the form on this page: your details and card go in there as each step shows them. Check them and press the final button yourself.`);
+        report('ready', `Checkout open at ${retailer.name} — your details and card go into its checkout form`, null);
+        if (data.card && checkoutFlow.payment === 'card') checkCard();
+        return;
+      }
       const result = await MGBFill.assist({
         values: MGBFill.fieldValues(data.profile, data.card),
         flow: checkoutFlow,

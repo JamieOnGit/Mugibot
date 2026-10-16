@@ -93,7 +93,8 @@ Leave that window open (Ctrl+C stops it). Go to http://localhost:8080 → **Join
 ## 2. Try every store's flow with dummy products
 
 The dummy store is a set of fake shops shaped like Kmart, BIG W, EB Games,
-JB Hi-Fi and Trainer Town. Nothing is real and no order can be placed.
+JB Hi-Fi, Trainer Town, Gamerholic, The Games Cube, Pokémon Center and Premium
+Bandai. Nothing is real and no order can be placed.
 
 Stop `npm start` first (Ctrl+C), then:
 
