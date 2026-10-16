@@ -34,6 +34,21 @@ export function register(router, ctx) {
     admin: isAdmin(req),
   }), member);
 
+  // The live monitor: each store's searches as they happen, the counters and the latest events.
+  router.get('/api/monitor/live', async (req) => {
+    const s = sweeper.settings;
+    return {
+      ...sweeper.live(),
+      overview: overview(),
+      alerts: catalog.recentAlerts({ limit: 40 }),
+      settings: isAdmin(req) ? s : {
+        enabled: s.enabled, keywords: s.keywords, everySeconds: s.everySeconds, browserEverySeconds: s.browserEverySeconds,
+        newAlerts: s.newAlerts, restockAlerts: s.restockAlerts, priceAlerts: s.priceAlerts, priceDropPercent: s.priceDropPercent,
+      },
+      admin: isAdmin(req),
+    };
+  }, member);
+
   router.get('/api/monitor/products', async (req) => {
     const q = req.query;
     const list = catalog.listProducts({
@@ -84,7 +99,7 @@ export function register(router, ctx) {
   // --- Admins: the live sweeps -----------------------------------------------------------
   const sweepView = () => ({
     settings: sweeper.settings,
-    defaults: { tcgTerms: SWEEP_DEFAULTS.tcgTerms, keywords: SWEEP_DEFAULTS.keywords },
+    defaults: { tcgTerms: SWEEP_DEFAULTS.tcgTerms, notCardTerms: SWEEP_DEFAULTS.notCardTerms, keywords: SWEEP_DEFAULTS.keywords },
     stores: sweeper.health(),
     running: sweeper.running,
     monitorEnabled: cfg.monitor.enabled,

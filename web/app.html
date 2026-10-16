@@ -79,13 +79,19 @@
 
       <!-- 📡 Monitor -->
       <section data-panel="monitor" hidden>
-        <div class="tab-head">
+        <div class="tab-head sn-head">
           <h2>Monitor</h2>
           <span class="live" id="m-live" title="Updates as they happen">Live</span>
+          <span class="sn-clock">Local <b id="sn-clock">--:--:--</b></span>
+          <span class="sn-clock">Up <b id="sn-uptime">—</b></span>
+          <span class="sn-grow"></span>
+          <button class="btn small" id="sn-arm" type="button" aria-pressed="false" title="Sound and desktop notifications for new drops and restocks">🔔 Arm alerts</button>
+          <button class="btn small" id="sn-test" type="button" title="Runs the alert in this browser only, so you can check the sound and pop-up">⚡ Test alert</button>
+          <button class="btn small" id="ms-now" type="button" hidden>Sweep now</button>
           <button class="btn small primary" id="m-add-toggle" type="button" hidden>+ Add monitor</button>
         </div>
-        <p class="muted small">New drops, restocks and price drops across the stores, the moment they happen: each store's search is read every few seconds. The same alerts as the Discord channels. ⚡ Buy adds the product to your watchlist and runs your own checkout.</p>
-        <div class="stats" id="m-stats"></div>
+        <p class="muted small sn-intro">Every store's search, read every few seconds. New drops, restocks and price drops show up here the moment a search sees them, with a pop-up and a sound once you press <b>Arm alerts</b>. ⚡ Buy adds the product to your watchlist and runs your checkout with the extension.</p>
+        <div id="m-paywall"></div>
 
         <form class="card" id="m-add" hidden>
           <h3>Add a monitor</h3>
@@ -100,28 +106,74 @@
           <div class="form-actions"><button class="btn primary" type="submit">Add monitor</button><span class="msg" id="ma-msg"></span></div>
         </form>
 
-        <div class="filters" role="search">
-          <input id="m-q" type="search" placeholder="Search name or SKU" aria-label="Search products">
-          <select id="m-category" aria-label="Category"><option value="">All categories</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select>
-          <select id="m-store" aria-label="Store"><option value="">All stores</option></select>
-          <select id="m-status" aria-label="Stock"><option value="">Any stock</option><option value="available">Available now</option><option value="unavailable">Not available</option><option value="new">New today</option><option value="problem">Having problems</option></select>
-        </div>
+        <div class="sn-shell" id="sn-shell">
+          <aside class="sn-rail" aria-label="Stores and settings">
+            <section class="sn-panel">
+              <h3 class="sn-sec"><span class="idx">01</span> Live sonar <span class="meta sn-livedot" id="sn-sweeping">sweeping</span></h3>
+              <div class="sn-sonarwrap">
+                <div class="sn-sonar"><canvas id="sn-sonar" aria-hidden="true"></canvas></div>
+                <div class="sn-cap"><span>Stores <b id="sn-active">0</b></span><span>Pings <b id="sn-pings">0</b></span></div>
+              </div>
+            </section>
+            <section class="sn-panel">
+              <h3 class="sn-sec"><span class="idx">02</span> Stores <span class="meta" id="sn-stores-meta"></span></h3>
+              <div id="sn-channels"></div>
+            </section>
+            <section class="sn-panel">
+              <h3 class="sn-sec"><span class="idx">03</span> Keywords <span class="meta" id="sn-kw-count"></span></h3>
+              <div class="sn-watch">
+                <div class="sn-chips" id="sn-chips"></div>
+                <form class="sn-addrow" id="sn-kw-form" hidden>
+                  <input id="sn-kw-input" type="text" placeholder="add a keyword…" maxlength="60" autocomplete="off" aria-label="Add a keyword">
+                  <button class="btn small" type="submit">Add</button>
+                </form>
+                <p class="sn-note" id="sn-kw-note"></p>
+              </div>
+            </section>
+            <section class="sn-panel">
+              <h3 class="sn-sec"><span class="idx">04</span> Tuning</h3>
+              <div class="sn-settings" id="sn-tuning"></div>
+            </section>
+          </aside>
 
-        <div class="m-grid">
-          <div class="card">
-            <div class="card-head"><h3>Live feed</h3><select id="m-kind" aria-label="Alert kind"><option value="">Everything</option><option value="restock">Restocks</option><option value="listed">New drops</option><option value="price">Price changes</option><option value="sold_out">Sold out</option></select></div>
-            <ul class="feed-list" id="m-feed"></ul>
-            <button class="btn small" id="m-more" type="button" hidden>Older alerts</button>
-          </div>
-          <div class="card">
-            <div class="card-head"><h3>Products <span class="muted small" id="m-count"></span></h3></div>
-            <ul class="products" id="m-products"></ul>
+          <div class="sn-stage">
+            <div class="sn-stats" id="m-stats"></div>
+
+            <section class="sn-panel">
+              <div class="sn-stage-hd"><h3 class="sn-sec"><span class="idx">05</span> Response times</h3><span class="sn-grow"></span><span class="sn-meta">How long each store took to answer · last 5 minutes</span></div>
+              <div class="sn-chart" id="sn-chart"></div>
+              <div class="sn-legend" id="sn-legend"></div>
+              <details class="sn-table"><summary class="small">Show as a table</summary>
+                <div class="table-wrap"><table class="table" id="sn-lat-table"><thead><tr><th>Store</th><th>Last answer</th><th>Average</th><th>Slowest</th><th>Searches</th></tr></thead><tbody></tbody></table></div>
+              </details>
+            </section>
+
+            <section class="sn-panel">
+              <div class="sn-stage-hd">
+                <h3 class="sn-sec"><span class="idx">06</span> Event log</h3><span class="sn-livedot">Live</span><span class="sn-grow"></span>
+                <select id="m-kind" aria-label="Show in the event log"><option value="">Everything</option><option value="alerts">Alerts only</option><option value="listed">New drops</option><option value="restock">Restocks</option><option value="price">Price changes</option><option value="searches">Searches</option><option value="problems">Problems</option></select>
+              </div>
+              <div class="sn-feed" id="m-log" role="log" aria-label="Event log"></div>
+              <div class="sn-more"><button class="btn small" id="m-more" type="button" hidden>Older alerts</button></div>
+            </section>
+
+            <section class="sn-panel">
+              <div class="sn-stage-hd"><h3 class="sn-sec"><span class="idx">07</span> Tracked products</h3><span class="sn-grow"></span><span class="sn-meta" id="m-count"></span></div>
+              <div class="filters sn-filters" role="search">
+                <input id="m-q" type="search" placeholder="Search name or SKU" aria-label="Search products">
+                <select id="m-category" aria-label="Category"><option value="">All categories</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select>
+                <select id="m-store" aria-label="Store"><option value="">All stores</option></select>
+                <select id="m-status" aria-label="Stock"><option value="">Any stock</option><option value="available">Available now</option><option value="unavailable">Not available</option><option value="new">New today</option><option value="problem">Having problems</option></select>
+              </div>
+              <div class="sn-cat-head" aria-hidden="true"><span></span><span>Product</span><span>Store</span><span>Price</span><span>Stock</span><span>Change</span><span></span></div>
+              <ul class="sn-cat" id="m-products"></ul>
+            </section>
           </div>
         </div>
 
         <div id="m-admin" hidden>
           <div class="card" id="ms-card">
-            <div class="card-head"><h3>Live sweeps</h3><span class="pill" id="ms-state"></span><button class="btn small" id="ms-now" type="button">Sweep now</button></div>
+            <div class="card-head"><h3>Sweep settings and every search</h3><span class="pill" id="ms-state"></span></div>
             <p class="muted small">Each store's search for each keyword, read in full every few seconds. A product that wasn't there before is a 🆕 new drop; out of stock → in stock is a 🟢 restock (once a day per product); a price that falls by the set amount is a 📉 price drop. Alerts go out straight away: here, in the Discord channels whose rules match, and to every member watching that SKU. Stores that refuse servers are searched from an admin's browser with the extension (keep one open with Chrome running).</p>
             <div class="table-wrap"><table class="table" id="ms-table"><thead><tr><th>Store</th><th>Searched from</th><th>Last search</th><th>Products</th><th>Searches (1 h)</th><th>Avg time</th><th>Status</th></tr></thead><tbody></tbody></table></div>
             <details class="ms-terms"><summary class="small">Every search</summary><div class="table-wrap"><table class="table" id="ms-terms"><thead><tr><th>Store</th><th>Keyword</th><th>Page</th><th>Found</th><th>Kept</th><th>Last OK</th><th>Problem</th></tr></thead><tbody></tbody></table></div></details>
@@ -132,12 +184,13 @@
                 <div class="span2"><label for="ms-keywords">Keywords (comma-separated)</label><input id="ms-keywords" placeholder="pokemon, one piece" autocomplete="off"><p class="muted small">Each is searched at every store. A product counts when its name has every word of the keyword in it.</p></div>
                 <div><label for="ms-every">Seconds between searches at one store</label><input id="ms-every" type="number" min="3" max="600" required></div>
                 <div><label for="ms-bevery">…from an admin's browser</label><input id="ms-bevery" type="number" min="5" max="600" required></div>
-                <div><label for="ms-drop">Price drop alert from (% lower)</label><input id="ms-drop" type="number" min="0" max="90" step="1" required><p class="muted small">0 = no price drop alerts.</p></div>
+                <div><label for="ms-drop">Price drop alert from (% lower)</label><input id="ms-drop" type="number" min="1" max="90" step="1" required></div>
               </div>
               <fieldset class="kinds" id="ms-stores"><legend>Where each store is searched from</legend></fieldset>
               <fieldset class="kinds"><legend>Alerts</legend>
                 <label class="check inline"><input type="checkbox" id="ms-new"> 🆕 New drops</label>
                 <label class="check inline"><input type="checkbox" id="ms-restock"> 🟢 Restocks</label>
+                <label class="check inline"><input type="checkbox" id="ms-price"> 📉 Price drops</label>
                 <label class="check inline"><input type="checkbox" id="ms-once"> At most one restock alert a day per product</label>
               </fieldset>
               <fieldset class="kinds"><legend>Which products count</legend>
@@ -145,6 +198,8 @@
                 <label class="check inline"><input type="checkbox" id="ms-tcg"> Trading cards only</label>
                 <label for="ms-terms-input" class="small">Trading-card words (a name needs one of them)</label>
                 <textarea id="ms-terms-input" rows="3"></textarea>
+                <label for="ms-notcard-input" class="small">Not trading cards (a name with one of these is left out, unless it says TCG, trading card or card game)</label>
+                <textarea id="ms-notcard-input" rows="3"></textarea>
               </fieldset>
               <div class="form-actions"><button class="btn primary" type="submit">Save sweep settings</button><button class="btn" type="button" id="ms-reset-terms">Default card words</button><span class="msg" id="ms-msg"></span></div>
             </form>
@@ -411,6 +466,30 @@
       </section>
     </main>
   </div>
+  <!-- The drop pop-up (any tab): a new drop or restock the moment the monitor sees it -->
+  <div class="sn-overlay" id="sn-overlay" hidden>
+    <div class="sn-dropcard" role="dialog" aria-modal="false" aria-labelledby="sn-ov-title">
+      <span class="tick tl"></span><span class="tick tr"></span><span class="tick bl"></span><span class="tick br"></span>
+      <div class="sn-dh"><span class="pulse" aria-hidden="true"></span><span id="sn-ov-type">New drop</span><span class="store" id="sn-ov-store"></span></div>
+      <div class="sn-bd">
+        <img class="sn-ov-img" id="sn-ov-img" alt="" referrerpolicy="no-referrer">
+        <div class="sn-ov-text">
+          <div class="ti" id="sn-ov-title"></div>
+          <div class="meta"><span class="pr" id="sn-ov-price"></span><span id="sn-ov-was"></span><span>SKU <b id="sn-ov-sku"></b></span><span id="sn-ov-ttn"></span></div>
+        </div>
+      </div>
+      <div class="sn-ft">
+        <a class="btn primary" id="sn-ov-buy" target="_blank" rel="noopener">⚡ Buy</a>
+        <a class="btn" id="sn-ov-open" target="_blank" rel="noopener">Open product ↗</a>
+        <button class="btn" id="sn-ov-dismiss" type="button">Dismiss</button>
+        <span class="sn-grow"></span>
+        <span class="sn-cnt" id="sn-ov-cnt"></span>
+      </div>
+      <div class="sn-bar" id="sn-ov-bar"></div>
+    </div>
+  </div>
+  <div class="visually-hidden" id="sn-announce" aria-live="assertive"></div>
+
   <script type="module" src="/js/app.js"></script>
 </body>
 </html>

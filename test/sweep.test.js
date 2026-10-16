@@ -326,6 +326,8 @@ test('🎯 Target leaves sold-out products out of its results: gone from every p
   clock.offset += 7 * 60 * 1000;
   [, r] = await round();
   assert.equal(r.gone, 1);
+  const out = t.events.filter((e) => e.type === 'out').at(-1);
+  assert.equal(out.product.sku, '70100001', 'the live event log says it dropped out');
   assert.equal(product('target', '70100001').status, 'out_of_stock');
   // Back in the results: 🟢 a restock.
   const before = alerts('restock').length;
@@ -461,6 +463,74 @@ test("admins' browsers sweep the stores that refuse servers; members' browsers n
   assert.equal(due.body.terms.length, 1, 'Sweep now: straight away');
 });
 
+test('the live monitor: every search, fault and setting change as an event for members, the counters, and how fast alerts go out', async () => {
+  const before = sw.totals.searches;
+  const errorsBefore = sw.totals.errors;
+  await sweep('demo-jbhifi');
+  store.state.blockNonBrowsers = true;
+  await sweep('demo-kmart');
+  store.state.blockNonBrowsers = false;
+  assert.equal(sw.totals.searches, before + 2);
+  assert.equal(sw.totals.errors, errorsBefore + 1);
+  assert.equal(sw.totals.streak, 0);
+  await sweep('demo-kmart');
+  assert.equal(sw.totals.streak, 1);
+  const recent = sw.events.slice(-6);
+  const hb = recent.find((e) => e.type === 'hb' && e.store === 'demo-jbhifi');
+  assert.equal(hb.storeName, 'JB Hi-Fi (dummy store)');
+  assert.equal(hb.keyword, 'pokemon');
+  assert.equal(typeof hb.ms, 'number');
+  assert.ok(hb.found >= 1);
+  const err = recent.find((e) => e.type === 'err' && e.store === 'demo-kmart');
+  assert.match(err.error, /refused the search \(HTTP 403\)/);
+  assert.ok(recent.some((e) => e.type === 'sys' && /Kmart \(dummy store\) refused a search — searching it at a third of the pace/.test(e.message)));
+  // A new drop: the alert says how long it took from the store's answer to the dashboards.
+  store.shop('jbhifi').products.push({ sku: 'pokemon-tcg-live-test-etb', name: 'Pokémon TCG Live Test Elite Trainer Box', price: 99, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499998 });
+  await sweep('demo-jbhifi');
+  const [a] = alerts('listed');
+  assert.equal(a.sku, 'pokemon-tcg-live-test-etb');
+  assert.equal(typeof sw.ttns.at(-1), 'number');
+  // What a member's dashboard gets when it opens: stores, counters, the latest events and alerts.
+  const live = (await ash.get('/api/monitor/live')).body;
+  assert.equal(live.admin, false);
+  const jb = live.stores.find((x) => x.id === 'demo-jbhifi');
+  assert.equal(jb.status, 'ok');
+  assert.equal(jb.from, "Mugibot's server");
+  assert.ok(jb.searches >= 1);
+  assert.equal(typeof jb.lastMs, 'number');
+  assert.ok(jb.latency.length >= 1);
+  assert.match(jb.endpoint, /\/search\/suggest\.json\?q=$/);
+  assert.equal(live.stores.find((x) => x.id === 'demo-ebgames').mode, 'browser');
+  assert.ok(!live.stores.some((x) => x.id === 'target'), 'stores that are off are left out');
+  assert.equal(typeof live.meanAlertMs, 'number');
+  assert.ok(live.events.some((e) => e.type === 'hb'));
+  assert.ok(live.alerts.some((x) => x.sku === 'pokemon-tcg-live-test-etb'));
+  assert.deepEqual(live.settings.keywords, ['pokemon', 'one piece']);
+  assert.equal(live.settings.tcgTerms, undefined, 'members see the keywords and pace, not the admin-only settings');
+  assert.equal((await boss.get('/api/monitor/live')).body.settings.tcgTerms.length > 0, true);
+  // Settings changes are events too.
+  assert.equal((await boss.put('/api/monitor/sweep', { everySeconds: 6 })).status, 200);
+  assert.match(sw.events.at(-1).message, /boss changed the sweeps — a search every 6 s at each store/);
+  await boss.put('/api/monitor/sweep', { everySeconds: 5 });
+  sw.sweepNow(); // (Kmart was slowed after the refusal above)
+});
+
+test('not trading cards: "3 Pack Socks" and "Short Sleeve T-Shirt" are left out (unless the name says TCG); a filter change takes them off the list', async () => {
+  const counts = sw.filters();
+  assert.equal(counts({ title: 'Licensed Pokemon 3 Pack Quarter Crew Socks' }, 'pokemon'), false);
+  assert.equal(counts({ title: 'Pokemon Short Sleeve T-Shirt' }, 'pokemon'), false);
+  assert.equal(counts({ title: 'Pokémon TCG: Pikachu Plush Collection' }, 'pokemon'), true, 'says TCG: counts');
+  assert.equal(counts({ title: 'Pokemon Booster Pack' }, 'pokemon'), true);
+  assert.equal(counts({ title: 'One Piece Card Game Double Pack Set' }, 'one piece'), true);
+  // Something tracked before the filter existed drops off the list when the filters change.
+  const shirt = env.app.catalog.upsertProduct({ store: 'demo-kmart', sku: '43800001', name: 'Pokemon 2 Pack Trunks', url: '' });
+  env.app.catalog.updateProduct(shirt.id, { sweep_seen_at: Date.now() + clock.offset, sweep_first_at: Date.now() + clock.offset, sweep_keyword: 'pokemon' });
+  assert.ok((await ash.get('/api/monitor/products?store=demo-kmart')).body.products.some((p) => p.sku === '43800001'));
+  assert.equal((await boss.put('/api/monitor/sweep', { notCardTerms: [...sw.settings.notCardTerms, 'onesie'] })).status, 200);
+  assert.ok(!(await ash.get('/api/monitor/products?store=demo-kmart')).body.products.some((p) => p.sku === '43800001'));
+  assert.equal((await boss.put('/api/monitor/sweep', { notCardTerms: sw.settings.notCardTerms.filter((x) => x !== 'onesie') })).status, 200);
+});
+
 test('the loops: each store swept from the server on its own loop, every few seconds; switched off, it stops', async () => {
   const before = store.state.requests.filter((x) => x.path.startsWith('/kmart/search')).length;
   sw.running = false;
@@ -469,6 +539,7 @@ test('the loops: each store swept from the server on its own loop, every few sec
   try {
     await waitFor(() => store.state.requests.filter((x) => x.path.startsWith('/kmart/search')).length >= before + 2, { timeout: 15000, message: 'two Kmart searches' });
     assert.ok(sw.loops.has('demo-kmart'));
+    assert.ok(sw.events.some((e) => e.type === 'sys' && /Live sweeps started — .*Kmart \(dummy store\).* from Mugibot's server · .*EB Games \(dummy store\) from admins' browsers/.test(e.message)));
     assert.ok(sw.loops.has('demo-jbhifi'));
     assert.ok(!sw.loops.has('demo-ebgames'), 'browser stores have no server loop');
     const h = (await boss.get('/api/monitor/sweep')).body.stores.find((s) => s.store === 'demo-kmart');

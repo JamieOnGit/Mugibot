@@ -18,6 +18,11 @@
 // feed, the Discord channels whose rules match, and every member watching
 // that SKU (their own DM and watchlist).
 //
+// Every search is also an event for the dashboards' live event log (with how
+// long the store took to answer), and so are faults, recoveries, settings
+// changes and products dropping out of the results. The last ones are kept in
+// memory for dashboards that open later.
+//
 // Target leaves sold-out products out of its results, so there a product gone
 // from every page of a search for 6 minutes (while each page was read fine)
 // counts as sold out, and its return as a restock. Only when the pages Mugibot
@@ -43,6 +48,16 @@ export const TCG_TERMS = [
   'tin', 'collection box', 'special collection', 'display', 'trading card', 'booster box', 'binder', 'sleeve', 'sleeves',
 ];
 
+// Not trading cards, even with a card word in the name ("3 Pack Socks", "Short Sleeve T-Shirt"),
+// unless the name says TCG, trading card or card game.
+export const NOT_CARD_TERMS = [
+  'shirt', 't-shirt', 'tee', 'hoodie', 'jumper', 'socks', 'trunks', 'briefs', 'underwear', 'pyjamas', 'pajamas', 'sleepwear', 'dress', 'shorts',
+  'pants', 'leggings', 'jacket', 'beanie', 'hat', 'bucket hat', 'backpack', 'lunch box', 'bottle', 'drink bottle', 'mug', 'tumbler', 'towel', 'blanket',
+  'pillow', 'cushion', 'quilt', 'plush', 'plushie', 'puzzle', 'lego', 'costume', 'slippers', 'shoes', 'clogs', 'sandals', 'lamp', 'night light', 'poster',
+  'pencil case', 'keyring', 'keychain', 'phone case', 'nintendo switch', 'switch 2',
+];
+const CARD_SURE_RE = /\b(tcg|trading cards?|card game)\b/i;
+
 export const SWEEP_DEFAULTS = Object.freeze({
   enabled: true,
   keywords: ['pokemon', 'one piece'],
@@ -52,10 +67,12 @@ export const SWEEP_DEFAULTS = Object.freeze({
   skipMarketplace: true,
   tcgOnly: true,
   tcgTerms: TCG_TERMS,
+  notCardTerms: NOT_CARD_TERMS,
   newAlerts: true,
   restockAlerts: true,
   restockOncePerDay: true,
-  priceDropPercent: 10, // 0 = no price drop alerts
+  priceAlerts: true,
+  priceDropPercent: 10,
 });
 
 const MODES = ['server', 'browser', 'off'];
@@ -100,6 +117,7 @@ export function sweepSettings(input, current, retailers) {
     stores[id] = mode;
   }
   const tcgTerms = list(src.tcgTerms, { max: 80, maxLen: 40, lower: true });
+  const notCardTerms = list(src.notCardTerms, { max: 120, maxLen: 40, lower: true });
   const tcgOnly = bool(src.tcgOnly, true);
   if (tcgOnly && !tcgTerms.length) throw bad('Add the words that make a product a trading-card product, or switch "Trading cards only" off');
   return {
@@ -111,14 +129,18 @@ export function sweepSettings(input, current, retailers) {
     skipMarketplace: bool(src.skipMarketplace, true),
     tcgOnly,
     tcgTerms,
+    notCardTerms,
     newAlerts: bool(src.newAlerts, true),
     restockAlerts: bool(src.restockAlerts, true),
     restockOncePerDay: bool(src.restockOncePerDay, true),
-    priceDropPercent: num(src.priceDropPercent, { min: 0, max: 90, def: SWEEP_DEFAULTS.priceDropPercent }),
+    priceAlerts: bool(src.priceAlerts, true),
+    priceDropPercent: num(src.priceDropPercent, { min: 1, max: 90, def: SWEEP_DEFAULTS.priceDropPercent }),
   };
 }
 
-const FILTER_KEYS = ['keywords', 'skipMarketplace', 'tcgOnly', 'tcgTerms'];
+const FILTER_KEYS = ['keywords', 'skipMarketplace', 'tcgOnly', 'tcgTerms', 'notCardTerms'];
+const EVENTS_KEPT = 200;
+const MODE_LABEL = { server: "Mugibot's server", browser: "an admin's browser" };
 
 export class Sweeper {
   constructor({ cfg, repo, catalog, feed, monitor, retailers, hub, fetchImpl = storeFetch, now = () => Date.now(), random = Math.random }) {
@@ -128,13 +150,45 @@ export class Sweeper {
     this.loops = new Set();
     this.wakers = new Map();
     this.state = new Map(); // per store: rotation, recent requests, failures, browser lease
+    this.events = []; // the live event log's latest entries
+    this.seq = 0;
+    this.totals = { searches: 0, errors: 0, streak: 0 };
+    this.ttns = []; // ms from a store's answer to the alert reaching dashboards, latest alerts
+    this.startedAt = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // The live event log
+  // ---------------------------------------------------------------------------
+  /** One entry for the dashboards' event log, sent to every open dashboard of a member straight away. */
+  emit(ev) {
+    const e = { id: ++this.seq, at: this.now(), ...ev };
+    this.events.push(e);
+    if (this.events.length > EVENTS_KEPT) this.events.shift();
+    this.feed.broadcast('sweep', e);
+    return e;
+  }
+
+  sys(message, extra = {}) {
+    return this.emit({ type: 'sys', message, ...extra });
+  }
+
+  noteAlert(alert) {
+    if (alert && typeof alert.ttnMs === 'number') {
+      this.ttns.push(alert.ttnMs);
+      if (this.ttns.length > 50) this.ttns.shift();
+    }
+    return alert;
   }
 
   // ---------------------------------------------------------------------------
   // Settings
   // ---------------------------------------------------------------------------
   get settings() {
-    return { ...SWEEP_DEFAULTS, ...(this.repo.getSetting('sweep') || {}) };
+    const saved = this.repo.getSetting('sweep') || {};
+    // (Before priceAlerts existed, a price drop % of 0 meant no price drop alerts.)
+    if (saved.priceDropPercent === 0 && saved.priceAlerts === undefined) return { ...SWEEP_DEFAULTS, ...saved, priceAlerts: false, priceDropPercent: SWEEP_DEFAULTS.priceDropPercent };
+    return { ...SWEEP_DEFAULTS, ...saved };
   }
 
   save(input, user) {
@@ -142,9 +196,18 @@ export class Sweeper {
     const next = sweepSettings(input, before, this.retailers);
     this.repo.setSetting('sweep', next);
     // New keywords or filters: products they let in were already there, so the next sweeps set the scene again.
-    if (FILTER_KEYS.some((k) => JSON.stringify(before[k]) !== JSON.stringify(next[k]))) this.db.run('UPDATE sweep_terms SET baseline_at = NULL');
+    if (FILTER_KEYS.some((k) => JSON.stringify(before[k]) !== JSON.stringify(next[k]))) {
+      this.db.run('UPDATE sweep_terms SET baseline_at = NULL');
+      this.prune();
+    }
     this.db.run(`DELETE FROM sweep_terms WHERE keyword NOT IN (${next.keywords.map((_, i) => `:k${i}`).join(', ') || "''"})`, Object.fromEntries(next.keywords.map((k, i) => [`k${i}`, k])));
     this.repo.audit(user ? user.id : null, null, 'sweep-settings', `${next.enabled ? 'on' : 'off'}: ${next.keywords.join(', ')}`);
+    const changed = Object.keys(next).filter((k) => JSON.stringify(before[k]) !== JSON.stringify(next[k]));
+    if (changed.length) {
+      const what = changed.includes('keywords') ? `keywords: ${next.keywords.join(', ')}` : changed.includes('enabled') ? (next.enabled ? 'sweeps on' : 'sweeps off')
+        : changed.includes('everySeconds') ? `a search every ${next.everySeconds} s at each store` : 'settings changed';
+      this.sys(`${user ? user.username : 'An admin'} changed the sweeps — ${what}`);
+    }
     this.restart();
     return next;
   }
@@ -239,6 +302,37 @@ export class Sweeper {
     return this.ingest(r, term, parsed, { source: 'server', url, ms });
   }
 
+  /** Which products count (from MugiWatch): the keyword in the name, trading cards only, not a marketplace seller. */
+  filters(s = this.settings) {
+    const tcg = s.tcgOnly ? termsRegex(s.tcgTerms) : null;
+    const notCard = s.tcgOnly ? termsRegex(s.notCardTerms || []) : null;
+    return (p, keyword) => {
+      const name = norm(p.title || p.name);
+      if (!mentions(name, keyword)) return false;
+      if (s.skipMarketplace && p.marketplace) return false;
+      if (tcg && !tcg.test(name)) return false;
+      if (notCard && notCard.test(name) && !CARD_SURE_RE.test(name)) return false;
+      return true;
+    };
+  }
+
+  /** Products the sweeps tracked that no longer count (the filters changed): out of the list, unless monitored. */
+  prune() {
+    const s = this.settings;
+    const counts = this.filters(s);
+    const rows = this.db.all(`SELECT p.id, p.name, p.sweep_keyword FROM products p LEFT JOIN monitors m ON m.product_id = p.id
+      WHERE p.sweep_seen_at IS NOT NULL AND m.id IS NULL`);
+    let n = 0;
+    for (const p of rows) {
+      const kws = s.keywords.includes(p.sweep_keyword) ? [p.sweep_keyword] : s.keywords;
+      if (!kws.some((k) => counts({ title: p.name }, k))) {
+        this.db.run('UPDATE products SET sweep_seen_at = NULL WHERE id = :id', { id: p.id });
+        n += 1;
+      }
+    }
+    return n;
+  }
+
   /** What one search found. parsed: { products, total, problem } */
   async ingest(r, term, parsed, { source, url, ms = null }) {
     if (parsed.problem === 'blocked') return this.record(r, term, { ok: false, blocked: true, url, source, ms, error: 'The store showed a bot check instead of results' });
@@ -247,15 +341,13 @@ export class Sweeper {
     const now = this.now();
     const row = this.db.get('SELECT * FROM sweep_terms WHERE store = :s AND keyword = :k AND page = :p', { s: r.id, k: term.keyword, p: term.page });
     const baseline = !row || !row.baseline_at || !row.last_ok_at || now - row.last_ok_at > REBASELINE_MS;
-    const tcg = s.tcgOnly ? termsRegex(s.tcgTerms) : null;
+    const counts_ = this.filters(s);
     const counts = { found: parsed.products.length, kept: 0, new: 0, restock: 0, price: 0 };
     for (const p of parsed.products) {
       const status = p.inStock === true ? (p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
       // Members' own SKUs, whatever they are.
       await this.members(r, p, status);
-      if (!mentions(p.title, term.keyword)) continue;
-      if (s.skipMarketplace && p.marketplace) continue;
-      if (tcg && !tcg.test(norm(p.title))) continue;
+      if (!counts_(p, term.keyword)) continue;
       counts.kept += 1;
       const ev = await this.track(r, p, { status, keyword: term.keyword, baseline, now });
       for (const k of ev) counts[k] += 1;
@@ -288,6 +380,7 @@ export class Sweeper {
     for (const p of gone) {
       const fresh = this.catalog.updateProduct(p.id, { status: STATUS.OUT_OF_STOCK, status_at: now });
       this.feed.broadcast('product', toProduct(fresh));
+      this.emit({ type: 'out', store: r.id, storeName: r.name, product: { id: p.id, name: p.name, image: p.image, price: p.price, sku: p.sku, url: p.url } });
       const monitor = this.catalog.monitorForProduct(p.id);
       if (monitor && !monitor.paused) await this.feed.transitions(p, fresh);
       await this.members(r, { sku: p.sku, aliases: [] }, STATUS.OUT_OF_STOCK);
@@ -340,20 +433,20 @@ export class Sweeper {
     // New: never seen before, or a SKU confirmed as not listed yet (a monitor added before it's checked isn't new).
     const isNew = !before || (before.status === STATUS.NOT_LISTED && !!before.last_ok_at);
     if (isNew) {
-      if (!baseline && s.newAlerts && await this.feed.alert(fresh, 'listed', { sweep: true, note: `New in "${keyword}" at ${r.name}.` })) sent.push('new');
+      if (!baseline && s.newAlerts && this.noteAlert(await this.feed.alert(fresh, 'listed', { sweep: true, detectedAt: now, note: `New in "${keyword}" at ${r.name}.` }))) sent.push('new');
     } else {
       if (s.restockAlerts && isOrderable(fresh.status) && ORDERABLE_FROM.has(before.status) && before.confirmed) {
         const today = sydneyDay.format(now);
         if (!s.restockOncePerDay || fresh.restock_day !== today) {
-          if (await this.feed.alert(fresh, 'restock', { sweep: true })) {
+          if (this.noteAlert(await this.feed.alert(fresh, 'restock', { sweep: true, detectedAt: now }))) {
             this.catalog.updateProduct(product.id, { restock_day: today });
             sent.push('restock');
           }
         }
       }
-      if (s.priceDropPercent > 0 && priceMoved && typeof prevPrice === 'number' && prevPrice > 0 && price < prevPrice) {
+      if (s.priceAlerts && priceMoved && typeof prevPrice === 'number' && prevPrice > 0 && price < prevPrice) {
         const pct = ((price - prevPrice) / prevPrice) * 100;
-        if (-pct >= s.priceDropPercent && await this.feed.alert(fresh2(), 'price_drop', { sweep: true, pct })) sent.push('price');
+        if (-pct >= s.priceDropPercent && this.noteAlert(await this.feed.alert(fresh2(), 'price_drop', { sweep: true, detectedAt: now, pct }))) sent.push('price');
       }
     }
     // A monitor on this product also gets the alerts it asks for (sold out, price up…).
@@ -382,18 +475,25 @@ export class Sweeper {
   record(r, term, info) {
     const now = this.now();
     const st = this.stat(r.id);
+    const failedBefore = st.fails;
+    const wasSlow = st.slowUntil > now;
     st.lastAt = now;
+    st.searches = (st.searches || 0) + 1;
     st.log.push({ at: now, ok: info.ok, blocked: !!info.blocked, ms: info.ms ?? null, source: info.source });
     while (st.log.length && st.log[0].at < now - HOUR) st.log.shift();
+    this.totals.searches += 1;
     if (info.ok) {
       st.fails = 0;
       st.lastOkAt = now;
       if (!st.firstOkAt) st.firstOkAt = now;
       st.lastError = info.error || '';
+      this.totals.streak += 1;
     } else {
       st.fails += 1;
       st.lastError = info.error || 'Failed';
       if (info.blocked) st.slowUntil = now + SLOW_MS;
+      this.totals.errors += 1;
+      this.totals.streak = 0;
       this.cfg.log(JSON.stringify({ evt: 'sweep.failed', store: r.id, keyword: term.keyword, page: term.page, source: info.source, error: info.error || '', fails: st.fails, ms: info.ms ?? null }));
     }
     this.db.run(`INSERT INTO sweep_terms (store, keyword, page, url, source, baseline_at, last_at, last_ok_at, found, kept, total, fails, error, ms)
@@ -411,7 +511,9 @@ export class Sweeper {
       isOk: info.ok ? 1 : 0, wasBaseline: info.baseline ? 1 : 0,
     });
     const out = { store: r.id, keyword: term.keyword, page: term.page, ok: info.ok, blocked: !!info.blocked, error: info.error || '', found: info.found || 0, kept: info.kept || 0, new: info.new || 0, restock: info.restock || 0, price: info.price || 0, baseline: !!info.baseline, ms: info.ms ?? null };
-    this.feed.broadcastAdmins('sweep', out);
+    this.emit({ type: info.ok ? 'hb' : 'err', storeName: r.name, source: info.source || '', ...out });
+    if (info.ok && failedBefore >= 2) this.sys(`${r.name} is answering again after ${failedBefore} failed searches`, { store: r.id });
+    if (info.blocked && !wasSlow) this.sys(`${r.name} refused a search — searching it at a third of the pace for 10 minutes`, { store: r.id, level: 'warn' });
     return out;
   }
 
@@ -421,6 +523,14 @@ export class Sweeper {
   start() {
     if (this.running || !this.cfg.monitor.enabled) return;
     this.running = true;
+    this.startedAt = this.now();
+    this.prune();
+    const live = this.stores().filter((x) => x.mode !== 'off');
+    const from = (mode) => live.filter((x) => x.mode === mode).map((x) => x.retailer.name).join(', ');
+    const s = this.settings;
+    this.sys(s.enabled && live.length
+      ? `Live sweeps started — ${[from('server') && `${from('server')} from Mugibot's server`, from('browser') && `${from('browser')} from admins' browsers`].filter(Boolean).join(' · ')} · keywords: ${s.keywords.join(', ')}`
+      : 'Live sweeps are switched off');
     this.restart();
   }
 
@@ -518,6 +628,8 @@ export class Sweeper {
       const term = { keyword, page: num(res.page, { min: 1, max: 10, int: true, def: 1 }) };
       const url = this.urlFor(r, term.keyword, term.page);
       const ms = num(res.ms, { min: 0, max: 120000, int: true, def: null });
+      const st = this.stat(r.id);
+      if (!st.lastAt || this.now() - st.lastAt > 2 * 60 * 1000) this.sys(`${r.name}: ${user.username}'s browser is searching it`, { store: r.id });
       if (!res.ok) {
         const status = num(res.status, { min: 0, max: 999, int: true, def: 0 });
         const refused = !!res.blocked || [401, 403, 429, 503].includes(status);
@@ -569,6 +681,35 @@ export class Sweeper {
       for (const x of st.log) if (x.at >= since) { requests += 1; if (x.ok) ok += 1; }
     }
     return { sweeps1h: requests, sweepsOk1h: ok };
+  }
+
+  /** A store's state in a word: ok, slowed, retrying, waiting (for an admin's browser) or starting. */
+  statusOf(mode, st, now) {
+    if (!st.lastAt) return mode === 'browser' ? 'waiting' : 'starting';
+    if (st.fails) return 'retrying';
+    if (mode === 'browser' && now - st.lastAt > Math.max(60 * 1000, 4 * this.settings.browserEverySeconds * 1000)) return 'waiting';
+    if (st.slowUntil > now) return 'slowed';
+    return 'ok';
+  }
+
+  /** Everything the live monitor shows when it opens: each store, the counters and the latest events. */
+  live() {
+    const now = this.now();
+    const stores = this.stores().filter((x) => x.mode !== 'off').map(({ retailer: r, mode }) => {
+      const st = this.stat(r.id);
+      const lastOk = [...st.log].reverse().find((x) => x.ok && typeof x.ms === 'number');
+      return {
+        id: r.id, name: r.name, realId: r.realId || r.id, mode, from: MODE_LABEL[mode], status: this.statusOf(mode, st, now),
+        searches: st.searches || 0, fails: st.fails, lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastMs: lastOk ? lastOk.ms : null, lastError: st.lastError,
+        nextAt: st.nextAt, slowedUntil: st.slowUntil > now ? st.slowUntil : null, endpoint: r.sweep.path.split('{q}')[0],
+        latency: st.log.filter((x) => x.at >= now - 10 * 60 * 1000).slice(-150).map((x) => ({ at: x.at, ms: x.ms, ok: x.ok })),
+      };
+    });
+    const t = this.ttns;
+    return {
+      now, startedAt: this.startedAt, running: this.running, totals: { ...this.totals },
+      meanAlertMs: t.length ? Math.round(t.reduce((a, b) => a + b, 0) / t.length) : null, stores, events: this.events.slice(-150),
+    };
   }
 
   health() {

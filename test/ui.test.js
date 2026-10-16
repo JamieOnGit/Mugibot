@@ -187,8 +187,8 @@ test('Discord tab: connect (the fake Discord sends straight back), pings, test p
 test('Monitor tab: add a monitor, live alerts, product page with price history, alert rules; dark by default with a light switch', async () => {
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'dark theme by default');
   await page.click('a[data-tab="monitor"]');
-  await page.waitForSelector('#m-stats .stat');
-  assert.match(await page.textContent('#m-stats'), /Tracked\s*0/);
+  await page.waitForSelector('#m-stats .sn-stat');
+  assert.match(await page.textContent('#m-stats'), /Available now\s*0\s*of 0 tracked/);
   await page.click('#m-add-toggle');
   await page.fill('#ma-url', 'https://www.kmart.com.au/product/pokemon-tcg-30th-celebration-ultra-premium-collection-43818648/');
   await page.selectOption('#ma-category', 'pokemon');
@@ -205,9 +205,15 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   cat.updateProduct(p.id, { name: 'Day UPC', status: 'in_stock', confirmed: 1, price: 360, previous_price: 379, status_at: Date.now() });
   cat.addPrice(p.id, 360);
   await env.app.feed.alert(cat.productById(p.id), 'restock');
-  await page.waitForSelector('#m-feed li.feed-item.kind-restock');
-  assert.match(await page.textContent('#m-feed'), /In stock.*Day UPC.*\$360\.00/s);
-  assert.match(await page.getAttribute('#m-feed li.feed-item a.btn.primary', 'href'), /^\/buy\?store=kmart&sku=43818648/);
+  // It pops up (on any tab) with the price and ⚡ Buy, and goes into the event log.
+  await page.waitForSelector('#sn-overlay:not([hidden])');
+  assert.match(await page.textContent('#sn-overlay'), /Restock.*Day UPC.*\$360\.00.*was \$379\.00/s);
+  assert.match(await page.getAttribute('#sn-ov-buy', 'href'), /^\/buy\?store=kmart&sku=43818648/);
+  await page.click('#sn-ov-dismiss');
+  await page.waitForSelector('#sn-overlay', { state: 'hidden' });
+  await page.waitForSelector('#m-log .sn-ev.k-restock');
+  assert.match(await page.textContent('#m-log .sn-ev.k-restock'), /Restock.*Day UPC.*\$360\.00/s);
+  assert.match(await page.getAttribute('#m-log .sn-ev.k-restock a.btn.primary', 'href'), /^\/buy\?store=kmart&sku=43818648/);
   await page.waitForFunction(() => /Day UPC/.test(document.querySelector('#m-products').textContent));
 
   // The product page: price history (chart + table), alerts, and (admins) settings and the check log.
@@ -254,9 +260,18 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   // What a first sweep of Target found (no network here: the results are handed in).
   await sw.ingest(target, term, { products: [found('70000001', 'Pokemon TCG: Test Booster Bundle', false, 50), found('70000002', 'Pokemon Plush Pikachu', true, 20)] }, { source: 'server', url, ms: 400 });
   await page.goto(`${env.url}/app#monitor`);
+  await page.reload();
   await page.waitForSelector('#ms-table tbody tr');
   assert.match(await page.textContent('#ms-table'), /Target\s*Server/);
   assert.match(await page.textContent('#ms-state'), /Off \(MONITOR_ENABLED=0\)/, '(tests run with the loops off)');
+  // The live console: each store with its state, its search in the event log, the response-time chart.
+  await page.waitForSelector('#sn-channels .sn-chan[data-store="target"]');
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"]'), /Target\s*Searching.*searches\s*1.*last answer\s*400 ms.*server · \/search\?sEngine=c&text=/s);
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /Kmart\s*Waiting.*admin's browser/s);
+  assert.match(await page.textContent('#m-log'), /Search\s*Target · "pokemon" — 2 products · 1 count · first look \(no alerts\)\s*400 ms/);
+  await page.waitForSelector('#sn-chart svg circle.end.s3');
+  assert.match(await page.textContent('#sn-legend'), /Target\s*400 ms/);
+  assert.match(await page.textContent('#sn-chips'), /pokemon.*one piece/s);
   await page.waitForFunction(() => /Test Booster Bundle/.test(document.querySelector('#m-products').textContent));
   assert.doesNotMatch(await page.textContent('#m-products'), /Plush/, 'not a trading-card product');
   const ownerId = env.app.repo.userByUsername('owner').id;
@@ -264,13 +279,53 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
 
   // The next sweep: a new product and a restock, shown the moment they're seen.
   await sw.ingest(target, term, { products: [found('70000001', 'Pokemon TCG: Test Booster Bundle', true, 50), found('70000003', 'Pokemon TCG: Brand New ETB', true, 89)] }, { source: 'server', url, ms: 380 });
-  await page.waitForFunction(() => /New drop.*Brand New ETB/s.test(document.querySelector('#m-feed').textContent));
-  assert.match(await page.textContent('#m-feed'), /In stock.*Test Booster Bundle/s);
+  // Two alerts: they pop up one after the other.
+  await page.waitForSelector('#sn-overlay:not([hidden])');
+  await page.waitForFunction(() => /1 more/.test(document.querySelector('#sn-ov-cnt').textContent));
+  assert.match(await page.textContent('#sn-overlay'), /Restock.*Test Booster Bundle.*\$50\.00.*alerted \d+ ms after Target answered/s);
+  await page.click('#sn-ov-dismiss');
+  await page.waitForFunction(() => /New drop.*Brand New ETB.*\$89\.00/s.test(document.querySelector('#sn-overlay').textContent) && !document.querySelector('#sn-overlay').hidden);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#sn-overlay', { state: 'hidden' });
+  await page.waitForFunction(() => /New drop.*Brand New ETB/s.test(document.querySelector('#m-log').textContent));
+  assert.match(await page.textContent('#m-log'), /Restock.*Test Booster Bundle.*alerted in \d+ ms/s);
+  assert.match(await page.textContent('#m-log'), /Target · "pokemon" — 2 products · 1 new · 1 restock\s*380 ms/);
+  assert.match(await page.textContent('#m-stats'), /Drops · 24 h\s*\d+/);
+  // The event log's filter.
+  await page.selectOption('#m-kind', 'alerts');
+  assert.equal(await page.locator('#m-log .sn-ev.k-hb').count(), 0);
+  assert.ok(await page.locator('#m-log .sn-ev.k-drop').count() >= 1);
+  await page.selectOption('#m-kind', '');
   await page.waitForFunction(() => [...document.querySelectorAll('#m-products li')].some((li) => /Test Booster Bundle/.test(li.textContent) && /In stock/.test(li.textContent)));
   await page.waitForFunction(() => [...document.querySelectorAll('#m-products li')].some((li) => /Brand New ETB/.test(li.textContent) && /🆕 New/.test(li.textContent)));
   await page.selectOption('#m-status', 'new');
   await page.waitForFunction(() => document.querySelectorAll('#m-products li.product').length === 2);
   await page.selectOption('#m-status', '');
+
+  // Keywords and tuning, right in the console.
+  await page.fill('#sn-kw-input', 'Lorcana');
+  await page.click('#sn-kw-form button[type=submit]');
+  await page.waitForFunction(() => /lorcana/.test(document.querySelector('#sn-chips').textContent));
+  assert.deepEqual(sw.settings.keywords, ['pokemon', 'one piece', 'lorcana']);
+  await page.click('#sn-chips button[aria-label="Stop searching for lorcana"]');
+  await page.waitForFunction(() => !/lorcana/.test(document.querySelector('#sn-chips').textContent));
+  assert.deepEqual(sw.settings.keywords, ['pokemon', 'one piece']);
+  await page.click('#sn-tuning button[role=switch][aria-label^="Price drops"]');
+  await waitFor(() => sw.settings.priceAlerts === false, { message: 'price drop alerts off' });
+  await page.click('#sn-tuning button[role=switch][aria-label^="Price drops"]');
+  await waitFor(() => sw.settings.priceAlerts === true, { message: 'price drop alerts on' });
+  // This browser: no pop-up when switched off, and the test alert runs only here.
+  await page.click('#sn-tuning button[role=switch][aria-label="Pop-up for drops and restocks"]');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mgb-live')).popup), false);
+  await page.click('#sn-tuning button[role=switch][aria-label="Pop-up for drops and restocks"]');
+  await page.click('#sn-test');
+  await page.waitForSelector('#sn-overlay:not([hidden])');
+  assert.match(await page.textContent('#sn-ov-type'), /Test · New drop/);
+  await page.click('#sn-ov-dismiss');
+  await page.waitForSelector('#sn-overlay', { state: 'hidden' });
+  assert.match(await page.textContent('#m-log'), /test \(this browser only\)/);
+  await page.click('#sn-arm');
+  await page.waitForFunction(() => /Alerts armed/.test(document.querySelector('#toasts')?.textContent || ''));
 
   // Settings.
   await page.fill('#ms-keywords', 'pokemon, one piece, dragon ball');
