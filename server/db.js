@@ -320,6 +320,33 @@ const MIGRATIONS = [
   // 4 — where each connected extension came from: 'store' (the Chrome Web Store copy,
   //     which updates itself) or 'download' (a copy loaded from the dashboard's zip).
   `ALTER TABLE devices ADD COLUMN source TEXT NOT NULL DEFAULT '';`,
+  // 5 — live sweeps (docs/MONITORING.md): each store's search for each keyword, every few seconds.
+  //     Every product they find joins the catalogue; sweep_terms remembers each search.
+  `
+  ALTER TABLE products ADD COLUMN sweep_first_at INTEGER;             -- first found by a sweep
+  ALTER TABLE products ADD COLUMN sweep_seen_at INTEGER;              -- last seen by a sweep
+  ALTER TABLE products ADD COLUMN sweep_keyword TEXT NOT NULL DEFAULT '';
+  ALTER TABLE products ADD COLUMN restock_day TEXT NOT NULL DEFAULT ''; -- the day it last alerted a restock
+  CREATE INDEX products_sweep ON products(sweep_seen_at);
+
+  CREATE TABLE sweep_terms (
+    store TEXT NOT NULL,
+    keyword TEXT NOT NULL,
+    page INTEGER NOT NULL DEFAULT 1,
+    url TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',        -- server | browser
+    baseline_at INTEGER,                    -- its first good sweep: what it found then was already there
+    last_at INTEGER,
+    last_ok_at INTEGER,
+    found INTEGER NOT NULL DEFAULT 0,       -- products on the page
+    kept INTEGER NOT NULL DEFAULT 0,        -- …that passed the filters
+    total INTEGER,                          -- results the store says it has
+    fails INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    ms INTEGER,
+    PRIMARY KEY (store, keyword, page)
+  );
+  `,
 ];
 
 export class Db {

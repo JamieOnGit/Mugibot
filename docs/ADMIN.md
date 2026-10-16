@@ -60,10 +60,15 @@ but haven't connected their account.
 
 ## The Monitor feed
 
-Monitors, Discord alert channels, health per store and the check log are on
-the dashboard's **Monitor** tab. Admins see the controls there, and members see
-the feed. In Discord: `/monitor add · list · pause · resume · remove · status`.
-See [MONITORING.md](MONITORING.md).
+The live sweeps (keywords, how often, where each store is searched from,
+filters, each store's health, **Sweep now**), monitors, Discord alert
+channels, page-check health and the check log are on the dashboard's
+**Monitor** tab. Admins see the controls there, and members see the feed. In
+Discord: `/monitor add · list · pause · resume · remove · status`.
+
+Kmart, BIG W, EB Games and Zing refuse Mugibot's server, so they're searched
+from an admin's browser: keep Chrome open with the extension connected to an
+admin account. See [MONITORING.md](MONITORING.md).
 
 ## Command line (on the server)
 

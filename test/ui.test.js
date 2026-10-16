@@ -188,7 +188,7 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'dark theme by default');
   await page.click('a[data-tab="monitor"]');
   await page.waitForSelector('#m-stats .stat');
-  assert.match(await page.textContent('#m-stats'), /Monitors\s*0/);
+  assert.match(await page.textContent('#m-stats'), /Tracked\s*0/);
   await page.click('#m-add-toggle');
   await page.fill('#ma-url', 'https://www.kmart.com.au/product/pokemon-tcg-30th-celebration-ultra-premium-collection-43818648/');
   await page.selectOption('#ma-category', 'pokemon');
@@ -243,6 +243,53 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   assert.equal(await page.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('mgb-theme')].join()), 'light,light');
   await page.click('#theme-toggle');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+});
+
+test('Monitor tab: live sweeps — each store\'s health and settings; new drops, restocks and stock changes show up by themselves', async () => {
+  const sw = env.app.sweeper;
+  const target = env.app.retailers.get('target');
+  const term = { keyword: 'pokemon', page: 1 };
+  const url = sw.urlFor(target, 'pokemon');
+  const found = (sku, title, inStock, price) => ({ sku, aliases: [], title, price, wasPrice: null, inStock, preorder: false, url: `https://www.target.com.au/p/x/${sku}`, image: '', marketplace: false });
+  // What a first sweep of Target found (no network here: the results are handed in).
+  await sw.ingest(target, term, { products: [found('70000001', 'Pokemon TCG: Test Booster Bundle', false, 50), found('70000002', 'Pokemon Plush Pikachu', true, 20)] }, { source: 'server', url, ms: 400 });
+  await page.goto(`${env.url}/app#monitor`);
+  await page.waitForSelector('#ms-table tbody tr');
+  assert.match(await page.textContent('#ms-table'), /Target\s*Server/);
+  assert.match(await page.textContent('#ms-state'), /Off \(MONITOR_ENABLED=0\)/, '(tests run with the loops off)');
+  await page.waitForFunction(() => /Test Booster Bundle/.test(document.querySelector('#m-products').textContent));
+  assert.doesNotMatch(await page.textContent('#m-products'), /Plush/, 'not a trading-card product');
+  const ownerId = env.app.repo.userByUsername('owner').id;
+  await waitFor(() => env.app.hub.userIds().includes(ownerId), { message: 'the page is connected for live updates' });
+
+  // The next sweep: a new product and a restock, shown the moment they're seen.
+  await sw.ingest(target, term, { products: [found('70000001', 'Pokemon TCG: Test Booster Bundle', true, 50), found('70000003', 'Pokemon TCG: Brand New ETB', true, 89)] }, { source: 'server', url, ms: 380 });
+  await page.waitForFunction(() => /New drop.*Brand New ETB/s.test(document.querySelector('#m-feed').textContent));
+  assert.match(await page.textContent('#m-feed'), /In stock.*Test Booster Bundle/s);
+  await page.waitForFunction(() => [...document.querySelectorAll('#m-products li')].some((li) => /Test Booster Bundle/.test(li.textContent) && /In stock/.test(li.textContent)));
+  await page.waitForFunction(() => [...document.querySelectorAll('#m-products li')].some((li) => /Brand New ETB/.test(li.textContent) && /🆕 New/.test(li.textContent)));
+  await page.selectOption('#m-status', 'new');
+  await page.waitForFunction(() => document.querySelectorAll('#m-products li.product').length === 2);
+  await page.selectOption('#m-status', '');
+
+  // Settings.
+  await page.fill('#ms-keywords', 'pokemon, one piece, dragon ball');
+  await page.fill('#ms-every', '4');
+  await page.selectOption('#ms-stores select[data-store="kmart"]', 'off');
+  await page.uncheck('#ms-once');
+  await page.click('#ms-form button[type=submit]');
+  await page.waitForFunction(() => /Saved/.test(document.querySelector('#ms-msg').textContent));
+  assert.deepEqual(sw.settings.keywords, ['pokemon', 'one piece', 'dragon ball']);
+  assert.equal(sw.settings.everySeconds, 4);
+  assert.equal(sw.settings.restockOncePerDay, false);
+  assert.equal(sw.modeFor(env.app.retailers.get('kmart')), 'off');
+  await page.fill('#ms-keywords', ' ');
+  await page.click('#ms-form button[type=submit]');
+  await page.waitForFunction(() => /at least one keyword/.test(document.querySelector('#ms-msg').textContent));
+  await page.click('details.ms-terms summary');
+  assert.match(await page.textContent('#ms-terms'), /Target\s*pokemon\s*1/);
+  if (shots) await page.screenshot({ path: path.join(shots, 'monitor-sweeps.png'), fullPage: true });
+  await sw.save({ keywords: 'pokemon, one piece', stores: { kmart: 'browser' }, everySeconds: 5, restockOncePerDay: true }, null);
 });
 
 test('Extension tab: install steps, browser checks switch, stores and their flows', async () => {

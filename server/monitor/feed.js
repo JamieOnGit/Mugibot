@@ -7,18 +7,25 @@
 // Alerts fire only on confirmed changes. A blocked or failed check keeps the
 // last known status and never alerts. The same product and kind can't alert
 // again within the cooldown (kept in the database, so it survives restarts).
+//
+// The live sweeps (sweep.js) see most products every few seconds. While a
+// sweep has seen a product lately, a slower page check of it is only logged:
+// the sweep's view is fresher, and two sources taking turns would flip its
+// status back and forth.
 
 import { CATEGORIES, categoryFor, toAlert, toProduct } from '../catalog.js';
 import { entitlement } from '../entitlement.js';
 import { STATUS, STATUS_LABEL, isOrderable } from './status.js';
 
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
+// A sweep that saw the product this recently outranks a page check.
+export const SWEEP_FRESH_MS = 3 * 60 * 1000;
 const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '—');
 
 const KIND = {
   restock: { emoji: '🟢', label: 'In stock', color: 0x16a34a },
   preorder: { emoji: '🟣', label: 'Pre-order open', color: 0x7c3aed },
-  listed: { emoji: '🆕', label: 'Listed', color: 0x2563eb },
+  listed: { emoji: '🆕', label: 'New drop', color: 0x2563eb },
   sold_out: { emoji: '🔴', label: 'Sold out', color: 0xdc2626 },
   price_drop: { emoji: '📉', label: 'Price drop', color: 0x0d9488 },
   price_rise: { emoji: '📈', label: 'Price up', color: 0xd97706 },
@@ -41,6 +48,7 @@ export class Feed {
     const now = this.now();
     const failed = FAILED.has(r.status);
     this.catalog.logCheck({ productId: product.id, store: product.store, url, source, status: r.status, price: r.price ?? null, ms, error: r.error || '' });
+    if (product.status_source === 'sweep' && product.sweep_seen_at && now - product.sweep_seen_at < SWEEP_FRESH_MS) return product;
 
     if (failed) {
       // An admin's browser is doing the checking for this store: a refused server check changes nothing.
@@ -74,32 +82,42 @@ export class Feed {
     }
     const fresh = this.catalog.updateProduct(product.id, set);
     if (r.status !== prev || priceMoved) this.broadcast('product', toProduct(fresh));
-
-    // The first successful check only sets the scene; changes after it are news.
-    const wasKnown = prev !== 'pending' && !!product.last_ok_at;
-    if (!wasKnown) return fresh;
-    if (isOrderable(r.status) && !isOrderable(prev)) {
-      await this.alert(fresh, 'restock', { note: prev === STATUS.NOT_LISTED ? 'Just listed.' : '' });
-    } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.NOT_FOUND, STATUS.UNKNOWN].includes(r.status)) {
-      await this.alert(fresh, 'listed');
-    } else if (isOrderable(prev) && r.status === STATUS.OUT_OF_STOCK) {
-      await this.alert(fresh, 'sold_out');
-    }
-    if (priceMoved && typeof prevPrice === 'number' && prevPrice > 0) {
-      const pct = ((price - prevPrice) / prevPrice) * 100;
-      if (Math.abs(pct) >= this.cfg.monitor.priceChangePercent) await this.alert(fresh, pct < 0 ? 'price_drop' : 'price_rise', { pct });
-    }
+    await this.transitions(product, fresh);
     return fresh;
   }
 
   /**
+   * A monitored product's confirmed change → the alerts its monitor asks for.
+   * The first successful check only sets the scene; changes after it are news.
+   */
+  async transitions(before, fresh) {
+    const prev = before.status;
+    const wasKnown = prev !== 'pending' && !!before.last_ok_at;
+    if (!wasKnown) return;
+    if (isOrderable(fresh.status) && !isOrderable(prev)) {
+      await this.alert(fresh, 'restock', { note: prev === STATUS.NOT_LISTED ? 'Just listed.' : '' });
+    } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.NOT_FOUND, STATUS.UNKNOWN].includes(fresh.status)) {
+      await this.alert(fresh, 'listed');
+    } else if (isOrderable(prev) && fresh.status === STATUS.OUT_OF_STOCK) {
+      await this.alert(fresh, 'sold_out');
+    }
+    const price = fresh.price;
+    const prevPrice = before.price;
+    if (typeof price === 'number' && typeof prevPrice === 'number' && prevPrice > 0 && Math.abs(price - prevPrice) >= 0.005) {
+      const pct = ((price - prevPrice) / prevPrice) * 100;
+      if (Math.abs(pct) >= this.cfg.monitor.priceChangePercent) await this.alert(fresh, pct < 0 ? 'price_drop' : 'price_rise', { pct });
+    }
+  }
+
+  /**
    * Send an alert for a product: kind 'restock' | 'listed' | 'sold_out' | 'price_drop' | 'price_rise'.
-   * opts: { manual (an admin reported it: skips the cooldown), announce (an admin's 📣 SKU: no monitor needed), note, pct }
+   * opts: { manual (an admin reported it: skips the cooldown), announce (an admin's 📣 SKU: no monitor needed),
+   *         sweep (a live sweep found it: no monitor needed, the sweep settings decide), note, pct }
    * Returns the saved alert, or null when a monitor isn't asking for it or the cooldown is running.
    */
-  async alert(product, kind, { manual = false, announce = false, note = '', pct = null } = {}) {
+  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null } = {}) {
     const monitor = this.catalog.monitorForProduct(product.id);
-    if (!manual && !announce) {
+    if (!manual && !announce && !sweep) {
       if (!monitor || monitor.paused) return null;
       let kinds = [];
       try { kinds = JSON.parse(monitor.kinds); } catch { kinds = []; }
@@ -172,6 +190,14 @@ export class Feed {
       message: [alert.note, alert.manual ? 'Reported by an admin.' : ''].filter(Boolean).join('\n'),
       url: alert.url, image: alert.image, fields, footer: `${this.cfg.appName} Monitor`, embedColor: k.color, buttons,
     }, { mention });
+  }
+
+  /** Live updates for admins' open dashboards only (each sweep, as it happens). */
+  broadcastAdmins(type, data) {
+    for (const userId of this.hub.userIds()) {
+      const u = this.repo.userById(userId);
+      if (u && !u.disabled && u.role === 'admin') this.hub.publish(userId, `monitor-${type}`, data);
+    }
   }
 
   /** Live updates for every open dashboard of a member (or admin). */

@@ -1,171 +1,207 @@
-# Mugibot Monitor: restock feed, price tracking, Discord alerts
+# Mugibot Monitor: live sweeps, restock feed, price tracking, Discord alerts
 
-The Monitor is Mugibot's shared product feed. It is in the style of a Discord
-monitor service such as Zephyr Monitors. Admins pick the Pokémon and One Piece
-products to watch. Mugibot checks them on a schedule and keeps their stock,
-price, image and history. It posts rich alerts to your Discord channels when
-something changes, and every alert has a ⚡ Buy button that runs Mugibot's
-existing checkout.
+The Monitor is Mugibot's shared product feed. It's built on **MugiWatch**: every
+few seconds it reads each store's search results for your keywords (e.g.
+`pokemon`, `one piece`) in full, and compares them with what it saw before.
 
-It is built into Mugibot, not beside it. It uses the same server, database,
-monitor loop, Discord bot, extension, checkout flows, login and dashboard.
+| Alert | When |
+|---|---|
+| 🆕 **New drop** | A product that wasn't in the results before |
+| 🟢 **Restock** | Out of stock → in stock (or pre-order). At most once a day per product, like MugiWatch |
+| 📉 **Price drop** | The price fell by at least the set percentage (10% to start with) |
+
+Alerts go out the moment a sweep sees the change:
+
+- the dashboard's **Monitor** tab (live, no refresh)
+- the Discord channels whose rules match, with ⚡ Buy, Open product and price history buttons
+- every member watching that SKU: their own watchlist, DM, webhook or email
+
+Admins can also add **monitors** for single products (a link or a SKU), and
+members' own watchlists keep working as before. Everything is one system: the
+same products, the same alerts, the same ⚡ Buy.
 
 ---
 
-## 1. Audit: what Mugibot already had
+## 1. Where each store is searched from
 
-| Area | Where | What it does |
+| Store | Searched from | What's read |
 |---|---|---|
-| Server | `server/app.js`, `server/http.js` | One Node 22 process: plain `node:http`, no framework, no runtime dependencies. Runs on Fly.io (one machine, SQLite on a volume). |
-| Database | `server/db.js` (`MIGRATIONS` array), `server/repo.js` | `node:sqlite`. `items` is each member's own watchlist. `page_checks` is one shared row per store page. Also `events` (each member's feed) and `settings`. |
-| Monitor loop | `server/monitor/index.js` | 1 s tick. Each page is checked once per interval however many people watch it. 5 s gap between requests to one store, at most 4 checks at once, exponential backoff, private-address protection, an honest `Mugibot/1.0` User-Agent. Shopify product JSON is read first where available. |
-| Page reader | `server/monitor/extract.js` | Reads stock status, title, price and image from a page (JSON-LD, meta tags, microdata, buttons, text). Shared with the extension. |
-| In-browser checks | `server/monitor/index.js` `browserDue/browserResults`, `extension/background.js` | Stores that refuse servers (Kmart) are checked by members' own browsers, for their own SKUs only. |
-| Alerts | `server/notifier.js` | A member's feed, Discord DM, webhook and email. Plus `announce()`: a post in one restock channel for SKUs an admin marks 📣. |
-| Discord | `server/discord.js`, `server/routes/discord.js` | One bot: OAuth, server roles, DMs, channel posts, signed slash commands `/watch /unwatch /watchlist /buy /status /restock`. |
-| Checkout | `extension/*`, `server/retailers/*.js` | ⚡ Buy codes, signed per member, item and quantity. Each store has its own checkout flow, and the extension stops at the final button. The `/buy?store&sku` page turns a channel post into a ⚡ Buy for whoever presses it. |
-| Stores | `server/retailers/*.js` | One file per store: Kmart (verified), BIG W, EB Games, JB Hi-Fi (beta), Target, Zing, Toys"R"Us, Amazon AU (draft). |
-| Dashboard | `web/app.html`, `web/js/app.js`, `web/css/site.css` | Vanilla JS, a tab per section, live updates over Server-Sent Events, light and dark themes. Admin console at `/admin`. |
+| Target | Mugibot's server | Target's search page, newest first: every page with results (up to 4 pages of 48), with stock for every colour and size |
+| JB Hi-Fi | Mugibot's server | JB Hi-Fi's search suggestions (Shopify): 10 products a search, with stock. "tcg" is added to each keyword ("pokemon tcg"), because "pokemon" alone finds plushies and games |
+| Toys"R"Us | Mugibot's server | Same as JB Hi-Fi (also a Shopify store) |
+| Kmart, BIG W, EB Games, Zing | **An admin's browser** (the extension) | Their search pages: product tiles, and product data in the page's scripts |
 
-What was missing:
-- a shared product catalogue with images
-- price change detection and price history
-- a check log
-- monitoring health
-- alert routing to several channels by category, store or kind
-- slash commands to manage monitors
-- a monitor dashboard
+Kmart, BIG W, EB Games and Zing refuse requests from servers (403 / bot
+check), so the extension in an **admin's** browser searches them instead,
+every 15 seconds per store. Members' browsers never do this: only Mugibot's
+server and admins can change what everyone sees.
 
-## 2. How the brief maps onto Mugibot
+You can change where each store is searched from (server, admin's browser or
+off) in **Monitor → Live sweeps → Settings**.
 
-| Brief | Built as | Reused |
-|---|---|---|
-| Product monitoring, restock / sold out / price / availability | `products` (catalogue) + `monitors` tables. `server/monitor/feed.js` turns each check into status and price changes. | The monitor loop, shared `page_checks`, `extract.js`, backoff, store gaps, admin store switches |
-| Pokémon and One Piece | `category` on each product (`pokemon`, `onepiece`, `other`), guessed from the name, editable | — |
-| Images, prices, status, URLs | Saved on each product. Images come from the page (JSON-LD or `og:image`) or Shopify JSON. | `extract.js` (it already read the image; it's now kept) |
-| Configurable intervals | Per monitor (`interval_seconds`), never below `MONITOR_MIN_INTERVAL` | Store gap and backoff still apply |
-| No duplicate alerts | A per-product, per-kind cooldown kept in the database (survives restarts). Alerts only fire on confirmed changes. | Replaces the old in-memory 10-minute announce rule |
-| Price history, logs, status | `price_history`, `check_log`, `feed_alerts` | — |
-| Rich Discord embeds | Product image, store, price (and the old price), status, SKU, category, time; buttons ⚡ Buy, Open product, Add to cart (where the store supports a cart link) | `notifier.message()`, `discord.post()` |
-| Alert channels and rules | `alert_routes`: a channel, optional role ping, categories, stores, kinds, keywords | `DISCORD_RESTOCK_CHANNEL_ID` / `_ROLE_ID` stay the default route |
-| Slash commands | `/monitor add · list · pause · resume · remove · status` (admins), `/restocks` (members) | The same bot, the same signed interactions endpoint, the same single registration (Admin → Register slash commands) |
-| Checkout from alerts | ⚡ Buy → `/buy?store&sku` → the member's own ⚡ Buy code → the extension's store flow | All existing checkout code; nothing about checkout changed |
-| Store add-to-cart shortcuts | Shopify cart links (`/cart/<variant>:1`) and Amazon's add-to-cart link, where the store supports them | Retailer files gain an optional `cartUrl` |
-| Dashboard | A new **Monitor** tab: live restock feed, health cards, searchable and filterable products, product page with price chart and history; admin controls inline. Dark theme by default, with a ☀/☾ switch. | Login, permissions, tabs, live updates, styles |
-| Modular stores | Unchanged: one file per store. Monitors work on any store Mugibot knows. | `server/retailers/` |
-| Confirmed vs unknown | A product shows **confirmed** only when its last check succeeded. Blocked, error and unknown are shown as such and never alert. | Status rules in `monitor/status.js` |
-| Health, logs | Admin health per store (checks, success rate, blocked, errors, response time, last success), the monitor loop's heartbeat, a searchable check log | — |
+**Why the server can read Target and JB Hi-Fi now:** their CDNs refuse Node's
+built-in `fetch()` (403 and 429) but answer Node's own `https` client normally,
+with the same honest `Mugibot/1.0` headers. All store requests (sweeps and the
+older page checks) now go through `server/monitor/http.js`, which uses that
+client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
 
-## 3. Design
+## 2. How a sweep works
 
 ```
-                       ┌───────────── page_checks (one row per store page) ─────────────┐
- members' watchlists ──┤                                                                 ├── Monitor.tick (1 s)
- (items)               │                                                                 │    store gap · backoff · ≤4 at once
- admin monitors ───────┘                                                                 │
- (monitors → products)                                                                   ▼
-                                                                         read page / Shopify JSON
-                                                                                 │
-                    ┌────────────────────────────────────────────────────────────┴──────────┐
-                    ▼                                                                       ▼
-        items: each member's own status                                  products: catalogue status/price/image
-        → DM / webhook / email (unchanged)                               → check_log, price_history
-                                                                         → Feed.alert (cooldown, rules)
-                                                                             → feed_alerts (history)
-                                                                             → Discord channels (alert_routes)
-                                                                             → open dashboards (live)
+ every store has its own loop                         (server/monitor/sweep.js)
+   ┌──────────────────────────────────────────────────────────────────────┐
+   │ next search: page 1 of each keyword in turn, then one later page      │
+   │ fetch it (honest Mugibot headers)                                     │
+   │ read every product: code, name, price, stock, link, picture          │──┐
+   │ wait ~5 s (±20%), or back off after a failure (×2 each time, ≤15 min) │  │
+   └──────────────────────────────────────────────────────────────────────┘  │
+ admins' browsers (extension) do the same for Kmart, BIG W, EB Games, Zing ──┤
+                                                                              ▼
+          members' SKUs (any product):   watchlist status → their own DM / webhook / email
+          products that count:           catalogue (products) → price history
+            · every word of the keyword in the name ("pokemon" matches "Pokémon")
+            · a trading-card word in the name (card, booster, ETB, tin, …)
+            · not sold by a marketplace seller
+                                         → 🆕 / 🟢 / 📉 alerts → feed, Discord, dashboards
 ```
 
-- **One check, many uses.** A product that is both a monitor and on members'
-  watchlists is still checked once per interval.
-- **Stores that refuse servers** (Kmart): admins' own browsers (with the
-  extension) check the monitors at those stores. Members' browsers only ever
-  check their own SKUs. So only Mugibot's server and admins can change the
-  shared feed: a member can't post a fake restock to everyone.
-- **Checkout is separate from monitoring.** Checkout runs in each member's
-  browser. The server only hands out ⚡ Buy codes and delivery details, which
-  are quick database reads. Monitoring is limited to 4 checks at a time with
-  timeouts, so it can't hold those up.
-- **Alerts fire only on confirmed changes:**
-  - not orderable → in stock or pre-order: `restock`
-  - not listed → listed: `listed`
-  - orderable → sold out: `sold_out`
-  - the price moved by at least `MONITOR_PRICE_CHANGE_PERCENT`: `price_drop` or `price_rise`
+- **The first sweep of each search only sets the scene.** What's there is
+  already there: it's added to the catalogue without alerting. So does the
+  first sweep after a search hasn't run for 6 hours, and the first sweep after
+  you change the keywords or filters (otherwise every product the new setting
+  lets in would look new).
+- **Restocks** need a confirmed out-of-stock first. "Unknown" stock never
+  alerts.
+- **Target leaves sold-out products out of its results** (every product in
+  its results is in stock and deliverable). So at Target, a product that's
+  been missing from every page of its search for 6 minutes, while each page
+  was read fine, counts as sold out, and when it comes back that's a 🟢
+  restock. This only happens when the pages Mugibot reads hold all of the
+  results (up to 192 per keyword), and never in the first minutes after a
+  restart.
+- **A refused or failed search never alerts** and keeps every product's last
+  stock. The store waits twice as long after each failure (up to 15 minutes),
+  then tries again.
+- **Members' SKUs**: when a sweep comes across a SKU a member watches (any
+  product, not only cards), it updates their watchlist straight away. A SKU
+  waiting to be listed gets its product page as soon as it shows up. While a
+  sweep has seen a SKU in the last 3 minutes, the slower once-a-minute page
+  checks leave it alone, so two sources can't flip it back and forth.
+- **Monitors**: a monitored product that a sweep sees is updated by the sweep
+  too, and still gets the alerts its monitor asks for (sold out, price up…).
+- **No duplicates**: the same product and kind can't alert twice within
+  `MONITOR_ALERT_COOLDOWN` (10 minutes), on top of "restock once a day".
 
-  Blocked or failed checks keep the last known status and never alert. Each
-  product and kind has a cooldown (`MONITOR_ALERT_COOLDOWN`), and an admin's
-  manual `/restock` bypasses it.
+### Speed
 
-## 4. Risks and limitations
+With the defaults (2 keywords, a search every 5 seconds per store):
 
-- **Kmart and other stores that refuse servers** can only be checked from
-  admins' browsers. If no admin browser is open, those monitors show *Blocked*
-  or *Waiting* and don't alert. Admins can still send a manual `/restock`.
-- **Fair use.** Mugibot never disguises its requests, never solves CAPTCHAs or
-  skips queues, and never presses the final buy button. That is the same as
-  the rest of Mugibot. Some Discord monitor services are tied to auto-checkout
-  bots; Mugibot deliberately isn't.
-- **Add-to-cart links** exist only where the store officially supports them
-  (Shopify cart links, Amazon's add-to-cart link). Everywhere else, ⚡ Buy uses
-  the extension's store flow.
-- **One machine.** SQLite on one Fly machine handles thousands of products.
-  Very large catalogues would move to Postgres and a separate monitor worker.
-  The monitor is already its own module (`server/monitor/`), so that's a
-  contained change.
-- **ZephyMonitor itself** wasn't available to inspect (its site refuses
-  automated visits). The feed, embeds and dashboard follow the usual pattern
-  for Discord monitor services instead: an image thumbnail, store, price,
-  stock, time, quick links, and channels per category.
+- Target: page 1 of each keyword every ~15 s, every page every ~1–2 minutes.
+  Target's own CDN keeps a copy of a search page for a short while, so a
+  change can take a minute or two to show up there. Mugibot doesn't try to
+  get around their cache.
+- JB Hi-Fi and Toys"R"Us: each keyword every ~10 s.
+- Kmart, BIG W, EB Games, Zing (admin's browser): each keyword every ~30 s.
 
-## 5. Setting it up
+More keywords means each one comes round a little less often. Each store has
+its own loop, so a slow store never holds up the others.
 
-1. Deploy as usual. Merging into `main` deploys it, and the database upgrades
-   itself.
-2. Discord: make channels like `#pokemon-restocks` and `#onepiece-restocks`.
-   Give the bot **View Channel, Send Messages, Embed Links** in each (as for
-   `#restocks`, see [DISCORD.md](DISCORD.md)).
-3. Admin → Setup check → **Register slash commands**. This adds `/monitor` and
-   `/restocks`.
-4. Dashboard → **Monitor** → **Alert channels**: add a rule per channel. Paste
-   the channel ID, and optionally a role to ping, the categories, the stores,
-   and which kinds (restock, listed, sold out, price drop, price rise). With
-   no rules, alerts go to `DISCORD_RESTOCK_CHANNEL_ID` as before (restocks and
-   listings).
-5. Add monitors: Dashboard → **Monitor** → **Add monitor** (a product link, or
-   a store and SKU), or in Discord: `/monitor add link:<product link> category:Pokémon`.
+## 3. Setting it up
 
-### Settings (environment variables, all optional)
+1. Deploy as usual: merging into `main` deploys it, and the database upgrades
+   itself. Sweeps start on their own, with the keywords `pokemon` and
+   `one piece`.
+2. **Admins' browsers** (for Kmart, BIG W, EB Games, Zing): install the
+   extension (version 1.5.0 or later), connect it to an **admin** account, and
+   keep Chrome open. If a store refuses that browser too, open the store's
+   website in it once, then wait for the next search. The extension's popup
+   shows **Live sweeps from this browser** with each store's last result.
+3. Discord: alerts go to the channels in **Monitor → Discord alert channels**.
+   New drops are the 🆕 kind, restocks 🟢, price drops 📉; tick the kinds each
+   channel should get. With no rules, restocks and new drops go to
+   `DISCORD_RESTOCK_CHANNEL_ID`.
+4. **Monitor → Live sweeps → Settings**:
+   - **Keywords**: what to search for at every store.
+   - **Seconds between searches at one store**: 5 to start with (3 at least).
+   - **…from an admin's browser**: 15 to start with.
+   - **Price drop alert from**: 10% to start with; 0 turns price drop alerts off.
+   - **Where each store is searched from**.
+   - **Alerts**: new drops, restocks, and "at most one restock alert a day per product".
+   - **Which products count**: skip marketplace sellers, trading cards only, and the trading-card words.
+
+## 4. Running it day to day
+
+- **Monitor tab** (every member):
+  - the live feed: new drops, restocks, price changes
+  - numbers: products tracked, available now, new drops / restocks / price changes in 24 h, checks OK in the last hour
+  - every tracked product, searchable and filterable by category, store and stock (and **New today**); 🆕 marks products found in the last 24 hours
+  - click a product for its price chart, alert history and (admins) check log
+- **Admins**, in the same tab:
+  - **Live sweeps**: each store's last search, products found, searches in the last hour, average time and any problem; **Every search** lists each keyword and page; **Sweep now** searches everything again straight away
+  - monitors (add, edit, pause, check now, remove), Discord alert channels, page-check health and the check log
+- **Discord**: `/monitor list`, `/monitor status`, `/restocks` as before.
+
+## 5. Settings (environment variables, all optional)
+
+The sweep settings are in the dashboard. These are for the whole monitor:
 
 | Setting | Default | What it does |
 |---|---|---|
-| `MONITOR_URL_INTERVAL` | 60 | Default seconds between checks of a page |
-| `MONITOR_MIN_INTERVAL` | 20 | The shortest interval a monitor may ask for |
-| `MONITOR_HOST_GAP` | 5 | Seconds between requests to the same store |
+| `MONITOR_ENABLED` | 1 | `0` switches the sweeps and page checks off |
 | `MONITOR_ALERT_COOLDOWN` | 600 | Seconds before the same product can alert the same kind again |
-| `MONITOR_PRICE_CHANGE_PERCENT` | 1 | The smallest price change that counts |
-| `MONITOR_LOG_DAYS` | 7 | How long the check log is kept |
+| `MONITOR_URL_INTERVAL` | 60 | Seconds between page checks of one product page (monitors and members' SKUs the sweeps don't cover) |
+| `MONITOR_MIN_INTERVAL` | 20 | The shortest interval a monitor may ask for |
+| `MONITOR_HOST_GAP` | 5 | Seconds between page checks at the same store |
+| `MONITOR_PRICE_CHANGE_PERCENT` | 1 | The smallest price change a **monitor's** price alerts count (sweeps use the dashboard's price drop %) |
+| `MONITOR_LOG_DAYS` | 7 | How long the page-check log is kept |
 
-## 6. Running it day to day
-
-- **Monitor tab:**
-  - the live restock feed
-  - health cards: active monitors, restocks and price changes in 24 h, checks OK in the last hour
-  - all products, searchable and filterable by category, store and status
-  - click a product for its price chart, alert history and (admins) check log
-- **Admins:** add, edit (category, interval, which alerts), pause, resume,
-  check now, and remove; alert channels; health per store.
-- **Discord:**
-  - `/monitor list category:One Piece`
-  - `/monitor pause target:<SKU or link>`
-  - `/monitor status`
-  - `/restocks` (members: the latest alerts)
-
-## 7. Troubleshooting
+## 6. Troubleshooting
 
 | You see | Do this |
 |---|---|
-| A store shows **Blocked** in Health | The store is refusing the server. Admin → Stores & flows → switch **Server checks** off for it, and keep an admin browser with the extension open. Don't shorten the interval: that makes it worse. |
-| Alerts in the dashboard but not in Discord | Admin → Setup check → **Check the Discord bot**, then **Post a test message**. Check the rule's channel ID and that the bot can post there. |
-| The same product alerted twice | Different kinds (e.g. a restock, then a price drop) each alert once. The same kind repeats only after the cooldown. |
-| A product stays **Waiting** | Its first check hasn't happened yet: there's a queue per store, one request every `MONITOR_HOST_GAP` seconds. Press **Check now**. |
-| No image | The store page has no product image data. The alert still works. |
+| A store's status says **refused** (server) | The store is refusing Mugibot's server. Set it to **Admin's browser** in Live sweeps → Settings, and keep an admin's browser with the extension open. Don't make the searches more frequent: that makes it worse. |
+| **Waiting for an admin's browser** | No admin's browser is sweeping. Open Chrome with the extension connected to an admin account. The popup should show **Live sweeps from this browser** within 30 seconds. |
+| **refused the admin's browser** | Open that store's website in the admin's browser once (so it gets the store's cookies), then wait. It tries again on its own, waiting longer each time. |
+| **The page didn't have the product list Mugibot reads** | The store changed its search page. Send a copy of the page (right-click → Save as) so the reader can be updated. |
+| **No products on the page** for a store and keyword | The store has nothing for that keyword, or (Kmart, BIG W, EB Games, Zing) its page builds the list later with JavaScript. Check **Every search**: if it stays 0 for a keyword the store does sell, send a copy of the page. |
+| A Target product shows **Out of stock** but it's on the site | It was missing from Target's results for 6 minutes. The next sweep that finds it puts it back (and alerts a restock). If it keeps happening, the keyword has more results than Mugibot reads: use a more specific keyword. |
+| A product you expect isn't tracked | Its name needs every word of the keyword and a trading-card word, and it must be sold by the store itself. Add the word to the trading-card words, or a keyword that matches it. |
+| Lots of new drops after changing settings | Shouldn't happen: a changed keyword or filter sets the scene again first. If it does, tell me which store and keyword. |
+| Alerts in the dashboard but not in Discord | Admin → Setup check → **Check the Discord bot**, then **Post a test message**. Check the rule's channel ID, that it ticks 🆕 / 🟢 / 📉, and that the bot can post there. |
+
+## 7. Where things are
+
+| Part | File |
+|---|---|
+| The sweeps: loops, filters, alerts, admins' browsers | `server/monitor/sweep.js` |
+| Reading search results (Target, Shopify, any store), shared with the extension | `server/monitor/listing.js` |
+| Store requests on Node's own `https` client | `server/monitor/http.js` |
+| Each store's search address and reader | `sweep:` in `server/retailers/<store>.js` |
+| Alerts, Discord embeds, live dashboard updates | `server/monitor/feed.js` |
+| Page checks of single products and members' SKUs | `server/monitor/index.js` |
+| Catalogue, price history, alert history | `server/catalog.js`; `products`, `sweep_terms`, `price_history`, `feed_alerts` (`server/db.js`, migration 5) |
+| Admin API | `GET/PUT /api/monitor/sweep`, `POST /api/monitor/sweep/now` (`server/routes/monitor.js`) |
+| Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
+| Dashboard | `web/app.html`, `web/js/monitor.js` |
+| Tests | `test/sweep.test.js`, plus the Monitor tab in `test/ui.test.js` and the admin's-browser sweep in `test/extension.e2e.test.js` |
+
+### What changed from MugiWatch
+
+- **Kept**: keyword sweeps per store, the first sweep as a silent baseline,
+  NEW / RESTOCK (once a day) / PRICE drop (10%), the marketplace and
+  trading-card filters and the trading-card words, per-store health, jittered
+  waits and backoff, an instant dashboard and Discord webhook-style alerts.
+- **Better stock reading**: MugiWatch never saw stock at Target or JB Hi-Fi
+  (JB's search page has no stock, and Target leaves sold-out products out of
+  its results), so it couldn't alert their restocks. Mugibot reads JB Hi-Fi's
+  stock from its search suggestions (which also give links and pictures), and
+  at Target treats a product that drops out of the results as sold out and
+  its return as a restock.
+- **Persistent**: products, stock, prices and baselines are in the database,
+  so a restart doesn't re-baseline or lose history, and a drop that happens
+  while the server restarts is still a new drop.
+- **Not kept**: the disguised Chrome User-Agent and puppeteer "stealth"
+  (they didn't help: the same requests with honest headers are answered the
+  same), headless Chrome on the server (admins' real browsers sweep the stores
+  that refuse servers instead), and the plain-text card profile (Mugibot keeps
+  the card encrypted in each member's own browser).

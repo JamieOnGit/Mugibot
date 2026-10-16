@@ -13,10 +13,15 @@
 // as you refreshing the product page. If a store shows a bot check, it backs
 // off; it never tries to get past one. Switch it off on the dashboard
 // (Extension tab).
+//
+// Live sweeps (admins only): for stores that refuse servers, an admin's
+// browser reads their search results at the pace the server sets, and sends
+// back what it found (docs/MONITORING.md). Members' browsers never do this.
 
 import './config.js';
 import './vault.js';
 import { extractProduct, extractProductLinks } from './lib/extract.js';
+import { parseListing } from './lib/listing.js';
 
 const CONFIG = globalThis.MGB_CONFIG;
 const Vault = globalThis.MGBVault;
@@ -85,6 +90,7 @@ async function pair(code) {
   if (!res.ok) return { ok: false, error: data.error || `Couldn't connect (HTTP ${res.status})` };
   await chrome.storage.local.set({ auth: { token: data.token, user: data.user, device: data.device, server: SERVER, pairedAt: Date.now() } });
   ensureAlarm();
+  sweepLoop().catch(() => null);
   return { ok: true, user: data.user };
 }
 
@@ -216,10 +222,11 @@ async function status() {
   const me = await api('GET', `/api/ext/me?v=${encodeURIComponent(VERSION)}&src=${SOURCE}`);
   const still = await getAuth();
   if (!still) return { paired: false, server: SERVER, appName: CONFIG.appName, version: VERSION, disconnected: true, update };
-  const { lastChecks } = await chrome.storage.local.get('lastChecks');
+  const { lastChecks, lastSweeps } = await chrome.storage.local.get(['lastChecks', 'lastSweeps']);
   return {
     paired: true, server: SERVER, appName: CONFIG.appName, version: VERSION, user: still.user, update,
     online: me.status === 200, entitlement: me.body && me.body.entitlement, card: await Vault.status(still.user.id), lastChecks: lastChecks || null,
+    lastSweeps: lastSweeps || null, sweeping,
   };
 }
 
@@ -291,6 +298,49 @@ async function runChecks() {
   }
 }
 
+// --- live sweeps (admins' browsers) --------------------------------------------
+async function sweepOne(t) {
+  const started = Date.now();
+  const base = { store: t.store, keyword: t.keyword, page: t.page };
+  let res;
+  try {
+    res = await fetch(t.url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
+  } catch {
+    return { ...base, ok: false, error: "This browser couldn't reach the store", ms: Date.now() - started };
+  }
+  if (!res.ok) return { ...base, ok: false, status: res.status, blocked: [401, 403, 429, 503].includes(res.status), ms: Date.now() - started };
+  const text = (await res.text()).slice(0, 6_000_000);
+  const parsed = parseListing(t.parser, text, { base: res.url || t.url, productPath: revive(t.productPath), skuFromPath: revive(t.skuFromPath), storeName: t.storeName });
+  return { ...base, ok: true, status: res.status, ms: Date.now() - started, problem: parsed.problem, products: parsed.products.slice(0, 300) };
+}
+
+let sweeping = false;
+/** Runs while the server has searches for this browser (only admins get any); the alarm restarts it. */
+async function sweepLoop() {
+  if (sweeping) return;
+  if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return;
+  if (!(await getAuth())) return;
+  sweeping = true;
+  try {
+    for (;;) {
+      const due = await api('GET', '/api/ext/sweeps');
+      if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) break;
+      for (const t of due.body.terms || []) {
+        const result = await sweepOne(t);
+        await api('POST', '/api/ext/sweeps', { results: [result] });
+        const { lastSweeps } = await chrome.storage.local.get('lastSweeps');
+        await chrome.storage.local.set({ lastSweeps: { ...(lastSweeps || {}), [t.store]: { at: Date.now(), name: t.storeName, ok: result.ok, found: (result.products || []).length, status: result.status || 0 } } });
+      }
+      // Waiting for the next search. Touching storage keeps this worker running meanwhile.
+      await chrome.storage.session.set({ sweepBeat: Date.now() });
+      await new Promise((r) => setTimeout(r, Math.min(20000, Math.max(1000, due.body.waitMs))));
+      if (!(await getAuth())) break;
+    }
+  } finally {
+    sweeping = false;
+  }
+}
+
 function ensureAlarm() {
   chrome.storage.local.get('retired').then(({ retired }) => {
     if (retired && !FROM_STORE) return;
@@ -300,9 +350,11 @@ function ensureAlarm() {
 chrome.runtime.onInstalled.addListener(ensureAlarm);
 chrome.runtime.onStartup.addListener(ensureAlarm);
 ensureAlarm();
+sweepLoop().catch(() => null);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== CHECK_ALARM) return;
   runChecks().catch(() => null);
+  sweepLoop().catch(() => null);
   updateInfo().catch(() => null); // keeps the "NEW" badge on the toolbar icon up to date
 });
 
@@ -383,6 +435,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true };
       case 'checkNow':
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
+        sweepLoop().catch(() => null);
         return runChecks();
 
       // From the popup / settings page only
@@ -433,3 +486,4 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // For tests and the "Check now" button.
 globalThis.mugibotRunChecks = runChecks;
+globalThis.mugibotSweepLoop = sweepLoop;

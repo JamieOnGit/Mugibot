@@ -347,17 +347,22 @@ fly secrets set RESEND_API_KEY=re_… EMAIL_FROM="Mugibot <alerts@mugibot.com>"
 ## 6b. The Monitor feed (restock channels)
 
 Members get DMs for their own watchlists either way. The Monitor is the shared
-feed: your Discord channels get restocks, listings and price changes for the
-products admins pick. Follow **[MONITORING.md](MONITORING.md)**, section 5. In
-short:
+feed: every few seconds it searches each store for your keywords, and your
+Discord channels get new drops, restocks and price drops. Follow
+**[MONITORING.md](MONITORING.md)**, section 3. In short:
 
 1. Make channels like `#pokemon-restocks` and `#onepiece-restocks`, and let
    the bot post there.
 2. Admin → Setup check → **Register slash commands**. This adds `/monitor` and
    `/restocks`.
 3. Dashboard → **Monitor** → **Discord alert channels** → **+ Add rule**, once
-   per channel. Then **Test** each rule.
-4. **+ Add monitor** for each product, or `/monitor add` in Discord.
+   per channel (tick 🆕, 🟢 and 📉 for the kinds it should get). Then **Test**
+   each rule.
+4. Dashboard → **Monitor** → **Live sweeps** → **Settings**: your keywords.
+   The sweeps run by themselves.
+5. Keep Chrome open with the extension connected to an **admin** account: it
+   searches Kmart, BIG W, EB Games and Zing, which refuse servers.
+6. Optional: **+ Add monitor** for single products, or `/monitor add` in Discord.
 
 ---
 

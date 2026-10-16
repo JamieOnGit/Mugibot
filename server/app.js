@@ -11,7 +11,9 @@ import { Hub } from './hub.js';
 import { Router, RateLimiter, clientIp, parseCookies, parseJson, readBody, securityHeaders, sendJson } from './http.js';
 import { Mailer } from './mailer.js';
 import { Feed } from './monitor/feed.js';
+import { storeFetch } from './monitor/http.js';
 import { Monitor } from './monitor/index.js';
+import { Sweeper } from './monitor/sweep.js';
 import { Notifier } from './notifier.js';
 import { Repo } from './repo.js';
 import { Retailers } from './retailers/index.js';
@@ -31,11 +33,12 @@ const UNSAFE = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
 
 /**
  * options: config overrides (see config.js), plus
- *   fetch: used for outbound requests (Whop, Discord, email, store pages) — tests pass a fake
+ *   fetch: used for outbound requests (Whop, Discord, email) — tests pass a fake
+ *   storeFetch: used for store pages (monitor/http.js: Node's own client, which stores answer) — tests can pass a fake
  *   now: clock — tests pass a fake
  */
 export async function createApp(options = {}) {
-  const { fetch: fetchImpl = globalThis.fetch, now = () => Date.now(), ...overrides } = options;
+  const { fetch: fetchImpl = globalThis.fetch, storeFetch: storeFetchImpl = storeFetch, now = () => Date.now(), ...overrides } = options;
   const cfg = options.cfg || loadConfig(overrides);
   const db = new Db(cfg.databasePath);
   const repo = new Repo(db, cfg, now);
@@ -48,9 +51,10 @@ export async function createApp(options = {}) {
   const whop = new Whop({ cfg, repo, notifier, discord, fetchImpl, now });
   const catalog = new Catalog({ db, repo, now });
   const feed = new Feed({ cfg, repo, catalog, retailers, notifier, discord, hub, now });
-  const monitor = new Monitor({ cfg, repo, retailers, notifier, hub, catalog, feed, fetchImpl, now });
+  const monitor = new Monitor({ cfg, repo, retailers, notifier, hub, catalog, feed, fetchImpl: storeFetchImpl, now });
+  const sweeper = new Sweeper({ cfg, repo, catalog, feed, monitor, retailers, hub, fetchImpl: storeFetchImpl, now });
   const limiter = new RateLimiter(now);
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, catalog, feed, limiter, pageCache: new Map() };
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, limiter, pageCache: new Map() };
 
   const router = new Router();
   auth.register(router, ctx);
@@ -103,7 +107,7 @@ export async function createApp(options = {}) {
     }
 
     if (UNSAFE.has(req.method)) {
-      const raw = await readBody(req, o.raw ? 1024 * 1024 : 64 * 1024);
+      const raw = await readBody(req, o.raw ? 1024 * 1024 : o.maxBody || 64 * 1024);
       if (o.raw) req.rawBody = raw;
       else req.body = parseJson(raw);
     } else {
@@ -200,6 +204,7 @@ export async function createApp(options = {}) {
     retailers,
     hub,
     monitor,
+    sweeper,
     catalog,
     feed,
     discord,
@@ -217,11 +222,13 @@ export async function createApp(options = {}) {
       app.url = `http://${host === '0.0.0.0' || host === '::' ? 'localhost' : host}:${addr.port}`;
       if (cfg.baseUrlAuto) cfg.baseUrl = app.url;
       monitor.start();
+      sweeper.start();
       startJobs();
       return app.url;
     },
     async close() {
       monitor.stop();
+      sweeper.stop();
       timers.forEach(clearInterval);
       hub.close();
       await new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections?.(); });

@@ -27,13 +27,17 @@ community. Built on TCGCopBot's working Kmart flow.
 - **Accounts are a username and a password.** Each account has its own
   watchlist, delivery addresses (several if wanted), card (kept in that
   member's browser), alert settings and activity.
-- **Monitor feed** ([docs/MONITORING.md](docs/MONITORING.md)). Admins pick the
-  Pokémon and One Piece products to watch, and Mugibot posts their restocks, new
-  listings and price changes to your Discord channels: the product image,
-  store, price, stock and a ⚡ Buy button. Each channel gets what its rule asks
-  for (by category, store, kind or keyword). The dashboard's **Monitor** tab
-  shows the live feed, health, searchable products and each product's price
-  history. Manage it from the dashboard or with `/monitor` in Discord.
+- **Live monitor** ([docs/MONITORING.md](docs/MONITORING.md)), built on
+  MugiWatch. Every few seconds it reads each store's search results for your
+  keywords (`pokemon`, `one piece`…) and alerts the moment it sees a 🆕 **new
+  drop**, a 🟢 **restock** or a 📉 **price drop**: in the dashboard, in your
+  Discord channels (image, store, price, stock and a ⚡ Buy button) and to
+  every member watching that SKU. Target, JB Hi-Fi and Toys"R"Us are searched
+  from the server; Kmart, BIG W, EB Games and Zing from an admin's browser
+  with the extension. Admins can also monitor single products. Each channel
+  gets what its rule asks for (by category, store, kind or keyword). The
+  dashboard's **Monitor** tab shows the live feed, every tracked product, each
+  store's health and each product's price history.
 - **Admin console** at `/admin`: members, memberships, Discord status, SKU
   totals, restock pings, stores and flows, a setup check, Whop memberships and
   an audit log.
@@ -101,6 +105,10 @@ Discord and Whop are optional for this. Add them later with the guides.
 
 ## How the monitor works (and staying unblocked)
 
+- **Live sweeps.** Each store's search for each keyword, read in full every few
+  seconds, each store on its own loop (docs/MONITORING.md). Stores that refuse
+  servers are searched from an admin's browser instead. A member's SKU that a
+  sweep comes across is updated straight away.
 - **Server checks.** Mugibot's server checks each product page once per
   interval, however many members watch it. Requests say who they are
   (`Mugibot/1.0`) and keep a gap between requests to the same store.
@@ -160,6 +168,12 @@ npm test
 - **Monitor** (dummy stores): one request per page, the honest User-Agent, price
   limits, not listed → listed → restock, Shopify JSON, blocked stores handed to
   browsers, store switches, announcements, private-address protection.
+- **Live sweeps** (dummy stores, fake Discord): reading Target's, Shopify's and
+  any store's search results; the first sweep sets the scene; new drops,
+  restocks (once a day) and price drops alert at once in the feed, Discord and
+  to members watching the SKU; the filters; refused searches back off; new
+  keywords set the scene again; admins' browsers sweep the stores that refuse
+  servers (members' never do); the per-store loops; the store client.
 - **Monitor feed** (dummy stores, fake Discord): name, image, price and stock
   from the first check without an alert; restock, price drop and rise alerts
   once per cooldown; alert rules by category, store, kind and keyword; price
@@ -173,12 +187,14 @@ npm test
   boxes in separate frames that only take real typing or key presses (like
   Adyen's), and a clear message when the card can't go in, the Chrome Web Store
   copy taking over from a downloaded one (never both acting at once), the
-  Discord ⚡ Buy button, in-browser checks, and two accounts in one browser.
+  Discord ⚡ Buy button, in-browser checks, an admin's browser sweeping a store
+  that refuses the server, and two accounts in one browser.
 - **Chrome Web Store:** the package, the admin's listing link, and the GitHub
   job that publishes each new version (against a fake Chrome Web Store API).
 - **Website in a browser:** every dashboard and admin tab, including the
-  Monitor tab (live alerts, product page with price chart, alert rules, light
-  and dark themes), phone-sized screens, no JavaScript errors.
+  Monitor tab (live alerts, live sweeps' health and settings, product page with
+  price chart, alert rules, light and dark themes), phone-sized screens, no
+  JavaScript errors.
 
 ## Layout
 
@@ -187,7 +203,8 @@ server/
   app.js            routing and security checks      repo.js     all per-member data access
   db.js             SQLite schema                    crypto.js   passwords, tokens, encryption, signed links
   retailers/        one file per store, with its checkout flow (kmart.js, bigw.js, …)
-  monitor/          SKU monitor (server checks, in-browser check results), feed.js (the Monitor feed's alerts)
+  monitor/          sweep.js (live sweeps), listing.js (search results), http.js (store requests),
+                    SKU page checks and in-browser check results, feed.js (alerts)
   catalog.js        the Monitor's products, monitors, price history, check log, alert rules
   discord.js        Discord OAuth, server roles, DMs, channel posts
   whop.js           Whop checkout links, webhooks, membership sync

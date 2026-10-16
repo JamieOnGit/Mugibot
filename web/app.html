@@ -84,7 +84,7 @@
           <span class="live" id="m-live" title="Updates as they happen">Live</span>
           <button class="btn small primary" id="m-add-toggle" type="button" hidden>+ Add monitor</button>
         </div>
-        <p class="muted small">Restocks, new listings and price changes across the stores: the same alerts as the Discord channels. ⚡ Buy adds the product to your watchlist and runs your own checkout.</p>
+        <p class="muted small">New drops, restocks and price drops across the stores, the moment they happen: each store's search is read every few seconds. The same alerts as the Discord channels. ⚡ Buy adds the product to your watchlist and runs your own checkout.</p>
         <div class="stats" id="m-stats"></div>
 
         <form class="card" id="m-add" hidden>
@@ -104,12 +104,12 @@
           <input id="m-q" type="search" placeholder="Search name or SKU" aria-label="Search products">
           <select id="m-category" aria-label="Category"><option value="">All categories</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select>
           <select id="m-store" aria-label="Store"><option value="">All stores</option></select>
-          <select id="m-status" aria-label="Stock"><option value="">Any stock</option><option value="available">Available now</option><option value="unavailable">Not available</option><option value="problem">Having problems</option></select>
+          <select id="m-status" aria-label="Stock"><option value="">Any stock</option><option value="available">Available now</option><option value="unavailable">Not available</option><option value="new">New today</option><option value="problem">Having problems</option></select>
         </div>
 
         <div class="m-grid">
           <div class="card">
-            <div class="card-head"><h3>Live feed</h3><select id="m-kind" aria-label="Alert kind"><option value="">Everything</option><option value="restock">Restocks</option><option value="listed">New listings</option><option value="price">Price changes</option><option value="sold_out">Sold out</option></select></div>
+            <div class="card-head"><h3>Live feed</h3><select id="m-kind" aria-label="Alert kind"><option value="">Everything</option><option value="restock">Restocks</option><option value="listed">New drops</option><option value="price">Price changes</option><option value="sold_out">Sold out</option></select></div>
             <ul class="feed-list" id="m-feed"></ul>
             <button class="btn small" id="m-more" type="button" hidden>Older alerts</button>
           </div>
@@ -120,6 +120,35 @@
         </div>
 
         <div id="m-admin" hidden>
+          <div class="card" id="ms-card">
+            <div class="card-head"><h3>Live sweeps</h3><span class="pill" id="ms-state"></span><button class="btn small" id="ms-now" type="button">Sweep now</button></div>
+            <p class="muted small">Each store's search for each keyword, read in full every few seconds. A product that wasn't there before is a 🆕 new drop; out of stock → in stock is a 🟢 restock (once a day per product); a price that falls by the set amount is a 📉 price drop. Alerts go out straight away: here, in the Discord channels whose rules match, and to every member watching that SKU. Stores that refuse servers are searched from an admin's browser with the extension (keep one open with Chrome running).</p>
+            <div class="table-wrap"><table class="table" id="ms-table"><thead><tr><th>Store</th><th>Searched from</th><th>Last search</th><th>Products</th><th>Searches (1 h)</th><th>Avg time</th><th>Status</th></tr></thead><tbody></tbody></table></div>
+            <details class="ms-terms"><summary class="small">Every search</summary><div class="table-wrap"><table class="table" id="ms-terms"><thead><tr><th>Store</th><th>Keyword</th><th>Page</th><th>Found</th><th>Kept</th><th>Last OK</th><th>Problem</th></tr></thead><tbody></tbody></table></div></details>
+            <form id="ms-form">
+              <h4>Settings</h4>
+              <label class="check"><input type="checkbox" id="ms-enabled"> Sweeps on</label>
+              <div class="grid2">
+                <div class="span2"><label for="ms-keywords">Keywords (comma-separated)</label><input id="ms-keywords" placeholder="pokemon, one piece" autocomplete="off"><p class="muted small">Each is searched at every store. A product counts when its name has every word of the keyword in it.</p></div>
+                <div><label for="ms-every">Seconds between searches at one store</label><input id="ms-every" type="number" min="3" max="600" required></div>
+                <div><label for="ms-bevery">…from an admin's browser</label><input id="ms-bevery" type="number" min="5" max="600" required></div>
+                <div><label for="ms-drop">Price drop alert from (% lower)</label><input id="ms-drop" type="number" min="0" max="90" step="1" required><p class="muted small">0 = no price drop alerts.</p></div>
+              </div>
+              <fieldset class="kinds" id="ms-stores"><legend>Where each store is searched from</legend></fieldset>
+              <fieldset class="kinds"><legend>Alerts</legend>
+                <label class="check inline"><input type="checkbox" id="ms-new"> 🆕 New drops</label>
+                <label class="check inline"><input type="checkbox" id="ms-restock"> 🟢 Restocks</label>
+                <label class="check inline"><input type="checkbox" id="ms-once"> At most one restock alert a day per product</label>
+              </fieldset>
+              <fieldset class="kinds"><legend>Which products count</legend>
+                <label class="check inline"><input type="checkbox" id="ms-market"> Skip marketplace sellers</label>
+                <label class="check inline"><input type="checkbox" id="ms-tcg"> Trading cards only</label>
+                <label for="ms-terms-input" class="small">Trading-card words (a name needs one of them)</label>
+                <textarea id="ms-terms-input" rows="3"></textarea>
+              </fieldset>
+              <div class="form-actions"><button class="btn primary" type="submit">Save sweep settings</button><button class="btn" type="button" id="ms-reset-terms">Default card words</button><span class="msg" id="ms-msg"></span></div>
+            </form>
+          </div>
           <div class="card">
             <div class="card-head"><h3>Discord alert channels</h3><button class="btn small" id="mr-new" type="button">+ Add rule</button></div>
             <p class="muted small">Each rule sends matching alerts to one channel, with an optional role ping. Copy IDs in Discord with Developer Mode on (right-click → Copy Channel ID / Copy Role ID). Give the bot View Channel, Send Messages and Embed Links there.</p>

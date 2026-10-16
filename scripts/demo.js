@@ -23,6 +23,10 @@ process.env.DEMO_STORE_URL = process.env.DEMO_STORE_URL || demoStoreUrl;
 process.env.MONITOR_ALLOW_PRIVATE = '1';
 const cfg = loadConfig();
 const app = await createApp({ cfg });
+// Live sweeps of the dummy shops only (the first time: the real stores are left alone).
+if (!app.repo.getSetting('sweep')) {
+  app.sweeper.save({ stores: Object.fromEntries(app.sweeper.stores().map(({ retailer: r }) => [r.id, r.demo ? 'server' : 'off'])) }, null);
+}
 const url = await app.listen(cfg.port, cfg.host).catch((e) => portHelp(e, cfg.port));
 const admins = cfg.adminUsernames.length ? cfg.adminUsernames.join(', ') : '(nobody yet: set ADMIN_USERNAMES in .env)';
 console.log(`
@@ -38,6 +42,8 @@ Mugibot (dummy store mode) is running. Leave this window open; press Ctrl+C to s
   3. On the Watchlist tab press "Add dummy-store test items".
   4. In the dummy store's control panel, restock a product: the dashboard (and Discord,
      if set up) pings you. Press ⚡ Buy and watch it go to the final button.
+  5. Monitor tab: the live sweeps search the dummy shops every few seconds. List or
+     restock a product in the control panel and it shows up there within seconds.
 `);
 openBrowser(url);
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await app.close(); await store.close(); process.exit(0); });

@@ -14,6 +14,10 @@ export default {
   skuFromPath: /^\/p\/[^/]+\/([A-Za-z0-9_-]+)/,
   productPath: /^\/p\/[^/]+\/[A-Za-z0-9_-]+\/?$/,
   searchPath: '/search?text={q}',
+  // Live sweeps (docs/MONITORING.md): the newest listings first, up to four pages of 48. Target
+  // leaves products that are sold out online out of its results, so one that's gone from every
+  // page for a while is sold out (and its return is a restock).
+  sweep: { from: 'server', parser: 'target', path: '/search?sEngine=c&text={q}&sortBy=onlinedate&sortOrder=descending', pagePath: '&page={page}', pages: 4, goneMeansSoldOut: true },
   monitor: { server: true, browser: true },
   flow: {
     product: { add: [/\badd to (cart|basket|bag)\b/i, /\bpre-?order\b/i], quantity: 'page', waitMs: 12000 },

@@ -190,10 +190,17 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       </script>`, { head: ldFor(p, shop), bagCount: bagCount(shop) });
   }
 
-  function searchPage(shop, q) {
+  const searchHits = (shop, q) => {
     const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
-    const hits = shopOf(shop).products.filter((x) => x.listed && words.some((w) => slugify(x.name).includes(slugify(w)) || x.sku === w));
-    return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1>${hits.map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}">${esc(x.name)}</a><div>$${x.price.toFixed(2)}</div></div>`).join('') || '<p>No results</p>'}`);
+    return shopOf(shop).products.filter((x) => x.listed && words.some((w) => slugify(x.name).includes(slugify(w)) || x.sku === w));
+  };
+  // Search results the way stores show them: a tile per product, with its price and an add / sold out button.
+  function searchPage(shop, q) {
+    const hits = searchHits(shop, q);
+    const button = (x) => (x.status === 'in_stock' ? '<button type="button" class="add-to-cart">Add to cart</button>'
+      : x.status === 'preorder' ? '<button type="button" class="add-to-cart">Pre-order</button>'
+        : `<button type="button" disabled>${x.status === 'coming_soon' ? 'Coming soon' : 'Out of stock'}</button>`);
+    return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1>${hits.map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}"><img src="${imagePath(shop, x)}" alt="">${esc(x.name)}</a><div class="price">$${x.price.toFixed(2)}</div>${button(x)}</div>`).join('') || '<p>No results</p>'}`);
   }
 
   function cartPage(shop) {
@@ -497,6 +504,20 @@ for (const el of document.querySelectorAll('input')) {
     }
 
     if (sub === '/search' || sub === '/search/') return html(200, searchPage(shop, u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || ''));
+    // Shopify's search suggestions (what Mugibot's live sweeps read at JB Hi-Fi).
+    if (shop === 'jbhifi' && sub === '/search/suggest.json') {
+      const hits = searchHits(shop, u.searchParams.get('q')).slice(0, 10);
+      return json(200, {
+        resources: {
+          results: {
+            products: hits.map((x, i) => ({
+              id: x.id, handle: x.sku, title: x.name, price: x.price.toFixed(2), available: x.status === 'in_stock' || x.status === 'preorder',
+              url: `${pathFor(shop, x)}?_pos=${i + 1}&_sid=dummy&_ss=r`, image: `http://${req.headers.host}${imagePath(shop, x)}`, vendor: 'Dummy', tags: [], type: 'TRADING CARDS',
+            })),
+          },
+        },
+      });
+    }
 
     if (sub === '/api/cart/add' && req.method === 'POST') {
       const b = await parseBody(req);

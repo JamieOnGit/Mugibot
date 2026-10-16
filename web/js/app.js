@@ -771,7 +771,8 @@ function connectStream() {
     watchTimer = setTimeout(() => loadItems().catch(() => null), 300);
   });
   es.addEventListener('monitor-feed', (e) => monitorUI.onFeed(JSON.parse(e.data)));
-  es.addEventListener('monitor-product', () => monitorUI.onProduct());
+  es.addEventListener('monitor-product', (e) => monitorUI.onProduct(JSON.parse(e.data)));
+  es.addEventListener('monitor-sweep', () => monitorUI.onSweep());
   es.addEventListener('devices', () => {
     if (!$('[data-panel="extension"]').hidden) loadDevices().catch(() => null);
     renderExtStatus().catch(() => null);

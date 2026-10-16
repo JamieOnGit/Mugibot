@@ -14,7 +14,7 @@ export const EXTENSION_SRC = path.join(ROOT, 'extension');
 const TEMPLATE = JSON.parse(fs.readFileSync(path.join(EXTENSION_SRC, 'manifest.json'), 'utf8'));
 export const EXTENSION_VERSION = TEMPLATE.version;
 // The monitor's page reader, used by the extension's in-browser checks too.
-const SHARED = ['html.js', 'extract.js', 'status.js'].map((f) => ({ name: `lib/${f}`, from: path.join(ROOT, 'server', 'monitor', f) }));
+const SHARED = ['html.js', 'extract.js', 'status.js', 'listing.js'].map((f) => ({ name: `lib/${f}`, from: path.join(ROOT, 'server', 'monitor', f) }));
 
 const isLocal = (u) => ['localhost', '127.0.0.1'].includes(new URL(u).hostname);
 
