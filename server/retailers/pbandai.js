@@ -9,8 +9,12 @@
 // Product page: "Add to Cart" → straight to the cart → "Proceed to checkout" → Global-e's
 //   checkout (address, delivery, card) → STOP at "Place Order" / "Pay".
 //
-// Live sweeps from an admin's browser: its search, newest first, builds its product list
-// once it's open, so the extension opens it in its own window and reads it (like BIG W's).
+// Live sweeps from an admin's browser: its search page gets its products from the site's own
+// search JSON (/api/search, newest first, up to 100 at a time), asked for with the region in a
+// header (x-g1-area-code: au; without it the site answers with an error). The extension keeps a
+// Premium Bandai page open in its own window and asks for that JSON from inside it, the way the
+// page does (like EB Games'). (The search page itself answered "PAGE NOT AVAILABLE" when tried
+// in Oct 2026, even from the site's own search box, while this JSON answered fine.)
 
 export default {
   id: 'pbandai',
@@ -28,9 +32,14 @@ export default {
   productPath: /^(\/pbandai)?(\/au)?\/item\/[A-Z]\d{6,15}\/?$/,
   productPathFromSku: '/item/{sku}',
   searchPath: '/search?keyword={q}',
-  // Newest arrivals first. (Should the store read its keyword some other way, the newest arrivals
-  // still come back, and the keyword is matched against their names here.)
-  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search?keyword={q}&sort=newArrival', minSeconds: 30 },
+  sweep: {
+    from: 'browser', parser: 'pbandai', inPage: true, openPath: '', fromOrigin: true,
+    path: '/api/search?keyword={q}&limit=100&offset=0&sortType=NewArrival',
+    headers: { 'x-g1-area-code': 'au' },
+    // Needs the extension that sends those headers.
+    extension: '1.8.1',
+    minSeconds: 30,
+  },
   monitor: { server: true, browser: true },
   flow: {
     product: {

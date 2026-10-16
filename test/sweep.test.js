@@ -14,7 +14,7 @@ import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, wa
 import { startMockStore } from '../devtools/mockstore.js';
 import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
-import { Sweeper } from '../server/monitor/sweep.js';
+import { Sweeper, olderVersion } from '../server/monitor/sweep.js';
 
 // --- reading results -----------------------------------------------------------
 function targetPage(products, total = products.length) {
@@ -766,8 +766,57 @@ test("where each store is searched: Kmart moved to the server (a saved 'browser'
   assert.equal(sw.urlFor(R('pokemoncenter'), 'one piece'), 'https://www.pokemoncenter.com/en-au/search/one%20piece');
   assert.equal(R('pokemoncenter').sweep.render, true);
   assert.equal(R('pbandai').sweep.from, 'browser');
-  assert.equal(sw.urlFor(R('pbandai'), 'one piece'), 'https://p-bandai.com/au/search?keyword=one%20piece&sort=newArrival');
+  // Premium Bandai: the site's own search JSON (not under /au), asked for from inside its page.
+  assert.equal(sw.urlFor(R('pbandai'), 'one piece'), 'https://p-bandai.com/api/search?keyword=one%20piece&limit=100&offset=0&sortType=NewArrival');
+  assert.equal(R('pbandai').sweep.inPage, true);
+  assert.equal(sw.endpoint(R('pbandai')), '/api/search?keyword=');
   assert.equal(sw.paceFor(R('pbandai'), true), 30000);
+});
+
+test("an admin's browser with an extension too old for a store isn't given its searches, and the live monitor says to update it", async () => {
+  const admin = { role: 'admin', username: 'boss' };
+  const saved = { ...sw.settings.stores };
+  sw.save({ stores: { ...saved, 'demo-pbandai': 'browser', 'demo-pokemoncenter': 'browser' } }, null);
+  try {
+    const said = () => sw.events.filter((e) => e.type === 'sys' && /Premium Bandai \(dummy store\): Needs Mugibot's extension 1\.8\.1 or newer/.test(e.message)).length;
+    let due = sw.browserDue(admin, { version: '1.8.0', who: 'boss' });
+    assert.deepEqual(due.terms.map((t) => t.store), [], 'neither store, with 1.8.0');
+    const card = sw.live().stores.find((s) => s.id === 'demo-pbandai');
+    assert.equal(card.status, 'waiting');
+    assert.match(card.lastError, /^Needs Mugibot's extension 1\.8\.1 or newer in an admin's browser \(boss's has 1\.8\.0\) — update it/);
+    assert.equal(card.fails, 0);
+    sw.browserDue(admin, { version: '1.8.0', who: 'boss' });
+    assert.equal(said(), 1, 'said once, not every time that browser asks');
+    // An extension that doesn't say which version it is (before 1.8.1) counts as too old.
+    assert.deepEqual(sw.browserDue(admin, {}).terms, []);
+
+    // An up-to-date one gets both: Premium Bandai's search JSON with the region its own code sends,
+    // asked from its front page; Pokémon Center's search page, opened and read.
+    due = sw.browserDue(admin, { version: '1.8.1' });
+    const pb = due.terms.find((t) => t.store === 'demo-pbandai');
+    assert.ok(pb, JSON.stringify(due));
+    assert.equal(pb.inPage, true);
+    assert.equal(pb.render, false);
+    assert.equal(pb.parser, 'pbandai');
+    assert.deepEqual(pb.headers, { 'x-g1-area-code': 'au' });
+    assert.equal(pb.url, `${store.url}/pbandai/api/search?keyword=${encodeURIComponent(pb.keyword)}&limit=100&offset=0&sortType=NewArrival`);
+    assert.equal(pb.pageUrl, `${store.url}/pbandai`);
+    const pc = due.terms.find((t) => t.store === 'demo-pokemoncenter');
+    assert.equal(pc.render, true);
+    assert.equal(pc.headers, null);
+    // While it's searching, a second admin's browser with an old extension doesn't take it over or change its card.
+    await sw.browserResults(admin, [{ store: 'demo-pbandai', keyword: pb.keyword, page: 1, ok: true, status: 200, ms: 300, products: [] }]);
+    const n = said();
+    assert.deepEqual(sw.browserDue(admin, { version: '1.7.2', who: 'misty' }).terms, []);
+    assert.equal(said(), n);
+    assert.notEqual(sw.live().stores.find((s) => s.id === 'demo-pbandai').status, 'waiting');
+  } finally {
+    sw.save({ stores: saved }, null);
+  }
+  assert.equal(olderVersion('1.8.0', '1.8.1'), true);
+  assert.equal(olderVersion('1.10.0', '1.8.1'), false);
+  assert.equal(olderVersion('1.8.1', '1.8.1'), false);
+  assert.equal(olderVersion('', '1.8.1'), true);
 });
 
 test('🚫 the blacklist: a product, a SKU or a whole store never pings, isn\'t tracked and stays off the lists; its monitor goes', async () => {
@@ -889,4 +938,39 @@ test("Premium Bandai: the product data in the search page's PRELOAD_DATA", () =>
   assert.equal(r.products[0].sku, 'N2903432001');
   assert.equal(r.products[0].price, 25);
   assert.equal(r.products[0].url, 'https://p-bandai.com/au/item/N2903432001');
+});
+
+test("Premium Bandai: its search JSON (/api/search) — on sale, pre-orders, closed pre-orders and sold out", () => {
+  const item = (code, name, saleStatus, flags, amount = 18) => ({
+    areaProductNo: `NAP${code}AU`, productCode: code, areaCode: 'AU', productName: { en: name }, productType: 'PreOrder', fixedPrice: true,
+    fixedListPrice: { amount, currency: 'AUD' }, saleStatus, displayStatus: 'On', flags,
+    productImages: [{ fileUrl: `files/seller-products/${code}/a.webp`, mediaType: 'Image' }],
+  });
+  const json = JSON.stringify({
+    text: 'one piece',
+    productResults: {
+      products: [
+        item('N2903432001', 'ONE PIECE CARD GAME Premium Card Collection -29th Anniversary Edition-', 'On', ['PRE_ORDER']),
+        item('N2873815002', 'ONE PIECE CARD GAME Japanese 4th Anniversary Set', 'End', ['PRE_ORDER_CLOSED'], 280),
+        item('A2870005001', 'LUFFY’s ARTCANVAS 1/8 -20th Anniversary-', 'On', ['OUT_OF_STOCK'], 148),
+        { productCode: 'nope', productName: { en: 'Not a product code' } },
+      ],
+      sortType: 'NewArrival', limit: 100, offset: 0, totalCount: 3,
+    },
+    aggs: {},
+  });
+  const r = parseListing('pbandai', json, { base: 'https://p-bandai.com/api/search?keyword=one%20piece', storeBase: 'https://p-bandai.com/au' });
+  assert.equal(r.problem, null);
+  assert.equal(r.total, 3);
+  assert.deepEqual(r.products.map((p) => [p.sku, p.price, p.inStock, p.preorder]), [
+    ['N2903432001', 18, true, true],
+    ['N2873815002', 280, false, true],
+    ['A2870005001', 148, false, true],
+  ]);
+  assert.equal(r.products[0].url, 'https://p-bandai.com/au/item/N2903432001');
+  assert.equal(r.products[0].image, 'https://p-bandai.com/files/seller-products/N2903432001/a.webp');
+  // Without the region header the site answers with an error, not a list.
+  assert.equal(parseListing('pbandai', '{"timestamp":"2026-10-16T13:27:22.023Z","status":500,"error":"Internal Server Error","path":"/api/search"}', { storeBase: 'https://p-bandai.com/au' }).problem, 'layout');
+  // Each one counts as Premium Bandai's own (the sweeps keep only the store's own links).
+  assert.equal(env.app.retailers.forUrl(r.products[0].url).id, 'pbandai');
 });

@@ -17,12 +17,14 @@
 //   /thegamescube  CrystalCommerce-style (The Games Cube): search tiles, an icon-only
 //             cart button, the cart API, "Checkout as a guest" → address → shipping
 //             and payment → "Place Order"
-//   /pokemoncenter  Pokémon Center-style: a search page built once it's open,
+//   /pokemoncenter  Pokémon Center-style: a search page built once it's open (behind
+//             an Imperva-style check that reloads it, when botCheck is on),
 //             "Add to Cart" → "View Cart" → "Checkout" → guest → shipping → payment
 //             (card frame) → "Place Order"
 //   /pbandai  Premium Bandai-style: a Vue page (its Add button works once Vue has
-//             wired it up), "Go to Cart" → "Proceed to checkout" → the whole
-//             checkout in a Global-e-style frame from another address
+//             wired it up), its search JSON (only with its region header),
+//             "Go to Cart" → "Proceed to checkout" → the whole checkout in a
+//             Global-e-style frame from another address
 //
 // Open the root (/) for the control panel: restock, sell out, list or unlist
 // products and watch Mugibot react. A second server on another port serves
@@ -64,6 +66,8 @@ export function defaultShops() {
       reactMs: 0, slowLoadMs: 0, vueMs: id === 'pbandai' ? 600 : 0,
       // Search pages that only fill in their products once open (like Pokémon Center's and Premium Bandai's).
       clientSearch: id === 'pokemoncenter' || id === 'pbandai',
+      // A bot check's page first, which reloads the page after a moment (Pokémon Center's search; the delay in ms).
+      botCheck: false,
       // When the product page was last sent, and when the last add arrived.
       servedAt: 0, addedAt: 0,
       // What the bag page showed each time it was opened (number of items in it).
@@ -644,7 +648,35 @@ for (const el of document.querySelectorAll('input')) {
 
     if (shop === 'thegamescube' && sub === '/products/search') return html(200, crystalSearchPage(u.searchParams.get('q') || ''));
     const pathSearch = shop === 'pokemoncenter' && sub.match(/^\/search\/([^/]+)$/);
+    // Like Imperva's check at Pokémon Center (botCheck on): a first visit gets its page (a frame, no
+    // title), which reloads the page once the browser has passed — here, after a moment.
+    if (pathSearch && S.botCheck && !/(^|;\s*)pc_check=1/.test(req.headers.cookie || '')) {
+      return html(200, `<html style="height:100%"><head><meta name="ROBOTS" content="NOINDEX, NOFOLLOW"></head><body style="margin:0;height:100%">
+        <iframe id="main-iframe" src="/pokemoncenter/_Incapsula_Resource?SWUDNSAI=31" frameborder="0" width="100%" height="100%">Request unsuccessful.</iframe>
+        <script>setTimeout(() => { document.cookie = 'pc_check=1; path=/'; location.reload(); }, ${Number(S.botCheck) > 1 ? Number(S.botCheck) : 1500});</script></body></html>`);
+    }
+    if (shop === 'pokemoncenter' && sub === '/_Incapsula_Resource') return html(200, '<html><body>Checking your browser…</body></html>');
     if (pathSearch) return html(200, clientSearchPage(shop, decodeURIComponent(pathSearch[1])));
+    // Premium Bandai's search JSON (what its search page reads, and Mugibot's sweeps): only with the
+    // region its own code sends in x-g1-area-code — without it, an error, like the real site.
+    if (shop === 'pbandai' && sub === '/api/search' && u.searchParams.has('keyword')) {
+      if (String(req.headers['x-g1-area-code'] || '').toLowerCase() !== 'au') return json(500, { status: 500, error: 'Internal Server Error', path: '/api/search' });
+      const all = searchHits(shop, u.searchParams.get('keyword'));
+      return json(200, {
+        text: u.searchParams.get('keyword'),
+        productResults: {
+          sortType: u.searchParams.get('sortType') || 'Recommended', limit: Number(u.searchParams.get('limit')) || 20, offset: 0, totalCount: all.length,
+          products: all.map((x) => ({
+            areaProductNo: `NAP${x.sku}AU`, productCode: x.sku, areaCode: 'AU', productName: { en: x.name },
+            productType: x.status === 'preorder' ? 'PreOrder' : 'Normal', fixedListPrice: { amount: x.price, currency: 'AUD' },
+            saleStatus: x.status === 'coming_soon' ? 'Waiting' : 'On', displayStatus: 'On',
+            productImages: [{ fileUrl: imagePath(shop, x).slice(1), mediaType: 'Image' }],
+            flags: [...(x.status === 'preorder' ? ['PRE_ORDER'] : []), ...(x.status === 'out_of_stock' ? ['OUT_OF_STOCK'] : [])],
+          })),
+        },
+        aggs: {},
+      });
+    }
     if (sub === '/search' || sub === '/search/') {
       const q = u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('keyword') || '';
       // Like BIG W's real site: the page has no products in it until its own code fetches them.

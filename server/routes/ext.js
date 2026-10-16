@@ -125,7 +125,9 @@ export function register(router, ctx) {
   // that refuses servers… Members' browsers get none: only admins can change the shared feed.
   router.get('/api/ext/sweeps', async (req) => {
     if (!limiter.hit(`sweeps:${req.device.id}`, 120, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
-    return ctx.sweeper.browserDue(req.user);
+    // Which version this copy of the extension is (it says, since 1.8.1; before that, the one it connected with).
+    const version = str(req.query.get('v'), 20) || req.device.version || '';
+    return ctx.sweeper.browserDue(req.user, { version, who: req.user.username });
   }, { auth: 'device' });
 
   // …and what they found.

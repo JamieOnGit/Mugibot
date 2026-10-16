@@ -11,7 +11,8 @@
 //
 // Live sweeps from an admin's browser: its search page (/en-au/search/<keyword>, 32 products
 // a page) builds its product list once it's open, so the extension opens it in its own
-// window and reads it (like BIG W's).
+// window and reads it (like BIG W's). Imperva's check may reload the page first: the extension
+// keeps looking until the products are there (from 1.8.1; 1.8.0 gave up at the reload).
 
 export default {
   id: 'pokemoncenter',
@@ -29,7 +30,7 @@ export default {
   // Australian product pages only (the dummy store's copy lives under /pokemoncenter).
   productPath: /^(\/en-au|\/pokemoncenter)\/product\/[0-9A-Za-z]+(-[0-9A-Za-z]+)+\/[^/?#]+\/?$/,
   searchPath: '/search/{q}',
-  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search/{q}', minSeconds: 30 },
+  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search/{q}', minSeconds: 30, extension: '1.8.1' },
   monitor: { server: true, browser: true },
   flow: {
     product: {

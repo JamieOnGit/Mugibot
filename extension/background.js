@@ -395,16 +395,18 @@ function readSweepPage(path) {
   const data = performance.getEntriesByType('resource')
     .filter((e) => (e.initiatorType === 'fetch' || e.initiatorType === 'xmlhttprequest') && /search|product|listing|catalog|browse/i.test(e.name))
     .map((e) => e.name).filter((u, i, all) => all.indexOf(u) === i).slice(-4);
-  const challenge = /just a moment|attention required|access denied|verify you are human/i.test(document.title);
+  // A bot check's page instead of the store's (Cloudflare's, or Imperva's at Pokémon Center: a frame and no title).
+  const challenge = /just a moment|attention required|access denied|verify you are human|pardon our interruption/i.test(document.title)
+    || !!document.querySelector('iframe[src*="_Incapsula_Resource"]');
   return { products, data, challenge, url: location.href, title: document.title, html: document.documentElement.outerHTML };
 }
 
-/** Runs in the store's page: asks the store for something, the way the page itself does. */
-async function askInPage(urls) {
+/** Runs in the store's page: asks the store for something, the way the page itself does (with the headers its own code adds). */
+async function askInPage(urls, headers) {
   const out = [];
   for (const url of urls) {
     try {
-      const r = await fetch(url, { credentials: 'include', headers: { accept: 'application/json, text/plain, */*' } });
+      const r = await fetch(url, { credentials: 'include', headers: { accept: 'application/json, text/plain, */*', ...(headers || {}) } });
       out.push({ url: r.url, status: r.status, type: r.headers.get('content-type') || '', text: (await r.text()).slice(0, 6000000) });
     } catch (e) {
       out.push({ url, status: 0, error: String(e && e.message || e) });
@@ -420,13 +422,19 @@ async function renderedPage(t) {
   const { id: tabId } = await sweepTab(t.store);
   await openIn(tabId, t.url);
   const path = t.productPath ? [t.productPath.re, t.productPath.f || ''] : null;
-  const until = Date.now() + 12000;
+  // (Longer than the page needs: a store's bot check may hold it up for a few seconds first.)
+  const until = Date.now() + 15000;
   let page = null;
+  let failed = null;
   let dataAt = 0;
   for (let seen = 0; ;) {
-    page = await inPage(tabId, readSweepPage, [path]);
+    // The page can be changing under us: a store's bot check (Imperva's, F5's) reloads it once it's
+    // satisfied. Reading it at that moment fails: look again a moment later.
+    const now = await inPage(tabId, readSweepPage, [path]).then((x) => { failed = null; return x; }, (e) => { failed = e; return null; });
+    if (now) page = now;
     // Products on the page: one more look a moment later, so their prices have filled in too.
-    if (page && page.products) { if (seen++) break; } else if (Date.now() > until || (page && page.challenge)) break;
+    // A bot check's page: wait (it may let the page through), and say so if it never does.
+    if (now && now.products) { if (seen++) break; } else if (Date.now() > until) break;
     // The page downloaded its product data but hasn't drawn it (a page in a hidden window
     // may never draw it): a moment longer for the drawing, then read the data instead.
     if (page && !page.products && page.data.length) {
@@ -435,10 +443,10 @@ async function renderedPage(t) {
     }
     await new Promise((r) => setTimeout(r, seen ? 600 : 800));
   }
-  if (!page) return null;
+  if (!page) { if (failed) throw failed; return null; }
   // The product data the page downloaded, asked for again from inside it: JSON only.
   if (page.data.length) {
-    const got = (await inPage(tabId, askInPage, [page.data])) || [];
+    const got = (await inPage(tabId, askInPage, [page.data]).catch(() => null)) || [];
     const json = got.filter((g) => g.status === 200 && /^\s*[[{]/.test(g.text || ''));
     page.html += json.map((g) => `<script type="application/json" data-mugibot-sweep>${g.text.replace(/<\//g, '<\\/')}</script>`).join('');
   }
@@ -451,25 +459,39 @@ async function askFromStorePage(t) {
   const origin = new URL(t.url).origin;
   const onStore = () => chrome.tabs.get(tab.id).then((x) => String(x.url || '').startsWith(origin)).catch(() => false);
   if (!(await onStore())) await openIn(tab.id, t.pageUrl || origin);
-  let [res] = (await inPage(tab.id, askInPage, [[t.url]])) || [];
-  // The store's bot check: a real visit to its page passes it, then ask again.
-  if (res && (res.status === 403 || res.status === 503 || /just a moment|attention required/i.test(res.text || ''))) {
+  const ask = () => inPage(tab.id, askInPage, [[t.url], t.headers || null]).catch(() => null);
+  let [res] = (await ask()) || [];
+  // The store's bot check (a refusal, or its page where the JSON should be): a real visit to the
+  // store's page passes it, then ask again.
+  if (!res || res.status === 403 || res.status === 503 || (res.status === 200 && !/^\s*[[{]/.test(res.text || ''))) {
     await openIn(tab.id, t.pageUrl || origin);
-    [res] = (await inPage(tab.id, askInPage, [[t.url]])) || [];
+    [res] = (await ask()) || [];
   }
   return res || null;
 }
+
+// Why something failed, briefly ("Cannot access contents of the page…"), for the live monitor.
+const why = (e) => {
+  const m = String((e && e.message) || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  return m ? ` (${m})` : '';
+};
 
 async function sweepOne(t) {
   const started = Date.now();
   const base = { store: t.store, keyword: t.keyword, page: t.page };
   const opts = (url) => ({ base: url || t.url, storeBase: t.storeBase, productPath: revive(t.productPath), skuFromPath: revive(t.skuFromPath), storeName: t.storeName });
+  // A store added after this copy of the extension was made: Chrome doesn't let it open that store's pages.
+  if (t.render || t.inPage) {
+    const u = new URL(t.url);
+    const allowed = await chrome.permissions.contains({ origins: [`${u.protocol}//${u.hostname}/*`] }).catch(() => true);
+    if (!allowed) return { ...base, ok: false, error: `This copy of Mugibot's extension (v${VERSION}) can't open ${u.hostname} — update the extension`, ms: 0 };
+  }
   if (t.render) {
     let page;
     try {
       page = await renderedPage(t);
-    } catch {
-      return { ...base, ok: false, error: "This browser couldn't open the store's page", ms: Date.now() - started };
+    } catch (e) {
+      return { ...base, ok: false, error: `This browser couldn't open the store's page${why(e)}`, ms: Date.now() - started };
     }
     if (!page) return { ...base, ok: false, error: "This browser couldn't read the store's page", ms: Date.now() - started };
     const parsed = parseListing(t.parser, page.html.slice(0, 8_000_000), opts(page.url));
@@ -479,8 +501,8 @@ async function sweepOne(t) {
     let res;
     try {
       res = await askFromStorePage(t);
-    } catch {
-      return { ...base, ok: false, error: "This browser couldn't open the store's page", ms: Date.now() - started };
+    } catch (e) {
+      return { ...base, ok: false, error: `This browser couldn't open the store's page${why(e)}`, ms: Date.now() - started };
     }
     if (!res || !res.status) return { ...base, ok: false, error: "This browser couldn't reach the store", ms: Date.now() - started };
     if (res.status !== 200) return { ...base, ok: false, status: res.status, blocked: [401, 403, 429, 503].includes(res.status), ms: Date.now() - started };
@@ -517,7 +539,8 @@ async function sweepLoop() {
   try {
     for (;;) {
       sweepAgain = false;
-      const due = await api('GET', '/api/ext/sweeps');
+      // (With this copy's version: stores added since an older one are kept for browsers that can open them.)
+      const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}`);
       if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) {
         if (sweepAgain) continue;
         break;

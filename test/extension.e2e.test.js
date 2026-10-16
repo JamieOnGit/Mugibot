@@ -743,6 +743,76 @@ test("BIG W: products the page downloaded but hasn't drawn (a page in a hidden w
   }
 });
 
+// The admin's browser searches each store at most every 30 s (Pokémon Center, Premium Bandai), one
+// keyword at a time: skip the wait until what the test needs has turned up.
+async function browserSweepsUntil(found, message) {
+  for (let round = 0; ; round++) {
+    env.app.sweeper.sweepNow();
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    try {
+      await waitFor(found, { timeout: 25000, message });
+      return;
+    } catch (e) {
+      if (round === 2) throw e;
+    }
+  }
+}
+
+test("Premium Bandai: its own search JSON, asked for from inside a Premium Bandai page with the region its code sends (servers refused)", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-pbandai': 'browser' } }, null);
+  store.state.blockNonBrowsers = true;
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    // Like the real site: without its region header (x-g1-area-code), an error.
+    assert.equal((await fetch(`${store.url}/pbandai/api/search?keyword=one%20piece`, { headers: { 'user-agent': 'Mozilla/5.0 Chrome' } })).status, 500);
+    await browserSweepsUntil(() => env.app.catalog.productFor('demo-pbandai', 'N2903432001'), 'Premium Bandai products from its search JSON');
+    const pcc = env.app.catalog.productFor('demo-pbandai', 'N2903432001');
+    assert.equal(pcc.status, 'in_stock');
+    assert.equal(pcc.price, 25);
+    assert.match(pcc.url, /\/pbandai\/item\/N2903432001$/);
+    await waitFor(() => env.app.catalog.productFor('demo-pbandai', 'N2863373001'), { timeout: 10000, message: 'the sold-out one too' });
+    assert.equal(env.app.catalog.productFor('demo-pbandai', 'N2863373001').status, 'out_of_stock');
+    const asked = store.state.requests.filter((x) => x.path === '/pbandai/api/search');
+    assert.ok(asked.length >= 1 && asked.every((x) => /Chrome|Mozilla/.test(x.ua)), "asked by the browser, from Premium Bandai's page");
+    assert.ok(store.state.requests.some((x) => x.path === '/pbandai'), 'its front page, opened in the sweep window');
+    const h = sweeper.health().find((s) => s.store === 'demo-pbandai');
+    assert.equal(h.fails, 0, h.lastError);
+    assert.ok(h.terms.every((t) => t.source === 'browser'));
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    store.state.blockNonBrowsers = false;
+    sweeper.save({ stores: off }, null);
+  }
+});
+
+test("Pokémon Center: its bot check's page comes first and reloads the search page; the admin's browser waits it out and reads the products", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-pokemoncenter': 'browser' } }, null);
+  store.shop('pokemoncenter').botCheck = 1200; // like Imperva's: its page, then a reload a moment later
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    await browserSweepsUntil(() => env.app.catalog.productFor('demo-pokemoncenter', '10-10447-108'), 'products read once the bot check let the page through');
+    const etb = env.app.catalog.productFor('demo-pokemoncenter', '10-10447-108');
+    assert.equal(etb.status, 'in_stock');
+    assert.equal(etb.price, 129.95);
+    assert.match(etb.url, /\/pokemoncenter\/product\/10-10447-108\/[^/]+$/);
+    const searches = store.state.requests.filter((x) => x.path.startsWith('/pokemoncenter/search/'));
+    assert.ok(searches.length >= 2, "the bot check's page, then the search page after its reload");
+    const h = sweeper.health().find((s) => s.store === 'demo-pokemoncenter');
+    assert.equal(h.fails, 0, h.lastError);
+    assert.equal(h.terms[0].source, 'browser');
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    store.shop('pokemoncenter').botCheck = false;
+    sweeper.save({ stores: off }, null);
+  }
+});
+
 test("another account's ⚡ Buy link does nothing in this browser", async () => {
   const misty = await Client.signup(env.url, 'misty');
   env.app.repo.updateUser(misty.user.id, { plan: 'active' });

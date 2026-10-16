@@ -76,8 +76,9 @@ Discord: `/monitor add · list · pause · resume · remove · status`.
 
 BIG W, EB Games, Pokémon Center and Premium Bandai refuse Mugibot's server, so
 they're searched from an admin's browser: keep Chrome open with the extension
-(1.8.0 or later for Pokémon Center and Premium Bandai) connected to an admin
-account. (Zing's website now sends everyone to EB Games, so Zing's sweeps are
+(1.8.1 or later for Pokémon Center and Premium Bandai: with an older one the
+Monitor tab says so on their cards, and they wait for an updated browser)
+connected to an admin account. (Zing's website now sends everyone to EB Games, so Zing's sweeps are
 off.) Kmart, Target, JB Hi-Fi, Toys"R"Us, Trainer Town, Amazon AU, The Games
 Cube and Gamerholic are searched from the server. See [MONITORING.md](MONITORING.md).
 
