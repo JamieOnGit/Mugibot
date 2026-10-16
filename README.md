@@ -20,7 +20,8 @@ community. Built on TCGCopBot's working Kmart flow.
   press.
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games and
   JB Hi-Fi are beta (tested on dummy copies of those stores). Target, Zing,
-  Toys"R"Us, Trainer Town and Amazon are drafts. Flows live on the server, so fixing one
+  Toys"R"Us, Trainer Town, Amazon, The Games Cube, Gamerholic, Pokémon Center
+  (Australia) and Premium Bandai (Australia) are drafts. Flows live on the server, so fixing one
   reaches everyone without reinstalling the extension. See
   [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md).
 - **Memberships on Whop (A$19.99/month).** Members pay through Whop, and their
@@ -36,10 +37,12 @@ community. Built on TCGCopBot's working Kmart flow.
   drop**, a 🟢 **restock** or a 📉 **price drop**: in the dashboard, in your
   Discord channels (image, store, price, stock and a ⚡ Buy button) and to
   every member watching that SKU. Target, JB Hi-Fi, Toys"R"Us, Trainer Town
-  (each game's whole collection), Kmart (through its search provider) and
-  Amazon AU are searched from the server; BIG W (its page opened and read once
-  it has built its product list), EB Games and Zing from an admin's browser
-  with the extension. Admins can also monitor single products. Each channel
+  (each game's whole collection), Kmart (through its search provider), Amazon
+  AU, The Games Cube and Gamerholic (its newest products) are searched from the
+  server; BIG W and Pokémon Center and Premium Bandai (their pages opened and
+  read once they have built their product lists), and EB Games (its own search
+  data, asked for from inside its page) from an admin's browser with the
+  extension. Admins can also monitor single products. Each channel
   gets what its rule asks for (by category, store, kind or keyword). The
   dashboard's **Monitor** tab is a live console: each store's searches and
   response times as they happen, an event log of every search and alert (with
@@ -188,7 +191,9 @@ npm test
   links; blocked stores keep their last status; admins' browsers for stores
   that refuse servers; `/monitor` and `/restocks`.
 - **The real extension in Chromium:** Kmart (verified), BIG W, EB Games,
-  JB Hi-Fi and Trainer Town flows each stop at their final button with nothing pressed, plus the
+  JB Hi-Fi, Trainer Town, The Games Cube, Gamerholic, Pokémon Center and
+  Premium Bandai (its checkout in a Global-e-style frame) flows each stop at
+  their final button with nothing pressed, plus the
   card saved without a passphrase and still ready after the browser restarts,
   a card from an older version moving over, the card in a payment frame, card
   boxes in separate frames that only take real typing or key presses (like
@@ -219,7 +224,8 @@ server/
   routes/           auth, user, ext (extension API), membership, discord (+ slash commands), monitor, admin, web
 web/                landing, sign-in, dashboard, ⚡ Buy page, admin console, terms, privacy
 extension/          the browser extension (built per server by server/extension.js)
-devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, JB Hi-Fi-, Trainer Town-style)
+devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, Shopify- (JB Hi-Fi, Trainer Town, Gamerholic),
+                    CrystalCommerce- (The Games Cube), Pokémon Center- and Premium Bandai-style)
 scripts/            demo, mockstore, discord-commands, make-admin, reset-link, backup, build-extension, publish-extension,
                     make-icons.py (the site's and the extension's icons, from the logo)
 brand/              the logo (the straw-hat robot); after changing it: python3 scripts/make-icons.py

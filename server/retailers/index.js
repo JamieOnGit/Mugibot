@@ -14,14 +14,18 @@
 import amazon from './amazon.js';
 import bigw from './bigw.js';
 import ebgames from './ebgames.js';
+import gamerholic from './gamerholic.js';
 import jbhifi from './jbhifi.js';
 import kmart from './kmart.js';
+import pbandai from './pbandai.js';
+import pokemoncenter from './pokemoncenter.js';
 import target from './target.js';
+import thegamescube from './thegamescube.js';
 import toysrus from './toysrus.js';
 import trainertown from './trainertown.js';
 import zing from './zing.js';
 
-export const RETAILER_DEFS = [kmart, bigw, target, ebgames, zing, jbhifi, toysrus, trainertown, amazon];
+export const RETAILER_DEFS = [kmart, bigw, target, ebgames, zing, jbhifi, toysrus, trainertown, amazon, thegamescube, gamerholic, pokemoncenter, pbandai];
 
 // Card boxes are often in a frame hosted by the store's payment provider.
 export const PAYMENT_HOSTS = [
@@ -37,6 +41,8 @@ export const PAYMENT_HOSTS = [
   'https://*.eway.io/*',
   'https://*.securepay.com.au/*',
   'https://checkout.shopifycs.com/*',
+  // Global-e (Premium Bandai's checkout): the whole checkout is in its frame, delivery details too.
+  'https://*.global-e.com/*',
 ];
 
 export const OTHER_STORE = { id: 'other', name: 'Other website', flowStatus: 'none', monitor: { server: true, browser: false }, hosts: [] };

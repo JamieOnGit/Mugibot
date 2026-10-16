@@ -494,6 +494,83 @@ test('Trainer Town flow (draft, Shopify): ⚡ Buy opens Shopify\'s cart link str
   await dash.close();
 });
 
+test('The Games Cube (draft, CrystalCommerce): its icon-only cart button → straight to checkout → "Checkout as a guest" → address → delivery and card → stops at "Place Order"', async () => {
+  await useItems([{ url: store.productUrl('thegamescube', '729233'), name: 'GC OP-17' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'GC OP-17');
+  await waitReady(shop, 'Place Order');
+  const S = store.shop('thegamescube');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['729233', 1]], 'one of it, in the cart');
+  assert.deepEqual(S.bagViews, [], 'straight to checkout, never the cart page');
+  assert.deepEqual(S.data.contact, { name: 'Ash Ketchum', email: PROFILE_A.email }, 'a guest, with your name and email');
+  assert.equal(S.data.address['address[street]'], PROFILE_A.address1);
+  assert.equal(S.data.address['address[city]'], 'Sydney');
+  assert.equal(S.data.address['address[state]'], 'NSW');
+  assert.equal(S.data.address['address[postcode]'], '2000');
+  assert.equal(await shop.isChecked('input[name=shipping][value=auspost]'), true, 'delivery, not pick up in store');
+  assert.match(await shop.inputValue('input[name=cc_number]'), /^4242 ?4242 ?4242 ?4242$/);
+  assert.equal(await shop.inputValue('input[name=cc_cvv]'), '123');
+  await shop.waitForTimeout(800);
+  assert.equal(ordersPlaced(), 0, '"Place Order" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('Gamerholic (draft, Shopify): ⚡ Buy → Shopify\'s cart link → one-page checkout → stops at "Pay now"', async () => {
+  const handle = 'pokemon-tcg-mega-evolution-elite-trainer-box';
+  await useItems([{ store: 'demo-gamerholic', sku: handle, name: 'GH ETB' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'GH ETB');
+  await shop.waitForURL(/\/gamerholic\/checkouts\/c\/abc123$/, { timeout: 30000 });
+  await waitReady(shop, 'Pay now');
+  assert.deepEqual(store.shop('gamerholic').cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+  assert.equal(await shop.inputValue('input[name=email]'), PROFILE_A.email);
+  assert.equal(await shop.inputValue('input[name=postalCode]'), '2000');
+  await shop.waitForTimeout(500);
+  assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('Pokémon Center (draft): "Add to Cart" → "View Cart" → "Checkout" → "Continue as Guest" → shipping → card frame → stops at "Place Order"', async () => {
+  await useItems([{ url: store.productUrl('pokemoncenter', '10-10447-108'), name: 'PC ETB' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'PC ETB');
+  await waitReady(shop, 'Place Order');
+  const S = store.shop('pokemoncenter');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['10-10447-108', 1]]);
+  assert.equal(S.data.guest.email, PROFILE_A.email);
+  assert.deepEqual([S.data.shipping.firstName, S.data.shipping.lastName, S.data.shipping.address1, S.data.shipping.city, S.data.shipping.state, S.data.shipping.postcode], ['Ash', 'Ketchum', PROFILE_A.address1, 'Sydney', 'NSW', '2000']);
+  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=cardnumber]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
+  await shop.waitForTimeout(500);
+  assert.equal(ordersPlaced(), 0, '"Place Order" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test("Premium Bandai (draft): Add pressed once its Vue page has wired it up → \"Go to Cart\" → \"Proceed to checkout\" → the whole checkout in a Global-e-style frame: your details and card go in there, and it's left for you to place", async () => {
+  await useItems([{ url: store.productUrl('pbandai', 'N2903432001'), name: 'PB PCC' }]);
+  const S = store.shop('pbandai');
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'PB PCC');
+  await shop.waitForURL(/\/pbandai\/checkout$/, { timeout: 30000 });
+  assert.ok(S.addedAt - S.servedAt >= S.vueMs, 'not pressed before the page could take it');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['N2903432001', 1]], 'pressed once');
+  const ge = () => shop.frames().find((f) => f.url().includes('/ge-checkout'));
+  await waitFor(async () => !!ge() && (await ge().inputValue('input[name=address1]')) === PROFILE_A.address1, { timeout: 20000, message: 'delivery details in the checkout frame' });
+  assert.equal(await ge().inputValue('input[name=email]'), PROFILE_A.email);
+  assert.equal(await ge().inputValue('input[name=firstName]'), 'Ash');
+  assert.equal(await ge().inputValue('input[name=city]'), 'Sydney');
+  assert.equal(await ge().inputValue('select[name=state]'), 'NSW');
+  assert.equal(await ge().inputValue('input[name=zip]'), '2000');
+  await waitFor(async () => (await ge().inputValue('input[name=cardNumber]')).replace(/\s/g, '') === '4242424242424242', { timeout: 20000, message: 'card in the checkout frame' });
+  assert.match(await panel(shop).textContent(), /checkout is in the form on this page/);
+  await shop.waitForTimeout(800);
+  assert.notEqual(await ge().title(), 'placed', '"Place Order" in the frame was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
 test('the ⚡ Buy button in a Discord DM goes straight to the store and the flow runs', async () => {
   // Connect Discord for Ash (the fake Discord sends straight back).
   const page = await ctx.newPage();

@@ -12,7 +12,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
-import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
+import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
 import { Sweeper } from '../server/monitor/sweep.js';
 
@@ -299,7 +299,7 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   // The real stores off (tests never touch them); the dummy ones swept from the server.
   r = await boss.put('/api/monitor/sweep', {
     everySeconds: 5, keywords: 'Pokemon, one piece',
-    stores: { target: 'off', jbhifi: 'off', toysrus: 'off', trainertown: 'off', amazon: 'off', kmart: 'off', bigw: 'off', ebgames: 'off', zing: 'off', 'demo-kmart': 'server', 'demo-jbhifi': 'server', 'demo-bigw': 'server', 'demo-ebgames': 'browser', 'demo-trainertown': 'server' },
+    stores: { target: 'off', jbhifi: 'off', toysrus: 'off', trainertown: 'off', amazon: 'off', kmart: 'off', bigw: 'off', ebgames: 'off', zing: 'off', thegamescube: 'off', gamerholic: 'off', pokemoncenter: 'off', pbandai: 'off', 'demo-kmart': 'server', 'demo-jbhifi': 'server', 'demo-bigw': 'server', 'demo-ebgames': 'browser', 'demo-trainertown': 'server' },
   });
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(r.body.settings.keywords, ['pokemon', 'one piece']);
@@ -750,6 +750,19 @@ test("where each store is searched: Kmart moved to the server (a saved 'browser'
   } finally {
     await boss.put('/api/monitor/sweep', { stores: saved.stores });
   }
+  // The four added in 1.8.0: The Games Cube and Gamerholic from the server; Pokémon Center and
+  // Premium Bandai (both turn servers away) opened in an admin's browser.
+  assert.equal(R('thegamescube').sweep.from, 'server');
+  assert.equal(sw.urlFor(R('thegamescube'), 'one piece', 2), 'https://www.thegamescube.com/products/search?q=one%20piece&page=2');
+  assert.equal(R('gamerholic').sweep.from, 'server');
+  assert.equal(sw.urlFor(R('gamerholic'), 'pokemon'), 'https://gamerholic.com.au/products.json?limit=100', 'its newest products, for every keyword');
+  assert.equal(sw.paceFor(R('gamerholic')), 15000);
+  assert.equal(R('pokemoncenter').sweep.from, 'browser');
+  assert.equal(sw.urlFor(R('pokemoncenter'), 'one piece'), 'https://www.pokemoncenter.com/en-au/search/one%20piece');
+  assert.equal(R('pokemoncenter').sweep.render, true);
+  assert.equal(R('pbandai').sweep.from, 'browser');
+  assert.equal(sw.urlFor(R('pbandai'), 'one piece'), 'https://p-bandai.com/au/search?keyword=one%20piece&sort=newArrival');
+  assert.equal(sw.paceFor(R('pbandai'), true), 30000);
 });
 
 test('🚫 the blacklist: a product, a SKU or a whole store never pings, isn\'t tracked and stays off the lists; its monitor goes', async () => {
@@ -839,4 +852,36 @@ test('the loops: each store swept from the server on its own loop, every few sec
     sw.stop();
     sw.cfg.monitor.enabled = false;
   }
+});
+
+test("The Games Cube (CrystalCommerce): each tile's product, the dearest option in stock, sold out, pre-orders by category; the store's buylist left out", () => {
+  const tile = (href, name, body) => `<li class="product" itemscope itemtype="http://schema.org/Product"><div class="inner"><div class="image"><a href="${href}" itemprop="url" title="${name}"><img src="https://cdn.example/${name.length}.jpg" alt="" itemprop="image"></a></div>
+    <div class="meta"><a href="${href}" itemprop="url"><h4 class="name small-12" itemprop="name" title="${name}">${name}</h4></a><a href="/catalog/x/5888"><span class="category">Cat</span></a>${body}</div></div></li>`;
+  const form = (vid, price) => `<form class="add-to-cart-form" data-vid="${vid}" data-name="x" data-id="1" data-price="AUD$ ${price}"><span class="regular price">AUD$ ${price}</span><input class="qty" name="qty" type="number" value="1"><input class="utility-button add-to-cart" name="commit" type="submit" value="&#xf217;"></form>`;
+  const html = `<html><head><title>Search</title></head><body><div class="products-container browse"><ul class="products">
+    ${tile('/catalog/one_piece_tcg-one_piece_booster_boxes/one_piece_two_legends_booster_box_op08/695722', 'One Piece Two Legends Booster Box OP08', `<div class="variant-row in-stock"><span class="variant-qty">3 In Stock</span>${form(8670590, '450.00')}${form(8670591, '420.00')}</div>`)}
+    ${tile('/catalog/accessories-playmats/ultra_pro_pokemon_pikachu_playmat/712165', 'ULTRA PRO Pokemon: Pikachu Playmat', '<div class="variant-row no-stock"><span class="variant-qty">Out of stock.</span><span class="price no-stock hide" itemprop="price">AUD$ 50.00</span></div>')}
+    ${tile('/catalog/riftbound_pre_orders/radiance_booster_display/731930', 'Radiance Booster Display', `<div class="variant-row in-stock">${form(8700001, '199.95')}</div>`)}
+    ${tile('/buylist/magic_singles-pioneer-guilds_of_ravnica/assassins_trophy/594123', "Assassin's Trophy", '<span class="price buylist">AUD$ 1.00</span>')}
+  </ul></div></body></html>`;
+  const r = parseListing('crystal', html, { base: 'https://www.thegamescube.com/products/search?q=x' });
+  assert.equal(r.problem, null);
+  assert.deepEqual(r.products.map((p) => [p.sku, p.title, p.price, p.inStock, p.preorder]), [
+    ['695722', 'One Piece Two Legends Booster Box OP08', 450, true, false],
+    ['712165', 'ULTRA PRO Pokemon: Pikachu Playmat', 50, false, false],
+    ['731930', 'Radiance Booster Display', 199.95, true, true],
+  ]);
+  assert.equal(r.products[0].url, 'https://www.thegamescube.com/catalog/one_piece_tcg-one_piece_booster_boxes/one_piece_two_legends_booster_box_op08/695722');
+  assert.equal(r.products[0].image, 'https://cdn.example/38.jpg');
+  assert.equal(parseListing('crystal', '<html><title>Search</title><body><p>Nothing</p></body></html>', { base: 'https://www.thegamescube.com/' }).problem, 'layout');
+});
+
+test("Premium Bandai: the product data in the search page's PRELOAD_DATA", () => {
+  const data = { searchResult: { total: 1, items: [{ productCode: 'N2903432001', name: 'ONE PIECE CARD GAME Premium Card Collection -29th Anniversary Edition-', price: 25, url: '/au/item/N2903432001', image: 'https://p-bandai.com/img/N2903432001.jpg', inStock: true }] } };
+  const html = `<html><head><title>SEARCH RESULT</title></head><body><div id="app"></div><script>window.PRELOAD_DATA = ${JSON.stringify(data)};</script></body></html>`;
+  const r = parseListing('generic', html, { base: 'https://p-bandai.com/au/search?keyword=one%20piece', productPath: R('pbandai').productPath, skuFromPath: R('pbandai').skuFromPath, storeName: 'Premium Bandai' });
+  assert.equal(r.products.length, 1);
+  assert.equal(r.products[0].sku, 'N2903432001');
+  assert.equal(r.products[0].price, 25);
+  assert.equal(r.products[0].url, 'https://p-bandai.com/au/item/N2903432001');
 });

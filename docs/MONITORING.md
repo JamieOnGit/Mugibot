@@ -32,13 +32,18 @@ same products, the same alerts, the same ⚡ Buy.
 | Trainer Town | Mugibot's server | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi) |
 | Kmart | Mugibot's server | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online |
 | Amazon AU | Mugibot's server | Amazon's search, newest first (2 pages of 48), with "tcg" added to each keyword. At most one search every 20 seconds |
+| The Games Cube | Mugibot's server | Its search pages (CrystalCommerce, made on the server): a tile per product with each option's stock and price, up to 4 pages of 25–30. Pre-orders are the ones in its "… Pre-Orders" categories. The cards it buys from customers (its buylist) are left out |
+| Gamerholic | Mugibot's server | Its **newest 100 products** (Shopify's product list, newest first, every option's stock), for every keyword: Gamerholic lists hundreds of products a day, so a new drop shows up there the moment it's listed. At most one read every 15 seconds |
 | BIG W | **An admin's browser** (the extension) | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list — or, if the page has downloaded its products but not drawn them (pages in a minimised window may not), the product data it downloaded |
 | EB Games | **An admin's browser** (the extension) | EB Games' own search data (the JSON its search page asks for: every product's code, price, picture, stock, pre-order and release date), newest first, 2 pages — asked for from inside an EB Games page in the extension's window |
 | Zing | Off | zingpopculture.com.au now sends every visitor to EB Games, so EB Games' sweeps cover it. An admin can switch it back on if Zing's own site returns |
+| Pokémon Center (Australia) | **An admin's browser** (the extension) | Its search page (`/en-au/search/<keyword>`, 32 a page), opened in the extension's window and read once it has built its product list, like BIG W's. At most one search every 30 seconds |
+| Premium Bandai (Australia) | **An admin's browser** (the extension) | Its search, newest arrivals first, opened in the extension's window and read once it has built its product list (or from the product data in the page). At most one search every 30 seconds |
 
-BIG W and EB Games refuse requests from servers (403 / Cloudflare's bot check),
-so the extension in an **admin's** browser searches them instead, every 15
-seconds per store (BIG W every 20). Members' browsers never do this: only
+BIG W, EB Games, Pokémon Center and Premium Bandai refuse requests from
+servers (403 / Cloudflare's, Imperva's or their own bot checks), so the
+extension in an **admin's** browser searches them instead, every 15 seconds per
+store (BIG W every 20, Pokémon Center and Premium Bandai every 30). Members' browsers never do this: only
 Mugibot's server and admins can change what everyone sees.
 
 **Why BIG W and EB Games showed nothing:** EB Games' search page has no
@@ -153,7 +158,10 @@ With the defaults (2 keywords, a search every 5 seconds per store):
 - Trainer Town: each keyword's whole collection every ~10 s.
 - Kmart: each keyword every ~10 s.
 - Amazon AU: each keyword every ~60 s (page 1), page 2 now and then.
-- BIG W (admin's browser): each keyword every ~40 s; EB Games: every ~30 s.
+- The Games Cube: each keyword every ~10 s (page 1), the later pages now and then.
+- Gamerholic: its newest products every ~15 s.
+- BIG W (admin's browser): each keyword every ~40 s; EB Games: every ~30 s;
+  Pokémon Center and Premium Bandai: every ~60 s.
 
 More keywords means each one comes round a little less often. Each store has
 its own loop, so a slow store never holds up the others.

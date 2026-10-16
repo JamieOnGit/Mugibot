@@ -7,7 +7,7 @@ and which button is the **final one**. The final button is never pressed.
 ⚡ Buy buys **one** of each product (quantities are off for now) and gets to
 checkout as fast as the store allows:
 
-- **Shopify stores** (JB Hi-Fi, Trainer Town, Toys"R"Us): the store's own cart
+- **Shopify stores** (JB Hi-Fi, Trainer Town, Gamerholic, Toys"R"Us): the store's own cart
   link, `/cart/<variant>:1`, which opens checkout with the product in the cart.
   When the monitor has seen the product, the dashboard's ⚡ Buy opens that link
   straight away — no product page at all. Otherwise the product page opens, the
@@ -33,6 +33,10 @@ checkout as fast as the store allows:
 | Zing | `zing.js` | 🟨 draft | Uses the EB Games flow (same platform). |
 | Toys"R"Us | `toysrus.js` | 🟨 draft | Uses the Shopify flow. |
 | Trainer Town | `trainertown.js` | 🟨 draft | Uses the Shopify flow; tested on the Shopify-style dummy store (`/trainertown`), not on trainertown.com.au yet. |
+| Gamerholic | `gamerholic.js` | 🟨 draft | Uses the Shopify flow; tested on the Shopify-style dummy store (`/gamerholic`), not on gamerholic.com.au yet. |
+| The Games Cube | `thegamescube.js` | 🟨 draft | CrystalCommerce. Built from its real pages (search, product page, cart, the start of checkout): its cart button is an icon (`addSelector`), straight to `/checkout/proceed_to_checkout`, "Checkout as a guest". Tested on the CrystalCommerce-style dummy store (`/thegamescube`). |
+| Pokémon Center | `pokemoncenter.js` | 🟨 draft | Australia only (`/en-au`). Its bot check turns servers away, so its checkout couldn't be seen: a best guess, tested on a dummy copy only. During big drops it may queue everyone first; ⚡ Buy waits like you do. |
+| Premium Bandai | `pbandai.js` | 🟨 draft | Australia only (`/au`). Members only (stay signed in to your Bandai Namco ID). Its checkout is in a Global-e frame (`checkout.inFrame`): your details and card are filled in there. A best guess, tested on a dummy copy only. |
 | Amazon AU | `amazon.js` | 🟨 draft | Adds to cart and opens checkout; Amazon fills your saved address and card. |
 
 - **verified**: tested on the real store.
@@ -129,6 +133,7 @@ export default {
     checkout: {
       path: /\/checkout(\/|$)/i,
       url: '/checkout',                             // optional: go straight here once it's in the bag
+      inFrame: false,                               // the whole checkout in a frame (Global-e): filled in there
       guest: [/^continue as (a )?guest$/i],         // pressed to check out as a guest
       choose: [/^home delivery$/i],                 // buttons to press once each (not radios)
       steps: [/^continue to payment$/i, /^continue$/i],   // "next step" buttons

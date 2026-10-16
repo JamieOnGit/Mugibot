@@ -12,6 +12,7 @@
 //                    sellers and the states each product is out of stock in.
 //   amazon           Amazon's search page: a tile per result, with its ASIN.
 //   ebgames          EB Games' and Zing's search JSON (what their search page fetches).
+//   crystal          A CrystalCommerce store's search page (The Games Cube): a tile per product.
 //   generic          Any other store: product data in the page's scripts (Next.js
 //                    data, JSON-LD, embedded state), plus product tiles in the HTML.
 //
@@ -274,6 +275,45 @@ export function parseAmazon(html, { base } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// CrystalCommerce search results (The Games Cube)
+// ---------------------------------------------------------------------------
+// Server-made pages: a tile per product (<li class="product">) with its link, name, picture and
+// each option ("Sealed"…). An option in stock has an add-to-cart form with its price; with none
+// in stock the tile says "Out of stock.". Pre-orders sit in a "… Pre-Orders" category (in the link).
+export function parseCrystal(html, { base } = {}) {
+  const s = String(html || '');
+  const problem = pageProblem(s);
+  if (problem) return { products: [], problem };
+  const doc = parseHTML(s);
+  const cls = (n) => ` ${String((n.attrs && n.attrs.class) || '')} `;
+  const tilesFound = findAll(doc, (n) => n.tag === 'li' && / product /.test(cls(n)));
+  if (!tilesFound.length) return { products: [], problem: /class="products?[\s"]|no results|0 results/i.test(s) ? 'empty' : 'layout' };
+  const products = [];
+  for (const t of tilesFound) {
+    const link = findFirst(t, (n) => n.tag === 'a' && /\/catalog\/[^/]+\/[^/]+\/\d+\/?$/.test(n.attrs.href || ''));
+    if (!link) continue;
+    const href = link.attrs.href;
+    const sku = href.match(/\/(\d+)\/?$/)[1];
+    const nameNode = findFirst(t, (n) => /\bname\b/.test(cls(n)) && (n.attrs.itemprop === 'name' || n.tag === 'h4'));
+    const title = clean((nameNode && (nameNode.attrs.title || textContent(nameNode))) || link.attrs.title || '');
+    if (title.length < 3) continue;
+    const forms = findAll(t, (n) => n.tag === 'form' && / add-to-cart-form /.test(cls(n)) && /^\d+$/.test(n.attrs['data-vid'] || ''));
+    const prices = forms.map((f) => money(f.attrs['data-price'])).filter((n) => n !== null);
+    const anyPrice = findFirst(t, (n) => / price /.test(cls(n)) && !/ (buylist|store-credit) /.test(cls(n)) && money(textContent(n)) !== null);
+    const price = prices.length ? Math.max(...prices) : anyPrice ? money(textContent(anyPrice)) : null;
+    const text = tileText(t);
+    const inStock = forms.length ? true : /\bout of stock\b/i.test(text) ? false : null;
+    const img = findFirst(t, (n) => n.tag === 'img' && (n.attrs.itemprop === 'image' || n.attrs.src));
+    products.push({
+      sku, aliases: [], title, price, wasPrice: null, inStock,
+      preorder: /pre_?orders?\b/i.test(href) || PREORDER_RE.test(title),
+      url: httpsUrl(href, base), image: img ? httpsUrl(img.attrs.src, base) : '', marketplace: false,
+    });
+  }
+  return { products, total: null, problem: products.length ? null : 'empty' };
+}
+
+// ---------------------------------------------------------------------------
 // Any store: data in the page's scripts, then product tiles
 // ---------------------------------------------------------------------------
 const URL_KEYS = ['url', 'href', 'link', 'productUrl', 'productURL', 'pdpUrl', 'canonicalUrl', 'baseProductUrl', 'seoUrl', 'urlPath', 'path', 'slugUrl'];
@@ -373,7 +413,7 @@ function walkJson(node, out, ctx, depth = 0) {
   for (const v of Object.values(node)) if (v && typeof v === 'object') walkJson(v, out, ctx, depth + 1);
 }
 
-/** Every JSON blob a page carries: Next.js data, JSON-LD, JSON scripts and `window.__STATE__ = {…}`. */
+/** Every JSON blob a page carries: Next.js data, JSON-LD, JSON scripts and `window.__STATE__ = {…}` (or `PRELOAD_DATA = {…}`, Premium Bandai's). */
 function jsonBlobs(doc) {
   const out = [];
   for (const s of findAll(doc, (n) => n.tag === 'script' && n.text)) {
@@ -384,7 +424,7 @@ function jsonBlobs(doc) {
       continue;
     }
     if (type && !/javascript|module/.test(type)) continue;
-    for (const m of text.matchAll(/(?:window\.)?__[A-Z_]+__\s*=\s*\{/g)) {
+    for (const m of text.matchAll(/(?:window\.)?(?:__[A-Z_]+__|PRELOAD_DATA)\s*=\s*\{/g)) {
       const start = m.index + m[0].length - 1;
       const blob = balanced(text, start);
       if (blob) { try { out.push(JSON.parse(blob)); } catch { /* not plain JSON */ } }
@@ -505,7 +545,7 @@ export function parseGeneric(html, { base, productPath = null, skuFromPath = nul
   return { products: [...map.values()].slice(0, 300), problem: map.size ? null : 'empty' };
 }
 
-export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, generic: parseGeneric };
+export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, crystal: parseCrystal, generic: parseGeneric };
 
 export function parseListing(parser, text, opts) {
   return (PARSERS[parser] || parseGeneric)(text, opts);

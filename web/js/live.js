@@ -11,10 +11,11 @@ import { $, $$, api, h, money, setMsg, toast, when } from './common.js';
 
 // Each store keeps its colour everywhere (validated categorical palette, see site.css --s1…--s8).
 // The stores with live sweeps, one colour each (the 8-colour palette in site.css). Any other store
-// (Amazon, the ninth; other websites) is grey, and always shown with its name.
+// (Amazon, The Games Cube, Gamerholic, Pokémon Center, Premium Bandai; other websites) is grey, and
+// always shown with its name.
 const SLOT_ORDER = ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown'];
 export const slotOf = (id) => SLOT_ORDER.indexOf(String(id || '').replace(/^demo-/, '')) + 1;
-const ABBR = { kmart: 'KM', bigw: 'BW', target: 'TG', ebgames: 'EB', zing: 'ZG', jbhifi: 'JB', toysrus: 'TR', trainertown: 'TT', amazon: 'AZ' };
+const ABBR = { kmart: 'KM', bigw: 'BW', target: 'TG', ebgames: 'EB', zing: 'ZG', jbhifi: 'JB', toysrus: 'TR', trainertown: 'TT', amazon: 'AZ', thegamescube: 'GC', gamerholic: 'GH', pokemoncenter: 'PC', pbandai: 'PB' };
 const abbr = (id) => ABBR[String(id || '').replace(/^demo-/, '')] || String(id || '?').slice(0, 2).toUpperCase();
 const STATE = { ok: ['ok', 'Searching'], slowed: ['warn', 'Slowed'], retrying: ['err', 'Retrying'], waiting: ['warn', 'Waiting'], starting: ['', 'Starting'] };
 const ALERT = { listed: ['drop', 'New drop'], restock: ['restock', 'Restock'], price_drop: ['price', 'Price ↓'], price_rise: ['price', 'Price ↑'], sold_out: ['out', 'Sold out'] };

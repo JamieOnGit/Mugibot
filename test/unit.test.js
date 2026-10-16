@@ -66,7 +66,7 @@ test('connection codes are easy to type', () => {
 });
 
 test('retailers: each store has its own flow; product codes from links; demo copies on the dummy store', () => {
-  assert.deepEqual(RETAILER_DEFS.map((r) => r.id), ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown', 'amazon']);
+  assert.deepEqual(RETAILER_DEFS.map((r) => r.id), ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown', 'amazon', 'thegamescube', 'gamerholic', 'pokemoncenter', 'pbandai']);
   for (const r of RETAILER_DEFS) {
     assert.ok(r.flow && r.flow.product && r.flow.checkout, `${r.id} has a flow`);
     assert.ok(r.flow.checkout.final.length, `${r.id} names its final button`);
@@ -78,6 +78,17 @@ test('retailers: each store has its own flow; product codes from links; demo cop
   assert.equal(sku('https://www.ebgames.com.au/product/toys-and-collectibles/312345-one-piece-op18'), '312345');
   assert.equal(sku('https://www.jbhifi.com.au/products/pokemon-tcg-etb'), 'pokemon-tcg-etb');
   assert.equal(sku('https://www.target.com.au/p/pokemon-tcg-booster/71234567'), '71234567');
+  // The four added in 1.8.0. Pokémon Center and Premium Bandai: only their Australian stores.
+  assert.equal(retailers.forUrl('https://www.thegamescube.com/catalog/one_piece_tcg-one_piece_booster_boxes/one_piece_two_legends_booster_box_op08/695722').id, 'thegamescube');
+  assert.equal(sku('https://www.thegamescube.com/catalog/one_piece_tcg-one_piece_booster_boxes/one_piece_two_legends_booster_box_op08/695722'), '695722');
+  assert.equal(retailers.forUrl('https://gamerholic.com.au/products/pokemon-tcg-etb').id, 'gamerholic');
+  assert.equal(retailers.forUrl('https://www.pokemoncenter.com/en-au/product/10-10447-108/pokemon-tcg-etb').id, 'pokemoncenter');
+  assert.equal(sku('https://www.pokemoncenter.com/en-au/product/10-10447-108/pokemon-tcg-etb'), '10-10447-108');
+  assert.equal(retailers.forUrl('https://www.pokemoncenter.com/product/10-10447-108/pokemon-tcg-etb'), null, "the US store isn't Pokémon Center Australia");
+  assert.equal(retailers.forUrl('https://p-bandai.com/au/item/N2863373001').id, 'pbandai');
+  assert.equal(sku('https://p-bandai.com/au/item/N2863373001'), 'N2863373001');
+  assert.equal(retailers.forUrl('https://p-bandai.com/us/item/N2863373001'), null);
+  assert.equal(retailers.productUrlFromSku(retailers.get('pbandai'), 'N2863373001'), 'https://p-bandai.com/au/item/N2863373001');
   assert.equal(sku('https://www.bigw.com.au/product/pokemon-tcg/p/6012345'), '6012345');
   assert.equal(sku('https://www.amazon.com.au/dp/B0ABCDEF12'), 'B0ABCDEF12');
   assert.equal(sku('https://shop.example.com/item/9876543'), '9876543');
@@ -222,6 +233,8 @@ test('extension built for a live server: only that server and the stores; module
   assert.ok(m.host_permissions.includes('https://ac.cnstrc.com/*'), "Kmart's search provider, for an admin's browser sweeping Kmart");
   assert.equal(m.host_permissions[0], 'https://app.mugibot.example/*');
   assert.ok(m.host_permissions.includes('https://www.kmart.com.au/*'), 'stores (for in-browser checks)');
+  for (const h of ['https://www.thegamescube.com/*', 'https://gamerholic.com.au/*', 'https://www.pokemoncenter.com/*', 'https://p-bandai.com/*']) assert.ok(m.host_permissions.includes(h), h);
+  assert.ok(m.content_scripts.some((cs) => cs.all_frames && cs.matches.includes('https://*.global-e.com/*') && cs.js.includes('frame.js')), "Premium Bandai's checkout, in Global-e's frame");
   assert.ok(!JSON.stringify(m).includes('127.0.0.1'), 'no local addresses in a live build');
   const by = (f) => m.content_scripts.find((c) => c.js.includes(f));
   assert.deepEqual(by('bridge.js').matches, ['https://app.mugibot.example/*']);

@@ -13,6 +13,16 @@
 //             one-page checkout → "Pay now"; search suggestions
 //   /trainertown  the same Shopify pages (Trainer Town), plus a collection per
 //             game with its product list (what the live sweeps read there)
+//   /gamerholic  the same Shopify pages (Gamerholic), with its newest-products list
+//   /thegamescube  CrystalCommerce-style (The Games Cube): search tiles, an icon-only
+//             cart button, the cart API, "Checkout as a guest" → address → shipping
+//             and payment → "Place Order"
+//   /pokemoncenter  Pokémon Center-style: a search page built once it's open,
+//             "Add to Cart" → "View Cart" → "Checkout" → guest → shipping → payment
+//             (card frame) → "Place Order"
+//   /pbandai  Premium Bandai-style: a Vue page (its Add button works once Vue has
+//             wired it up), "Go to Cart" → "Proceed to checkout" → the whole
+//             checkout in a Global-e-style frame from another address
 //
 // Open the root (/) for the control panel: restock, sell out, list or unlist
 // products and watch Mugibot react. A second server on another port serves
@@ -28,9 +38,14 @@ const SHOPS = {
   ebgames: { name: 'EB Games (dummy)', color: '#d22' },
   jbhifi: { name: 'JB Hi-Fi (dummy Shopify)', color: '#222' },
   trainertown: { name: 'Trainer Town (dummy Shopify)', color: '#1d4e89' },
+  gamerholic: { name: 'Gamerholic (dummy Shopify)', color: '#6b21a8' },
+  thegamescube: { name: 'The Games Cube (dummy CrystalCommerce)', color: '#0f766e' },
+  pokemoncenter: { name: 'Pokémon Center (dummy)', color: '#d32f2f' },
+  pbandai: { name: 'Premium Bandai (dummy)', color: '#1f2937' },
 };
 // The Shopify-style shops: the same product, cart and checkout pages.
-const SHOPIFY = new Set(['jbhifi', 'trainertown']);
+const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic']);
+const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai)(\/.*|$)/;
 const LD_AVAIL = { in_stock: 'InStock', preorder: 'PreOrder', out_of_stock: 'OutOfStock' };
 const STATES = '<option value="">Select state</option><option value="NSW">New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option><option value="WA">Western Australia</option><option value="SA">South Australia</option><option value="TAS">Tasmania</option><option value="ACT">Australian Capital Territory</option><option value="NT">Northern Territory</option>';
 
@@ -45,7 +60,10 @@ export function defaultShops() {
       hydrateMs: 0, addDelayMs: 0, refuseAdds: false,
       // A React-style page (like Kmart's): its code wires up "Add" reactMs after the page
       // opens, long before a slow picture lets the page finish loading (slowLoadMs).
-      reactMs: 0, slowLoadMs: 0,
+      // vueMs: the same for a Vue page (Premium Bandai's).
+      reactMs: 0, slowLoadMs: 0, vueMs: id === 'pbandai' ? 600 : 0,
+      // Search pages that only fill in their products once open (like Pokémon Center's and Premium Bandai's).
+      clientSearch: id === 'pokemoncenter' || id === 'pbandai',
       // When the product page was last sent, and when the last add arrived.
       servedAt: 0, addedAt: 0,
       // What the bag page showed each time it was opened (number of items in it).
@@ -74,6 +92,8 @@ button[disabled]{background:#999;cursor:default}label{display:block;margin:8px 0
 function bagLink(shop, count) {
   const word = shop === 'kmart' ? 'Bag' : 'Cart';
   const label = count == null ? word : `${word}, ${count} item${count === 1 ? '' : 's'}`;
+  // CrystalCommerce: the cart is at /checkout/cart, its count in .cart-count (0 included).
+  if (shop === 'thegamescube') return `<a href="/thegamescube/checkout/cart" id="bag-link" class="cart-details">Cart <span class="cart-count">${count || 0}</span></a>`;
   return `<a href="${shop ? `/${shop}` : ''}/cart" id="bag-link" aria-label="${label}">${word}${count ? ` <span class="bag-count">${count}</span>` : ''}</a>`;
 }
 
@@ -155,6 +175,9 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       bigw: { in_stock: 'Add to cart', preorder: 'Pre-order', out_of_stock: 'Out of stock online', coming_soon: 'Coming soon' },
       ebgames: { in_stock: 'Add to Cart', preorder: 'Pre-order Now', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
       jbhifi: { in_stock: 'Add to cart', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon' },
+      pokemoncenter: { in_stock: 'Add to Cart', preorder: 'Pre-order', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
+      pbandai: { in_stock: 'Add to Cart', preorder: 'Add to Cart', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
+      thegamescube: {},
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     const orderable = p.status === 'in_stock' || p.status === 'preorder';
     if (SHOPIFY.has(shop)) {
@@ -162,11 +185,14 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <form action="/${shop}/cart/add" method="get"><input type="hidden" name="id" value="${p.id}">${qtyControl(p)}
         <button type="submit" name="add" ${orderable ? '' : 'disabled'}>${labels[p.status]}</button></form></div>`, { head: ldFor(p, shop) });
     }
+    if (shop === 'thegamescube') return crystalProductPage(p);
     const button = orderable ? `<button type="button" id="atc" class="add-to-cart">${labels[p.status]}</button>` : `<button type="button" class="add-to-cart" disabled>${labels[p.status]}</button>`;
     const drawer = {
       kmart: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to bag"><h3>Added to bag</h3><p id="drawer-msg"></p><a class="btn" href="/kmart/checkout">Checkout</a> <a href="/kmart/cart">View bag</a></div>',
       bigw: '<div class="drawer added-to-cart-drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/bigw/cart">View cart</a> <a href="/bigw/">Continue shopping</a></div>',
       ebgames: '<div class="drawer mini-cart" id="drawer"><h3>Added to cart</h3><p id="drawer-msg"></p><a class="btn" href="/ebgames/checkout">Checkout</a> <a href="/ebgames/cart">View cart</a></div>',
+      pokemoncenter: '<div class="drawer mini-cart" id="drawer" role="dialog" aria-label="Added to cart"><h3>Added to cart</h3><p id="drawer-msg"></p><a class="btn" href="/pokemoncenter/cart">View Cart</a> <a href="/pokemoncenter/">Continue Shopping</a></div>',
+      pbandai: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Item added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/pbandai/cart">Go to Cart</a></div>',
     }[shop];
     return page(shop, `${p.name} | ${SHOPS[shop].name}`, `
       <div class="product-detail">
@@ -185,7 +211,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         ${p.lateMs ? `setTimeout(() => { document.getElementById('buybox').innerHTML = ${JSON.stringify(button)}; }, ${Number(p.lateMs)});` : ''}
         ${stepperJs(p)}
         // Until the page's code has started, pressing Add does nothing (like a store that's still loading).
-        let started = ${shopOf(shop).hydrateMs || shopOf(shop).reactMs ? 'false' : 'true'};
+        let started = ${shopOf(shop).hydrateMs || shopOf(shop).reactMs || shopOf(shop).vueMs ? 'false' : 'true'};
         ${shopOf(shop).hydrateMs ? `addEventListener('load', () => setTimeout(() => { started = true; }, ${Number(shopOf(shop).hydrateMs)}));` : ''}
         ${shopOf(shop).reactMs ? `window.__NEXT_DATA__ = {};
         setTimeout(() => {
@@ -193,6 +219,12 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           const atc = document.getElementById('atc'); // what React leaves on a button it has taken over
           if (atc) { atc.__reactFiber$mock = {}; atc.__reactProps$mock = { onClick() {} }; }
         }, ${Number(shopOf(shop).reactMs)});` : ''}
+        ${shopOf(shop).vueMs ? `document.body.setAttribute('data-v-app', '');
+        setTimeout(() => {
+          started = true;
+          const atc = document.getElementById('atc'); // what Vue leaves on an element it has wired up
+          if (atc) atc._vei = { onClick() {} };
+        }, ${Number(shopOf(shop).vueMs)});` : ''}
         document.addEventListener('click', async (e) => {
           if (!e.target.closest('#atc') || !started) return;
           ${readQtyJs}
@@ -205,6 +237,48 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           setTimeout(() => { document.getElementById('drawer-msg').textContent = d.count + ' item(s) in your ${shop === 'kmart' ? 'bag' : 'cart'}'; document.getElementById('drawer').classList.add('open'); }, 150);
         });
       </script>`, { head: ldFor(p, shop), bagCount: bagCount(shop) });
+  }
+
+  // CrystalCommerce (The Games Cube): each option in stock has its own small cart button — an icon, no words.
+  function crystalForm(p) {
+    return `<form class="add-to-cart-form" data-vid="${p.id}" data-name="${esc(p.name)}" data-id="${p.sku}" data-price="AUD$ ${p.price.toFixed(2)}" data-category="Cards" data-variant="Sealed">
+      <div class="product-price-qty"><span class="regular price">AUD$ ${p.price.toFixed(2)}</span></div>
+      <div class="qty-submit"><input class="qty" max="3" name="qty" size="1" type="number" value="1"><input class="utility-button add-to-cart" name="commit" type="submit" value="&#xf217;" style="width:44px;font-family:monospace"></div></form>`;
+  }
+  function crystalProductPage(p) {
+    const orderable = p.status === 'in_stock' || p.status === 'preorder';
+    return page('thegamescube', `${p.name} | The Games Cube`, `<article class="product-container single">
+      <h1 class="title" itemprop="name">${esc(p.name)}</h1>
+      <h4 class="stock-indicator ${orderable ? 'in-stock' : 'no-stock'}">${orderable ? 'In Stock' : 'Out of Stock'}</h4>
+      <div class="info-box"><h4 class="heading">Buy This Product</h4><div class="variant-row row">
+        <span class="variant-short-info">Sealed, <em>${orderable ? '3 in-stock' : 'Out of stock.'}</em></span>
+        ${orderable ? crystalForm(p) : `<span class="regular price">AUD$ ${p.price.toFixed(2)}</span> <a href="#" class="utility-button add-to-wishlist">Wishlist</a>`}
+      </div></div></article>
+      <div class="alert-box" id="cart-alert" role="alert" style="display:none"></div>
+      <script>
+        document.addEventListener('submit', async (e) => {
+          const f = e.target.closest('.add-to-cart-form');
+          if (!f) return;
+          e.preventDefault();
+          const r = await fetch('/thegamescube/api/v1/cart/line_items', { method: 'POST', headers: { 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ line_items: [{ variant_id: Number(f.dataset.vid), qty: Number(f.querySelector('[name=qty]').value) }] }) });
+          const d = await r.json();
+          if (!d.line_items || !d.line_items.length) return;
+          document.querySelector('.cart-count').textContent = String(d.count);
+          const a = document.getElementById('cart-alert');
+          a.textContent = d.line_items[0].name + ' has been added to your cart';
+          a.style.display = 'block';
+        });
+      </script>`, { bagCount: bagCount('thegamescube') });
+  }
+  function crystalSearchPage(q) {
+    const hits = searchHits('thegamescube', q);
+    return page('thegamescube', 'Search results', `<div class="products-container browse"><ul class="products">${hits.map((x) => {
+      const orderable = x.status === 'in_stock' || x.status === 'preorder';
+      return `<li class="product" itemscope itemtype="http://schema.org/Product"><div class="inner"><div class="image"><a href="${pathFor('thegamescube', x)}" itemprop="url" title="${esc(x.name)}"><img src="${imagePath('thegamescube', x)}" alt="${esc(x.name)}" itemprop="image"></a></div>
+        <div class="meta"><a href="${pathFor('thegamescube', x)}" itemprop="url"><h4 class="name" itemprop="name" title="${esc(x.name)}">${esc(x.name)}</h4></a>
+        <div class="variant-row ${orderable ? 'in-stock' : 'no-stock'}"><span class="variant-short-info variant-qty">${orderable ? '3 In Stock' : 'Out of stock.'}</span>
+        ${orderable ? crystalForm(x) : `<span class="price no-stock hide" itemprop="price">AUD$ ${x.price.toFixed(2)}</span>`}</div></div></div></li>`;
+    }).join('')}</ul></div>`);
   }
 
   const searchHits = (shop, q) => {
@@ -242,7 +316,10 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       const qty = SHOPIFY.has(shop) ? `<input type="number" name="updates[]" aria-label="Quantity" data-sku="${c.sku}" value="${c.qty}" min="1" style="width:60px">` : `<select aria-label="Quantity" data-sku="${c.sku}">${opts}</select>`;
       return `<li class="line-item"><div class="line-name"><a href="${p ? pathFor(shop, p) : '#'}">${esc(c.name)}</a></div><div class="line-qty">Qty ${qty}</div></li>`;
     }).join('');
-    const go = { kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>' }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
+    const go = {
+      kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>',
+      thegamescube: '<a class="utility-button checkout" href="/thegamescube/checkout/proceed_to_checkout">Checkout &rarr;</a>', pokemoncenter: '<a class="btn" href="/pokemoncenter/checkout">Checkout</a>', pbandai: '<a class="btn" href="/pbandai/checkout">Proceed to checkout</a>',
+    }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || '<li>Empty</li>'}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
       <script>
         for (const s of document.querySelectorAll('[data-sku]')) s.addEventListener('change', () => fetch('/${shop}/api/cart/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: s.dataset.sku, qty: Number(s.value) }) }));
@@ -384,6 +461,27 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   // -------------------------------------------------------------------- card iframe server
   const cardServer = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
+    // A whole checkout in a frame (like Global-e's, which runs Premium Bandai's): details and card.
+    if (u.pathname === '/ge-checkout') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui"><h2>Secure checkout</h2>
+<style>label{display:block;margin:6px 0}input,select{display:block;padding:6px;width:300px}</style>
+<label>Email <input name="email" type="email" autocomplete="email"></label>
+<label>First name <input name="firstName" autocomplete="given-name"></label>
+<label>Last name <input name="lastName" autocomplete="family-name"></label>
+<label>Address <input name="address1" autocomplete="address-line1"></label>
+<label>City <input name="city" autocomplete="address-level2"></label>
+<label>State <select name="state" autocomplete="address-level1"><option value="">Select</option><option value="NSW">New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option></select></label>
+<label>Postcode <input name="zip" autocomplete="postal-code"></label>
+<label>Phone <input name="phone" type="tel" autocomplete="tel"></label>
+<h3>Payment</h3>
+<label>Card number <input name="cardNumber" autocomplete="cc-number" inputmode="numeric"></label>
+<label>Expiry date <input name="expiry" autocomplete="cc-exp" placeholder="MM/YY"></label>
+<label>CVV <input name="cvv" autocomplete="cc-csc" inputmode="numeric"></label>
+<button type="button" id="ge-place" onclick="document.title='placed'">Place Order</button>
+</body></html>`);
+      return;
+    }
     if (u.pathname === '/card-frame') {
       const style = u.searchParams.get('style') || 'stripe';
       if (style === 'strict') {
@@ -459,7 +557,7 @@ for (const el of document.querySelectorAll('input')) {
     const redirect = (to) => { res.writeHead(302, { location: to }); res.end(); };
 
     // Product pictures (a coloured card with the product's name).
-    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown)\/([^/]+)\.svg$/);
+    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai)\/([^/]+)\.svg$/);
     if (img) {
       const prod = find(img[1], decodeURIComponent(img[2]));
       if (!prod) return html(404, 'Not found');
@@ -506,7 +604,7 @@ for (const el of document.querySelectorAll('input')) {
         <p>Orders placed (should stay 0 — Mugibot never presses the final button): <b>${orders}</b></p>`));
     }
 
-    const m = p.match(/^\/(kmart|bigw|ebgames|jbhifi|trainertown)(\/.*|$)/);
+    const m = p.match(SHOP_RE);
     if (!m) return html(404, page(null, 'Page not found', '<h1>Page not found</h1>'));
     const shop = m[1];
     const sub = m[2] || '/';
@@ -521,6 +619,9 @@ for (const el of document.querySelectorAll('input')) {
     if (shop === 'kmart') sku = (sub.match(/^\/product\/[^/]*-(\d{6,10})\/?$/) || [])[1];
     if (shop === 'bigw') sku = (sub.match(/^\/product\/[^/]+\/p\/(\d+)$/) || [])[1];
     if (shop === 'ebgames') sku = (sub.match(/^\/product\/[^/]+\/(\d+)-/) || [])[1];
+    if (shop === 'thegamescube') sku = (sub.match(/^\/catalog\/[^/]+\/[^/]+\/(\d+)\/?$/) || [])[1];
+    if (shop === 'pokemoncenter') sku = (sub.match(/^\/product\/([0-9A-Za-z-]+)\/[^/]+$/) || [])[1];
+    if (shop === 'pbandai') sku = (sub.match(/^\/item\/([A-Z]\d+)$/) || [])[1];
     if (SHOPIFY.has(shop)) {
       const js = sub.match(/^\/products\/([^/]+)\.js$/);
       if (js) {
@@ -541,8 +642,11 @@ for (const el of document.querySelectorAll('input')) {
       return html(200, productPage(shop, prod));
     }
 
+    if (shop === 'thegamescube' && sub === '/products/search') return html(200, crystalSearchPage(u.searchParams.get('q') || ''));
+    const pathSearch = shop === 'pokemoncenter' && sub.match(/^\/search\/([^/]+)$/);
+    if (pathSearch) return html(200, clientSearchPage(shop, decodeURIComponent(pathSearch[1])));
     if (sub === '/search' || sub === '/search/') {
-      const q = u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || '';
+      const q = u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('keyword') || '';
       // Like BIG W's real site: the page has no products in it until its own code fetches them.
       if (S.clientSearch) return html(200, clientSearchPage(shop, q));
       return html(200, searchPage(shop, q));
@@ -619,6 +723,31 @@ for (const el of document.querySelectorAll('input')) {
           images: [{ src: `http://${req.headers.host}${imagePath(shop, x)}` }],
         })),
       });
+    }
+
+    // Shopify's whole product list, newest first (what Mugibot's live sweeps read at Gamerholic).
+    if (SHOPIFY.has(shop) && sub === '/products.json') {
+      const listed = shopOf(shop).products.filter((x) => x.listed).slice().reverse();
+      return json(200, { products: listed.slice(0, Number(u.searchParams.get('limit')) || 30).map((x) => ({
+          id: x.id, title: x.name, handle: x.sku, body_html: '<p>Dummy</p>', product_type: 'Trading Cards', tags: x.status === 'preorder' ? ['Pre-Order'] : [],
+          variants: [{ id: x.id, title: 'Default Title', price: x.price.toFixed(2), compare_at_price: x.was ? x.was.toFixed(2) : null, available: x.status === 'in_stock' || x.status === 'preorder' }],
+          images: [{ src: `http://${req.headers.host}${imagePath(shop, x)}` }],
+        })) });
+    }
+
+    // ---------------- CrystalCommerce (The Games Cube): the cart API its pages use
+    if (shop === 'thegamescube' && sub === '/api/v1/cart/line_items' && req.method === 'POST') {
+      const b = await parseBody(req);
+      S.addedAt = Date.now();
+      const items = [];
+      for (const li of (b.line_items || [])) {
+        const prod = S.products.find((x) => x.id === Number(li.variant_id));
+        if (prod && addToCart(shop, prod.sku, li.qty).ok) items.push({ id: prod.id, name: prod.name, qty: Number(li.qty) || 1, variant_id: prod.id, product_id: Number(prod.sku), price_cents: Math.round(prod.price * 100) });
+      }
+      return json(200, { line_items: items, count: bagCount(shop), errors: items.length ? undefined : { base: ['Out of stock'] } });
+    }
+    if (shop === 'thegamescube' && sub === '/api/v1/cart') {
+      return json(200, { carts: [{ type: 'Order', currency: 'AUD', line_items_count: bagCount(shop), total_cents: Math.round(total(shop) * 100), links: { checkout: '/checkout/proceed_to_checkout', cart: '/checkout/cart' }, line_items: [] }] });
     }
 
     if (sub === '/api/cart/add' && req.method === 'POST') {
@@ -732,7 +861,109 @@ for (const el of document.querySelectorAll('input')) {
       }
     }
 
-    // ---------------- Shopify-style one-page checkout (JB Hi-Fi, Trainer Town)
+    // ---------------- CrystalCommerce checkout (The Games Cube): guest → address → shipping and payment
+    if (shop === 'thegamescube' && sub.startsWith('/checkout')) {
+      const gc = (title, body) => html(200, page(shop, title, body));
+      if (sub === '/checkout/cart') {
+        S.bagViews.push(bagCount(shop));
+        return html(200, cartPage(shop));
+      }
+      if (sub === '/checkout/proceed_to_checkout') {
+        return gc('Checkout', '<p>Proceeding to checkout... <a id="proceed-to-checkout-manually" href="/thegamescube/checkout/index">Click here if you are not redirected automatically.</a></p><script>setTimeout(() => { location.href = "/thegamescube/checkout/index"; }, 300);</script>');
+      }
+      if (sub === '/checkout/customers' && req.method === 'POST') {
+        const b = await parseBody(req);
+        S.steps.push({ step: 'guest' });
+        S.data.contact = { name: b['customer[fullname]'], email: b['customer[email]'] };
+        return redirect('/thegamescube/checkout/index');
+      }
+      if (sub === '/checkout/address' && req.method === 'POST') {
+        const b = await parseBody(req);
+        S.steps.push({ step: 'address' });
+        S.data.address = b;
+        return redirect('/thegamescube/checkout/index');
+      }
+      if (sub === '/checkout/create' && req.method === 'POST') {
+        S.orders.push({ cart: S.cart.slice(), data: { ...S.data }, form: await parseBody(req), ts: Date.now() });
+        S.cart = [];
+        return gc('Order complete', '<h1>Thank you for your order!</h1>');
+      }
+      if (sub === '/checkout/index') {
+        const lines = S.cart.map((c) => `<li>${esc(c.name)} x ${c.qty}</li>`).join('') || '<li>Your cart is empty</li>';
+        if (!S.data.contact) {
+          return gc('Checkout', `<h2>Checkout is fast, easy, and secure</h2>
+            <form action="/thegamescube/checkout/session" method="post" id="existing_member_form"><h3>Sign in</h3>
+              <label for="existing_customer_email">Email</label><input id="existing_customer_email" name="customer[email]" type="text">
+              <label for="existing_customer_password">Password</label><input id="existing_customer_password" name="customer[password]" type="password">
+              <input class="btn btn--login" name="commit" type="submit" value="Login"></form>
+            <form action="/thegamescube/checkout/customers" method="post" id="new_member_form"><h3>Checkout as a guest</h3><p>Continue as a guest. You may create an account after checkout.</p>
+              <label for="customer_fullname">Name</label><input id="customer_fullname" name="customer[fullname]" type="text">
+              <label for="customer_email">Email</label><input id="customer_email" name="customer[email]" type="text">
+              <input class="btn btn--neutral" id="customer_submit" name="commit" type="submit" value="Checkout as a guest"></form>
+            <h3>Your Cart</h3><ul>${lines}</ul>`);
+        }
+        if (!S.data.address) {
+          return gc('Checkout', `<h2>1. Shipping Address</h2><form action="/thegamescube/checkout/address" method="post">
+            <label>Address <input name="address[street]" autocomplete="shipping address-line1" required></label>
+            <label>Address 2 <input name="address[street2]" autocomplete="shipping address-line2"></label>
+            <label>City / Suburb <input name="address[city]" autocomplete="shipping address-level2" required></label>
+            <label>State <select name="address[state]" autocomplete="shipping address-level1" required>${STATES}</select></label>
+            <label>Postcode <input name="address[postcode]" autocomplete="shipping postal-code" required></label>
+            <label>Phone <input name="address[phone]" type="tel" autocomplete="tel"></label>
+            <button type="submit">Continue</button></form><h3>Your Cart</h3><ul>${lines}</ul>`);
+        }
+        return gc('Checkout', `<form action="/thegamescube/checkout/create" method="post" id="place_order_form">
+          <h2>2. Shipping Method</h2>
+          <label><input type="radio" name="shipping" value="pickup"> Pick up in store (free)</label>
+          <label><input type="radio" name="shipping" value="auspost"> Australia Post Standard — AUD$ 10.00</label>
+          <h2>3. Payment Options</h2>
+          <label>Card number <input name="cc_number" autocomplete="cc-number" inputmode="numeric"></label>
+          <label>Name on card <input name="cc_name" autocomplete="cc-name"></label>
+          <label>Expiry (MM/YY) <input name="cc_exp" autocomplete="cc-exp" placeholder="MM/YY"></label>
+          <label>CVV <input name="cc_cvv" autocomplete="cc-csc" inputmode="numeric"></label>
+          <h3>Your Cart</h3><ul>${lines}</ul>
+          <button type="submit" id="place-order">Place Order</button></form>`);
+      }
+    }
+
+    // ---------------- Pokémon Center-style checkout: guest → shipping → payment (card frame)
+    if (shop === 'pokemoncenter' && sub.startsWith('/checkout')) {
+      if (sub === '/checkout' && req.method === 'POST') {
+        const b = await parseBody(req);
+        S.data[b.step] = b;
+        S.steps.push({ step: b.step });
+        return redirect('/pokemoncenter/checkout');
+      }
+      const lines = S.cart.map((c) => `<li>${esc(c.name)} x ${c.qty}</li>`).join('');
+      if (!S.data.guest) {
+        return html(200, page(shop, 'Checkout', `<h1>Checkout</h1><form method="post"><input type="hidden" name="step" value="guest">
+          <label>Email address <input name="email" type="email" autocomplete="email" required></label>
+          <button type="submit">Continue as Guest</button></form><ul>${lines}</ul>`));
+      }
+      if (!S.data.shipping) {
+        return html(200, page(shop, 'Checkout', `<h1>Shipping</h1><form method="post"><input type="hidden" name="step" value="shipping">
+          <label>First name <input name="firstName" autocomplete="given-name" required></label>
+          <label>Last name <input name="lastName" autocomplete="family-name" required></label>
+          <label>Street address <input name="address1" autocomplete="address-line1" required></label>
+          <label>Apartment, unit (optional) <input name="address2" autocomplete="address-line2"></label>
+          <label>Suburb <input name="city" autocomplete="address-level2" required></label>
+          <label>State <select name="state" autocomplete="address-level1" required>${STATES}</select></label>
+          <label>Postcode <input name="postcode" autocomplete="postal-code" required></label>
+          <label>Phone number <input name="phone" type="tel" autocomplete="tel" required></label>
+          <button type="submit">Continue to Payment</button></form>`));
+      }
+      return html(200, page(shop, 'Checkout', `<h1>Payment</h1><p>Shipping to ${esc(S.data.shipping.address1)}</p>
+        <p><b>Pay with card</b></p>${cardBoxes('generic')}<form action="/pokemoncenter/checkout/place" method="post"><button type="submit">Place Order</button></form>`));
+    }
+
+    // ---------------- Premium Bandai-style checkout: the whole checkout in a Global-e-style frame
+    if (shop === 'pbandai' && sub === '/checkout') {
+      S.data.checkoutOpened = Date.now();
+      return html(200, page(shop, 'Checkout', `<h1>Checkout</h1><p>Your order is handled by our checkout partner.</p>
+        <iframe id="ge-frame" src="${cardOrigin}/ge-checkout" width="560" height="760" style="border:1px solid #ccc"></iframe>`));
+    }
+
+    // ---------------- Shopify-style one-page checkout (JB Hi-Fi, Trainer Town, Gamerholic)
     if (SHOPIFY.has(shop) && sub.startsWith('/checkouts/c/abc123')) {
       if (sub.endsWith('/thank-you')) return html(200, page(shop, 'Thank you', '<h1>Thank you for your purchase!</h1><p>Your order is confirmed.</p>'));
       if (req.method === 'POST') {
