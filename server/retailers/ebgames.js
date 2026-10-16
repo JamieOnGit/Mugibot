@@ -20,6 +20,8 @@ export default {
   skuFromPath: /\/product\/[^/]+\/(\d+)/,
   productPath: /^(\/ebgames)?\/product\/[^/]+\/\d+/,
   searchPath: '/search?q={q}',
+  // Live sweeps: EB Games refuses servers, so an admin's browser (the extension) reads its search page.
+  sweep: { from: 'browser', parser: 'generic', path: '/search?q={q}' },
   monitor: { server: true, browser: true },
   flow: {
     product: {

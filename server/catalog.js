@@ -29,8 +29,12 @@ export function toProduct(r) {
     status: r.status, statusSource: r.status_source, confirmed: !!r.confirmed, price: r.price, previousPrice: r.previous_price,
     variantId: r.variant_id, failCount: r.fail_count, error: r.error,
     statusAt: r.status_at, priceAt: r.price_at, checkedAt: r.checked_at, lastOkAt: r.last_ok_at, createdAt: r.created_at,
+    sweep: r.sweep_first_at ? { firstAt: r.sweep_first_at, seenAt: r.sweep_seen_at, keyword: r.sweep_keyword } : null,
   };
 }
+
+// How long a product a sweep stopped seeing stays in the list (sold out products often drop out of search).
+const SWEPT_DAYS = 14;
 
 export function toMonitor(r) {
   return r && {
@@ -185,6 +189,39 @@ export class Catalog {
       }));
   }
 
+  /**
+   * The products list: everything the live sweeps track (seen lately) and every monitored product,
+   * filtered and searched. Members don't see paused monitors that no sweep tracks.
+   */
+  listProducts({ q = '', category = '', store = '', status = '', admin = false, limit = 600 } = {}) {
+    const where = [`(m.id IS NOT NULL${admin ? '' : ' AND m.paused = 0'} OR p.sweep_seen_at >= :swept)`];
+    const params = { limit, swept: this.now() - SWEPT_DAYS * 86400000 };
+    if (q) { where.push('(p.name LIKE :q OR p.sku LIKE :q)'); params.q = `%${q}%`; }
+    if (category) { where.push('p.category = :category'); params.category = category; }
+    if (store) { where.push('p.store = :store'); params.store = store; }
+    if (status === 'available') where.push("p.status IN ('in_stock', 'preorder')");
+    else if (status === 'unavailable') where.push("p.status NOT IN ('in_stock', 'preorder')");
+    else if (status === 'problem') where.push("(p.status IN ('blocked', 'error') OR p.fail_count > 0)");
+    else if (status === 'new') { where.push('p.sweep_first_at >= :day'); params.day = this.now() - 86400000; }
+    else if (status) { where.push('p.status = :status'); params.status = status; }
+    return this.db.all(`SELECT p.*, m.id AS m_id, m.interval_seconds AS m_interval, m.paused AS m_paused, m.kinds AS m_kinds, m.note AS m_note,
+        m.created_at AS m_created
+      FROM products p LEFT JOIN monitors m ON m.product_id = p.id WHERE ${where.join(' AND ')}
+      ORDER BY CASE WHEN p.status IN ('in_stock', 'preorder') THEN 0 ELSE 1 END, COALESCE(p.status_at, p.sweep_first_at, p.created_at) DESC LIMIT :limit`, params)
+      .map((r) => ({
+        ...toProduct(r),
+        monitor: r.m_id ? { id: r.m_id, intervalSeconds: r.m_interval, paused: !!r.m_paused, kinds: json(r.m_kinds, DEFAULT_KINDS), note: r.m_note, createdAt: r.m_created } : null,
+      }));
+  }
+
+  /** Is this product in the shared list (monitored, or tracked by a sweep lately)? */
+  isListed(product, { admin = false } = {}) {
+    if (!product) return false;
+    const m = this.monitorForProduct(product.id);
+    if (m && (admin || !m.paused)) return true;
+    return !!product.sweep_seen_at && product.sweep_seen_at >= this.now() - SWEPT_DAYS * 86400000;
+  }
+
   /** Active monitors at a store whose server checks can't be relied on: for admins' browsers to check. */
   browserTargets(stores, now, limit = 5) {
     if (!stores.length) return [];
@@ -291,10 +328,14 @@ export class Catalog {
     return {
       monitors: one('SELECT COUNT(*) FROM monitors WHERE paused = 0'),
       paused: one('SELECT COUNT(*) FROM monitors WHERE paused = 1'),
-      available: one("SELECT COUNT(*) FROM monitors m JOIN products p ON p.id = m.product_id WHERE m.paused = 0 AND p.status IN ('in_stock', 'preorder')"),
+      available: one(`SELECT COUNT(*) FROM products p LEFT JOIN monitors m ON m.product_id = p.id
+        WHERE ((m.id IS NOT NULL AND m.paused = 0) OR p.sweep_seen_at >= :d) AND p.status IN ('in_stock', 'preorder')`, { d: day }),
       restocks24h: one("SELECT COUNT(*) FROM feed_alerts WHERE kind = 'restock' AND at >= :d", { d: day }),
+      drops24h: one("SELECT COUNT(*) FROM feed_alerts WHERE kind = 'listed' AND at >= :d", { d: day }),
+      tracked: one('SELECT COUNT(*) FROM products WHERE sweep_seen_at >= :d', { d: day }),
       priceChanges24h: one("SELECT COUNT(*) FROM feed_alerts WHERE kind IN ('price_drop', 'price_rise') AND at >= :d", { d: day }),
       checks1h: checks.n || 0,
+      ok1h: checks.ok || 0,
       okRate1h: checks.n ? Math.round(((checks.ok || 0) / checks.n) * 100) : null,
     };
   }

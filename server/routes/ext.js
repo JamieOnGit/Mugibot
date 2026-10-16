@@ -120,4 +120,19 @@ export function register(router, ctx) {
     const applied = await ctx.monitor.browserResults(req.user, req.body.results.slice(0, 20));
     return { ok: true, applied };
   }, { auth: 'device', entitled: true });
+
+  // Live sweeps from an admin's browser (docs/MONITORING.md): the next search at each store
+  // that refuses servers… Members' browsers get none: only admins can change the shared feed.
+  router.get('/api/ext/sweeps', async (req) => {
+    if (!limiter.hit(`sweeps:${req.device.id}`, 120, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    return ctx.sweeper.browserDue(req.user);
+  }, { auth: 'device' });
+
+  // …and what they found.
+  router.post('/api/ext/sweeps', async (req) => {
+    if (!limiter.hit(`sweeps-post:${req.device.id}`, 120, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    if (!Array.isArray(req.body.results)) throw bad('results must be a list');
+    if (req.user.role !== 'admin') return { ok: true, results: [] };
+    return { ok: true, results: await ctx.sweeper.browserResults(req.user, req.body.results) };
+  }, { auth: 'device', maxBody: 768 * 1024 });
 }

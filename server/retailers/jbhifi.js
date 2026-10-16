@@ -23,6 +23,9 @@ export default {
   // Shopify cart link: the product straight into the cart (Shopify's own feature).
   cartPath: '/cart/{variant}:{qty}',
   searchPath: '/search?query={q}',
+  // Live sweeps: Shopify's search suggestions (10 products a search, with stock). "pokemon" alone
+  // finds plushies and games, so "tcg" is added unless the keyword already says cards.
+  sweep: { from: 'server', parser: 'shopify-suggest', path: '/search/suggest.json?q={q}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last', addWord: 'tcg' },
   monitor: { server: true, browser: true },
   flow: {
     product: {

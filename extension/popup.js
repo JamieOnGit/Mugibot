@@ -76,6 +76,16 @@ async function render() {
   $('card-status').textContent = cardText(s.card);
   $('card-settings').textContent = s.card && s.card.saved ? 'Card settings' : 'Add your card';
   $('checks-status').textContent = checksText(s.lastChecks);
+  const sweeps = Object.values(s.lastSweeps || {}).filter((x) => Date.now() - x.at < 30 * 60 * 1000);
+  $('sweeps').hidden = !sweeps.length;
+  $('sweeps-list').textContent = '';
+  for (const x of sweeps) {
+    const li = document.createElement('li');
+    const secs = Math.round((Date.now() - x.at) / 1000);
+    li.textContent = `${x.name}: ${x.ok ? `${x.found} products` : `refused${x.status ? ` (HTTP ${x.status})` : ''}, backing off`} · ${secs < 60 ? `${secs}s` : `${Math.round(secs / 60)} min`} ago`;
+    li.className = x.ok ? '' : 'muted';
+    $('sweeps-list').appendChild(li);
+  }
   const st = await ask({ type: 'state' });
   const list = $('items');
   list.textContent = '';

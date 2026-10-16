@@ -22,6 +22,8 @@ export default {
   skuFromPath: /\/p\/(\d+)/,
   productPath: /^(\/bigw)?\/product\/[^/]+\/p\/\d+/,
   searchPath: '/search?text={q}',
+  // Live sweeps: BIG W refuses servers, so an admin's browser (the extension) reads its search page.
+  sweep: { from: 'browser', parser: 'generic', path: '/search?text={q}' },
   monitor: { server: true, browser: true },
   flow: {
     product: {

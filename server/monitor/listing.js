@@ -1,0 +1,368 @@
+// Reads the product list from a store's search results: every product's code,
+// name, price, stock, link and picture. Used by the live sweeps
+// (docs/MONITORING.md) on the server, and by the admin's browser (the
+// extension gets a copy of this file) for stores that refuse servers.
+//
+//   target           Target's search page: the product list the page is built from
+//                    (__NEXT_DATA__), stock per colour/size.
+//   shopify-suggest  Shopify's search suggestions (JB Hi-Fi): JSON, with stock.
+//   generic          Any other store: product data in the page's scripts (Next.js
+//                    data, JSON-LD, embedded state), plus product tiles in the HTML.
+//
+// A product: { sku, aliases, title, price, wasPrice, inStock (true/false/null),
+//              preorder, url, image, marketplace }
+
+import { findAll, findFirst, parseHTML, textContent } from './html.js';
+import { looksBlocked, parsePrice } from './extract.js';
+
+const clean = (s, max = 200) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+const httpsUrl = (v, base) => {
+  if (typeof v !== 'string' || !v.trim()) return '';
+  try {
+    const u = new URL(v.trim().replace(/^\/\//, 'https://'), base);
+    return /^https?:$/.test(u.protocol) ? u.href : '';
+  } catch { return ''; }
+};
+const money = (v) => {
+  const n = parsePrice(v);
+  return n !== null && n > 0 && n < 100000 ? Math.round(n * 100) / 100 : null;
+};
+
+function titleOf(html) {
+  const m = String(html).match(/<title[^>]*>([^<]*)<\/title>/i);
+  return m ? m[1] : '';
+}
+
+function nextData(html) {
+  const m = String(html).match(/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+/** What a page that isn't a result list says about why. */
+function pageProblem(html) {
+  return looksBlocked(html, titleOf(html)) ? 'blocked' : null;
+}
+
+// ---------------------------------------------------------------------------
+// Target
+// ---------------------------------------------------------------------------
+// Stock per colour: `inStock` on a single item, `stockAvailable` and each size's `inStock` on
+// clothing. Target leaves products that are sold out online out of its results altogether
+// (see sweep.js: a product gone from the results for a while is sold out).
+function targetStock(v) {
+  if (!v || typeof v !== 'object') return null;
+  const sizes = Array.isArray(v.sizeVariants) ? v.sizeVariants.filter(Boolean) : [];
+  if (v.inStock === true || v.stockAvailable === true || sizes.some((s) => s.inStock === true)) return true;
+  if (v.inStock === false || v.stockAvailable === false || (sizes.length && sizes.every((s) => s.inStock === false))) return false;
+  if (v.comingSoon === true || /out_?of_?stock|sold_?out|unavailable|coming_?soon/i.test(String(v.productDisplayType || ''))) return false;
+  return null;
+}
+
+export function parseTarget(html, { base = 'https://www.target.com.au' } = {}) {
+  const data = nextData(html);
+  const list = data && data.props && data.props.pageProps && data.props.pageProps.metadata && data.props.pageProps.metadata.productList;
+  if (!list || !Array.isArray(list.products)) return { products: [], total: null, problem: pageProblem(html) || 'layout' };
+  const products = [];
+  for (const p of list.products) {
+    if (!p || !p.id || !p.title) continue;
+    const vars = Array.isArray(p.variations) ? p.variations : [];
+    const code = String(p.id).replace(/^P/i, '');
+    const one = vars.length === 1 ? vars[0] : null;
+    const url = httpsUrl(one && one.url, base) || httpsUrl(p.baseProductUrl, base);
+    const sku = one && one.colourVariantCode ? String(one.colourVariantCode) : String(p.id);
+    const stock = vars.map(targetStock);
+    let inStock = null;
+    if (stock.includes(true)) inStock = true;
+    else if (p.displayOnly || (stock.length && stock.every((x) => x === false))) inStock = false;
+    const price = money(p.price && (p.price.offerPrice || (p.price.priceRange && p.price.priceRange.min)));
+    const was = money(p.price && p.price.wasPrice);
+    products.push({
+      sku, aliases: [...new Set([String(p.id), code, sku])].filter((a) => a !== sku), title: clean(p.title),
+      price, wasPrice: was && price && was > price ? was : null, inStock,
+      preorder: /^pre-?order\b/i.test(p.title) || vars.some((v) => /pre_?order/i.test(String(v && v.productDisplayType))),
+      url, image: httpsUrl(p.imageUrl, base), marketplace: false,
+    });
+  }
+  return { products, total: typeof list.totalNumProducts === 'number' ? list.totalNumProducts : null, perPage: list.products.length, problem: null };
+}
+
+// ---------------------------------------------------------------------------
+// Shopify search suggestions (JB Hi-Fi)
+// ---------------------------------------------------------------------------
+export function parseShopifySuggest(text, { base } = {}) {
+  let j;
+  try { j = JSON.parse(text); } catch { return { products: [], problem: pageProblem(text) || 'layout' }; }
+  const list = j && j.resources && j.resources.results && j.resources.results.products;
+  if (!Array.isArray(list)) return { products: [], problem: 'layout' };
+  const products = [];
+  for (const p of list) {
+    if (!p || !p.handle || !p.title) continue;
+    let url = httpsUrl(p.url, base);
+    if (url) { const u = new URL(url); u.search = ''; u.hash = ''; url = u.href; }
+    const image = p.image || (p.featured_image && p.featured_image.url) || '';
+    const price = money(p.price ?? p.price_min);
+    const was = money(p.compare_at_price_max);
+    products.push({
+      sku: String(p.handle), aliases: p.id ? [String(p.id)] : [], title: clean(p.title), price,
+      wasPrice: was && price && was > price ? was : null, inStock: typeof p.available === 'boolean' ? p.available : null,
+      preorder: /\bpre-?order\b/i.test(`${p.title} ${(p.tags || []).join(' ')}`), url, image: httpsUrl(image, base), marketplace: false,
+    });
+  }
+  return { products, problem: null };
+}
+
+// ---------------------------------------------------------------------------
+// Any store: data in the page's scripts, then product tiles
+// ---------------------------------------------------------------------------
+const URL_KEYS = ['url', 'href', 'link', 'productUrl', 'productURL', 'pdpUrl', 'canonicalUrl', 'baseProductUrl', 'seoUrl', 'urlPath', 'path', 'slugUrl'];
+const IMAGE_KEYS = ['image', 'imageUrl', 'imageURL', 'thumbnail', 'thumbnailUrl', 'primaryImage', 'img', 'images', 'media'];
+
+// From MugiWatch: the places stores keep a product's price…
+function pickPrice(node) {
+  const o = node.offers && typeof node.offers === 'object' ? (Array.isArray(node.offers) ? node.offers[0] || {} : node.offers) : {};
+  const pr = node.prices && typeof node.prices === 'object' ? node.prices : {};
+  const p = node.price && typeof node.price === 'object' ? node.price : {};
+  for (const c of [typeof node.price === 'object' ? null : node.price, o.price, o.lowPrice, pr.sale, pr.single, pr.price, pr.amount, pr.current, p.offerPrice, p.salePrice,
+    p.amount, p.value, p.current, p.price, p.now, node.sellingPrice, node.offerPrice, node.salePrice, node.currentPrice, node.listPrice]) {
+    if (typeof c === 'number' || typeof c === 'string') {
+      const n = money(c);
+      if (n !== null) return n;
+    }
+  }
+  return null;
+}
+
+// …whether it's in stock…
+function readStock(node) {
+  const o = node.offers && typeof node.offers === 'object' ? (Array.isArray(node.offers) ? node.offers[0] || {} : node.offers) : {};
+  const clues = [node.inStock, node.in_stock, node.isInStock, node.available, node.isAvailable, node.availability, node.stock, node.stockStatus, node.stock_status,
+    node.stockLevel, node.availableOnline, node.isAvailableOnline, node.purchasable, node.isPurchasable, node.soldOut === true ? 'sold out' : undefined, o.availability,
+    node.item && node.item.inStock, node.item && node.item.available].filter((c) => c !== undefined && c !== null && typeof c !== 'object');
+  for (const c of clues) {
+    if (typeof c === 'boolean') return c;
+    if (typeof c === 'number') return c > 0;
+    const s = String(c).toLowerCase();
+    if (/out ?of ?stock|outofstock|sold ?out|soldout|unavailable|no_?stock|discontinued/.test(s)) return false;
+    if (/pre-?order|preorder|in ?stock|instock|available|limited/.test(s)) return true;
+  }
+  return null;
+}
+
+// …and whether it's sold by someone else (a marketplace seller).
+function readMarketplace(node, storeName) {
+  for (const k of ['isMarketplace', 'marketplace', 'is_marketplace', 'thirdPartySeller', 'isThirdParty', 'isPartner', 'byMarketplace', 'isMarketplaceProduct']) {
+    if (node[k] === true) return true;
+  }
+  const first = String(storeName || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').split(' ')[0];
+  for (const k of ['sellerName', 'soldBy', 'seller', 'vendorName', 'merchantName', 'seller_type', 'sellerType', 'listingType', 'fulfilledBy']) {
+    const v = node[k];
+    const s = typeof v === 'string' ? v : v && typeof v === 'object' && typeof v.name === 'string' ? v.name : '';
+    if (!s.trim()) continue;
+    if (/market ?place|third ?party/i.test(s)) return true;
+    if (first && !s.toLowerCase().replace(/[^a-z0-9 ]/g, '').includes(first)) return true;
+  }
+  for (const k of ['condition', 'productState', 'listingState', 'entryType']) {
+    if (typeof node[k] === 'string' && /second ?hand|used|refurb|trade ?in|market ?place/i.test(node[k])) return true;
+  }
+  return false;
+}
+
+function pickUrl(node, base, productPath) {
+  for (const k of URL_KEYS) {
+    const v = node[k];
+    if (typeof v !== 'string' || v.length < 2 || v.length > 1000) continue;
+    const u = httpsUrl(v, base);
+    if (u && (!productPath || productPath.test(new URL(u).pathname))) return u;
+  }
+  return '';
+}
+
+function pickImage(node, base) {
+  for (const k of IMAGE_KEYS) {
+    let v = node[k];
+    if (Array.isArray(v)) v = v[0];
+    if (v && typeof v === 'object') v = v.url || v.src || v.href || v.contentUrl;
+    const u = httpsUrl(v, base);
+    if (u) return u;
+  }
+  return '';
+}
+
+function walkJson(node, out, ctx, depth = 0) {
+  if (depth > 40 || out.length > 2000) return;
+  if (Array.isArray(node)) { for (const n of node) walkJson(n, out, ctx, depth + 1); return; }
+  if (!node || typeof node !== 'object') return;
+  const title = node.title || node.name || node.displayName || node.productName || (node.item && node.item.name);
+  if (typeof title === 'string' && title.trim().length > 3) {
+    const price = pickPrice(node);
+    const url = pickUrl(node, ctx.base, ctx.productPath);
+    const fromUrl = url && ctx.skuFrom(url);
+    const code = node.sku || node.productId || node.productCode || node.code || node.keycode || node.itemNumber || node.id || (node.item && node.item.sku);
+    const sku = fromUrl || (typeof code === 'string' || typeof code === 'number' ? String(code) : '');
+    // A product: a name with a price, and either its own link or a product code.
+    if (price !== null && sku && (url || ctx.codesOk)) {
+      out.push({
+        sku, aliases: code && String(code) !== sku ? [String(code)] : [], title: clean(title), price, wasPrice: null, inStock: readStock(node),
+        preorder: /\bpre-?order\b/i.test(`${title} ${typeof node.availability === 'string' ? node.availability : ''}`),
+        url, image: pickImage(node, ctx.base), marketplace: readMarketplace(node, ctx.storeName),
+      });
+    }
+  }
+  for (const v of Object.values(node)) if (v && typeof v === 'object') walkJson(v, out, ctx, depth + 1);
+}
+
+/** Every JSON blob a page carries: Next.js data, JSON-LD, JSON scripts and `window.__STATE__ = {…}`. */
+function jsonBlobs(doc) {
+  const out = [];
+  for (const s of findAll(doc, (n) => n.tag === 'script' && n.text)) {
+    const type = String(s.attrs.type || '').toLowerCase();
+    const text = s.text.trim();
+    if (/json/.test(type) || s.attrs.id === '__NEXT_DATA__') {
+      try { out.push(JSON.parse(text)); } catch { /* not JSON after all */ }
+      continue;
+    }
+    if (type && !/javascript|module/.test(type)) continue;
+    for (const m of text.matchAll(/(?:window\.)?__[A-Z_]+__\s*=\s*\{/g)) {
+      const start = m.index + m[0].length - 1;
+      const blob = balanced(text, start);
+      if (blob) { try { out.push(JSON.parse(blob)); } catch { /* not plain JSON */ } }
+    }
+  }
+  return out;
+}
+
+function balanced(s, start) {
+  let depth = 0;
+  let inStr = false;
+  for (let i = start; i < s.length && i - start < 3_000_000; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (c === '\\') i++;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return s.slice(start, i + 1);
+  }
+  return null;
+}
+
+const TILE_RE = /\b(product|tile|card|item|result)\b|product[-_]|[-_](tile|card)/i;
+const SKIP_TEXT = new Set(['script', 'style', 'noscript', 'template', 'svg']);
+
+/** A tile's text, with a space between every element (so "$100" and "Add to bag" stay apart). */
+function tileText(node) {
+  const parts = [];
+  const rec = (n) => {
+    if (n.type === 3) { parts.push(n.text); return; }
+    if (SKIP_TEXT.has(n.tag)) return;
+    for (const c of n.children) rec(c);
+    parts.push(' ');
+  };
+  rec(node);
+  return parts.join('').replace(/\s+/g, ' ').trim();
+}
+
+/** Product tiles in the HTML: a link to a product page, with its name, price and stock in the tile around it. */
+function tiles(doc, ctx) {
+  const out = [];
+  const seen = new Set();
+  for (const a of findAll(doc, (n) => n.tag === 'a' && n.attrs.href)) {
+    const url = httpsUrl(a.attrs.href, ctx.base);
+    if (!url) continue;
+    const u = new URL(url);
+    if (ctx.host && u.hostname.replace(/^www\./, '') !== ctx.host) continue;
+    if (!(ctx.productPath || /\/(p|product|products)\//i).test(u.pathname)) continue;
+    u.search = '';
+    u.hash = '';
+    const key = u.pathname.replace(/\/+$/, '').toLowerCase();
+    if (seen.has(key)) continue;
+    // The tile: the nearest container that looks like one (or a few levels up).
+    let tile = a;
+    for (let p = a.parent, i = 0; p && p.tag !== '#root' && p.tag !== 'body' && i < 6; p = p.parent, i++) {
+      tile = p;
+      const id = `${p.attrs.class || ''} ${p.attrs['data-testid'] || ''} ${p.attrs.id || ''}`;
+      if (p.tag === 'article' || p.tag === 'li' || TILE_RE.test(id)) break;
+    }
+    const text = tileText(tile);
+    let title = clean(textContent(a) || a.attrs.title || a.attrs['aria-label'] || '');
+    if (!title || /\$\s?\d/.test(title)) {
+      const img = findFirst(tile, (n) => n.tag === 'img' && n.attrs.alt);
+      if (img) title = clean(img.attrs.alt);
+    }
+    if (!title || title.length < 4) continue;
+    seen.add(key);
+    const pm = text.match(/\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)/);
+    const img = findFirst(tile, (n) => n.tag === 'img' && (n.attrs.src || n.attrs['data-src']));
+    out.push({
+      sku: ctx.skuFrom(u.href) || key, aliases: [], title, price: pm ? money(pm[1]) : null, wasPrice: null,
+      inStock: /\b(out of stock|sold out|unavailable|no stock|currently unavailable)\b/i.test(text) ? false
+        : /\b(add to (cart|bag|trolley|basket)|in stock|pre-?order)\b/i.test(text) ? true : null,
+      preorder: /\bpre-?order\b/i.test(text), url: u.href, image: img ? httpsUrl(img.attrs.src || img.attrs['data-src'], ctx.base) : '',
+      marketplace: /\bmarket ?place\b|\bsold by\b|\bships from\b/i.test(text) && !(ctx.storeWord && new RegExp(`sold by ${ctx.storeWord}`, 'i').test(text)),
+    });
+  }
+  return out;
+}
+
+/**
+ * opts: { base (the search page's address), productPath (RegExp), skuFromPath (RegExp), storeName }
+ */
+export function parseGeneric(html, { base, productPath = null, skuFromPath = null, storeName = '' } = {}) {
+  const problem = pageProblem(html);
+  if (problem) return { products: [], problem };
+  const doc = parseHTML(html);
+  let host = '';
+  try { host = new URL(base).hostname.replace(/^www\./, ''); } catch { /* no base */ }
+  const skuFrom = (url) => {
+    if (!skuFromPath) return '';
+    try { const m = new URL(url).pathname.match(skuFromPath); return m ? m[1] : ''; } catch { return ''; }
+  };
+  const ctx = { base, productPath, skuFrom, storeName, host, codesOk: false, storeWord: String(storeName).split(/\s/)[0] };
+  const found = [];
+  const blobs = jsonBlobs(doc);
+  for (const blob of blobs) walkJson(blob, found, ctx);
+  found.push(...tiles(doc, ctx));
+  if (!found.length) {
+    // No product links anywhere: take named, priced entries with a product code (linked to a search for their name).
+    ctx.codesOk = true;
+    for (const blob of blobs) walkJson(blob, found, ctx);
+  }
+  // One entry per product: the first sighting, filled in from later ones.
+  const map = new Map();
+  for (const p of found) {
+    const k = p.sku.toLowerCase();
+    const prev = map.get(k);
+    if (!prev) { map.set(k, { ...p }); continue; }
+    for (const f of ['url', 'image', 'price']) if (!prev[f] && p[f]) prev[f] = p[f];
+    if (prev.inStock === null && p.inStock !== null) prev.inStock = p.inStock;
+    prev.marketplace = prev.marketplace || p.marketplace;
+    prev.preorder = prev.preorder || p.preorder;
+  }
+  return { products: [...map.values()].slice(0, 300), problem: map.size ? null : 'empty' };
+}
+
+export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, generic: parseGeneric };
+
+export function parseListing(parser, text, opts) {
+  return (PARSERS[parser] || parseGeneric)(text, opts);
+}
+
+// ---------------------------------------------------------------------------
+// Which products count (from MugiWatch): the keyword in the name, trading cards only, no marketplace sellers
+// ---------------------------------------------------------------------------
+export const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+/** Every word of the keyword appears in the name ("pokemon" matches "Pokémon"). */
+export function mentions(title, keyword) {
+  const t = ` ${norm(title).replace(/[^a-z0-9]+/g, ' ')} `;
+  return norm(keyword).split(/[^a-z0-9]+/).filter(Boolean).every((w) => t.includes(` ${w}`));
+}
+
+export function termsRegex(terms) {
+  const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const list = (terms || []).map((t) => norm(t).trim()).filter(Boolean);
+  return list.length ? new RegExp(`\\b(${list.map(esc).join('|')})\\b`, 'i') : null;
+}

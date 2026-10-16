@@ -15,12 +15,17 @@
 //
 // Every item keeps its own status, so each member gets their own alert when
 // their SKU goes from out of stock (or not listed) to in stock / pre-order.
+//
+// The live sweeps (sweep.js) search each store every few seconds and update
+// members' SKUs they come across straight away; while a sweep has seen a SKU
+// lately, these slower checks leave it alone.
 
 import { PRODUCTS_FOR_PAGE } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { DEFAULT_ALERTS } from '../schema.js';
 import { serialize } from '../retailers/index.js';
 import { extractProduct, extractProductLinks } from './extract.js';
+import { SWEEP_FRESH_MS } from './feed.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
 
@@ -109,6 +114,11 @@ export class Monitor {
       ORDER BY c.next_check_at LIMIT 25`, { now });
     const jobs = [];
     for (const page of due) {
+      if (this.sweptLately(page.url, now)) {
+        // A live sweep has just seen this product: no need to fetch its page as well.
+        this.db.run('UPDATE page_checks SET next_check_at = :next WHERE url = :url', { url: page.url, next: now + this.pageInterval(page.url) });
+        continue;
+      }
       const retailer = this.retailers.get(page.store) || this.retailers.forUrl(page.url);
       if (retailer && !this.retailers.settings(retailer).serverChecks) {
         // Switched off by an admin: members' browsers check these instead.
@@ -124,6 +134,16 @@ export class Monitor {
     }
     await Promise.all(jobs);
     return jobs.length;
+  }
+
+  /** Has a live sweep seen what's on this product page in the last few minutes (the shared product, or members' SKUs)? */
+  sweptLately(url, now) {
+    const since = now - SWEEP_FRESH_MS;
+    const product = this.db.get("SELECT 1 AS y FROM products WHERE url = :url AND sweep_seen_at >= :since AND status_source = 'sweep' LIMIT 1", { url, since });
+    if (product) return true;
+    const items = this.db.get(`SELECT COUNT(*) AS n, SUM(CASE WHEN status_source = 'sweep' AND checked_at >= :since THEN 1 ELSE 0 END) AS swept
+      FROM items WHERE url = :url AND monitor = 1`, { url, since });
+    return !!items && items.n > 0 && items.swept === items.n;
   }
 
   headers() {
@@ -253,6 +273,7 @@ export class Monitor {
     const now = this.now();
     const prev = item.status;
     const failed = FAILED.has(r.status);
+    if (source !== 'sweep' && item.status_source === 'sweep' && item.checked_at && now - item.checked_at < SWEEP_FRESH_MS) return prev;
     if (source === 'server' && failed && item.status_source === 'browser' && item.browser_checked_at && now - item.browser_checked_at < 3 * this.browserInterval) {
       // The member's browser is doing the checking for this store; keep what it saw.
       return prev;

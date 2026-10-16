@@ -1,13 +1,13 @@
-// The dashboard's Monitor tab (docs/MONITORING.md): the live feed of
-// restocks and price changes, health numbers, the monitored products with
-// filters, and a product page with its price history. Admins also add and
-// change monitors, set up the Discord alert channels, and see health and the
-// check log here.
+// The dashboard's Monitor tab (docs/MONITORING.md): the live feed of new
+// drops, restocks and price changes, health numbers, every tracked product
+// with filters, and a product page with its price history. Admins also run
+// the live sweeps, add and change monitors, set up the Discord alert
+// channels, and see health and the check log here.
 import { $, $$, ago, api, busy, h, money, setMsg, toast, when } from './common.js';
 
 const KINDS = {
   restock: { emoji: '🟢', label: 'In stock' },
-  listed: { emoji: '🆕', label: 'Listed' },
+  listed: { emoji: '🆕', label: 'New drop' },
   sold_out: { emoji: '🔴', label: 'Sold out' },
   price_drop: { emoji: '📉', label: 'Price drop' },
   price_rise: { emoji: '📈', label: 'Price up' },
@@ -17,6 +17,8 @@ const STATUS = {
   not_found: 'Page gone', blocked: 'Blocked by site', error: 'Check failed', unknown: 'Unknown', pending: 'Waiting for first check',
 };
 const CATEGORY = { pokemon: 'Pokémon', onepiece: 'One Piece', other: 'Other' };
+const MODES = { server: 'Server', browser: "Admin's browser", off: 'Off' };
+const DAY = 86400000;
 const SVG = 'http://www.w3.org/2000/svg';
 
 export function setupMonitor({ showError }) {
@@ -57,7 +59,7 @@ export function setupMonitor({ showError }) {
     m.alerts = more ? [...m.alerts, ...alerts] : alerts;
     const list = $('#m-feed');
     if (!more) list.textContent = '';
-    if (!m.alerts.length) list.append(h('li', { class: 'empty' }, 'No alerts yet. They appear here the moment a monitored product restocks or changes price.'));
+    if (!m.alerts.length) list.append(h('li', { class: 'empty' }, 'No alerts yet. They appear here the moment a product drops, restocks or changes price.'));
     for (const a of alerts) list.append(feedItem(a));
     $('#m-more').hidden = alerts.length < 30;
   }
@@ -70,7 +72,7 @@ export function setupMonitor({ showError }) {
     $('#m-count').textContent = `(${products.length})`;
     if (!products.length) {
       list.append(h('li', { class: 'empty' }, filters().q || filters().category || filters().store || filters().status
-        ? 'Nothing matches those filters.' : m.admin ? 'No monitors yet — press + Add monitor.' : 'No products are being monitored yet.'));
+        ? 'Nothing matches those filters.' : m.admin ? 'Nothing tracked yet — the live sweeps fill this in within a minute (or press + Add monitor).' : 'No products are being tracked yet.'));
     }
     for (const p of products) list.append(productRow(p));
   }
@@ -106,11 +108,12 @@ export function setupMonitor({ showError }) {
     const box = $('#m-stats');
     box.textContent = '';
     box.append(
-      tile('Monitors', o.monitors, o.paused ? `${o.paused} paused` : 'active'),
+      tile('Tracked', o.tracked + o.monitors, `${o.tracked} from sweeps · ${o.monitors} monitor${o.monitors === 1 ? '' : 's'}`),
       tile('Available now', o.available, 'in stock or pre-order'),
+      tile('New drops', o.drops24h, 'last 24 hours'),
       tile('Restocks', o.restocks24h, 'last 24 hours'),
       tile('Price changes', o.priceChanges24h, 'last 24 hours'),
-      tile('Checks OK', o.okRate1h === null ? '—' : `${o.okRate1h}%`, `${health.icon} ${health.label}${o.checks1h ? ` · ${o.checks1h} checks / hour` : ''}`, health.cls),
+      tile('Checks OK', o.okRate1h === null ? '—' : `${o.okRate1h}%`, `${health.icon} ${health.label}${o.checks1h ? ` · ${o.checks1h.toLocaleString()} / hour` : ''}`, health.cls),
     );
   }
 
@@ -166,13 +169,16 @@ export function setupMonitor({ showError }) {
     return h('span', { class: `pill ${p.status}`, title: p.error || (p.checkedAt ? `Checked ${ago(p.checkedAt)}` : '') }, label + unsure);
   }
 
+  const isNewProduct = (p) => !!(p.sweep && p.sweep.firstAt && Date.now() - p.sweep.firstAt < DAY);
+
   function productRow(p) {
     const was = typeof p.previousPrice === 'number' && p.previousPrice !== p.price ? h('s', { class: 'muted small' }, money(p.previousPrice)) : null;
     return h('li', { class: `product ${p.monitor && p.monitor.paused ? 'paused' : ''}`, dataset: { id: p.id } },
       thumb(p.image, p.name || p.sku),
       h('div', { class: 'info' },
         h('button', { class: 'link-btn name', type: 'button', onclick: () => openProduct(p.id) }, p.name || p.sku),
-        h('div', { class: 'meta' }, `${storeName(p.store)} · ${CATEGORY[p.category]} · SKU ${p.sku}${p.monitor && p.monitor.paused ? ' · ⏸ paused' : ''}`)),
+        isNewProduct(p) ? h('span', { class: 'pill info new-tag', title: `Found ${ago(p.sweep.firstAt)}` }, '🆕 New') : null,
+        h('div', { class: 'meta' }, `${storeName(p.store)} · ${CATEGORY[p.category]} · SKU ${p.sku}${p.monitor && p.monitor.paused ? ' · ⏸ paused' : ''}${p.sweep && p.sweep.seenAt ? ` · seen ${ago(p.sweep.seenAt)}` : ''}`)),
       h('div', { class: 'price' }, h('b', {}, money(p.price) || '—'), ' ', was),
       h('div', { class: 'state' }, statusPill(p), h('div', { class: 'muted small' }, p.statusAt ? `since ${ago(p.statusAt)}` : '')));
   }
@@ -195,7 +201,7 @@ export function setupMonitor({ showError }) {
     img.hidden = !p.image;
     if (p.image) img.src = p.image;
     $('#md-name').textContent = p.name || p.sku;
-    $('#md-meta').textContent = `${storeName(p.store)} · ${CATEGORY[p.category]} · SKU ${p.sku}${p.checkedAt ? ` · checked ${ago(p.checkedAt)}` : ''}`;
+    $('#md-meta').textContent = `${storeName(p.store)} · ${CATEGORY[p.category]} · SKU ${p.sku}${p.checkedAt ? ` · checked ${ago(p.checkedAt)}` : ''}${p.sweep ? ` · found ${ago(p.sweep.firstAt)} searching "${p.sweep.keyword}"` : ''}`;
     const state = $('#md-state');
     state.textContent = '';
     const was = typeof p.previousPrice === 'number' && p.previousPrice !== p.price ? h('s', { class: 'muted' }, money(p.previousPrice)) : null;
@@ -329,7 +335,79 @@ export function setupMonitor({ showError }) {
   // Admins
   // ---------------------------------------------------------------------------
   async function loadAdmin() {
-    await Promise.all([loadRoutes(), loadHealth(), loadLog()]);
+    await Promise.all([loadSweep(), loadRoutes(), loadHealth(), loadLog()]);
+  }
+
+  // --- The live sweeps ---------------------------------------------------------
+  function fillSweepForm(d) {
+    const s = d.settings;
+    m.sweepDefaults = d.defaults;
+    $('#ms-enabled').checked = s.enabled;
+    $('#ms-keywords').value = s.keywords.join(', ');
+    $('#ms-every').value = s.everySeconds;
+    $('#ms-bevery').value = s.browserEverySeconds;
+    $('#ms-drop').value = s.priceDropPercent;
+    $('#ms-new').checked = s.newAlerts;
+    $('#ms-restock').checked = s.restockAlerts;
+    $('#ms-once').checked = s.restockOncePerDay;
+    $('#ms-market').checked = s.skipMarketplace;
+    $('#ms-tcg').checked = s.tcgOnly;
+    $('#ms-terms-input').value = s.tcgTerms.join(', ');
+    const box = $('#ms-stores');
+    $$('.store-mode', box).forEach((e) => e.remove());
+    for (const st of d.stores) {
+      const sel = h('select', { 'aria-label': `${st.name}: searched from`, dataset: { store: st.id || st.store } },
+        ...Object.entries(MODES).map(([v, label]) => h('option', { value: v, selected: st.mode === v }, `${label}${v === st.defaultMode ? ' (default)' : ''}`)));
+      box.append(h('label', { class: 'store-mode' }, `${st.name}`, sel));
+    }
+  }
+
+  function renderSweep(d) {
+    const live = d.stores.filter((s) => s.mode !== 'off');
+    const state = $('#ms-state');
+    state.className = `pill ${!d.monitorEnabled || !d.settings.enabled ? '' : live.some((s) => s.fails > 2) ? 'warn' : 'ok'}`;
+    state.textContent = !d.monitorEnabled ? 'Off (MONITOR_ENABLED=0)' : !d.settings.enabled ? 'Off' : `On · ${live.length} store${live.length === 1 ? '' : 's'}`;
+    const body = $('#ms-table tbody');
+    body.textContent = '';
+    for (const s of d.stores) {
+      const rate = s.requests1h ? Math.round((s.ok1h / s.requests1h) * 100) : null;
+      const status = s.mode === 'off' ? h('span', { class: 'muted' }, '—')
+        : s.fails ? h('span', { class: `pill ${s.fails > 2 ? 'err' : 'warn'}`, title: s.lastError }, `${s.lastError || 'Failing'}${s.nextAt ? ` · retry ${ago(s.nextAt)}` : ''}`)
+          : s.slowedUntil ? h('span', { class: 'pill warn', title: 'The store refused a search lately, so it is searched at a third of the pace for a while' }, `Slowed after a refusal · until ${new Date(s.slowedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
+            : s.lastOkAt ? h('span', { class: 'pill ok', title: s.lastError || '' }, s.lastError || 'OK')
+            : h('span', { class: 'pill' }, s.mode === 'browser' ? "Waiting for an admin's browser" : 'Starting');
+      body.append(h('tr', { class: s.mode === 'off' ? 'muted' : '' },
+        h('td', {}, s.name),
+        h('td', {}, MODES[s.mode]),
+        h('td', {}, s.lastAt ? h('time', { title: when(s.lastAt) }, ago(s.lastAt)) : '—'),
+        h('td', {}, String(s.products24h)),
+        h('td', {}, s.requests1h ? `${s.requests1h}${rate !== null ? ` · ${rate}% OK` : ''}` : '—'),
+        h('td', {}, s.avgMs ? `${(s.avgMs / 1000).toFixed(1)} s` : '—'),
+        h('td', {}, status)));
+    }
+    const terms = $('#ms-terms tbody');
+    terms.textContent = '';
+    for (const s of d.stores) {
+      for (const t of s.terms) {
+        terms.append(h('tr', {},
+          h('td', {}, s.name), h('td', {}, t.url ? h('a', { href: t.url, target: '_blank', rel: 'noopener' }, t.keyword) : t.keyword), h('td', {}, String(t.page)),
+          h('td', {}, t.total !== null && t.total !== undefined ? `${t.found} of ${t.total}` : String(t.found)), h('td', {}, String(t.kept)),
+          h('td', {}, t.lastOkAt ? ago(t.lastOkAt) : 'never'), h('td', {}, t.error ? h('span', { class: `pill ${t.fails ? 'err' : 'warn'}` }, t.error) : '')));
+      }
+    }
+    if (!terms.children.length) terms.append(h('tr', {}, h('td', { colspan: '7', class: 'muted' }, 'No searches yet.')));
+  }
+
+  async function loadSweep({ form = true } = {}) {
+    const d = await api('GET', '/api/monitor/sweep');
+    if (form) fillSweepForm(d);
+    renderSweep(d);
+  }
+
+  // Each sweep tells open admin dashboards straight away; the table refreshes at most every 2 seconds.
+  function onSweep() {
+    if (!m.admin || !panelOpen() || m.sweepTimer) return;
+    m.sweepTimer = setTimeout(() => { m.sweepTimer = null; loadSweep({ form: false }).catch(() => null); }, 2000);
   }
 
   async function loadRoutes() {
@@ -472,6 +550,38 @@ export function setupMonitor({ showError }) {
     });
   });
   $('#mh-refresh').addEventListener('click', () => Promise.all([loadHealth(), loadLog()]).catch(showError));
+
+  $('#ms-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    busy(e.target, async () => {
+      const stores = Object.fromEntries($$('#ms-stores select').map((sel) => [sel.dataset.store, sel.value]));
+      try {
+        const d = await api('PUT', '/api/monitor/sweep', {
+          enabled: $('#ms-enabled').checked, keywords: $('#ms-keywords').value, everySeconds: $('#ms-every').value, browserEverySeconds: $('#ms-bevery').value,
+          priceDropPercent: $('#ms-drop').value, newAlerts: $('#ms-new').checked, restockAlerts: $('#ms-restock').checked, restockOncePerDay: $('#ms-once').checked,
+          skipMarketplace: $('#ms-market').checked, tcgOnly: $('#ms-tcg').checked, tcgTerms: $('#ms-terms-input').value, stores,
+        });
+        fillSweepForm(d);
+        renderSweep(d);
+        setMsg($('#ms-msg'), 'Saved. New keywords and filters start by noting what\'s already there, so the first search of each doesn\'t alert.', true);
+      } catch (err) {
+        setMsg($('#ms-msg'), err.message);
+      }
+    });
+  });
+  $('#ms-reset-terms').addEventListener('click', () => { if (m.sweepDefaults) $('#ms-terms-input').value = m.sweepDefaults.tcgTerms.join(', '); });
+  $('#ms-now').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await api('POST', '/api/monitor/sweep/now', {});
+      toast('Sweeping now', 'Every store is searched again straight away.', 'success');
+      setTimeout(() => loadSweep({ form: false }).catch(() => null), 3000);
+    } catch (err) {
+      toast("Couldn't start a sweep", err.message, 'warn');
+    } finally {
+      e.target.disabled = false;
+    }
+  });
   $('#ml-errors').addEventListener('change', () => loadLog().catch(showError));
 
   const dlg = $('#m-detail');
@@ -536,8 +646,21 @@ export function setupMonitor({ showError }) {
     schedule();
   }
 
-  function onProduct() {
-    if (panelOpen()) schedule();
+  // A product changed: its row updates in place; a product that isn't listed yet brings a refresh.
+  function onProduct(p) {
+    if (!panelOpen()) return;
+    const row = p && $(`#m-products li[data-id="${CSS.escape(p.id)}"]`);
+    const known = p && m.products.find((x) => x.id === p.id);
+    if (row && known) {
+      const merged = { ...known, ...p, monitor: known.monitor };
+      m.products[m.products.indexOf(known)] = merged;
+      row.replaceWith(productRow(merged));
+      if (m.current && m.current.product.id === p.id) openProduct(p.id).catch(() => null);
+      clearTimeout(m.statsTimer);
+      m.statsTimer = setTimeout(() => api('GET', '/api/monitor').then((d) => renderStats(d.overview)).catch(() => null), 1500);
+      return;
+    }
+    schedule();
   }
 
   // Several changes at once (a round of checks) → one refresh.
@@ -553,5 +676,5 @@ export function setupMonitor({ showError }) {
     }, 600);
   }
 
-  return { load, openProduct, onFeed, onProduct };
+  return { load, openProduct, onFeed, onProduct, onSweep };
 }

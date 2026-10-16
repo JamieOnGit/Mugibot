@@ -498,6 +498,42 @@ test('in-browser checks: a store that refuses the server is checked by your brow
   assert.match(discord.dmsTo('d-ash').at(-1).body.embeds[0].description, /Seen by your browser/);
 });
 
+test("live sweeps from an admin's browser: a store that refuses the server is searched from here, and a new drop alerts", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-kmart': 'browser' } }, null);
+  store.state.blockNonBrowsers = true; // like Kmart's bot protection for servers
+  store.set('kmart', '43818648', { listed: false });
+  // A member's browser gets no searches…
+  assert.deepEqual(await sw.evaluate(() => globalThis.mugibotSweepLoop()), undefined);
+  assert.ok(!store.state.requests.some((x) => x.path.startsWith('/kmart/search')));
+  // …an admin's does (the alarm starts it every 30 s; start it now).
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => env.app.catalog.productFor('demo-kmart', '43818587'), { timeout: 20000, message: 'the first sweep from this browser' });
+    const h = sweeper.health().find((s) => s.store === 'demo-kmart');
+    assert.equal(h.terms[0].source, 'browser');
+    assert.equal(h.terms[0].baselineAt > 0, true);
+    assert.ok(store.state.requests.some((x) => x.path.startsWith('/kmart/search') && /Chrome|Mozilla/.test(x.ua)), 'a normal browser request');
+    assert.equal(env.app.catalog.productFor('demo-kmart', '43818587').status, 'in_stock');
+
+    // The store adds a product: the next sweep from this browser alerts it.
+    store.set('kmart', '43818648', { listed: true, status: 'in_stock' });
+    await waitFor(() => env.app.catalog.recentAlerts({ kind: 'listed' }).some((a) => a.sku === '43818648'), { timeout: 30000, message: 'a new drop from the browser sweep' });
+
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForSelector('#sweeps:not([hidden])');
+    assert.match(await popup.textContent('#sweeps-list'), /Kmart \(dummy store\): \d+ products/);
+    await popup.close();
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: { 'demo-kmart': 'off' } }, null);
+  }
+});
+
 test("another account's ⚡ Buy link does nothing in this browser", async () => {
   const misty = await Client.signup(env.url, 'misty');
   env.app.repo.updateUser(misty.user.id, { plan: 'active' });

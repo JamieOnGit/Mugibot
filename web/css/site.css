@@ -300,6 +300,12 @@ fieldset.kinds { border: 1px solid var(--line); border-radius: 10px; margin: 12p
 fieldset.kinds legend { font-weight: 700; font-size: 13px; padding: 0 4px; }
 .check.inline { display: inline-flex; align-items: center; margin: 4px 0; font-weight: 500; }
 .check.small { font-size: 13px; font-weight: 500; margin: 0; }
+fieldset.kinds > label.small, fieldset.kinds > textarea { flex-basis: 100%; }
+fieldset.kinds > textarea { width: 100%; min-width: 0; font: inherit; font-size: 13px; }
+.store-mode { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 14px; }
+.store-mode select { width: auto; padding: 4px 6px; font-size: 13px; }
+.ms-terms { margin: 8px 0 4px; }
+.product .new-tag { margin-left: 6px; }
 dialog.detail { width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 32px); border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--fg); padding: 20px; box-shadow: var(--shadow); }
 dialog.detail::backdrop { background: rgba(5, 8, 14, .6); }
 .detail-head { display: flex; gap: 14px; align-items: flex-start; }

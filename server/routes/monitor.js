@@ -1,13 +1,15 @@
 // The Monitor tab (docs/MONITORING.md). Members with an active membership see
 // the shared feed: live alerts, products, price history. Admins also manage
-// monitors and Discord alert rules, and see the check log and health.
+// the live sweeps, monitors and Discord alert rules, and see the check log
+// and health.
 
 import { CATEGORIES, toMonitor, toProduct } from '../catalog.js';
 import { MonitorAdmin } from '../monitor/manage.js';
+import { SWEEP_DEFAULTS } from '../monitor/sweep.js';
 import { HttpError, bad, str } from '../schema.js';
 
 export function register(router, ctx) {
-  const { cfg, catalog, retailers, monitor, feed, limiter } = ctx;
+  const { cfg, catalog, retailers, monitor, sweeper, feed, limiter } = ctx;
   const manage = new MonitorAdmin(ctx);
   ctx.monitorAdmin = manage;
   const member = { entitled: true };
@@ -15,8 +17,17 @@ export function register(router, ctx) {
   const isAdmin = (req) => req.user && req.user.role === 'admin';
 
   // --- Everyone with a membership --------------------------------------------------
+  // The numbers at the top: page checks and sweeps together.
+  const overview = () => {
+    const o = catalog.overview();
+    const sw = sweeper.summary();
+    const checks = o.checks1h + sw.sweeps1h;
+    const ok = o.ok1h + sw.sweepsOk1h;
+    return { ...o, ...sw, checks1h: checks, ok1h: ok, okRate1h: checks ? Math.round((ok / checks) * 100) : null };
+  };
+
   router.get('/api/monitor', async (req) => ({
-    overview: catalog.overview(),
+    overview: overview(),
     alerts: catalog.recentAlerts({ limit: 30 }),
     categories: CATEGORIES,
     stores: retailers.publicList().filter((r) => !r.demo || cfg.demoStoreUrl).map((r) => ({ id: r.id, name: r.name })),
@@ -25,17 +36,16 @@ export function register(router, ctx) {
 
   router.get('/api/monitor/products', async (req) => {
     const q = req.query;
-    const list = catalog.listMonitors({
-      q: str(q.get('q'), 80), category: str(q.get('category'), 20), store: str(q.get('store'), 40), status: str(q.get('status'), 20),
-      paused: isAdmin(req) ? null : false,
+    const list = catalog.listProducts({
+      q: str(q.get('q'), 80), category: str(q.get('category'), 20), store: str(q.get('store'), 40), status: str(q.get('status'), 20), admin: isAdmin(req),
     });
-    return { products: list.map((p) => (isAdmin(req) ? p : { ...p, monitor: { id: p.monitor.id, paused: p.monitor.paused } })) };
+    return { products: list.map((p) => (isAdmin(req) || !p.monitor ? p : { ...p, monitor: { id: p.monitor.id, paused: p.monitor.paused } })) };
   }, member);
 
   router.get('/api/monitor/products/:id', async (req) => {
     const p = catalog.productById(req.params.id);
     const m = p && catalog.monitorForProduct(p.id);
-    if (!p || (!m && !isAdmin(req)) || (m && m.paused && !isAdmin(req))) throw new HttpError(404, 'Not found');
+    if (!p || (!isAdmin(req) && !catalog.isListed(p))) throw new HttpError(404, 'Not found');
     return {
       product: toProduct(p),
       monitor: m ? (isAdmin(req) ? toMonitor(m) : { id: m.id, paused: !!m.paused }) : null,
@@ -71,12 +81,34 @@ export function register(router, ctx) {
     return { ok: true };
   }, admin);
 
+  // --- Admins: the live sweeps -----------------------------------------------------------
+  const sweepView = () => ({
+    settings: sweeper.settings,
+    defaults: { tcgTerms: SWEEP_DEFAULTS.tcgTerms, keywords: SWEEP_DEFAULTS.keywords },
+    stores: sweeper.health(),
+    running: sweeper.running,
+    monitorEnabled: cfg.monitor.enabled,
+  });
+
+  router.get('/api/monitor/sweep', async () => sweepView(), admin);
+
+  router.put('/api/monitor/sweep', async (req) => {
+    sweeper.save(req.body, req.user);
+    return sweepView();
+  }, admin);
+
+  router.post('/api/monitor/sweep/now', async (req) => {
+    if (!limiter.hit(`sweepnow:${req.user.id}`, 10, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    sweeper.sweepNow();
+    return { ok: true };
+  }, admin);
+
   // --- Admins: health and the check log --------------------------------------------------
   router.get('/api/monitor/health', async () => {
     const now = ctx.repo.now();
     const due = ctx.db.get('SELECT COUNT(*) AS n FROM page_checks WHERE next_check_at <= :now', { now });
     return {
-      overview: catalog.overview(),
+      overview: overview(),
       loop: { enabled: cfg.monitor.enabled, lastTickAt: monitor.lastTickAt, inFlight: monitor.inFlight.size, due: due ? due.n : 0, intervalSeconds: cfg.monitor.urlIntervalSeconds, hostGapSeconds: cfg.monitor.hostGapSeconds },
       stores: catalog.health().map((h) => {
         const r = retailers.get(h.store);
