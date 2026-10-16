@@ -117,8 +117,35 @@ test('a restock alerts once: live feed + Discord embed with image, store, price,
   assert.equal(field('Category'), 'One Piece');
   assert.ok(e.timestamp);
   const buttons = msg.components[0].components;
-  assert.match(buttons[0].url, /\/buy\?store=demo-ebgames&sku=312345/, '⚡ Buy runs the member\'s own checkout');
+  assert.match(buttons[0].url, /\/buy\?store=demo-ebgames&sku=312345&.*&t=\d+\.[\w-]+$/, '⚡ Buy runs the member\'s own checkout');
   assert.equal(buttons[1].label, 'Open product');
+
+  // One click: the ⚡ Buy in the channel goes straight to the store, with whoever presses it's own
+  // checkout (the product is added to their watchlist) — no buy page in between.
+  const link = buttons[0].url.slice(env.url.length);
+  const go = await ash.get(link);
+  assert.equal(go.status, 302);
+  assert.match(go.headers.get('location'), new RegExp(`^${store.url}/ebgames/product/.+#mgb-go=[\\w-]+$`));
+  assert.ok((await ash.get('/api/items')).body.items.some((x) => x.store === 'demo-ebgames' && x.sku === '312345'));
+  // A link changed by someone else (another product): the buy page, which asks first.
+  const forged = link.replace('sku=312345', 'sku=312346');
+  assert.equal((await ash.get(forged)).status, 200);
+  assert.ok(!(await ash.get('/api/items')).body.items.some((x) => x.sku === '312346'));
+  // Without a signature: straight through only when pressed on Mugibot's own pages (the Monitor tab)…
+  const unsigned = link.replace(/&t=[^&]+$/, '');
+  const here = { 'sec-fetch-site': 'same-origin', referer: `${env.url}/app` };
+  assert.equal((await ash.get(unsigned, here)).status, 302);
+  // …not from another website, nor passed on by the sign-in page (which follows any link it's given).
+  assert.equal((await ash.get(unsigned, { 'sec-fetch-site': 'cross-site' })).status, 200);
+  assert.equal((await ash.get(unsigned, { ...here, referer: `${env.url}/login?next=x` })).status, 200);
+  assert.equal((await ash.get(unsigned, { referer: 'https://evil.example/' })).status, 200);
+  assert.equal((await ash.get(unsigned, { 'sec-fetch-site': 'cross-site', referer: `${env.url}/app` })).status, 200);
+  assert.equal((await ash.get(unsigned)).status, 200, 'typed in, or from an app: no Referer');
+  // Signed out: sign in first, then the same one click.
+  const anon = await new Client(env.url).get(link);
+  assert.equal(anon.headers.get('location'), `/login?next=${encodeURIComponent(link)}`);
+  // (Off the watchlist again: its own page checks would add to the monitor's below.)
+  for (const x of (await ash.get('/api/items')).body.items) if (x.sku === '312345') await ash.del(`/api/items/${x.id}`);
   assert.match(buttons.at(-1).url, /\/app#monitor\/prd_/, 'price history in the dashboard');
 
   const feed = (await ash.get('/api/monitor')).body;

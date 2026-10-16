@@ -230,8 +230,9 @@ monitor play a sound and show desktop notifications; the tab title also
 flashes while you're on another tab. **⚡ Test alert** runs the whole chain in
 your browser only, to check the sound and pop-up.
 
-**⚡ Buy** opens a new tab that adds the product to your watchlist and starts
-your checkout with the extension, as before.
+**⚡ Buy** is one click: a new tab opens straight at the store (no page in
+between), with the product added to your watchlist and your checkout started by
+the extension. So is **⚡ Buy with Mugibot** in the Discord channels' alerts.
 
 **Admins** also get **Sweep now** (search everything again straight away),
 **+ Add monitor**, and below the console: the full sweep settings and **Every

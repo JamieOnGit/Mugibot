@@ -3,19 +3,24 @@
 // email — never anyone else's. (Posts in the server's channels are the
 // Monitor feed's: server/monitor/feed.js.)
 
-import { purposeKey, signParts } from './crypto.js';
-import { DEFAULT_ALERTS } from './schema.js';
+import { purposeKey, signParts, verifyParts } from './crypto.js';
+import { DEFAULT_ALERTS, str } from './schema.js';
 import { STATUS_LABEL } from './monitor/status.js';
 
-const BUY_LINK_TTL = 30 * 60 * 1000;
+// ⚡ Buy links go straight to the store while they're valid (then they open the buy page, one
+// press more). A member's own link only works signed in as them, so it can last a week.
+const BUY_LINK_TTL = 7 * 24 * 60 * 60 * 1000;
 const COLORS = { urgent: 0x16a34a, success: 0x16a34a, warn: 0xd97706, info: 0x2563eb, listed: 0x7c3aed };
 
 const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
+// What a channel ⚡ Buy link signs: the same, trimmed, when it's made and when it comes back.
+const alertBuyParts = (store, sku, url, name) => [str(store, 40), str(sku, 60), str(url, 1000), str(name, 120)];
 
 export class Notifier {
   constructor({ cfg, repo, retailers, hub, mailer, discord, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
     Object.assign(this, { cfg, repo, retailers, hub, mailer, discord, fetch: fetchImpl, now });
     this.buyKey = purposeKey(cfg.dataKey, 'buy-link');
+    this.alertBuyKey = purposeKey(cfg.dataKey, 'alert-buy-link');
   }
 
   /** A ⚡ Buy link for a member's own item: opens the product with the extension ready to go. */
@@ -23,6 +28,26 @@ export class Notifier {
     const exp = this.now() + BUY_LINK_TTL;
     const t = signParts(this.buyKey, [userId, item.id, '1'], exp);
     return `${this.cfg.baseUrl}/buy/${encodeURIComponent(item.id)}?qty=1&t=${t}`;
+  }
+
+  /**
+   * A ⚡ Buy link for everyone (a Monitor alert in a Discord channel): whoever opens it goes straight
+   * to the store with their own checkout. Signed, so only links Mugibot made do that: anyone else's
+   * link to /buy shows the buy page first.
+   */
+  alertBuyLink(a) {
+    const parts = alertBuyParts(a.store, a.sku, a.url, a.name);
+    const q = new URLSearchParams({ store: parts[0], sku: parts[1] });
+    if (parts[2]) q.set('url', parts[2]);
+    if (parts[3]) q.set('name', parts[3]);
+    q.set('t', signParts(this.alertBuyKey, parts, this.now() + BUY_LINK_TTL));
+    return `${this.cfg.baseUrl}/buy?${q}`;
+  }
+
+  /** Did Mugibot make this /buy?store=…&sku=…&url=…&name=…&t=… link (and is it still valid)? */
+  verifyAlertBuyLink(params) {
+    const parts = alertBuyParts(params.get('store'), params.get('sku'), params.get('url'), params.get('name'));
+    return verifyParts(this.alertBuyKey, parts, params.get('t'), this.now());
   }
 
   /**

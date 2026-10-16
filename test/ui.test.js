@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { Client, PASSWORD, discordOpts, startApp, startFakeDiscord, startFakeWhop, waitFor, whopOpts, whopWebhook } from './helpers.js';
+import { RETAILER_DEFS } from '../server/retailers/index.js';
 
 let env;
 let whop;
@@ -21,7 +22,10 @@ before(async () => {
   whop = await startFakeWhop();
   discord = await startFakeDiscord();
   env = await startApp({ adminUsernames: 'owner', ...whopOpts(whop), ...discordOpts(discord) });
-  browser = await chromium.launch({ headless: true });
+  // Never touch the real stores from tests — not even when Mugibot redirects there (⚡ Buy), which
+  // the stubs below don't catch: this browser can't reach any store's address at all.
+  const stores = [...new Set(RETAILER_DEFS.flatMap((r) => r.hosts))];
+  browser = await chromium.launch({ headless: true, args: [`--host-resolver-rules=${stores.map((h) => `MAP ${h} 127.0.0.1`).join(', ')}`] });
   page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on('pageerror', (e) => errors.push(e.message));
   // (A 4xx answer to a form with a mistake in it is expected, not an error.)
@@ -415,7 +419,45 @@ test('Membership tab: become a member through Whop, then it shows the membership
   await p2.close();
 });
 
+test('⚡ Buy is one click: a Monitor alert\'s ⚡ Buy from Discord, and ⚡ Buy on the Monitor tab, go straight to the store', async () => {
+  const owner = env.app.repo.userByUsername('owner');
+  // Where ⚡ Buy sends the browser, caught instead of followed (a stub page in the store's place):
+  // the request goes to Mugibot as the browser made it (its cookie and Referer).
+  const sentTo = [];
+  const catchBuy = async (route) => {
+    const req = route.request();
+    const headers = Object.fromEntries(Object.entries(await req.allHeaders()).filter(([k]) => !k.startsWith(':') && !/^(host|connection|content-length)$/i.test(k)));
+    const r = await fetch(req.url(), { headers, redirect: 'manual' });
+    if (r.status === 302) {
+      sentTo.push(r.headers.get('location'));
+      return route.fulfill({ status: 200, contentType: 'text/html', body: '<title>the store (stub)</title>' });
+    }
+    return route.fulfill({ status: r.status, headers: { 'content-type': r.headers.get('content-type') || 'text/html' }, body: Buffer.from(await r.arrayBuffer()) });
+  };
+  await page.context().route(/\/buy\?/, catchBuy);
+  try {
+    // The ⚡ Buy in a Discord channel's alert (a link Mugibot signed): no buy page in between, and
+    // the product goes on the watchlist.
+    await page.goto(env.app.notifier.alertBuyLink({ store: 'ebgames', sku: '313001', url: 'https://www.ebgames.com.au/product/toys-and-collectibles/313001-booster', name: 'One Click Booster' }));
+    assert.match(sentTo.at(-1) || '', /^https:\/\/www\.ebgames\.com\.au\/product\/toys-and-collectibles\/313001-booster#mgb-go=[\w-]+$/);
+    assert.equal(await page.title(), 'the store (stub)');
+    assert.ok(env.app.repo.listItems(owner.id).some((x) => x.sku === '313001' && x.name === 'One Click Booster'));
+    // ⚡ Buy on an alert in the Monitor tab's event log: straight to the store, in a new tab.
+    await page.goto(`${env.url}/app#monitor`);
+    const buy = page.locator('#m-log .sn-ev.k-restock', { hasText: 'Day UPC' }).locator('a.btn.primary').first();
+    await buy.waitFor();
+    const n = sentTo.length;
+    const [tab] = await Promise.all([page.context().waitForEvent('page'), buy.click()]);
+    await waitFor(() => sentTo.length > n, { message: 'the new tab sent straight to the store' });
+    assert.match(sentTo.at(-1), /^https:\/\/www\.kmart\.com\.au\/product\/.*43818648\/#mgb-go=[\w-]+$/);
+    await tab.close();
+  } finally {
+    await page.context().unroute(/\/buy\?/, catchBuy);
+  }
+});
+
 test('the ⚡ Buy page from a Discord channel post: adds the SKU and goes', async () => {
+  // (An old post's link, from before they were signed, or an expired one: the buy page asks once.)
   await page.goto(`${env.url}/buy?store=ebgames&sku=312999&name=${encodeURIComponent('Channel ETB')}&url=${encodeURIComponent('https://www.ebgames.com.au/product/toys-and-collectibles/312999-etb')}`);
   await page.waitForFunction(() => /Not on your watchlist yet/.test(document.querySelector('#b-meta').textContent));
   await page.click('#b-go');

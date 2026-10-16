@@ -240,8 +240,7 @@ export function register(router, ctx) {
       if (!ent.active) return reply(`The Monitor feed is for members: ${cfg.baseUrl}/app#membership`);
       const alerts = ctx.catalog.recentAlerts({ limit: 10, category: str(opts.category, 20) });
       if (!alerts.length) return reply(`No alerts yet. The live feed is at ${cfg.baseUrl}/app#monitor`);
-      const buyLink = (a) => `${cfg.baseUrl}/buy?${new URLSearchParams({ store: a.store, sku: a.sku, ...(a.url ? { url: a.url } : {}), name: a.name })}`;
-      const lines = alerts.map((a) => `${ALERT_EMOJI[a.kind] || '•'} **${a.name}** — ${retailers.name(a.store)}${typeof a.price === 'number' ? ` · $${a.price.toFixed(2)}` : ''} · <t:${Math.floor(a.at / 1000)}:R>${a.kind !== 'sold_out' ? ` · [⚡ Buy](${buyLink(a)})` : ''}`);
+      const lines = alerts.map((a) => `${ALERT_EMOJI[a.kind] || '•'} **${a.name}** — ${retailers.name(a.store)}${typeof a.price === 'number' ? ` · $${a.price.toFixed(2)}` : ''} · <t:${Math.floor(a.at / 1000)}:R>${a.kind !== 'sold_out' ? ` · [⚡ Buy](${ctx.notifier.alertBuyLink(a)})` : ''}`);
       return reply('', { embeds: [{ title: 'Latest from the Monitor', description: lines.join('\n').slice(0, 4000), color: 0x16a34a, url: `${cfg.baseUrl}/app#monitor` }] });
     }
     return reply('Unknown command.');
