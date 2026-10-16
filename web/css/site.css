@@ -219,7 +219,10 @@ pre.flow-json { background: var(--surface-2); padding: 10px; border-radius: 8px;
 }
 @media (max-width: 720px) {
   .topbar nav .opt { display: none; }
-  .topbar nav .pill { max-width: 42vw; overflow: hidden; text-overflow: ellipsis; }
+  /* The header always fits: the membership pill gives way first (cut short with "…"). */
+  .topbar .logo { flex-shrink: 0; }
+  .topbar nav { min-width: 0; }
+  .topbar nav .pill { max-width: 42vw; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
   .topbar .wrap { gap: 8px; }
 }
 .status-row select { width: auto; }
