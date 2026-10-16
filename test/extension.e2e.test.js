@@ -447,6 +447,22 @@ test('JB Hi-Fi flow (beta, Shopify): quantity → add → cart → "Check out" �
   await dash.close();
 });
 
+test('Trainer Town flow (draft, Shopify): add → cart → "Check out" → one-page checkout → stops at "Pay now"', async () => {
+  await useItems([{ store: 'demo-trainertown', sku: 'pokemon-tcg-ascended-heroes-elite-trainer-box', name: 'TT ETB' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'TT ETB', 1);
+  await shop.waitForURL(/\/trainertown\/checkouts\/c\/abc123$/, { timeout: 30000 });
+  await waitReady(shop, 'Pay now');
+  assert.equal(store.shop('trainertown').cart[0].sku, 'pokemon-tcg-ascended-heroes-elite-trainer-box');
+  assert.equal(await shop.inputValue('input[name=email]'), PROFILE_A.email);
+  assert.equal(await shop.inputValue('input[name=postalCode]'), '2000');
+  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=number]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
+  await shop.waitForTimeout(800);
+  assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
 test('the ⚡ Buy button in a Discord DM goes straight to the store and the flow runs', async () => {
   // Connect Discord for Ash (the fake Discord sends straight back).
   const page = await ctx.newPage();

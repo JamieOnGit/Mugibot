@@ -28,7 +28,10 @@
 // counts as sold out, and its return as a restock. Only when the pages Mugibot
 // reads hold every result: with more results than that, nothing is marked.
 //
-// Stores that answer servers (Target, JB Hi-Fi) are swept from the server,
+// Trainer Town (Shopify) keeps each game in a collection of its own; there a
+// keyword's whole collection is read in one go, sold-out products included.
+//
+// Stores that answer servers (Target, JB Hi-Fi, Trainer Town) are swept from the server,
 // honestly identified as Mugibot. Stores that refuse servers (Kmart, BIG W,
 // EB Games) are swept from an admin's browser by the extension, at a gentler
 // pace. A refused or failed search backs off (twice as long each time, up to
@@ -150,6 +153,7 @@ export class Sweeper {
     this.loops = new Set();
     this.wakers = new Map();
     this.state = new Map(); // per store: rotation, recent requests, failures, browser lease
+    this.collections = new Map(); // per Shopify store that's read by collection: its collections
     this.events = []; // the live event log's latest entries
     this.seq = 0;
     this.totals = { searches: 0, errors: 0, streak: 0 };
@@ -243,7 +247,51 @@ export class Sweeper {
     return w && !/\b(tcg|cards?|booster|trading)\b/i.test(keyword) ? `${keyword} ${w}` : keyword;
   }
 
+  /**
+   * Shopify stores that list each game in a collection of its own (Trainer Town): a keyword's whole
+   * range is that collection, read whole in one go (sold-out products too), instead of a search
+   * that shows the first 10. The store's collections are looked up from its collection list
+   * (every 6 hours); a keyword with no collection of its own is searched as usual.
+   */
+  async refreshCollections(r) {
+    if (!r.sweep.collectionPath || !r.sweep.collectionsPath) return;
+    const now = this.now();
+    const c = this.collections.get(r.id);
+    if (c && now < c.nextAt) return;
+    this.collections.set(r.id, { list: c ? c.list : [], nextAt: now + 10 * 60 * 1000 });
+    try {
+      const url = `${r.base}${r.sweep.collectionsPath}`;
+      const timeoutMs = Math.min(this.cfg.monitor.timeoutMs, 20000);
+      const res = await safeFetch(this.fetch, url, { headers: this.headers(r), timeoutMs, signal: AbortSignal.timeout(timeoutMs) }, { allowPrivate: this.cfg.monitor.allowPrivateHosts });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = JSON.parse(await res.text());
+      if (!j || !Array.isArray(j.collections)) throw new Error('no collection list');
+      const list = j.collections.filter((x) => x && typeof x.handle === 'string' && /^[a-z0-9][a-z0-9-]{0,120}$/i.test(x.handle))
+        .map((x) => ({ handle: x.handle, title: str(x.title, 120), count: Number(x.products_count) || 0 }));
+      const before = c ? c.list.map((x) => x.handle).join() : '';
+      this.collections.set(r.id, { list, nextAt: now + REBASELINE_MS });
+      if (before !== list.map((x) => x.handle).join()) {
+        const used = this.settings.keywords.map((k) => [k, this.collectionFor(r, k)]).filter(([, h]) => h);
+        if (used.length) this.sys(`${r.name}: reading each game's whole collection — ${used.map(([k, h]) => `"${k}" → ${h}`).join(', ')}`, { store: r.id });
+      }
+    } catch (e) {
+      this.cfg.log(JSON.stringify({ evt: 'sweep.collections', store: r.id, error: e.message }));
+    }
+  }
+
+  /** The store's own collection for a keyword: the biggest one named after it (that one read holds whole). */
+  collectionFor(r, keyword) {
+    const c = r.sweep.collectionPath && this.collections.get(r.id);
+    if (!c) return null;
+    const max = r.sweep.collectionMax || 250;
+    const named = c.list.filter((x) => x.count > 0 && (mentions(x.title, keyword) || mentions(x.handle.replace(/-/g, ' '), keyword)))
+      .sort((a, b) => b.count - a.count);
+    return named.length && named[0].count <= max ? named[0].handle : null;
+  }
+
   urlFor(r, keyword, page = 1) {
+    const collection = this.collectionFor(r, keyword);
+    if (collection) return `${r.base}${r.sweep.collectionPath.replace('{collection}', encodeURIComponent(collection))}`;
     let p = r.sweep.path.replace('{q}', encodeURIComponent(this.query(r, keyword)));
     if (page > 1 && r.sweep.pagePath) p += r.sweep.pagePath.replace('{page}', String(page));
     return `${r.base}${p}`;
@@ -271,7 +319,7 @@ export class Sweeper {
   }
 
   headers(r) {
-    const json = r.sweep.parser === 'shopify-suggest';
+    const json = /^shopify/.test(r.sweep.parser);
     return {
       'user-agent': this.cfg.monitor.userAgent,
       accept: json ? 'application/json' : 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
@@ -281,6 +329,7 @@ export class Sweeper {
 
   /** One search from the server: fetch, read, compare, alert. */
   async sweepTerm(r, term) {
+    await this.refreshCollections(r);
     const url = this.urlFor(r, term.keyword, term.page);
     const started = Date.now();
     let res;
@@ -340,7 +389,8 @@ export class Sweeper {
     const s = this.settings;
     const now = this.now();
     const row = this.db.get('SELECT * FROM sweep_terms WHERE store = :s AND keyword = :k AND page = :p', { s: r.id, k: term.keyword, p: term.page });
-    const baseline = !row || !row.baseline_at || !row.last_ok_at || now - row.last_ok_at > REBASELINE_MS;
+    // (Read somewhere else than before, e.g. a collection instead of the search: what's there already was.)
+    const baseline = !row || !row.baseline_at || !row.last_ok_at || now - row.last_ok_at > REBASELINE_MS || (!!row.url && row.url !== url);
     const counts_ = this.filters(s);
     const counts = { found: parsed.products.length, kept: 0, new: 0, restock: 0, price: 0 };
     for (const p of parsed.products) {
@@ -411,6 +461,7 @@ export class Sweeper {
       if (monitor) this.repo.ensurePage(p.url, 'product', r.id, product.sku);
     }
     if (p.image && p.image !== product.image) set.image = p.image.slice(0, 1000);
+    if (p.variantId && p.variantId !== product.variant_id) set.variant_id = String(p.variantId).slice(0, 40);
     if (product.category === 'other') {
       const c = categoryFor(p.title);
       if (c !== 'other') set.category = c;
@@ -499,7 +550,8 @@ export class Sweeper {
     this.db.run(`INSERT INTO sweep_terms (store, keyword, page, url, source, baseline_at, last_at, last_ok_at, found, kept, total, fails, error, ms)
       VALUES (:s, :k, :p, :url, :src, :base, :now, :ok, :found, :kept, :total, :fails, :err, :ms)
       ON CONFLICT (store, keyword, page) DO UPDATE SET url = excluded.url, source = excluded.source, last_at = excluded.last_at,
-        baseline_at = CASE WHEN :isOk = 1 AND (sweep_terms.baseline_at IS NULL OR :wasBaseline = 1) THEN :now ELSE sweep_terms.baseline_at END,
+        baseline_at = CASE WHEN :isOk = 1 AND (sweep_terms.baseline_at IS NULL OR :wasBaseline = 1) THEN :now
+          WHEN :isOk = 0 AND sweep_terms.url <> excluded.url THEN NULL ELSE sweep_terms.baseline_at END,
         last_ok_at = COALESCE(excluded.last_ok_at, sweep_terms.last_ok_at),
         found = CASE WHEN :isOk = 1 THEN excluded.found ELSE sweep_terms.found END,
         kept = CASE WHEN :isOk = 1 THEN excluded.kept ELSE sweep_terms.kept END,
@@ -603,6 +655,7 @@ export class Sweeper {
       if (mode !== 'browser') continue;
       const st = this.stat(r.id);
       if (st.browserNext > now) { next = Math.min(next ?? Infinity, st.browserNext); continue; }
+      this.refreshCollections(r).catch(() => {});
       const term = this.nextTerm(r);
       st.browserNext = now + this.waitFor(st, every);
       st.nextAt = st.browserNext;
@@ -666,6 +719,7 @@ export class Sweeper {
       sku, title, aliases: (Array.isArray(p.aliases) ? p.aliases : []).slice(0, 3).map((a) => str(a, 80)).filter(Boolean),
       price: price(p.price), wasPrice: price(p.wasPrice), inStock: typeof p.inStock === 'boolean' ? p.inStock : null, preorder: p.preorder === true,
       url: onStore(p.url), image: /^https:\/\//.test(image) ? image : '', marketplace: p.marketplace === true,
+      variantId: /^\d{1,20}$/.test(String(p.variantId ?? '')) ? String(p.variantId) : null,
     };
   }
 
@@ -701,7 +755,8 @@ export class Sweeper {
       return {
         id: r.id, name: r.name, realId: r.realId || r.id, mode, from: MODE_LABEL[mode], status: this.statusOf(mode, st, now),
         searches: st.searches || 0, fails: st.fails, lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastMs: lastOk ? lastOk.ms : null, lastError: st.lastError,
-        nextAt: st.nextAt, slowedUntil: st.slowUntil > now ? st.slowUntil : null, endpoint: r.sweep.path.split('{q}')[0],
+        nextAt: st.nextAt, slowedUntil: st.slowUntil > now ? st.slowUntil : null,
+        endpoint: this.settings.keywords.some((k) => this.collectionFor(r, k)) ? r.sweep.collectionPath.replace('{collection}', '…').split('?')[0] : r.sweep.path.split('{q}')[0],
         latency: st.log.filter((x) => x.at >= now - 10 * 60 * 1000).slice(-150).map((x) => ({ at: x.at, ms: x.ms, ok: x.ok })),
       };
     });

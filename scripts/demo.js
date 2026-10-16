@@ -23,9 +23,12 @@ process.env.DEMO_STORE_URL = process.env.DEMO_STORE_URL || demoStoreUrl;
 process.env.MONITOR_ALLOW_PRIVATE = '1';
 const cfg = loadConfig();
 const app = await createApp({ cfg });
-// Live sweeps of the dummy shops only (the first time: the real stores are left alone).
-if (!app.repo.getSetting('sweep')) {
-  app.sweeper.save({ stores: Object.fromEntries(app.sweeper.stores().map(({ retailer: r }) => [r.id, r.demo ? 'server' : 'off'])) }, null);
+// Live sweeps of the dummy shops only: the real stores are left alone (stores added since too).
+const saved = app.repo.getSetting('sweep');
+const modes = saved && saved.stores ? saved.stores : null;
+const fresh = app.sweeper.stores().filter(({ retailer: r }) => !modes || !(r.id in modes));
+if (fresh.length) {
+  app.sweeper.save({ stores: { ...modes, ...Object.fromEntries(fresh.map(({ retailer: r }) => [r.id, r.demo && !modes ? 'server' : 'off'])) } }, null);
 }
 const url = await app.listen(cfg.port, cfg.host).catch((e) => portHelp(e, cfg.port));
 const admins = cfg.adminUsernames.length ? cfg.adminUsernames.join(', ') : '(nobody yet: set ADMIN_USERNAMES in .env)';

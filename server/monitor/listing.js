@@ -6,6 +6,8 @@
 //   target           Target's search page: the product list the page is built from
 //                    (__NEXT_DATA__), stock per colour/size.
 //   shopify-suggest  Shopify's search suggestions (JB Hi-Fi): JSON, with stock.
+//   shopify          A Shopify collection's product list (Trainer Town): JSON, every
+//                    product in it with each option's stock; reads suggestions too.
 //   generic          Any other store: product data in the page's scripts (Next.js
 //                    data, JSON-LD, embedded state), plus product tiles in the HTML.
 //
@@ -88,11 +90,16 @@ export function parseTarget(html, { base = 'https://www.target.com.au' } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Shopify search suggestions (JB Hi-Fi)
+// Shopify: search suggestions (JB Hi-Fi), and a collection's product list (Trainer Town)
 // ---------------------------------------------------------------------------
+const shopifyJson = (text) => {
+  try { return JSON.parse(text); } catch { return undefined; }
+};
+const PREORDER_RE = /\bpre-?orders?\b/i;
+
 export function parseShopifySuggest(text, { base } = {}) {
-  let j;
-  try { j = JSON.parse(text); } catch { return { products: [], problem: pageProblem(text) || 'layout' }; }
+  const j = typeof text === 'string' ? shopifyJson(text) : text;
+  if (j === undefined) return { products: [], problem: pageProblem(text) || 'layout' };
   const list = j && j.resources && j.resources.results && j.resources.results.products;
   if (!Array.isArray(list)) return { products: [], problem: 'layout' };
   const products = [];
@@ -106,10 +113,51 @@ export function parseShopifySuggest(text, { base } = {}) {
     products.push({
       sku: String(p.handle), aliases: p.id ? [String(p.id)] : [], title: clean(p.title), price,
       wasPrice: was && price && was > price ? was : null, inStock: typeof p.available === 'boolean' ? p.available : null,
-      preorder: /\bpre-?order\b/i.test(`${p.title} ${(p.tags || []).join(' ')}`), url, image: httpsUrl(image, base), marketplace: false,
+      // (Trainer Town marks pre-orders in the picture's description: "[Pre-Order] Pokémon - TCG - …")
+      preorder: PREORDER_RE.test(`${p.title} ${(p.tags || []).join(' ')} ${(p.featured_image && p.featured_image.alt) || ''}`),
+      url, image: httpsUrl(image, base), marketplace: false,
     });
   }
   return { products, problem: null };
+}
+
+/**
+ * A Shopify collection's product list (/collections/<handle>/products.json): every product in it,
+ * sold-out ones too, with each option's stock. In stock when any option is.
+ */
+export function parseShopifyProducts(text, { base } = {}) {
+  const j = typeof text === 'string' ? shopifyJson(text) : text;
+  if (j === undefined) return { products: [], problem: pageProblem(text) || 'layout' };
+  if (j && j.resources) return parseShopifySuggest(j, { base });
+  const list = j && j.products;
+  if (!Array.isArray(list)) return { products: [], problem: 'layout' };
+  // Product links sit next to the collections (the same shop, under any path the shop is at).
+  let shop = '';
+  try { shop = new URL(base).pathname.replace(/\/(collections|products)(\/.*)?$/, '').replace(/\/$/, ''); } catch { /* no base */ }
+  const products = [];
+  for (const p of list) {
+    if (!p || !p.handle || !p.title) continue;
+    const vars = (Array.isArray(p.variants) ? p.variants : []).filter((v) => v && typeof v === 'object');
+    const selling = vars.filter((v) => v.available === true);
+    const prices = (selling.length ? selling : vars).map((v) => money(v.price)).filter((n) => n !== null);
+    const price = prices.length ? Math.min(...prices) : null;
+    const cheapest = (selling.length ? selling : vars).find((v) => money(v.price) === price);
+    const was = cheapest ? money(cheapest.compare_at_price) : null;
+    let inStock = null;
+    if (selling.length) inStock = true;
+    else if (vars.length && vars.every((v) => v.available === false)) inStock = false;
+    const images = Array.isArray(p.images) ? p.images : [];
+    const tags = Array.isArray(p.tags) ? p.tags : typeof p.tags === 'string' ? p.tags.split(',') : [];
+    products.push({
+      sku: String(p.handle), aliases: p.id ? [String(p.id)] : [], title: clean(p.title), price,
+      wasPrice: was && price && was > price ? was : null, inStock,
+      // The option to buy, for Shopify's add-to-cart link (the cheapest one in stock).
+      variantId: cheapest && /^\d{1,20}$/.test(String(cheapest.id)) ? String(cheapest.id) : null,
+      preorder: PREORDER_RE.test(`${p.title} ${tags.join(' ')} ${p.product_type || ''}`),
+      url: httpsUrl(`${shop}/products/${encodeURIComponent(p.handle)}`, base), image: httpsUrl(images[0] && images[0].src, base), marketplace: false,
+    });
+  }
+  return { products, total: products.length, problem: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +392,7 @@ export function parseGeneric(html, { base, productPath = null, skuFromPath = nul
   return { products: [...map.values()].slice(0, 300), problem: map.size ? null : 'empty' };
 }
 
-export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, generic: parseGeneric };
+export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, generic: parseGeneric };
 
 export function parseListing(parser, text, opts) {
   return (PARSERS[parser] || parseGeneric)(text, opts);

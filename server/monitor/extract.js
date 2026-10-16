@@ -218,7 +218,7 @@ function pickProduct(products, sku, url) {
 // Block / not-found page detection
 // ---------------------------------------------------------------------------
 
-const BLOCK_TITLE_RE = /access denied|pardon our interruption|request unsuccessful|attention required|just a moment|verify (you are|you're) (a )?human|are you a robot|robot check|security check|bot (detection|protection)|unusual traffic|you have been blocked|forbidden|too many requests/i;
+const BLOCK_TITLE_RE = /access denied|pardon our interruption|request unsuccessful|attention required|just a moment|verify (you are|you're) (a )?human|are you a robot|robot check|security check|bot (detection|protection)|unusual traffic|you have been blocked|forbidden|too many requests|verifying your connection/i;
 const BLOCK_BODY_RE = /_Incapsula_Resource|cf-chl-|cf_chl_|px-captcha|captcha-delivery\.com|\/_sec\/cp_challenge|KPSDK|ak_bmsc_challenge|errors\.edgesuite\.net|Reference #\d+\.[0-9a-f]+\.\d+/i;
 
 export function looksBlocked(html, title) {

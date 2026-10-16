@@ -12,7 +12,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
-import { mentions, parseGeneric, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
+import { mentions, parseGeneric, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
 import { Sweeper } from '../server/monitor/sweep.js';
 
@@ -67,6 +67,42 @@ test("Shopify's search suggestions (JB Hi-Fi): handle, price, stock and a clean 
     ['one-piece-op-08', 177.54, false, 'https://www.jbhifi.com.au/products/one-piece-op-08', 'https://cdn.shopify.com/y.jpg'],
   ]);
   assert.equal(parseShopifySuggest('<html>nope</html>').problem, 'layout');
+});
+
+test("a Shopify collection's product list (Trainer Town): every product, in stock when any option is, and the option to add to the cart", () => {
+  const r = parseShopifyProducts(JSON.stringify({ products: [
+    { id: 8630270394456, handle: 'pokemon-tcg-ascended-heroes-booster-bundle-sealed-display', title: 'Pokémon - TCG - Ascended Heroes Booster Bundle Sealed Display', tags: ['Pokemon', 'TCG'], product_type: '',
+      variants: [{ id: 43647197413464, price: '1899.95', compare_at_price: '2299.95', available: true }], images: [{ src: 'https://cdn.shopify.com/s/files/1/0643/a.png?v=1' }] },
+    { id: 2, handle: 'one-piece-tcg-op-14-booster-box', title: 'One Piece - TCG - OP-14 Booster Box', tags: ['Pre-Order'],
+      variants: [{ id: 11, price: '219.95', available: false }, { id: 12, price: '189.95', compare_at_price: null, available: true }], images: [] },
+    { id: 3, handle: 'pokemon-tcg-pitch-black-booster-bundle', title: 'Pokémon - TCG - Pitch Black Booster Bundle', tags: [], variants: [{ id: 21, price: '69.95', available: false }], images: [{ src: '//cdn.shopify.com/b.png' }] },
+    { id: 4, handle: 'mystery-box', title: 'Mystery Box', variants: [] },
+  ] }), { base: 'https://trainertown.com.au/collections/pokemon-cards/products.json?limit=250' });
+  assert.equal(r.problem, null);
+  assert.equal(r.total, 4);
+  assert.deepEqual(r.products.map((p) => [p.sku, p.price, p.wasPrice, p.inStock, p.preorder, p.variantId]), [
+    ['pokemon-tcg-ascended-heroes-booster-bundle-sealed-display', 1899.95, 2299.95, true, false, '43647197413464'],
+    ['one-piece-tcg-op-14-booster-box', 189.95, null, true, true, '12'],
+    ['pokemon-tcg-pitch-black-booster-bundle', 69.95, null, false, false, '21'],
+    ['mystery-box', null, null, null, false, null],
+  ]);
+  const [a, b, c] = r.products;
+  assert.equal(a.url, 'https://trainertown.com.au/products/pokemon-tcg-ascended-heroes-booster-bundle-sealed-display');
+  assert.deepEqual(a.aliases, ['8630270394456']);
+  assert.equal(a.image, 'https://cdn.shopify.com/s/files/1/0643/a.png?v=1');
+  assert.equal(b.image, '');
+  assert.equal(c.image, 'https://cdn.shopify.com/b.png');
+  // A shop under a path of its own (the dummy store): the links stay in it.
+  const dummy = parseShopifyProducts(JSON.stringify({ products: [{ id: 5, handle: 'x-etb', title: 'X ETB', variants: [] }] }), { base: 'http://127.0.0.1:9/trainertown/collections/pokemon-cards/products.json?limit=250' });
+  assert.equal(dummy.products[0].url, 'http://127.0.0.1:9/trainertown/products/x-etb');
+  // Search suggestions read the same way (a keyword with no collection of its own); pre-orders marked in the picture's description.
+  const s = parseShopifyProducts(JSON.stringify({ resources: { results: { products: [
+    { id: 9, handle: 'pokemon-tcg-ascended-heroes-etb', title: 'Pokémon - TCG - Ascended Heroes Elite Trainer Box', price: '139.95', available: true, url: '/products/pokemon-tcg-ascended-heroes-etb?_pos=1', featured_image: { url: 'https://cdn.shopify.com/c.png', alt: '[Pre-Order] Pokémon - TCG - Ascended Heroes Elite Trainer Box' } },
+  ] } } }), { base: 'https://trainertown.com.au/search/suggest.json?q=pokemon' });
+  assert.deepEqual(s.products.map((p) => [p.sku, p.price, p.inStock, p.preorder, p.url]), [['pokemon-tcg-ascended-heroes-etb', 139.95, true, true, 'https://trainertown.com.au/products/pokemon-tcg-ascended-heroes-etb']]);
+  // Shopify's bot check instead of the list.
+  assert.equal(parseShopifyProducts('<!DOCTYPE html><html><head><title>Verifying your connection...</title></head><body><script>window._cf_chl_opt = {}</script></body></html>').problem, 'blocked');
+  assert.equal(parseShopifyProducts('{"collections":[]}').problem, 'layout');
 });
 
 test('any store: product tiles in the page, and product data in its scripts (JSON-LD, Next.js data, embedded state)', () => {
@@ -184,6 +220,7 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   const mode = (id) => r.body.stores.find((s) => s.store === id).mode;
   assert.equal(mode('target'), 'server');
   assert.equal(mode('jbhifi'), 'server');
+  assert.equal(mode('trainertown'), 'server', 'Trainer Town answers servers');
   assert.equal(mode('kmart'), 'browser', 'stores that refuse servers: from an admin\'s browser');
   assert.equal(mode('demo-kmart'), 'off');
   assert.equal((await boss.put('/api/monitor/sweep', { keywords: '' })).status, 400, 'at least one keyword');
@@ -192,7 +229,7 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   // The real stores off (tests never touch them); the dummy ones swept from the server.
   r = await boss.put('/api/monitor/sweep', {
     everySeconds: 5, keywords: 'Pokemon, one piece',
-    stores: { target: 'off', jbhifi: 'off', toysrus: 'off', kmart: 'off', bigw: 'off', ebgames: 'off', zing: 'off', 'demo-kmart': 'server', 'demo-jbhifi': 'server', 'demo-bigw': 'server', 'demo-ebgames': 'browser' },
+    stores: { target: 'off', jbhifi: 'off', toysrus: 'off', trainertown: 'off', kmart: 'off', bigw: 'off', ebgames: 'off', zing: 'off', 'demo-kmart': 'server', 'demo-jbhifi': 'server', 'demo-bigw': 'server', 'demo-ebgames': 'browser', 'demo-trainertown': 'server' },
   });
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(r.body.settings.keywords, ['pokemon', 'one piece']);
@@ -343,6 +380,63 @@ test('🎯 Target leaves sold-out products out of its results: gone from every p
   [, r] = await round();
   assert.equal(r.gone, 0);
   assert.equal(product('target', '70100001').status, 'in_stock');
+});
+
+test("🃏 Trainer Town: each game's whole collection read in one go — new drops with an add-to-cart link, restocks; other keywords searched", async () => {
+  const tt = R('demo-trainertown');
+  assert.equal(sw.modeFor(R('trainertown')), 'off', '(tests never touch the real store)');
+  const shop = store.shop('trainertown');
+  // The first read: the store's collections, then the game's whole collection (it sets the scene).
+  let r = await sweep('demo-trainertown');
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.baseline, true);
+  assert.equal(r.found, 1);
+  assert.equal(r.kept, 1);
+  const row = (k) => env.app.db.get('SELECT * FROM sweep_terms WHERE store = :s AND keyword = :k AND page = 1', { s: 'demo-trainertown', k });
+  assert.match(row('pokemon').url, /\/trainertown\/collections\/pokemon-cards\/products\.json\?limit=250$/);
+  assert.ok(sw.events.some((e) => e.type === 'sys' && /Trainer Town \(dummy store\): reading each game's whole collection — "pokemon" → pokemon-cards, "one piece" → one-piece-trading-card-game/.test(e.message)));
+  const etb = product('demo-trainertown', 'pokemon-tcg-ascended-heroes-elite-trainer-box');
+  assert.equal(etb.status, 'in_stock');
+  assert.equal(etb.price, 129.95);
+  assert.match(etb.url, /\/trainertown\/products\/pokemon-tcg-ascended-heroes-elite-trainer-box$/);
+  assert.equal(etb.variant_id, String(shop.products[0].id), 'the option to buy, for the add-to-cart link');
+  assert.equal((await sweep('demo-trainertown', 'one piece')).baseline, true);
+  assert.equal(product('demo-trainertown', 'one-piece-tcg-op-14-booster-box').status, 'out_of_stock');
+  assert.match(sw.live().stores.find((x) => x.id === 'demo-trainertown').endpoint, /^\/collections\/…\/products\.json$/);
+
+  // 🆕 A product the store adds (a pre-order): alerted at once, with Shopify's add-to-cart link.
+  shop.products.push({ sku: 'pokemon-tcg-mega-evolution-booster-box', name: 'Pokémon - TCG - Mega Evolution Booster Box', price: 269.95, status: 'preorder', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499997 });
+  const before = channel().length;
+  r = await sweep('demo-trainertown');
+  assert.equal(r.baseline, false);
+  assert.equal(r.new, 1);
+  const [a] = alerts('listed');
+  assert.equal(a.sku, 'pokemon-tcg-mega-evolution-booster-box');
+  assert.equal(a.status, 'preorder');
+  assert.equal(a.price, 269.95);
+  const [post] = channel().slice(before);
+  const buttons = post.body.components[0].components;
+  assert.ok(buttons.some((b) => b.label === '⚡ Buy with Mugibot' && /\/buy\?store=demo-trainertown&sku=pokemon-tcg-mega-evolution-booster-box/.test(b.url)));
+  const cart = buttons.find((b) => b.label === 'Add to cart');
+  assert.equal(cart.url, `${store.url}/trainertown/cart/4499997:1`);
+  // 🟢 Sold out → in stock at the next read of that collection.
+  store.set('trainertown', 'one-piece-tcg-op-14-booster-box', { status: 'in_stock' });
+  assert.equal((await sweep('demo-trainertown', 'one piece')).restock, 1);
+  assert.equal(alerts('restock')[0].sku, 'one-piece-tcg-op-14-booster-box');
+
+  // A keyword with no collection of its own: Shopify's search, as at JB Hi-Fi.
+  assert.match(sw.urlFor(tt, 'lorcana'), /\/trainertown\/search\/suggest\.json\?q=lorcana&/);
+  // Read somewhere else (the collection gone, so the search instead): what's there already was — no flood of "new".
+  const known = sw.collections.get('demo-trainertown');
+  sw.collections.set('demo-trainertown', { list: [], nextAt: Infinity });
+  shop.products.push({ sku: 'pokemon-tcg-surging-sparks-etb', name: 'Pokémon - TCG - Surging Sparks Elite Trainer Box', price: 89.95, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499996 });
+  r = await sweep('demo-trainertown');
+  assert.equal(r.baseline, true);
+  assert.equal(r.new, 0);
+  assert.match(row('pokemon').url, /\/search\/suggest\.json/);
+  sw.collections.set('demo-trainertown', known);
+  assert.equal((await sweep('demo-trainertown')).baseline, true, 'back to the collection: the scene is set again');
+  assert.equal((await sweep('demo-trainertown')).baseline, false);
 });
 
 test("members' own SKUs update straight away: a restock DM from a sweep, and a page check can't flip it back", async () => {
@@ -546,7 +640,7 @@ test('the loops: each store swept from the server on its own loop, every few sec
     assert.equal(h.running, true);
     assert.ok(h.requests1h >= 2);
     assert.ok((await boss.get('/api/monitor')).body.overview.sweeps1h >= 2);
-    await boss.put('/api/monitor/sweep', { stores: { 'demo-kmart': 'off' } });
+    await boss.put('/api/monitor/sweep', { stores: { ...sw.settings.stores, 'demo-kmart': 'off' } });
     await waitFor(() => !sw.loops.has('demo-kmart'), { timeout: 15000, message: 'the Kmart loop to stop' });
   } finally {
     sw.stop();
