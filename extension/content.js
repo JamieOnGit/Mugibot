@@ -50,6 +50,17 @@
   const checkoutFlow = MGBFlows.part(retailer, 'checkout');
   MGBFill.startFocusBroker(); // payment frames ask the page to focus their card boxes
 
+  // The store login monitor (logins.js): are you signed in here? Read from the page as it settles
+  // (headers often fill in a moment after the page loads); nothing is clicked.
+  if (retailer.account && globalThis.MGBLogins) {
+    let said = null;
+    const look = () => {
+      const status = MGBLogins.fromPage(document, retailer.account.check);
+      if (status && status !== said) { said = status; ask({ type: 'login', store: retailer.id, status }); }
+    };
+    for (const ms of [1200, 4000, 9000]) setTimeout(look, ms);
+  }
+
   const store = MGBQuick.sessionStore('mgbFlow');
   const assistFlag = {
     on: (profileId) => { try { sessionStorage.setItem(ASSIST_KEY, JSON.stringify({ until: Date.now() + ASSIST_TTL, profileId: profileId || null })); } catch { /* ignore */ } },

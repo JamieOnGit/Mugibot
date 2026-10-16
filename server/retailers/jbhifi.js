@@ -27,7 +27,18 @@ export default {
   searchPath: '/search?query={q}',
   // Live sweeps: Shopify's search suggestions (10 products a search, with stock). "pokemon" alone
   // finds plushies and games, so "tcg" is added unless the keyword already says cards.
-  sweep: { from: 'server', parser: 'shopify-suggest', path: '/search/suggest.json?q={q}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last', addWord: 'tcg' },
+  sweep: {
+    from: 'server', parser: 'shopify-suggest', path: '/search/suggest.json?q={q}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last', addWord: 'tcg',
+    // JB Hi-Fi Marketplace: other sellers' products are listed alongside JB's own, and the search
+    // doesn't say which is which. The product's own data does: a "Seller" option naming the
+    // marketplace seller(s) ("Gameology"), where JB's own products have none. Asked once per
+    // product, never as part of a search: just before its first alert, and slowly for the rest.
+    sellers: { path: '/products/{sku}.js', own: /^jb ?hi-?fi$/i },
+  },
+  // Store login monitor: Shopify puts the signed-in customer's number in every page ("cid" in __st),
+  // so the extension checks the store's front page with your cookies (every 10 minutes, and when you
+  // open the store). /account goes to the store's sign-in when you're signed out.
+  account: { signIn: '/account', check: { path: '/', signedIn: /var __st=\{[^}]*"cid":\s*\d+|"customerId":\s*\d+/, signedOut: /var __st=\{/ } },
   monitor: { server: true, browser: true },
   flow: {
     product: {

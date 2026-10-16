@@ -27,7 +27,12 @@ const toItem = (r) => r && ({
   status: r.status, statusSource: r.status_source, statusAt: r.status_at, checkedAt: r.checked_at, title: r.title || '',
   lastPrice: r.last_price, error: r.error || '', lastAlertAt: r.last_alert_at, createdAt: r.created_at,
 });
-const toDevice = (r) => r && ({ id: r.id, name: r.name, version: r.version, host: r.host || '', source: r.source || '', createdAt: r.created_at, lastSeenAt: r.last_seen_at });
+const parseLogins = (v) => { try { const o = JSON.parse(v || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
+const toDevice = (r) => r && ({
+  id: r.id, name: r.name, version: r.version, host: r.host || '', source: r.source || '', createdAt: r.created_at, lastSeenAt: r.last_seen_at,
+  // Which stores this browser is signed in to (the store login monitor): { store: { status, at, how } }.
+  logins: parseLogins(r.logins), loginsAt: r.logins_at || null,
+});
 
 function isUniqueError(e) {
   return /UNIQUE constraint failed/i.test(String(e && e.message));
@@ -383,6 +388,15 @@ export class Repo {
   extensionCounts(since) {
     return this.db.all(`SELECT version, source, COUNT(*) AS n FROM devices WHERE last_seen_at > :since
       GROUP BY version, source ORDER BY n DESC`, { since });
+  }
+
+  /** The store login monitor: what this browser saw (merged with what it said before). */
+  setDeviceLogins(userId, id, logins) {
+    const row = this.db.get('SELECT logins FROM devices WHERE user_id = :u AND id = :id', { u: userId, id });
+    if (!row) return null;
+    const merged = { ...parseLogins(row.logins), ...logins };
+    this.db.run('UPDATE devices SET logins = :l, logins_at = :t WHERE user_id = :u AND id = :id', { l: JSON.stringify(merged), t: this.now(), u: userId, id });
+    return merged;
   }
 
   listDevices(userId) {

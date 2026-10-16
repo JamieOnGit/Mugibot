@@ -28,6 +28,8 @@ export default {
   searchPath: '/products/search?q={q}',
   // Search results by relevance, 25–30 a page: page 1 of each keyword in turn, the later pages now and then.
   sweep: { from: 'server', parser: 'crystal', path: '/products/search?q={q}', pagePath: '&page={page}', pages: 4 },
+  // Store login monitor: CrystalCommerce marks its header "not-logged-in" until you sign in.
+  account: { signIn: '/user/login', check: { path: '/', signedIn: /\/user\/logout|class="(?:[^"]*\s)?logged-in[\s"]/, signedOut: /\bnot-logged-in\b/ } },
   monitor: { server: true, browser: true },
   flow: {
     product: {

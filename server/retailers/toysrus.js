@@ -14,4 +14,6 @@ export default {
   flowNote: 'Uses the Shopify flow. Not tested yet.',
   productPath: /^\/products\/[^/?#.]+$/,
   searchPath: '/search?q={q}',
+  // (No marketplace sellers here: nothing to ask about.)
+  sweep: { ...jbhifi.sweep, sellers: null },
 };

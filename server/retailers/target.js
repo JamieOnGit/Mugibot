@@ -18,6 +18,9 @@ export default {
   // leaves products that are sold out online out of its results, so one that's gone from every
   // page for a while is sold out (and its return is a restock).
   sweep: { from: 'server', parser: 'target', path: '/search?sEngine=c&text={q}&sortBy=onlinedate&sortOrder=descending', pagePath: '&page={page}', pages: 4, goneMeansSoldOut: true },
+  // Store login monitor: whether you're signed in here is read from the store's own page when you
+  // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
+  account: { signIn: '' },
   monitor: { server: true, browser: true },
   flow: {
     product: { add: [/\badd to (cart|basket|bag)\b/i, /\bpre-?order\b/i], waitMs: 12000 },

@@ -14,7 +14,7 @@ import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, wa
 import { startMockStore } from '../devtools/mockstore.js';
 import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
-import { Sweeper, olderVersion } from '../server/monitor/sweep.js';
+import { Sweeper, olderVersion, retryAfterMs } from '../server/monitor/sweep.js';
 
 // --- reading results -----------------------------------------------------------
 function targetPage(products, total = products.length) {
@@ -885,6 +885,116 @@ test('🚫 the blacklist: a product, a SKU or a whole store never pings, isn\'t 
   assert.ok(audit.includes('blacklist-add') && audit.includes('blacklist-remove'));
 });
 
+test("🛒 JB Hi-Fi Marketplace: a seller's product never alerts and leaves the list; JB's own still do — each asked once, never as part of a search", async () => {
+  const jb = store.shop('jbhifi');
+  const add = (sku, name, seller) => jb.products.push({ sku, name, price: 144.24, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4500000 + jb.products.length, seller });
+  const fest = 'one-piece-card-game-premium-card-collection-fest-23-24';
+  const op15 = 'one-piece-card-game-op-15-booster-box';
+  await sweep('demo-jbhifi', 'one piece');
+  add(fest, 'One Piece Card Game: Premium Card Collection - Bandai Card Games Fest. 23-24 Edition', 'Gameology');
+  add(op15, 'One Piece Card Game OP-15 Booster Box', null);
+  const asked = () => store.state.requests.filter((x) => /^\/jbhifi\/products\/[^/]+\.js$/.test(x.path)).length;
+  const n = asked();
+  const r = await sweep('demo-jbhifi', 'one piece');
+  assert.equal(r.ok, true, r.error);
+  assert.ok(alerts('listed').some((a) => a.sku === op15), "JB's own new drop alerts");
+  assert.ok(!alerts('listed').some((a) => a.sku === fest), "the marketplace seller's doesn't");
+  assert.equal(product('demo-jbhifi', fest).seller, 'Gameology');
+  assert.equal(product('demo-jbhifi', op15).seller, '', 'sold by JB Hi-Fi itself');
+  assert.equal(asked() - n, 2, 'asked once each, just before their first alert');
+  const listed = async () => (await ash.get('/api/monitor/products?store=demo-jbhifi')).body.products.map((p) => p.sku);
+  assert.ok(!(await listed()).includes(fest), 'off the list');
+  assert.ok((await listed()).includes(op15));
+  // Known now: the next searches leave it out without asking again.
+  jb.products.find((p) => p.sku === fest).price = 99;
+  await sweep('demo-jbhifi', 'one piece');
+  assert.equal(asked() - n, 2);
+  assert.ok(!alerts('price_drop').some((a) => a.sku === fest));
+  assert.ok(!(await listed()).includes(fest));
+  // Products listed before this: asked one at a time between searches (at most every 20 s).
+  const unknown = () => env.app.db.get("SELECT COUNT(*) AS n FROM products WHERE store = 'demo-jbhifi' AND seller IS NULL AND sweep_seen_at IS NOT NULL").n;
+  const left = unknown();
+  assert.ok(left >= 1);
+  sw.stat('demo-jbhifi').sellerAt = 0;
+  await sw.checkSellers(R('demo-jbhifi'));
+  assert.equal(unknown(), left - 1);
+  await sw.checkSellers(R('demo-jbhifi'));
+  assert.equal(unknown(), left - 1, 'one at a time');
+  // Stores whose search says who sells (Kmart) are never asked.
+  assert.equal(R('demo-kmart').sweep.sellers, undefined);
+  assert.equal(R('toysrus').sweep.sellers, null, 'Toys"R"Us has no marketplace');
+});
+
+test('↻ Reset: a store asking to wait (429, Retry-After) is waited for; Reset (one store, or all) starts it again gently; a browser store gets a fresh tab', async () => {
+  store.state.tooMany = { kmart: 60 };
+  try {
+    const r = await sweep('demo-kmart');
+    assert.equal(r.ok, false);
+    assert.match(r.error, /refused the search \(HTTP 429\) — it asked to wait 60 s/);
+    const st = sw.stat('demo-kmart');
+    assert.ok(st.retryAt - sw.now() > 55000);
+    assert.ok(sw.waitFor(st, 5000) >= 55000, "no search before the store said");
+    await sweep('demo-kmart');
+    assert.equal(sw.stat('demo-kmart').fails >= 2, true);
+  } finally {
+    store.state.tooMany = {};
+  }
+  assert.equal((await ash.post('/api/monitor/sweep/reset', { store: 'demo-kmart' })).status, 404, 'admins only');
+  assert.equal((await boss.post('/api/monitor/sweep/reset', { store: 'nope' })).status, 400);
+  const res = await boss.post('/api/monitor/sweep/reset', { store: 'demo-kmart' });
+  assert.equal(res.status, 200, res.text);
+  assert.deepEqual(res.body.reset, ['demo-kmart']);
+  const st = sw.stat('demo-kmart');
+  assert.equal(st.fails, 0);
+  assert.equal(st.lastError, '');
+  assert.ok(st.slowUntil > sw.now(), 'gently, for a while');
+  assert.ok(sw.events.some((e) => e.type === 'sys' && /boss reset Kmart \(dummy store\): searching it again now/.test(e.message)));
+  assert.ok(env.app.repo.listAudit(20).some((a) => a.action === 'sweep-reset'));
+  const card = sw.live().stores.find((s) => s.id === 'demo-kmart');
+  assert.ok(card.resetAt);
+  assert.equal((await sweep('demo-kmart')).ok, true, 'answering again');
+  // Reset all: every store being swept, none of the switched-off ones.
+  const all = await boss.post('/api/monitor/sweep/reset', {});
+  assert.ok(all.body.reset.includes('demo-kmart') && all.body.reset.includes('demo-jbhifi'));
+  assert.ok(!all.body.reset.includes('kmart'), 'not the ones that are off');
+  // A store searched from an admin's browser: its tab is closed and opened again at its front page (once).
+  const saved = { ...sw.settings.stores };
+  sw.save({ stores: { ...saved, 'demo-ebgames': 'browser' } }, null);
+  try {
+    const admin = { role: 'admin', username: 'boss' };
+    sw.reset('demo-ebgames');
+    let t = sw.browserDue(admin, { version: '9.9.9' }).terms.find((x) => x.store === 'demo-ebgames');
+    assert.equal(t.fresh, true);
+    assert.equal(t.frontUrl, `${store.url}/ebgames`);
+    sw.stat('demo-ebgames').browserNext = 0;
+    t = sw.browserDue(admin, { version: '9.9.9' }).terms.find((x) => x.store === 'demo-ebgames');
+    assert.equal(t.fresh, false);
+  } finally {
+    sw.save({ stores: saved }, null);
+    // (The gentle 10 minutes after the resets, and the dummy Kmart's "wait 60 s": over, for the tests that follow.)
+    for (const s of sw.state.values()) Object.assign(s, { slowUntil: 0, retryAt: 0 });
+  }
+});
+
+test('Retry-After: seconds or a date, at most 15 minutes', () => {
+  const now = Date.parse('2026-10-16T10:00:00Z');
+  assert.equal(retryAfterMs('30', now), 30000);
+  assert.equal(retryAfterMs(new Date(now + 90000).toUTCString(), now), 90000);
+  assert.equal(retryAfterMs('99999', now), 15 * 60 * 1000);
+  assert.equal(retryAfterMs('', now), 0);
+  assert.equal(retryAfterMs('soon', now), 0);
+});
+
+test("EB Games' results: a marketplace seller's product only when the result says so (never guessed from the name)", () => {
+  const r = parseEbGames(JSON.stringify({ results: [
+    { sku: '1', title: 'Dragon Ball Super Card Game Booster Box', price: 150 },
+    { sku: '2', title: 'Riftbound Booster Display', price: 160, sellerName: 'EB Games' },
+    { sku: '3', title: 'Gundam Card Game Booster Box', price: 170, sellerName: 'Cardz Galore' },
+    { sku: '4', title: 'Pokémon TCG Elite Trainer Box', price: 80, isMarketplace: true },
+  ] }), { base: 'https://www.ebgames.com.au/search/query', storeBase: 'https://www.ebgames.com.au' });
+  assert.deepEqual(r.products.map((p) => [p.sku, p.marketplace]), [['1', false], ['2', false], ['3', true], ['4', true]]);
+});
+
 test('the loops: each store swept from the server on its own loop, every few seconds; switched off, it stops', async () => {
   const before = store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length;
   sw.running = false;
@@ -900,11 +1010,29 @@ test('the loops: each store swept from the server on its own loop, every few sec
     assert.equal(h.running, true);
     assert.ok(h.requests1h >= 2);
     assert.ok((await boss.get('/api/monitor')).body.overview.sweeps1h >= 2);
+    // A store that asked to wait (Retry-After) isn't searched before then, even woken by Sweep now or a Reset…
+    const kmartSearches = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length;
+    sw.stat('demo-kmart').retryAt = sw.now() + 60000;
+    const asked = kmartSearches();
+    sw.sweepNow();
+    sw.reset('demo-kmart');
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal(kmartSearches(), asked, 'no search before the store said');
+    // …and Reset wakes only the store it resets: another store's backoff stands.
+    const jbSearches = () => store.state.requests.filter((x) => x.path.startsWith('/jbhifi/search/suggest')).length;
+    sw.stat('demo-jbhifi').retryAt = sw.now() + 60000;
+    sw.stat('demo-kmart').retryAt = 0;
+    const jbBefore = jbSearches();
+    sw.reset('demo-kmart');
+    await waitFor(() => kmartSearches() > asked, { timeout: 5000, message: 'Kmart searched straight after its reset' });
+    assert.equal(jbSearches(), jbBefore, 'JB Hi-Fi left alone');
+    sw.stat('demo-jbhifi').retryAt = 0;
     await boss.put('/api/monitor/sweep', { stores: { ...sw.settings.stores, 'demo-kmart': 'off' } });
     await waitFor(() => !sw.loops.has('demo-kmart'), { timeout: 15000, message: 'the Kmart loop to stop' });
   } finally {
     sw.stop();
     sw.cfg.monitor.enabled = false;
+    for (const st of sw.state.values()) Object.assign(st, { slowUntil: 0, retryAt: 0 });
   }
 });
 

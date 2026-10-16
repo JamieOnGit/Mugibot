@@ -49,7 +49,7 @@ export function extensionManifest(cfg, { version } = {}) {
   m.content_scripts = [
     { matches: appPatterns, js: ['bridge.js'], run_at: 'document_start' },
     { matches: [...stores, ...dev], js: ['capture.js'], run_at: 'document_start' },
-    { matches: [...stores, ...dev], js: ['flows.js', 'core.js', 'fill.js', 'content.js'], run_at: 'document_idle' },
+    { matches: [...stores, ...dev], js: ['flows.js', 'core.js', 'fill.js', 'logins.js', 'content.js'], run_at: 'document_idle' },
     { matches: [...PAYMENT_HOSTS, ...stores, ...dev], js: ['flows.js', 'fill.js', 'frame.js'], run_at: 'document_idle', all_frames: true },
   ];
   // The app's own pages aren't stores: keep the store scripts off them.

@@ -121,6 +121,26 @@ export function register(router, ctx) {
     return { ok: true, applied };
   }, { auth: 'device', entitled: true });
 
+  // The store login monitor: which stores this browser is signed in to (it looks when you open a
+  // store, and checks the stores that say so in their pages every 10 minutes). Signed in, ⚡ Buy is
+  // faster: the store fills in your saved details itself.
+  router.post('/api/ext/logins', async (req) => {
+    if (!limiter.hit(`logins:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const src = req.body.logins && typeof req.body.logins === 'object' ? req.body.logins : null;
+    if (!src) throw bad('logins must be an object');
+    const now = repo.now();
+    const out = {};
+    for (const [store, v] of Object.entries(src).slice(0, 40)) {
+      if (!retailers.get(store) || !v || typeof v !== 'object') continue;
+      if (!['in', 'out', 'unknown'].includes(v.status)) continue;
+      const at = Number(v.at);
+      out[store] = { status: v.status, at: Number.isFinite(at) && at > 0 && at <= now + 60000 ? Math.round(at) : now, how: v.how === 'check' ? 'check' : 'page' };
+    }
+    const logins = repo.setDeviceLogins(req.user.id, req.device.id, out);
+    if (logins && Object.keys(out).length) ctx.hub.publish(req.user.id, 'devices', {});
+    return { ok: true };
+  }, { auth: 'device' });
+
   // Live sweeps from an admin's browser (docs/MONITORING.md): the next search at each store
   // that refuses servers… Members' browsers get none: only admins can change the shared feed.
   router.get('/api/ext/sweeps', async (req) => {

@@ -37,9 +37,10 @@ function loadPrefs() {
   try { return { ...def, ...(JSON.parse(localStorage.getItem(PREFS_KEY)) || {}) }; } catch { return def; }
 }
 
-export function setupLive({ storeName, buyUrl, openProduct, panelOpen, sampleProduct, onSettings }) {
+export function setupLive({ storeName, buyUrl, openProduct, panelOpen, sampleProduct, onSettings, resetStore, setMode }) {
   const L = {
-    data: null, stores: new Map(), log: [], filter: '', admin: false, settings: null, skew: 0, pings: [], pingCount: 0, audio: null,
+    // (The feed shows drops and restocks first: searches and the rest are one choice away.)
+    data: null, stores: new Map(), log: [], filter: 'alerts', admin: false, open: new Set(), settings: null, skew: 0, pings: [], pingCount: 0, audio: null,
     queue: [], showing: null, popTimer: null, flashTimer: null, renderTimer: null, frame: null, beam: 0, ttns: [], olderBefore: null, loaded: false,
   };
   const prefs = loadPrefs();
@@ -78,9 +79,10 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     renderStats();
     renderChannels();
     renderKeywords();
-    renderTuning();
+    renderPrefs();
     renderChart();
     renderArm();
+    renderSub();
     const on = L.data && L.data.running && L.settings && L.settings.enabled;
     $('#sn-sweeping').textContent = on ? 'sweeping' : 'off';
     $('#sn-sweeping').classList.toggle('off', !on);
@@ -107,23 +109,35 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     return all.length ? Math.round(all.reduce((a, b) => a + b, 0) / all.length) : null;
   }
 
+  // The four numbers that matter, at a glance.
   function renderStats() {
     const box = $('#m-stats');
     if (!L.data) return;
     const d = L.data;
     const o = d.overview;
     const t = d.totals;
-    const tile = (k, v, s = '', id = '') => h('div', { class: 'sn-stat' }, h('div', { class: 'k' }, k), h('div', { class: 'v', id: id || null }, ...[].concat(v)), s ? h('div', { class: 's' }, s) : null);
+    const tile = (k, v, s = '', tone = '') => h('div', { class: `sn-stat${tone ? ` ${tone}` : ''}` }, h('div', { class: 'k' }, k), h('div', { class: 'v' }, ...[].concat(v)), s ? h('div', { class: 's' }, s) : null);
     const mean = meanAlertMs();
+    const per = o.sweeps1h || 0;
     box.textContent = '';
     box.append(
-      tile('Uptime', d.startedAt ? hms(serverNow() - d.startedAt) : '—', d.startedAt ? `since ${clockOf(d.startedAt)}` : 'sweeps not running here', 'sn-up'),
-      tile('Searches', t.searches.toLocaleString(), `${(o.sweeps1h || 0).toLocaleString()} / hour`),
-      tile('Drops · 24 h', String((o.drops24h || 0) + (o.restocks24h || 0)), `${o.drops24h || 0} new · ${o.restocks24h || 0} restocks`),
-      tile('Mean alert time', mean === null ? ['—', h('small', {}, ' ms')] : [String(mean), h('small', {}, ' ms')], 'answer → screen'),
-      tile('Errors / streak', [h('span', { class: 'bad' }, String(t.errors)), ' / ', h('span', { class: 'good' }, String(t.streak))], 'fails / in a row'),
-      tile('Available now', String(o.available || 0), `of ${o.tracked || 0} tracked`),
+      tile('Drops today', String((o.drops24h || 0) + (o.restocks24h || 0)), `${o.drops24h || 0} new · ${plural(o.restocks24h || 0, 'restock')} · 24 h`, 'brand'),
+      tile('Available now', String(o.available || 0), `of ${o.tracked || 0} tracked products`),
+      tile('Alert speed', mean === null ? '—' : [String(mean), h('small', {}, ' ms')], 'store to your screen'),
+      tile('Searches', [per.toLocaleString(), h('small', {}, ' / hour')], t.errors ? `${t.errors.toLocaleString()} failed · ${t.streak.toLocaleString()} OK in a row` : `${t.searches.toLocaleString()} since ${d.startedAt ? clockOf(d.startedAt) : 'start'}`),
     );
+  }
+
+  // Under the title: what's being searched for, where.
+  function renderSub() {
+    const sub = $('#mon-sub');
+    if (!sub || !L.settings) return;
+    sub.textContent = '';
+    if (!L.settings.enabled) { sub.append('Live sweeps are switched off.'); return; }
+    const n = L.stores.size;
+    sub.append(`Searching ${n} store${n === 1 ? '' : 's'} every few seconds for `);
+    L.settings.keywords.forEach((k, i) => { sub.append(i ? (i === L.settings.keywords.length - 1 ? ' and ' : ', ') : '', h('b', {}, k)); });
+    sub.append('. New drops and restocks pop up here the moment a search sees them.');
   }
 
   // ---------------------------------------------------------------------------
@@ -138,28 +152,66 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     return left > 1000 ? `in ${Math.ceil(left / 1000)} s` : 'now';
   }
 
+  // One line a store: its colour, name and state, and underneath what it's doing now (or what's wrong).
+  // Admins get a Reset button on each. A click on the name opens the details.
   function renderChannels() {
     const box = $('#sn-channels');
     box.textContent = '';
     const list = sortedStores();
-    $('#sn-stores-meta').textContent = `${list.length} active`;
+    const trouble = list.filter((s) => s.status === 'retrying' || (s.status === 'waiting' && s.lastError));
+    $('#sn-stores-meta').textContent = trouble.length ? `${trouble.length} need${trouble.length === 1 ? 's' : ''} attention` : `${list.length} active`;
+    $('#sn-stores-meta').classList.toggle('warn', trouble.length > 0);
+    $('#sn-reset-all').hidden = !L.admin || !list.length;
+    renderAttention(trouble);
     if (!list.length) {
       box.append(h('p', { class: 'sn-empty' }, L.settings && !L.settings.enabled ? 'Live sweeps are switched off.' : 'No stores are being swept.'));
       return;
     }
     for (const s of list) {
       const [cls, label] = STATE[s.status] || STATE.starting;
+      const open = L.open.has(s.id);
       const waiting = s.status === 'waiting';
-      box.append(h('div', { class: 'sn-chan', dataset: { store: s.id } },
-        h('div', { class: 'hd' }, swatch(s.id), h('span', {}, s.name), h('span', { class: `sn-state ${cls}`, title: s.lastError || '' }, label)),
-        h('div', { class: 'sn-rows' },
-          h('div', { class: 'r' }, h('span', {}, 'searches'), h('b', {}, s.searches.toLocaleString())),
-          h('div', { class: 'r' }, h('span', {}, 'last answer'), h('b', {}, msText(s.lastMs))),
-          h('div', { class: 'r' }, h('span', {}, 'next search'), h('b', { class: 'sn-next' }, nextText(s))),
-          h('div', { class: 'r' }, h('span', {}, 'from'), h('b', {}, `${s.mode === 'browser' ? "admin's browser" : 'server'} · ${s.endpoint}`)),
-          s.fails || s.lastError ? h('div', { class: 'r' }, h('span', {}, s.fails ? 'problem' : 'note'), h('b', {}, s.lastError || `${s.fails} failed`)) : null,
-          waiting && !/extension/i.test(s.lastError || '') ? h('div', { class: 'r' }, h('span', {}, ''), h('b', {}, "Keep Chrome open with the extension connected to an admin account")) : null)));
+      const sub = s.fails ? h('span', {}, s.lastError || `${s.fails} failed`)
+        : waiting ? h('span', {}, s.lastError || "Waiting for an admin's browser")
+          : typeof s.lastMs === 'number' ? h('span', {}, `Answered in ${msText(s.lastMs)} · next `, h('span', { class: 'sn-next' }, nextText(s)))
+            : h('span', {}, 'Starting…');
+      const toggle = h('button', { class: 'st-toggle', type: 'button', 'aria-expanded': open ? 'true' : 'false', title: open ? 'Hide the details' : 'Show the details' },
+        swatch(s.id), h('span', { class: 'st-name' }, s.name), h('span', { class: `sn-state ${cls}`, title: s.lastError || '' }, label));
+      toggle.addEventListener('click', () => { if (L.open.has(s.id)) L.open.delete(s.id); else L.open.add(s.id); renderChannels(); });
+      const rows = h('div', { class: 'sn-rows', hidden: !open },
+        h('div', { class: 'r' }, h('span', {}, 'searches'), h('b', {}, s.searches.toLocaleString())),
+        h('div', { class: 'r' }, h('span', {}, 'last answer'), h('b', {}, msText(s.lastMs))),
+        h('div', { class: 'r' }, h('span', {}, 'next search'), h('b', { class: 'sn-next' }, nextText(s))),
+        h('div', { class: 'r' }, h('span', {}, 'from'), h('b', {}, `${s.mode === 'browser' ? "admin's browser" : 'server'} · ${s.endpoint}`)),
+        s.retryAt ? h('div', { class: 'r' }, h('span', {}, 'store asked'), h('b', {}, `wait until ${clockOf(s.retryAt - L.skew)}`)) : null,
+        s.fails || s.lastError ? h('div', { class: 'r' }, h('span', {}, s.fails ? 'problem' : 'note'), h('b', {}, s.lastError || `${s.fails} failed`)) : null,
+        waiting && !/extension/i.test(s.lastError || '') ? h('div', { class: 'r' }, h('span', {}, ''), h('b', {}, 'Keep Chrome open with the extension connected to an admin account')) : null,
+        // A store that keeps refusing the server: an admin's browser may get through.
+        L.admin && s.refused && s.mode === 'server' ? h('div', { class: 'st-acts' }, h('span', {}, 'Still refused after a reset?'),
+          h('button', { class: 'btn small', type: 'button', onclick: () => setMode(s.id, 'browser') }, "Search it from an admin's browser")) : null);
+      box.append(h('div', { class: `sn-chan st-${cls || 'idle'}${open ? ' open' : ''}`, dataset: { store: s.id } },
+        h('div', { class: 'hd' }, toggle,
+          L.admin ? h('button', { class: 'btn small ghost st-reset', type: 'button', title: `Reset ${s.name}: search it again now, gently`, 'aria-label': `Reset ${s.name}`, onclick: (e) => resetStore(s.id, e.currentTarget) }, '↻') : null),
+        h('div', { class: `st-sub${s.fails ? ' bad' : waiting ? ' warn' : ''}` }, sub),
+        rows));
     }
+  }
+
+  // Stores that need attention, above everything: what's wrong, and (admins) Reset all.
+  function renderAttention(trouble) {
+    const box = $('#sn-attention');
+    if (!box) return;
+    box.textContent = '';
+    box.hidden = !trouble.length;
+    if (!trouble.length) return;
+    const names = trouble.map((s) => s.name);
+    const list = names.length > 2 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names.join(' and ');
+    box.append(
+      h('span', { class: 'ic', 'aria-hidden': 'true' }, '!'),
+      h('div', { class: 'tx' }, h('b', {}, `${list} ${names.length === 1 ? 'needs' : 'need'} attention.`), ' ',
+        L.admin ? 'Each store below says what\'s wrong. Reset starts one again (gently), or all of them at once.' : 'Mugibot keeps trying, waiting a little longer each time.'),
+      L.admin ? h('button', { class: 'btn small primary', type: 'button', onclick: (e) => resetStore(null, e.currentTarget) }, '↻ Reset all') : null,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -171,13 +223,13 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
       L.settings = d.settings;
       if (onSettings) onSettings(d);
       renderKeywords();
-      renderTuning();
+      renderPrefs();
+      renderSub();
       return d;
     } catch (e) {
       if (msgEl) setMsg(msgEl, e.message);
       else toast("Couldn't change the sweeps", e.message, 'warn');
       renderKeywords();
-      renderTuning();
       return null;
     }
   }
@@ -222,26 +274,14 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     return h('div', { class: 'sn-set sn-range' }, h('span', {}, label), h('div', { class: 'ctl' }, input, val));
   }
 
-  function renderTuning() {
+  // The ⚙ menu: alerts in this browser (sound, notifications, pop-ups) and a test alert.
+  function renderPrefs() {
+    const box = $('#sn-prefs');
+    if (!box) return;
     const s = L.settings;
-    const box = $('#sn-tuning');
-    if (!s) return;
     box.textContent = '';
-    if (L.admin) {
-      box.append(
-        h('div', { class: 'sn-set-title' }, 'Search every (admins)'),
-        range('Server stores', 'Search every, stores swept from the server (seconds)', s.everySeconds, 3, 15, 's', (v) => saveSweep({ everySeconds: v })),
-        range('Browser stores', "Search every, stores swept from an admin's browser (seconds)", s.browserEverySeconds, 5, 60, 's', (v) => saveSweep({ browserEverySeconds: v })),
-        h('div', { class: 'sn-set-title' }, 'Alerts (everyone)'),
-        sw('New drops', s.newAlerts, (v) => saveSweep({ newAlerts: v })),
-        sw('Restocks', s.restockAlerts, (v) => saveSweep({ restockAlerts: v })),
-        sw(`Price drops (${s.priceDropPercent}% or more)`, s.priceAlerts, (v) => saveSweep({ priceAlerts: v })),
-      );
-    } else {
-      box.append(h('p', { class: 'sn-note' }, `Each store is searched every ${s.everySeconds} s (stores that refuse servers: every ${s.browserEverySeconds} s from an admin's browser). Alerts: ${[s.newAlerts && 'new drops', s.restockAlerts && 'restocks', s.priceAlerts && `price drops of ${s.priceDropPercent}% or more`].filter(Boolean).join(', ') || 'none'}.`));
-    }
     box.append(
-      h('div', { class: 'sn-set-title' }, 'This browser'),
+      h('div', { class: 'sn-set-title' }, 'Alerts in this browser'),
       sw('Sound', prefs.sound, (v) => { prefs.sound = v; savePrefs(); if (v) chirp('listed'); }),
       sw('Desktop notifications', prefs.notify, async (v) => {
         prefs.notify = v;
@@ -250,6 +290,8 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
         if (v && 'Notification' in window && Notification.permission === 'denied') toast('Desktop notifications are blocked', 'Allow them for this site in your browser (the icon next to the address).', 'warn');
       }),
       sw('Pop-up for drops and restocks', prefs.popup, (v) => { prefs.popup = v; savePrefs(); }),
+      h('button', { class: 'btn small', id: 'sn-test', type: 'button', title: 'Runs the alert in this browser only, so you can check the sound and pop-up', onclick: testAlert }, '⚡ Send a test alert'),
+      s ? h('p', { class: 'sn-note' }, `For everyone: ${[s.newAlerts && 'new drops', s.restockAlerts && 'restocks', s.priceAlerts && `price drops of ${s.priceDropPercent}% or more`].filter(Boolean).join(', ') || 'no alerts'}.${L.admin ? ' Change it in Settings.' : ''}`) : null,
     );
   }
 
@@ -453,16 +495,9 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     if (ticker) return;
     ticker = setInterval(() => {
       if (!panelOpen()) return;
-      $('#sn-clock').textContent = clockOf(Date.now());
-      if (L.data && L.data.startedAt) {
-        $('#sn-uptime').textContent = hms(serverNow() - L.data.startedAt);
-        const up = $('#sn-up');
-        if (up) up.textContent = hms(serverNow() - L.data.startedAt);
-      }
       for (const row of $$('#sn-channels .sn-chan')) {
         const s = L.stores.get(row.dataset.store);
-        const next = $('.sn-next', row);
-        if (s && next) next.textContent = nextText(s);
+        if (s) for (const next of $$('.sn-next', row)) next.textContent = nextText(s);
       }
       animate();
     }, 1000);
@@ -716,7 +751,10 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     const resume = () => { document.removeEventListener('pointerdown', resume, true); if (!L.audio) arm().catch(() => null); };
     document.addEventListener('pointerdown', resume, true);
   }
-  $('#sn-test').addEventListener('click', () => {
+  // A test alert: the whole chain, in this browser only.
+  function testAlert() {
+    const menu = $('#sn-prefs-menu');
+    if (menu) menu.open = false;
     const p = sampleProduct() || { id: null, store: 'kmart', sku: '43818648', name: 'Pokémon TCG: Example Elite Trainer Box', url: '', image: '', price: 89, category: 'pokemon' };
     const a = {
       id: `test-${Date.now()}`, kind: 'listed', productId: p.id, store: p.store, sku: p.sku, name: p.name, url: p.url, image: p.image, price: p.price,
@@ -724,7 +762,11 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     };
     addLog({ at: a.at, alert: a });
     alertChain(a);
-  });
+  }
+  $('#sn-reset-all').addEventListener('click', (e) => resetStore(null, e.currentTarget));
+  // The ⚙ menu closes on a click elsewhere, or Escape.
+  document.addEventListener('click', (e) => { const menu = $('#sn-prefs-menu'); if (menu && menu.open && !menu.contains(e.target)) menu.open = false; });
+  document.addEventListener('keydown', (e) => { const menu = $('#sn-prefs-menu'); if (e.key === 'Escape' && menu && menu.open) menu.open = false; });
   $('#sn-kw-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const input = $('#sn-kw-input');
@@ -819,7 +861,8 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
   function setSettings(s) {
     L.settings = s;
     renderKeywords();
-    renderTuning();
+    renderPrefs();
+    renderSub();
   }
 
   return { load, onSweep, onFeed, setFilter, setSettings, loadOlder, render: renderAll, renderLog };

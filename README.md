@@ -43,11 +43,22 @@ community. Built on TCGCopBot's working Kmart flow.
   read once they have built their product lists), and EB Games (its own search
   data, asked for from inside its page) from an admin's browser with the
   extension. Admins can also monitor single products. Each channel
-  gets what its rule asks for (by category, store, kind or keyword). The
-  dashboard's **Monitor** tab is a live console: each store's searches and
-  response times as they happen, an event log of every search and alert (with
-  the product's picture, price and ⚡ Buy), drop pop-ups with a sound and a
-  desktop notification, every tracked product and its price history.
+  gets what its rule asks for (by category, store, kind or keyword), and one
+  button sets up a channel per store and game (`kmart-pokemon`,
+  `bigw-one-piece`…, `premium-bandai`, `pokemon-center`, and `misc-retailers`
+  for everything else). The dashboard's **Monitor** tab: a live sonar, each
+  store's state (with **↻ Reset** for a store that keeps failing), today's
+  numbers, a feed of new drops and restocks (with the product's picture, price
+  and ⚡ Buy), drop pop-ups with a sound and a desktop notification, and every
+  tracked product with its price history; admins also get Settings and the
+  Check log on pages of their own. JB Hi-Fi Marketplace sellers' products are
+  left out.
+- **Store sign-ins.** The extension notices whether you're signed in at each
+  store (when you open it, and every 10 minutes for the stores whose pages
+  show it), and the Extension tab lists where you are and aren't, with a
+  **Sign in** link for each: signed in, ⚡ Buy's checkout is faster because the
+  store fills in your saved details. The watchlist reminds you about a store
+  you watch where you're signed out. It only looks: nothing is clicked or typed.
 - **Admin console** at `/admin`: members, memberships, Discord status, SKU
   totals, restock pings, stores and flows, a setup check, Whop memberships and
   an audit log.

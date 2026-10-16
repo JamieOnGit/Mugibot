@@ -44,10 +44,18 @@ import { categoryFor, toProduct } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { serialize } from '../retailers/index.js';
 import { bad, bool, num, str } from '../schema.js';
-import { storeFetch } from './http.js';
+import { dropConnections, storeFetch } from './http.js';
 import { mentions, norm, parseListing, termsRegex } from './listing.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
+
+/** A Retry-After header (seconds, or a date) as milliseconds from now, at most 15 minutes; 0 if none. */
+export function retryAfterMs(value, now = Date.now()) {
+  const v = String(value || '').trim();
+  if (!v) return 0;
+  const ms = /^\d+$/.test(v) ? Number(v) * 1000 : Date.parse(v) - now;
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, 15 * 60 * 1000) : 0;
+}
 
 /** Is extension version a older than b ("1.8.0" < "1.8.1")? Unknown counts as older. */
 export function olderVersion(a, b) {
@@ -385,7 +393,13 @@ export class Sweeper {
     const ms = Date.now() - started;
     if (!res.ok) {
       const refused = [401, 403, 429, 503].includes(res.status);
-      return this.record(r, term, { ok: false, blocked: refused, url, source: 'server', ms, error: refused ? `The store refused the search (HTTP ${res.status})` : `HTTP ${res.status}` });
+      // "Too many requests" / "unavailable" often come with how long to wait: no search before then.
+      const wait = retryAfterMs(res.headers && res.headers.get('retry-after'), this.now());
+      if (refused && wait) this.stat(r.id).retryAt = this.now() + wait;
+      return this.record(r, term, {
+        ok: false, blocked: refused, url, source: 'server', ms,
+        error: refused ? `The store refused the search (HTTP ${res.status})${wait ? ` — it asked to wait ${Math.ceil(wait / 1000)} s` : ''}` : `HTTP ${res.status}`,
+      });
     }
     const parsed = parseListing(r.sweep.parser, text, { base: url, storeBase: r.base, productPath: r.productPath, skuFromPath: r.skuFromPath, storeName: r.name });
     return this.ingest(r, term, parsed, { source: 'server', url, ms });
@@ -437,6 +451,11 @@ export class Sweeper {
       const status = p.inStock === true ? (p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
       // Members' own SKUs, whatever they are.
       await this.members(r, p, status);
+      // A store whose search doesn't say who sells what (JB Hi-Fi): what Mugibot found out before.
+      if (r.sweep.sellers && !p.marketplace) {
+        const known = this.catalog.productFor(r.id, p.sku);
+        if (known && known.seller) p.marketplace = true;
+      }
       if (!counts_(p, term.keyword) || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
       counts.kept += 1;
       const ev = await this.track(r, p, { status, keyword: term.keyword, baseline, now });
@@ -523,6 +542,13 @@ export class Sweeper {
     const fresh2 = () => this.catalog.productById(product.id);
     // New: never seen before, or a SKU confirmed as not listed yet (a monitor added before it's checked isn't new).
     const isNew = !before || (before.status === STATUS.NOT_LISTED && !!before.last_ok_at);
+    // About to alert a product whose seller isn't known yet (JB Hi-Fi): ask first. A marketplace
+    // seller's product leaves the list without an alert. (If the store doesn't answer, it alerts.)
+    const mayAlert = isNew ? !baseline && s.newAlerts
+      : (s.restockAlerts && isOrderable(fresh.status) && ORDERABLE_FROM.has(before.status)) || (s.priceAlerts && priceMoved && price < prevPrice);
+    if (mayAlert && s.skipMarketplace && r.sweep.sellers && (fresh.seller === null || fresh.seller === undefined) && !monitor) {
+      if (await this.sellerOf(r, fresh)) return sent;
+    }
     if (isNew) {
       if (!baseline && s.newAlerts && this.noteAlert(await this.feed.alert(fresh, 'listed', { sweep: true, detectedAt: now, note: `New in "${keyword}" at ${r.name}.` }))) sent.push('new');
     } else {
@@ -543,6 +569,41 @@ export class Sweeper {
     // A monitor on this product also gets the alerts it asks for (sold out, price up…).
     if (monitor && !monitor.paused && before) await this.feed.transitions(before, fresh2());
     return sent;
+  }
+
+  /**
+   * Who sells a product, from the product's own data, where the store's search doesn't say (JB Hi-Fi:
+   * a "Seller" option naming its marketplace sellers; its own products have none). Remembered on the
+   * product: '' = the store itself. A marketplace seller's product leaves the list (unless an admin
+   * monitors it). Returns the seller, '' or null when the store didn't answer (asked again later).
+   */
+  async sellerOf(r, product) {
+    const how = r.sweep.sellers;
+    const url = `${r.base}${how.path.replace('{sku}', encodeURIComponent(product.sku))}`;
+    try {
+      const res = await safeFetch(this.fetch, url, { headers: { ...this.headers(r), accept: 'application/json' }, timeoutMs: 8000, signal: AbortSignal.timeout(8000) }, { allowPrivate: this.cfg.monitor.allowPrivateHosts });
+      if (res.status === 404) { this.catalog.updateProduct(product.id, { seller: '' }); return ''; }
+      if (!res.ok) return null;
+      const j = JSON.parse(await res.text());
+      const option = (Array.isArray(j.options) ? j.options : []).find((o) => o && typeof o === 'object' && /^sellers?$/i.test(String(o.name || '')));
+      const names = option && Array.isArray(option.values) ? option.values.map((v) => String(v).trim()).filter(Boolean) : [];
+      const seller = !names.length || names.some((n) => how.own.test(n)) ? '' : names.join(', ').slice(0, 200);
+      this.catalog.updateProduct(product.id, seller && !this.catalog.monitorForProduct(product.id) ? { seller, sweep_seen_at: null } : { seller });
+      return seller;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Products already on the list whose seller isn't known yet: one at a time, at most every 20 s, never during a search. */
+  async checkSellers(r) {
+    if (!r.sweep.sellers || !this.settings.skipMarketplace) return;
+    const st = this.stat(r.id);
+    if (st.sellerAt && this.now() - st.sellerAt < 20000) return;
+    st.sellerAt = this.now();
+    const p = this.db.get(`SELECT * FROM products WHERE store = :s AND seller IS NULL AND sweep_seen_at IS NOT NULL
+      AND id NOT IN (SELECT product_id FROM monitors) ORDER BY sweep_seen_at DESC LIMIT 1`, { s: r.id });
+    if (p && await this.sellerOf(r, p)) this.feed.broadcast('product', toProduct(this.catalog.productById(p.id)));
   }
 
   /** Members watching this SKU: their own watchlist and alerts, straight away. */
@@ -653,8 +714,17 @@ export class Sweeper {
         const r = this.retailers.get(id);
         if (this.modeFor(r) !== 'server') break;
         const st = this.stat(id);
+        // Woken early (Reset, Sweep now) while the store asked to wait (Retry-After): wait it out first.
+        const asked = st.retryAt && st.retryAt > this.now() ? st.retryAt - this.now() : 0;
+        if (asked) {
+          st.nextAt = this.now() + asked;
+          await this.sleep(id, asked);
+          continue;
+        }
         const term = this.nextTerm(r);
         await this.sweepTerm(r, term).catch((e) => this.record(r, term, { ok: false, source: 'server', error: e.message }));
+        // (Between searches, not during one: who sells what, where the search doesn't say.)
+        if (!st.fails) await this.checkSellers(r).catch(() => {});
         const wait = this.waitFor(st, this.paceFor(r), { jitter: true });
         st.nextAt = this.now() + wait;
         await this.sleep(id, wait);
@@ -665,11 +735,50 @@ export class Sweeper {
     }
   }
 
-  /** How long a store waits before its next search: the set pace (±20%), slower for a while after a refusal, doubling after each failure. */
+  /**
+   * How long a store waits before its next search: the set pace (±20%), slower for a while after a
+   * refusal, doubling after each failure — and never before the time the store asked for (Retry-After).
+   */
   waitFor(st, every, { jitter = false } = {}) {
-    if (st.fails) return Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(st.fails, 10));
+    const asked = st.retryAt && st.retryAt > this.now() ? st.retryAt - this.now() : 0;
+    if (st.fails) return Math.max(asked, Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(st.fails, 10)));
     const slow = st.slowUntil > this.now() ? SLOW_FACTOR : 1;
-    return every * slow * (jitter ? 0.8 + 0.4 * this.random() : 1);
+    return Math.max(asked, every * slow * (jitter ? 0.8 + 0.4 * this.random() : 1));
+  }
+
+  /**
+   * Reset: a store (or every store) that keeps failing starts over, the way a person would come
+   * back to a site later. Its backoff and errors are cleared, its next search is now, and it's
+   * searched gently (at a third of the pace) for 10 minutes so it isn't refused straight away
+   * again. From the server: fresh connections to the store. From an admin's browser: the store's
+   * tab in the sweep window is closed and opened again at the store's front page. What a store
+   * asked for (Retry-After) is still waited for. Nothing here hides who's asking.
+   */
+  reset(storeId = null, user = null) {
+    const now = this.now();
+    const done = [];
+    for (const { retailer: r, mode } of this.stores()) {
+      if (storeId ? r.id !== storeId : mode === 'off') continue;
+      const st = this.stat(r.id);
+      Object.assign(st, { fails: 0, lastError: '', browserNext: 0, nextAt: now, slowUntil: now + SLOW_MS, resetAt: now, needsUpdateAt: 0 });
+      if (mode === 'browser') st.freshTab = true;
+      if (mode === 'server') {
+        try { dropConnections(new URL(this.urlFor(r, this.settings.keywords[0] || '')).host); } catch { /* no address */ }
+      }
+      this.db.run("UPDATE sweep_terms SET fails = 0, error = '' WHERE store = :s", { s: r.id });
+      done.push(r);
+      // Only the stores reset: the others keep their own pace (and any backoff).
+      if (mode === 'server' && this.running && !this.loops.has(r.id)) this.loop(r.id).catch((e) => this.cfg.log('[sweep]', e.message));
+      const wake = this.wakers.get(r.id);
+      if (wake) wake();
+    }
+    if (!done.length) return [];
+    const who = user ? user.username : 'An admin';
+    this.sys(storeId
+      ? `${who} reset ${done[0].name}: searching it again now, gently for 10 minutes`
+      : `${who} reset every store: searching them again now, gently for 10 minutes`, storeId ? { store: storeId } : {});
+    if (user) this.repo.audit(user.id, null, 'sweep-reset', storeId || 'all stores');
+    return done.map((r) => r.id);
   }
 
   sleep(id, ms) {
@@ -719,7 +828,11 @@ export class Sweeper {
         pageUrl: typeof r.sweep.openPath === 'string' ? `${r.base}${r.sweep.openPath.replace('{q}', encodeURIComponent(this.query(r, term.keyword)))}` : null,
         // The headers the store's own code sends with it (Premium Bandai's region: x-g1-area-code).
         headers: r.sweep.headers || null,
+        // Reset by an admin: the store's tab is closed and opened again at its front page first.
+        fresh: !!st.freshTab,
+        frontUrl: r.base,
       }));
+      st.freshTab = false;
     }
     return { terms, waitMs: next === null ? null : Math.max(1000, next - now) };
   }
@@ -833,6 +946,8 @@ export class Sweeper {
         id: r.id, name: r.name, realId: r.realId || r.id, mode, from: MODE_LABEL[mode], status: this.statusOf(mode, st, now, r),
         searches: st.searches || 0, fails: st.fails, lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastMs: lastOk ? lastOk.ms : null, lastError: st.lastError,
         nextAt: st.nextAt, slowedUntil: st.slowUntil > now ? st.slowUntil : null,
+        // The store asked to wait (Retry-After); when it was last reset; its last answer was a refusal.
+        retryAt: st.retryAt > now ? st.retryAt : null, resetAt: st.resetAt || null, refused: !!(st.fails && st.log.length && st.log.at(-1).blocked),
         endpoint: this.endpoint(r),
         latency: st.log.filter((x) => x.at >= now - 10 * 60 * 1000).slice(-150).map((x) => ({ at: x.at, ms: x.ms, ok: x.ok })),
       };

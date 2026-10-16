@@ -62,11 +62,17 @@ You need: a Discord server you own, and Mugibot's address (`BASE_URL`, e.g.
 
 1. **OAuth2** page → **OAuth2 URL Generator**:
    - Scopes: tick **bot** and **applications.commands**.
-   - Bot permissions: tick **Create Instant Invite**, **Manage Roles**, **View
-     Channels**, **Send Messages** and **Embed Links**. Also tick **Kick
-     Members** only if you'll set `DISCORD_KICK_ON_EXPIRE=1`. Don't tick
-     Administrator; the bot doesn't need it.
-2. Copy the generated URL at the bottom, open it, choose your server → **Authorize**.
+   - Bot permissions: tick **Create Instant Invite**, **Manage Roles**,
+     **Manage Channels**, **View Channels**, **Send Messages** and **Embed
+     Links**. Also tick **Kick Members** only if you'll set
+     `DISCORD_KICK_ON_EXPIRE=1`. Don't tick Administrator; the bot doesn't need it.
+   - Or skip the ticking: those six are the permissions integer **268454929**
+     (**268454931** with Kick Members). Put it in this link, with your
+     Application ID (General Information page):
+     `https://discord.com/oauth2/authorize?client_id=<Application ID>&scope=bot%20applications.commands&permissions=268454929`
+2. Copy the generated URL at the bottom (or the link above), open it, choose your
+   server → **Authorize**. Opening it again later, with a new permissions
+   integer, updates the bot's permissions the same way.
 3. Discord gives the bot its own role, named after the app ("Mugibot"), with
    those permissions. Don't give the bot any other roles (not `Member`, not
    `Restock Pings`).
@@ -76,7 +82,8 @@ You need: a Discord server you own, and Mugibot's address (`BASE_URL`, e.g.
 
 Already invited the bot without some of these? Server Settings → Roles →
 **Mugibot** → **Permissions**, and turn on **Create Invite**, **Manage Roles**,
-**View Channels**, **Send Messages** and **Embed Links**.
+**Manage Channels**, **View Channels**, **Send Messages** and **Embed Links**
+(or open the link above again).
 
 What each permission is for:
 
@@ -84,7 +91,8 @@ What each permission is for:
 |---|---|
 | Create Invite | Discord requires it for a bot to add people to the server |
 | Manage Roles | Give members the `Member` role, and take it away when their membership ends |
-| View Channels, Send Messages, Embed Links | Post restocks in `#restocks` |
+| Manage Channels | **Set up store channels** (Monitor → Settings) makes `kmart-pokemon`, `misc-retailers`… for you. Without it, make those channels yourself and press the button: it finds them by name |
+| View Channels, Send Messages, Embed Links | Post restocks in `#restocks` and the alert channels |
 | Kick Members (optional) | Only with `DISCORD_KICK_ON_EXPIRE=1`: remove people from the server when their membership ends |
 
 ---
@@ -220,6 +228,39 @@ they press ⚡ Buy once. A SKU is posted at most once every 10 minutes.
 Seen something in stock yourself? `/restock store:Kmart sku:43818648 note:online only`,
 or Admin → **SKUs & restock pings**, DMs everyone watching that SKU and posts in
 the channel.
+
+---
+
+## Store channels
+
+Monitor alerts (🆕 new drops, 🟢 restocks, 📉 price drops) can go to a channel
+per store and game. Dashboard → **Monitor → Settings → Discord alert
+channels** → **Set up store channels** makes them in one go:
+
+| Channel | Gets |
+|---|---|
+| `kmart-pokemon`, `kmart-one-piece` | Kmart's Pokémon / One Piece alerts |
+| `bigw-…`, `target-…`, `jbhifi-…`, `ebgames-…`, `zing-…`, `toysrus-…` | The same for BIG W, Target, JB Hi-Fi, EB Games, Zing and Toys"R"Us |
+| `premium-bandai` | Everything from Premium Bandai |
+| `pokemon-center` | Everything from Pokémon Center |
+| `misc-retailers` | Everything no other channel takes: other stores (Trainer Town, Amazon AU, The Games Cube, Gamerholic…) and other games (Gundam, Dragon Ball, Riftbound…) at the split stores |
+
+- The bot uses channels with those names that are **already there** (it also
+  finds `kmart-onepiece` and `misc-retailer`), and makes the rest in a
+  **Mugibot alerts** category. To make channels it needs the **Manage
+  Channels** permission (Server Settings → Roles → the bot's role); or make
+  the channels yourself and press the button again.
+- Each channel gets a rule (named after it, e.g. `#kmart-pokemon`) for new
+  drops and restocks; tick 📉 price drops on a rule to add them. **Role to
+  ping** (optional) pings that role in every channel. Pressing the button again
+  is safe: it brings the same rules back in line and keeps the alert kinds
+  you chose.
+- **Remove my other rules** deletes the rules that aren't for these channels.
+  Leave it unticked to keep them (an alert then also goes to those).
+- `misc-retailers` is a **catch-all** rule: it only gets an alert no other rule
+  took. Any rule can be a catch-all (tick **Catch-all** on it).
+- The bot needs **View Channel**, **Send Messages** and **Embed Links** in each
+  channel (in the category's permissions, they apply to all of them).
 
 ---
 

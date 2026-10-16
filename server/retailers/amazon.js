@@ -21,6 +21,8 @@ export default {
   // "tcg" added to the keyword. At most one search every 20 seconds. Amazon's results don't
   // say who sells each product, so marketplace sellers can't be told apart here.
   sweep: { from: 'server', parser: 'amazon', path: '/s?k={q}&s=date-desc-rank', pagePath: '&page={page}', pages: 2, addWord: 'tcg', minSeconds: 20 },
+  // Store login monitor: Your Account sends you to Amazon's sign-in (/ap/signin) when you're signed out.
+  account: { signIn: '/gp/css/homepage.html', check: { path: '/gp/css/homepage.html', signedOutUrl: /\/ap\/signin/, signedIn: /nav-link-accountList-nav-line-1"[^>]*>\s*Hello, (?!sign in)/i } },
   monitor: { server: true, browser: true, hostGapSeconds: 10 },
   hints: { availabilityRe: /(^|[\s_-])(availability|outOfStock)([\s_-]|$)/i },
   flow: {

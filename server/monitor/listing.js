@@ -225,7 +225,10 @@ export function parseEbGames(text, { base, storeBase, now = Date.now() } = {}) {
       wasPrice: promo && full && promo < full ? full : null,
       inStock: r.isOutOfStock === true || r.isUnavailable === true || r.isComingSoon === true ? false : true,
       preorder: !r.isComingSoon && Number.isFinite(released) && released > now,
-      url: storeLink(storeBase || base, r.productUrl), image: httpsUrl(r.imageUrl, storeBase || base), marketplace: false,
+      url: storeLink(storeBase || base, r.productUrl), image: httpsUrl(r.imageUrl, storeBase || base),
+      // Only when the result itself says another seller sells it (never guessed from the name).
+      marketplace: r.isMarketplace === true || r.marketplace === true || r.isThirdParty === true
+        || (typeof r.sellerName === 'string' && r.sellerName.trim() !== '' && !/\b(eb ?games|zing)\b/i.test(r.sellerName)),
     });
   }
   return { products, total: typeof j.totalResults === 'number' ? j.totalResults : null, perPage: j.results.length, problem: null };

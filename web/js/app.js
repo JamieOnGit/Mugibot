@@ -8,12 +8,14 @@ const STATUS = {
 };
 const FLOW = { verified: 'verified flow', beta: 'beta flow', draft: 'draft flow', none: 'alerts only' };
 
-const state = { me: null, items: [], retailers: [], profiles: null, editing: null, ext: null, feedOldest: null, alerts: null };
+const state = { me: null, items: [], retailers: [], profiles: null, editing: null, ext: null, feedOldest: null, alerts: null, logins: null };
 
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
-const TABS = ['watch', 'monitor', 'checkout', 'discord', 'extension', 'membership', 'activity', 'account'];
+const TABS = ['watch', 'monitor', 'monitor-settings', 'monitor-log', 'checkout', 'discord', 'extension', 'membership', 'activity', 'account'];
+// The Monitor's own pages (Settings and Check log are for admins): the sidebar's Monitor stays lit.
+const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
 const loaders = {};
 
 function showTab() {
@@ -26,8 +28,9 @@ function showTab() {
     return;
   }
   $$('[data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== tab; });
-  document.body.classList.toggle('wide-main', tab === 'monitor'); // the live monitor uses the full width
-  $$('.side a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
+  document.body.classList.toggle('wide-main', MONITOR_PAGES.has(tab)); // the monitor uses the full width
+  $$('.side a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab || (a.dataset.tab === 'monitor' && MONITOR_PAGES.has(tab))));
+  $$('.mon-tabs a').forEach((a) => { a.classList.toggle('active', a.dataset.mtab === tab); if (a.dataset.mtab === tab) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (loaders[tab]) {
     loaders[tab]().then(() => {
       if (hash === 'update') $('#ext-update').scrollIntoView({ block: 'start' });
@@ -39,6 +42,8 @@ window.addEventListener('hashchange', showTab);
 
 const monitorUI = setupMonitor({ showError: (e) => showError(e) });
 loaders.monitor = () => monitorUI.load();
+loaders['monitor-settings'] = () => monitorUI.loadSettings();
+loaders['monitor-log'] = () => monitorUI.loadChecks();
 initThemeToggle($('#theme-toggle'));
 
 function showError(e) {
@@ -225,6 +230,53 @@ async function loadDevices() {
   }
 }
 
+// --- The store login monitor: where this account's browsers are signed in ----------------
+const LOGIN_TEXT = { in: 'Signed in', out: 'Signed out', unknown: "Couldn't tell" };
+
+async function loadLogins() {
+  state.logins = await api('GET', '/api/logins');
+  return state.logins;
+}
+
+// Signed out first (the ones to fix), then the stores not seen yet, then the ones you're signed in at.
+// Stores on your watchlist go first in each group.
+function renderLogins() {
+  const d = state.logins;
+  const list = $('#logins');
+  if (!d || !list) return;
+  list.textContent = '';
+  const watched = new Set(state.items.map((it) => it.store));
+  const rank = (s) => ({ out: 0, unknown: 1, in: 3 }[s.status] ?? 2) * 2 + (watched.has(s.id) ? 0 : 1);
+  const stores = [...d.stores].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  const ins = stores.filter((s) => s.status === 'in').length;
+  const outs = stores.filter((s) => s.status === 'out');
+  $('#logins-sum').textContent = !d.browsers ? 'Connect the extension (step 2) and this shows where you\'re signed in.'
+    : `Signed in at ${ins} of ${stores.length} stores.${outs.length ? ` Signed out at ${outs.map((s) => s.name).join(', ')}.` : ''}`;
+  for (const s of stores) {
+    const seen = s.at ? `${LOGIN_TEXT[s.status] || 'Seen'} · ${s.how === 'check' ? 'checked' : 'seen'} ${ago(s.at)}${d.browsers > 1 && s.device ? ` in ${s.device}` : ''}`
+      : s.checked ? 'Not checked yet' : 'Not seen yet: open the store once';
+    list.append(h('li', { class: `login ${s.status || 'none'}`, dataset: { store: s.id } },
+      h('span', { class: 'dot', 'aria-hidden': 'true' }),
+      h('div', { class: 'info' },
+        h('div', { class: 'name' }, s.name, watched.has(s.id) ? h('span', { class: 'pill info', title: 'On your watchlist' }, 'watching') : null),
+        h('div', { class: 'meta', title: seen }, seen)),
+      s.status === 'in' ? null : h('a', { class: `btn small${s.status === 'out' ? ' primary' : ''}`, href: s.signInUrl, target: '_blank', rel: 'noopener' }, 'Sign in ↗')));
+  }
+}
+
+$('#logins-check').addEventListener('click', async (e) => {
+  const msg = $('#logins-msg');
+  if (!state.ext || !state.ext.paired) { setMsg(msg, 'Install the extension and connect it (steps 1 and 2) first.'); return; }
+  await busy($('#logins-card'), async () => {
+    setMsg(msg, 'Checking…', true);
+    const reply = await askExtension('checkLogins', {}, 30000);
+    if (!reply || !reply.ok) { setMsg(msg, 'The extension didn\'t answer: reload this page and try again (it needs version 1.9.0 or newer).'); return; }
+    await loadLogins();
+    renderLogins();
+    setMsg(msg, reply.checked ? `Checked ${reply.checked} store${reply.checked === 1 ? '' : 's'}. The others show once you open them.` : 'Up to date (checked in the last minute). The others show once you open them.', true);
+  });
+});
+
 async function loadRetailers() {
   if (!state.retailers.length) state.retailers = (await api('GET', '/api/retailers')).retailers;
   return state.retailers;
@@ -244,7 +296,8 @@ loaders.extension = async () => {
   $('#update-store').hidden = !store;
   $('#update-zip').hidden = !!store;
   if (store) { $('#store-link').href = store; $('#update-store-link').href = store; }
-  const [retailers, alerts] = await Promise.all([loadRetailers(), loadAlerts(), renderExtStatus(), loadDevices()]);
+  const [retailers, alerts] = await Promise.all([loadRetailers(), loadAlerts(), renderExtStatus(), loadDevices(), loadLogins(), state.items.length ? null : loadItems()]);
+  renderLogins();
   $('#b-checks').checked = alerts.browserChecks;
   const list = $('#stores');
   list.textContent = '';
@@ -323,6 +376,13 @@ function renderItems() {
   list.textContent = '';
   if (state.itemsInactive) list.append(h('li', { class: 'notice warn' }, 'Monitoring is paused while your account has no active membership.'));
   if (!state.items.length) list.append(h('li', { class: 'empty' }, 'Nothing on your watchlist yet — press "+ Add SKU".'));
+  // Signed out at a store you're watching: ⚡ Buy is faster signed in.
+  const out = state.logins ? state.logins.stores.filter((s) => s.status === 'out' && state.items.some((it) => it.store === s.id)) : [];
+  if (out.length) {
+    list.prepend(h('li', { class: 'notice warn login-nudge' },
+      h('span', {}, h('b', {}, `You're signed out at ${out.map((s) => s.name).join(', ')}. `), 'Sign in so ⚡ Buy\'s checkout is faster (the store fills in your saved details).'),
+      h('span', { class: 'acts' }, ...out.slice(0, 3).map((s) => h('a', { class: 'btn small', href: s.signInUrl, target: '_blank', rel: 'noopener' }, `${s.name} ↗`)))));
+  }
   state.items.forEach((it, i) => list.append(itemRow(it, i)));
 }
 
@@ -463,7 +523,8 @@ $('#w-demo').addEventListener('click', async () => {
 });
 
 loaders.watch = async () => {
-  await Promise.all([loadItems(), renderExtStatus(), loadRetailers()]);
+  await Promise.all([loadItems(), renderExtStatus(), loadRetailers(), loadLogins().catch(() => null)]);
+  renderItems();
 };
 
 // ---------------------------------------------------------------------------
@@ -793,7 +854,11 @@ function connectStream() {
   es.addEventListener('monitor-product', (e) => monitorUI.onProduct(JSON.parse(e.data)));
   es.addEventListener('monitor-sweep', (e) => monitorUI.onSweep(JSON.parse(e.data)));
   es.addEventListener('devices', () => {
-    if (!$('[data-panel="extension"]').hidden) loadDevices().catch(() => null);
+    if (!$('[data-panel="extension"]').hidden) {
+      loadDevices().catch(() => null);
+      loadLogins().then(renderLogins).catch(() => null);
+    }
+    if (!$('[data-panel="watch"]').hidden) loadLogins().then(renderItems).catch(() => null);
     renderExtStatus().catch(() => null);
   });
 }

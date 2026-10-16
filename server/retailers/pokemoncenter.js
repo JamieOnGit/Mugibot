@@ -31,6 +31,9 @@ export default {
   productPath: /^(\/en-au|\/pokemoncenter)\/product\/[0-9A-Za-z]+(-[0-9A-Za-z]+)+\/[^/?#]+\/?$/,
   searchPath: '/search/{q}',
   sweep: { from: 'browser', parser: 'generic', render: true, path: '/search/{q}', minSeconds: 30, extension: '1.8.1' },
+  // Store login monitor: whether you're signed in here is read from the store's own page when you
+  // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
+  account: { signIn: '' },
   monitor: { server: true, browser: true },
   flow: {
     product: {

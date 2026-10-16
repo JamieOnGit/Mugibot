@@ -40,6 +40,8 @@ export default {
     extension: '1.8.1',
     minSeconds: 30,
   },
+  // Store login monitor: the page's USER_DATA has the member ("loggedInMember") once you're signed in.
+  account: { signIn: '', check: { path: '', signedIn: /USER_DATA\s*=\s*\{[^\n]*"loggedInMember"\s*:\s*\{/, signedOut: /USER_DATA\s*=\s*\{/ } },
   monitor: { server: true, browser: true },
   flow: {
     product: {

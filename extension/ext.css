@@ -28,3 +28,6 @@ label { display: block; margin: 8px 0 3px; font-weight: 600; font-size: 12px; }
 img.logo { width: 20px; height: 20px; }
 .msg { min-height: 18px; margin-top: 6px; }
 .st-in_stock, .st-preorder { color: var(--ok); font-weight: 600; }
+/* Store sign-ins in the popup: signed in in green; otherwise a link to sign in. */
+#logins-list li .ok { color: var(--ok, #16a34a); font-weight: 600; }
+#logins-list li a.muted { color: var(--muted); }

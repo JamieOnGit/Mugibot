@@ -20,6 +20,7 @@
 
 import './config.js';
 import './vault.js';
+import './logins.js';
 import { extractProduct, extractProductLinks } from './lib/extract.js';
 import { parseListing } from './lib/listing.js';
 
@@ -470,6 +471,28 @@ async function askFromStorePage(t) {
   return res || null;
 }
 
+/**
+ * Reset by an admin (the live monitor's Reset): the store's tab in the sweep window is closed and
+ * opened again at the store's front page, like coming back to the site later. Its sign-in and
+ * cookies stay as they are.
+ */
+async function freshStart(t) {
+  const saved = await sweepWindow();
+  const old = saved.tabs[t.store];
+  if (old !== undefined) {
+    delete saved.tabs[t.store];
+    await chrome.storage.session.set({ [SWEEP_WINDOW]: saved });
+    await chrome.tabs.remove(old).catch(() => null);
+  }
+  if (!t.frontUrl) return;
+  if (t.render || t.inPage) {
+    const tab = await sweepTab(t.store);
+    await openIn(tab.id, t.frontUrl);
+  } else {
+    await fetch(t.frontUrl, { credentials: 'include', cache: 'no-store' }).catch(() => null);
+  }
+}
+
 // Why something failed, briefly ("Cannot access contents of the page…"), for the live monitor.
 const why = (e) => {
   const m = String((e && e.message) || '').replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -486,6 +509,7 @@ async function sweepOne(t) {
     const allowed = await chrome.permissions.contains({ origins: [`${u.protocol}//${u.hostname}/*`] }).catch(() => true);
     if (!allowed) return { ...base, ok: false, error: `This copy of Mugibot's extension (v${VERSION}) can't open ${u.hostname} — update the extension`, ms: 0 };
   }
+  if (t.fresh) await freshStart(t).catch(() => null);
   if (t.render) {
     let page;
     try {
@@ -567,6 +591,50 @@ async function sweepLoop() {
   }
 }
 
+// --- the store login monitor -----------------------------------------------------
+// Whether you're signed in at each store (logins.js): seen on the store's pages as you open them,
+// and checked every 10 minutes for the stores whose pages say so. Your account shows it on the
+// dashboard (Extension tab) so you can sign in before a drop: signed in, ⚡ Buy's checkout is faster.
+const LOGINS = 'logins';
+const LOGIN_CHECK_MS = 10 * 60 * 1000;
+let loginReport = null;
+
+async function noteLogin(store, status, how) {
+  const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
+  const before = all[store];
+  all[store] = { status, at: Date.now(), how };
+  await chrome.storage.local.set({ [LOGINS]: all });
+  // Your account hears about it in a moment (a change: straight away), all stores at once.
+  clearTimeout(loginReport);
+  loginReport = setTimeout(() => reportLogins().catch(() => null), before && before.status === status ? 4000 : 200);
+}
+
+async function reportLogins() {
+  const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
+  if (Object.keys(all).length) await api('POST', '/api/ext/logins', { logins: all });
+}
+
+/** Every 10 minutes (force: now): the stores whose pages say whether you're signed in, read with your cookies. */
+async function checkLogins({ force = false } = {}) {
+  if (!(await getAuth())) return 0;
+  const { loginsCheckedAt = 0 } = await chrome.storage.local.get('loginsCheckedAt');
+  if (!force && Date.now() - loginsCheckedAt < LOGIN_CHECK_MS) return 0;
+  await chrome.storage.local.set({ loginsCheckedAt: Date.now() });
+  const st = await getState();
+  let n = 0;
+  for (const r of st.flows || []) {
+    const check = r.account && r.account.check;
+    if (!check || !r.base) continue;
+    try {
+      const res = await fetch(`${r.base}${check.path || ''}`, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
+      const status = globalThis.MGBLogins.fromHtml((await res.text()).slice(0, 3000000), res.url, check);
+      if (status) { await noteLogin(r.id, status, 'check'); n += 1; }
+    } catch { /* the store didn't answer: try again next time */ }
+  }
+  return n;
+}
+globalThis.mugibotCheckLogins = (opts) => checkLogins(opts);
+
 function ensureAlarm() {
   chrome.storage.local.get('retired').then(({ retired }) => {
     if (retired && !FROM_STORE) return;
@@ -581,6 +649,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== CHECK_ALARM) return;
   runChecks().catch(() => null);
   sweepLoop().catch(() => null);
+  checkLogins().catch(() => null);
   updateInfo().catch(() => null); // keeps the "NEW" badge on the toolbar icon up to date
 });
 
@@ -643,6 +712,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'event': {
         await api('POST', '/api/ext/events', msg.event);
         return { ok: true };
+      }
+      case 'login': {
+        // The store page you have open: signed in there or not (logins.js).
+        if (!sender.tab || sender.frameId !== 0 || !['in', 'out'].includes(msg.status) || typeof msg.store !== 'string') return null;
+        if (await isSweepTab(sender.tab.id)) return null;
+        await noteLogin(msg.store.slice(0, 40), msg.status, 'page');
+        return { ok: true };
+      }
+      case 'checkLogins': {
+        // The dashboard's "Check now" (Extension tab): look again now (at most once a minute) and tell the account.
+        if (!fromApp(sender)) return null;
+        const { loginsCheckedAt = 0 } = await chrome.storage.local.get('loginsCheckedAt');
+        const checked = Date.now() - loginsCheckedAt < 60 * 1000 ? 0 : await checkLogins({ force: true });
+        clearTimeout(loginReport);
+        await reportLogins().catch(() => null);
+        return { ok: true, checked };
+      }
+      case 'logins': {
+        // The popup: what this browser knows.
+        if (!fromExtensionPage(sender)) return null;
+        const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
+        const st = await getState();
+        return { logins: all, stores: (st.flows || []).filter((r) => r.account).map((r) => ({ id: r.id, name: r.name, signIn: `${r.base}${r.account.signIn || ''}` })) };
       }
       case 'claim': {
         // A ⚡ Buy code: confirm it once, then allow checkout autofill in this tab.

@@ -365,6 +365,16 @@ const MIGRATIONS = [
     VALUES ('bl_kmart_43746880', 'kmart', '43746880', 'Wave Book Storage - Oak - One Size', 'Not a trading-card product; it kept pinging the restock channel.', CAST(strftime('%s', 'now') AS INTEGER) * 1000);
   DELETE FROM monitors WHERE product_id IN (SELECT id FROM products WHERE store = 'kmart' AND sku = '43746880');
   `,
+  // 7 — who sells a product, where the store's search doesn't say (JB Hi-Fi's marketplace):
+  //     NULL = not asked yet, '' = the store itself, else the marketplace seller(s); a Discord
+  //     alert channel that takes only what no other channel took (misc-retailers); and which
+  //     stores each connected browser is signed in to (the store login monitor).
+  `
+  ALTER TABLE products ADD COLUMN seller TEXT;
+  ALTER TABLE alert_routes ADD COLUMN fallback INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE devices ADD COLUMN logins TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE devices ADD COLUMN logins_at INTEGER;
+  `,
 ];
 
 export class Db {

@@ -366,3 +366,51 @@ test('an admin\'s 📣 SKU and a manual /restock go through the same feed and co
   // 📣 announcements respect it.
   assert.equal(await env.app.monitor.announce({ store: 'demo-ebgames', sku: '312346', name: 'EB ETB', url: '' }, { status: 'in_stock' }), false);
 });
+
+test('🗂 store channels: the bot makes kmart-pokemon … misc-retailers (using any already there), one rule each; misc-retailers only gets what no other channel took', async () => {
+  // Without the Manage Channels permission it says what to do.
+  discord.state.canManageChannels = false;
+  let r = await boss.post('/api/monitor/routes/setup', {});
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /Manage Channels permission/);
+  discord.state.canManageChannels = true;
+  assert.equal((await ash.post('/api/monitor/routes/setup', {})).status, 404, 'admins only');
+  // A channel the admin made already is used, not made again.
+  discord.state.channels.push({ id: '700000000000000900', name: 'kmart-pokemon', type: 0 });
+  const before = (await boss.get('/api/monitor/routes')).body.routes.length;
+  assert.ok(before > 0);
+  r = await boss.post('/api/monitor/routes/setup', { replace: true });
+  assert.equal(r.status, 200, r.text);
+  const names = r.body.channels.map((c) => c.name);
+  assert.deepEqual(names.slice(0, 4), ['kmart-pokemon', 'kmart-one-piece', 'bigw-pokemon', 'bigw-one-piece']);
+  for (const n of ['target-pokemon', 'jbhifi-one-piece', 'ebgames-pokemon', 'zing-one-piece', 'toysrus-pokemon', 'premium-bandai', 'pokemon-center', 'misc-retailers']) assert.ok(names.includes(n), n);
+  assert.equal(names.length, 17);
+  assert.equal(r.body.made, 16, 'kmart-pokemon was there already');
+  assert.equal(r.body.channels[0].id, '700000000000000900');
+  const category = discord.state.channels.find((c) => c.type === 4);
+  assert.equal(category.name, 'Mugibot alerts');
+  assert.equal(discord.state.channels.filter((c) => c.parent_id === category.id).length, 16);
+  assert.equal(r.body.routes.length, 17, 'the earlier rules were replaced');
+  const chan = (n) => r.body.channels.find((c) => c.name === n).id;
+  const rule = (n) => r.body.routes.find((x) => x.channelId === chan(n));
+  assert.deepEqual([rule('bigw-one-piece').stores, rule('bigw-one-piece').categories, rule('bigw-one-piece').name], [['bigw'], ['onepiece'], '#bigw-one-piece']);
+  assert.equal(rule('misc-retailers').fallback, true);
+  assert.equal(rule('premium-bandai').fallback, false);
+  // Again: nothing new made, nothing doubled.
+  const again = await boss.post('/api/monitor/routes/setup', {});
+  assert.deepEqual([again.body.made, again.body.added, again.body.routes.length], [0, 0, 17]);
+
+  // Each alert goes to its own channel only; anything else to misc-retailers.
+  const to = (a) => env.app.feed.routesFor({ kind: 'restock', ...a }).map((x) => x.channelId);
+  assert.deepEqual(to({ store: 'kmart', category: 'pokemon', name: 'Pokémon TCG Elite Trainer Box' }), [chan('kmart-pokemon')]);
+  assert.deepEqual(to({ kind: 'listed', store: 'demo-bigw', category: 'onepiece', name: 'One Piece OP-14 Booster Box' }), [chan('bigw-one-piece')], 'the dummy BIG W counts as BIG W');
+  assert.deepEqual(to({ store: 'pbandai', category: 'onepiece', name: 'ONE PIECE CARD GAME Premium Card Collection' }), [chan('premium-bandai')]);
+  assert.deepEqual(to({ store: 'pokemoncenter', category: 'pokemon', name: 'Pokémon Center Elite Trainer Box' }), [chan('pokemon-center')]);
+  assert.deepEqual(to({ store: 'kmart', category: 'other', name: 'Gundam Card Game Booster Box' }), [chan('misc-retailers')], 'another game: misc-retailers');
+  assert.deepEqual(to({ store: 'amazon', category: 'pokemon', name: 'Pokémon booster bundle' }), [chan('misc-retailers')], 'another store: misc-retailers');
+  // End to end: a real alert posts in its channel.
+  const n = posts(chan('ebgames-one-piece')).length;
+  await env.app.feed.post({ kind: 'restock', store: 'demo-ebgames', sku: '312345', name: 'One Piece Card Game OP-18 Booster Box', category: 'onepiece', status: 'in_stock', price: 159, url: '', image: '' }, {});
+  assert.equal(posts(chan('ebgames-one-piece')).length, n + 1);
+  assert.match(posts(chan('ebgames-one-piece')).at(-1).body.embeds[0].title, /OP-18 Booster Box/);
+});
