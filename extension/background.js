@@ -500,16 +500,28 @@ async function sweepOne(t) {
 }
 
 let sweeping = false;
+// Asked to start while running (the alarm, a new admin, new settings): ask the server again now,
+// rather than after the wait — or, if the loop was just stopping, keep going.
+let sweepAgain = false;
+let wakeSweeps = null;
 /** Runs while the server has searches for this browser (only admins get any); the alarm restarts it. */
 async function sweepLoop() {
-  if (sweeping) return;
+  if (sweeping) {
+    sweepAgain = true;
+    if (wakeSweeps) wakeSweeps();
+    return;
+  }
   if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return;
   if (!(await getAuth())) return;
   sweeping = true;
   try {
     for (;;) {
+      sweepAgain = false;
       const due = await api('GET', '/api/ext/sweeps');
-      if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) break;
+      if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) {
+        if (sweepAgain) continue;
+        break;
+      }
       for (const t of due.body.terms || []) {
         const result = await sweepOne(t);
         await api('POST', '/api/ext/sweeps', { results: [result] });
@@ -518,7 +530,13 @@ async function sweepLoop() {
       }
       // Waiting for the next search. Touching storage keeps this worker running meanwhile.
       await chrome.storage.session.set({ sweepBeat: Date.now() });
-      await new Promise((r) => setTimeout(r, Math.min(20000, Math.max(1000, due.body.waitMs))));
+      if (!sweepAgain) {
+        await new Promise((r) => {
+          wakeSweeps = r;
+          setTimeout(r, Math.min(20000, Math.max(1000, due.body.waitMs)));
+        });
+        wakeSweeps = null;
+      }
       if (!(await getAuth())) break;
     }
   } finally {
