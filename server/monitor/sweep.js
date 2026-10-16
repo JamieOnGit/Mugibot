@@ -31,10 +31,12 @@
 // Trainer Town (Shopify) keeps each game in a collection of its own; there a
 // keyword's whole collection is read in one go, sold-out products included.
 //
-// Stores that answer servers (Target, JB Hi-Fi, Trainer Town) are swept from the server,
-// honestly identified as Mugibot. Stores that refuse servers (Kmart, BIG W,
-// EB Games) are swept from an admin's browser by the extension, at a gentler
-// pace. A refused or failed search backs off (twice as long each time, up to
+// Stores that answer servers (Target, JB Hi-Fi, Trainer Town, Amazon) are swept
+// from the server, honestly identified as Mugibot; so is Kmart, through its
+// search provider (Constructor.io), which its own search page asks. Stores that
+// refuse servers (BIG W, EB Games) are swept from an admin's browser by the
+// extension, at a gentler pace; BIG W's page is opened and read once it has
+// built its product list. A refused or failed search backs off (twice as long each time, up to
 // 15 minutes) and never alerts.
 
 import { categoryFor, toProduct } from '../catalog.js';
@@ -117,7 +119,8 @@ export function sweepSettings(input, current, retailers) {
     const r = retailers.get(id);
     if (!r || !r.sweep) continue;
     if (!MODES.includes(mode)) throw bad(`${r.name}: choose server, browser or off`);
-    stores[id] = mode;
+    // Only what differs from the store's default is kept, so a better default reaches everyone.
+    if (mode !== (r.demo ? 'off' : r.sweep.from || 'server')) stores[id] = mode;
   }
   const tcgTerms = list(src.tcgTerms, { max: 80, maxLen: 40, lower: true });
   const notCardTerms = list(src.notCardTerms, { max: 120, maxLen: 40, lower: true });
@@ -126,6 +129,7 @@ export function sweepSettings(input, current, retailers) {
   return {
     enabled,
     keywords,
+    modesVersion: 2, // stores: only the modes that differ from each store's default
     everySeconds: num(src.everySeconds, { min: 3, max: 600, int: true, def: SWEEP_DEFAULTS.everySeconds }),
     browserEverySeconds: num(src.browserEverySeconds, { min: 5, max: 600, int: true, def: SWEEP_DEFAULTS.browserEverySeconds }),
     stores,
@@ -190,9 +194,25 @@ export class Sweeper {
   // ---------------------------------------------------------------------------
   get settings() {
     const saved = this.repo.getSetting('sweep') || {};
+    // (Saved before only the modes that differ from a store's default were kept: see ownModes.)
+    const out = { ...SWEEP_DEFAULTS, ...saved, stores: saved.modesVersion >= 2 ? { ...(saved.stores || {}) } : this.ownModes(saved.stores) };
     // (Before priceAlerts existed, a price drop % of 0 meant no price drop alerts.)
-    if (saved.priceDropPercent === 0 && saved.priceAlerts === undefined) return { ...SWEEP_DEFAULTS, ...saved, priceAlerts: false, priceDropPercent: SWEEP_DEFAULTS.priceDropPercent };
-    return { ...SWEEP_DEFAULTS, ...saved };
+    if (saved.priceDropPercent === 0 && saved.priceAlerts === undefined) Object.assign(out, { priceAlerts: false, priceDropPercent: SWEEP_DEFAULTS.priceDropPercent });
+    return out;
+  }
+
+  /**
+   * Settings saved before only changed modes were kept had every store's mode in them. A store whose
+   * default changed since (Kmart: from an admin's browser to the server) loses its old default there.
+   */
+  ownModes(stores) {
+    const out = {};
+    for (const [id, mode] of Object.entries(stores && typeof stores === 'object' ? stores : {})) {
+      const r = this.retailers.get(id);
+      if (r && r.sweep && !r.demo && mode === r.sweep.formerDefault) continue;
+      out[id] = mode;
+    }
+    return out;
   }
 
   save(input, user) {
@@ -294,7 +314,14 @@ export class Sweeper {
     if (collection) return `${r.base}${r.sweep.collectionPath.replace('{collection}', encodeURIComponent(collection))}`;
     let p = r.sweep.path.replace('{q}', encodeURIComponent(this.query(r, keyword)));
     if (page > 1 && r.sweep.pagePath) p += r.sweep.pagePath.replace('{page}', String(page));
-    return `${r.base}${p}`;
+    // (A store whose search is answered by its search provider: Kmart's, at Constructor.io.)
+    return `${r.sweep.apiBase || r.base}${p}`;
+  }
+
+  /** The time between two searches at a store: the set pace, or the store's own slowest (Amazon: 20 s). */
+  paceFor(r, browser = false) {
+    const s = this.settings;
+    return Math.max(browser ? s.browserEverySeconds : s.everySeconds, r.sweep.minSeconds || 0) * 1000;
   }
 
   /**
@@ -347,7 +374,7 @@ export class Sweeper {
       const refused = [401, 403, 429, 503].includes(res.status);
       return this.record(r, term, { ok: false, blocked: refused, url, source: 'server', ms, error: refused ? `The store refused the search (HTTP ${res.status})` : `HTTP ${res.status}` });
     }
-    const parsed = parseListing(r.sweep.parser, text, { base: url, productPath: r.productPath, skuFromPath: r.skuFromPath, storeName: r.name });
+    const parsed = parseListing(r.sweep.parser, text, { base: url, storeBase: r.base, productPath: r.productPath, skuFromPath: r.skuFromPath, storeName: r.name });
     return this.ingest(r, term, parsed, { source: 'server', url, ms });
   }
 
@@ -397,7 +424,7 @@ export class Sweeper {
       const status = p.inStock === true ? (p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
       // Members' own SKUs, whatever they are.
       await this.members(r, p, status);
-      if (!counts_(p, term.keyword)) continue;
+      if (!counts_(p, term.keyword) || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
       counts.kept += 1;
       const ev = await this.track(r, p, { status, keyword: term.keyword, baseline, now });
       for (const k of ev) counts[k] += 1;
@@ -615,7 +642,7 @@ export class Sweeper {
         const st = this.stat(id);
         const term = this.nextTerm(r);
         await this.sweepTerm(r, term).catch((e) => this.record(r, term, { ok: false, source: 'server', error: e.message }));
-        const wait = this.waitFor(st, this.settings.everySeconds * 1000, { jitter: true });
+        const wait = this.waitFor(st, this.paceFor(r), { jitter: true });
         st.nextAt = this.now() + wait;
         await this.sleep(id, wait);
       }
@@ -648,7 +675,6 @@ export class Sweeper {
   browserDue(user) {
     if (!user || user.role !== 'admin') return { terms: [], waitMs: null };
     const now = this.now();
-    const every = this.settings.browserEverySeconds * 1000;
     const terms = [];
     let next = null;
     for (const { retailer: r, mode } of this.stores()) {
@@ -657,12 +683,14 @@ export class Sweeper {
       if (st.browserNext > now) { next = Math.min(next ?? Infinity, st.browserNext); continue; }
       this.refreshCollections(r).catch(() => {});
       const term = this.nextTerm(r);
-      st.browserNext = now + this.waitFor(st, every);
+      st.browserNext = now + this.waitFor(st, this.paceFor(r, true));
       st.nextAt = st.browserNext;
       next = Math.min(next ?? Infinity, st.browserNext);
       terms.push(serialize({
         store: r.id, keyword: term.keyword, page: term.page, url: this.urlFor(r, term.keyword, term.page), parser: r.sweep.parser,
-        productPath: r.productPath || null, skuFromPath: r.skuFromPath || null, storeName: r.name,
+        productPath: r.productPath || null, skuFromPath: r.skuFromPath || null, storeName: r.name, storeBase: r.base,
+        // Pages that build their product list once they're open (BIG W): the browser opens them and waits.
+        render: !!r.sweep.render,
       }));
     }
     return { terms, waitMs: next === null ? null : Math.max(1000, next - now) };
@@ -738,12 +766,20 @@ export class Sweeper {
   }
 
   /** A store's state in a word: ok, slowed, retrying, waiting (for an admin's browser) or starting. */
-  statusOf(mode, st, now) {
+  statusOf(mode, st, now, r) {
     if (!st.lastAt) return mode === 'browser' ? 'waiting' : 'starting';
     if (st.fails) return 'retrying';
-    if (mode === 'browser' && now - st.lastAt > Math.max(60 * 1000, 4 * this.settings.browserEverySeconds * 1000)) return 'waiting';
+    if (mode === 'browser' && now - st.lastAt > Math.max(60 * 1000, 4 * this.paceFor(r, true))) return 'waiting';
     if (st.slowUntil > now) return 'slowed';
     return 'ok';
+  }
+
+  /** What a store's searches read, for the live monitor ("/search?text=", "ac.cnstrc.com/search/"). */
+  endpoint(r) {
+    if (this.settings.keywords.some((k) => this.collectionFor(r, k))) return r.sweep.collectionPath.replace('{collection}', '…').split('?')[0];
+    const p = r.sweep.path.split('{q}')[0];
+    if (!r.sweep.apiBase) return p;
+    try { return `${new URL(r.sweep.apiBase).host}${p}`; } catch { return p; }
   }
 
   /** Everything the live monitor shows when it opens: each store, the counters and the latest events. */
@@ -753,10 +789,10 @@ export class Sweeper {
       const st = this.stat(r.id);
       const lastOk = [...st.log].reverse().find((x) => x.ok && typeof x.ms === 'number');
       return {
-        id: r.id, name: r.name, realId: r.realId || r.id, mode, from: MODE_LABEL[mode], status: this.statusOf(mode, st, now),
+        id: r.id, name: r.name, realId: r.realId || r.id, mode, from: MODE_LABEL[mode], status: this.statusOf(mode, st, now, r),
         searches: st.searches || 0, fails: st.fails, lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastMs: lastOk ? lastOk.ms : null, lastError: st.lastError,
         nextAt: st.nextAt, slowedUntil: st.slowUntil > now ? st.slowUntil : null,
-        endpoint: this.settings.keywords.some((k) => this.collectionFor(r, k)) ? r.sweep.collectionPath.replace('{collection}', '…').split('?')[0] : r.sweep.path.split('{q}')[0],
+        endpoint: this.endpoint(r),
         latency: st.log.filter((x) => x.at >= now - 10 * 60 * 1000).slice(-150).map((x) => ({ at: x.at, ms: x.ms, ok: x.ok })),
       };
     });

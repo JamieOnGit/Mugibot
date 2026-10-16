@@ -299,9 +299,80 @@ async function runChecks() {
 }
 
 // --- live sweeps (admins' browsers) --------------------------------------------
+// --- Pages that build their product list once they're open (BIG W) ---------------------
+// Opened in a minimised window of the extension's own (one tab, reused for every search), read
+// once the products are on the page, and left there until the next search. Closing the window
+// is fine: the next search opens it again.
+const SWEEP_WINDOW = 'sweepWindow';
+
+async function sweepTabId() {
+  const { [SWEEP_WINDOW]: saved } = await chrome.storage.session.get(SWEEP_WINDOW);
+  return saved ? saved.tabId : null;
+}
+
+async function sweepTab() {
+  const saved = await sweepTabId();
+  if (saved !== null) {
+    try { return (await chrome.tabs.get(saved)).id; } catch { /* the window was closed */ }
+  }
+  const win = await chrome.windows.create({ url: 'about:blank', focused: false, state: 'minimized' });
+  const tabId = win.tabs[0].id;
+  await chrome.storage.session.set({ [SWEEP_WINDOW]: { windowId: win.id, tabId } });
+  return tabId;
+}
+
+function tabLoaded(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, timeoutMs);
+    function done() { clearTimeout(timer); chrome.tabs.onUpdated.removeListener(onUpdated); resolve(); }
+    function onUpdated(id, info) { if (id === tabId && info.status === 'complete') done(); }
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
+/** Runs in the store's page: how many product links it has so far, and the page itself. */
+function readSweepPage(path) {
+  const rx = path ? new RegExp(path[0], path[1]) : /\/(p|product|products)\//i;
+  let products = 0;
+  for (const a of document.querySelectorAll('a[href]')) {
+    try { if (rx.test(new URL(a.href, location.href).pathname)) products += 1; } catch { /* not a link */ }
+  }
+  return { products, url: location.href, title: document.title, html: document.documentElement.outerHTML };
+}
+
+async function renderedPage(t) {
+  const tabId = await sweepTab();
+  const loaded = tabLoaded(tabId, 25000);
+  await chrome.tabs.update(tabId, { url: t.url });
+  await loaded;
+  const path = t.productPath ? [t.productPath.re, t.productPath.f || ''] : null;
+  const until = Date.now() + 12000;
+  let page = null;
+  for (let seen = 0; ;) {
+    const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: readSweepPage, args: [path] });
+    page = res && res.result;
+    // Products on the page: one more look a moment later, so their prices have filled in too.
+    if (page && page.products) { if (seen++) break; } else if (Date.now() > until) break;
+    await new Promise((r) => setTimeout(r, seen ? 600 : 800));
+  }
+  return page;
+}
+
 async function sweepOne(t) {
   const started = Date.now();
   const base = { store: t.store, keyword: t.keyword, page: t.page };
+  const opts = (url) => ({ base: url || t.url, storeBase: t.storeBase, productPath: revive(t.productPath), skuFromPath: revive(t.skuFromPath), storeName: t.storeName });
+  if (t.render) {
+    let page;
+    try {
+      page = await renderedPage(t);
+    } catch {
+      return { ...base, ok: false, error: "This browser couldn't open the store's page", ms: Date.now() - started };
+    }
+    if (!page) return { ...base, ok: false, error: "This browser couldn't read the store's page", ms: Date.now() - started };
+    const parsed = parseListing(t.parser, page.html.slice(0, 6_000_000), opts(page.url));
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem: parsed.problem, products: parsed.products.slice(0, 300) };
+  }
   let res;
   try {
     res = await fetch(t.url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
@@ -310,7 +381,7 @@ async function sweepOne(t) {
   }
   if (!res.ok) return { ...base, ok: false, status: res.status, blocked: [401, 403, 429, 503].includes(res.status), ms: Date.now() - started };
   const text = (await res.text()).slice(0, 6_000_000);
-  const parsed = parseListing(t.parser, text, { base: res.url || t.url, productPath: revive(t.productPath), skuFromPath: revive(t.skuFromPath), storeName: t.storeName });
+  const parsed = parseListing(t.parser, text, opts(res.url));
   return { ...base, ok: true, status: res.status, ms: Date.now() - started, problem: parsed.problem, products: parsed.products.slice(0, 300) };
 }
 
@@ -370,7 +441,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || typeof msg !== 'object' || sender.id !== chrome.runtime.id) return null;
     switch (msg.type) {
       // From store pages
-      case 'state': return getState();
+      case 'state': {
+        // The extension's own window for live sweeps: no panel, no checkout there.
+        if (sender.tab && sender.tab.id === (await sweepTabId())) return { items: [], flows: [], sweepTab: true };
+        return getState();
+      }
       case 'event': {
         await api('POST', '/api/ext/events', msg.event);
         return { ok: true };

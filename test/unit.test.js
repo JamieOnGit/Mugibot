@@ -218,7 +218,8 @@ test('extension built for a live server: only that server and the stores; module
   const m = extensionManifest(cfg);
   assert.equal(m.manifest_version, 3);
   assert.equal(m.background.type, 'module');
-  assert.deepEqual(m.permissions, ['storage', 'alarms'], 'no tabs/history/cookies permissions');
+  assert.deepEqual(m.permissions, ['storage', 'alarms', 'scripting'], 'no tabs/history/cookies permissions (scripting: reading the page an admin\'s browser opens for a live sweep)');
+  assert.ok(m.host_permissions.includes('https://ac.cnstrc.com/*'), "Kmart's search provider, for an admin's browser sweeping Kmart");
   assert.equal(m.host_permissions[0], 'https://app.mugibot.example/*');
   assert.ok(m.host_permissions.includes('https://www.kmart.com.au/*'), 'stores (for in-browser checks)');
   assert.ok(!JSON.stringify(m).includes('127.0.0.1'), 'no local addresses in a live build');

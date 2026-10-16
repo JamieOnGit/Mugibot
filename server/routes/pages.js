@@ -97,6 +97,7 @@ export function servePage(ctx, req, res, url) {
   if (/^\/(css|js|img)\//.test(url.pathname)) {
     return sendFile(req, res, WEB, url.pathname, { cache: cfg.production ? 'public, max-age=3600' : 'no-cache' });
   }
-  if (url.pathname === '/favicon.ico' || url.pathname === '/favicon.svg') return sendFile(req, res, WEB, '/img/favicon.svg', { cache: 'public, max-age=86400' });
+  if (url.pathname === '/favicon.ico') return sendFile(req, res, WEB, '/img/favicon.ico', { cache: 'public, max-age=86400' });
+  if (url.pathname === '/apple-touch-icon.png') return sendFile(req, res, WEB, '/img/apple-touch-icon.png', { cache: 'public, max-age=86400' });
   return false;
 }

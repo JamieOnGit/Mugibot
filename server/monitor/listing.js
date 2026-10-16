@@ -8,6 +8,9 @@
 //   shopify-suggest  Shopify's search suggestions (JB Hi-Fi): JSON, with stock.
 //   shopify          A Shopify collection's product list (Trainer Town): JSON, every
 //                    product in it with each option's stock; reads suggestions too.
+//   constructor      Constructor.io search results (Kmart's search provider): JSON, with
+//                    sellers and the states each product is out of stock in.
+//   amazon           Amazon's search page: a tile per result, with its ASIN.
 //   generic          Any other store: product data in the page's scripts (Next.js
 //                    data, JSON-LD, embedded state), plus product tiles in the HTML.
 //
@@ -158,6 +161,87 @@ export function parseShopifyProducts(text, { base } = {}) {
     });
   }
   return { products, total: products.length, problem: null };
+}
+
+// ---------------------------------------------------------------------------
+// Constructor.io search results (Kmart)
+// ---------------------------------------------------------------------------
+// Kmart's search page has no products in it: the page asks Kmart's search provider,
+// Constructor.io, for them once it's open. Its answer has every product's code, name, price,
+// picture, sellers, pre-order flag, and the states it's out of stock in ("stateOOS").
+const AU_STATES = ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'];
+const storeLink = (root, path) => {
+  if (typeof path !== 'string' || !path.trim()) return '';
+  if (/^https?:\/\//i.test(path)) return httpsUrl(path);
+  return httpsUrl(`${String(root || '').replace(/\/+$/, '')}${path.startsWith('/') ? '' : '/'}${path}`);
+};
+
+export function parseConstructor(text, { base, storeBase } = {}) {
+  const j = typeof text === 'string' ? shopifyJson(text) : text;
+  const r = j && j.response;
+  if (!r || !Array.isArray(r.results)) return { products: [], problem: (j === undefined && pageProblem(text)) || 'layout' };
+  const products = [];
+  for (const x of r.results) {
+    const d = x && x.data;
+    if (!d || !d.id || typeof x.value !== 'string') continue;
+    const price = money(d.price);
+    const was = money((String(d.SavePrice || '').match(/\$\s?(\d[\d,]*(?:\.\d{1,2})?)/) || [])[1]);
+    const oos = d.stateOOS && typeof d.stateOOS === 'object' ? Object.keys(d.stateOOS) : [];
+    const sellers = Array.isArray(d.Seller) ? d.Seller.map(String) : [];
+    products.push({
+      sku: String(d.id).replace(/^P_/, ''), aliases: [String(d.id)], title: clean(x.value), price,
+      wasPrice: was && price && was > price ? was : null,
+      // Out of stock in every state = sold out online; in stock somewhere otherwise.
+      inStock: !AU_STATES.every((s) => oos.includes(s)),
+      preorder: d.isPreOrderActive === true, url: storeLink(storeBase || base, d.url || d.uri), image: httpsUrl(d.image_url, base),
+      marketplace: sellers.length > 0 && sellers.every((s) => /market ?place/i.test(s)),
+    });
+  }
+  return { products, total: typeof r.total_num_results === 'number' ? r.total_num_results : null, perPage: r.results.length, problem: null };
+}
+
+// ---------------------------------------------------------------------------
+// Amazon's search results
+// ---------------------------------------------------------------------------
+// Each result is a tile marked data-component-type="s-search-result" with its ASIN. The name is
+// in two parts (the brand, then the rest: "Pokémon" + "TCG: 30th Celebration Elite Trainer Box").
+const AMAZON_BLOCK_RE = /api-services-support@amazon\.com|\/errors\/validateCaptcha|Type the characters you see in this image/i;
+
+export function parseAmazon(html, { base } = {}) {
+  const s = String(html || '');
+  if (AMAZON_BLOCK_RE.test(s)) return { products: [], problem: 'blocked' };
+  const problem = pageProblem(s);
+  if (problem) return { products: [], problem };
+  const doc = parseHTML(s);
+  const cls = (n) => String((n.attrs && n.attrs.class) || '');
+  const results = findAll(doc, (n) => n.attrs && n.attrs['data-component-type'] === 's-search-result' && /^[A-Z0-9]{10}$/.test(n.attrs['data-asin'] || ''));
+  if (!results.length) return { products: [], problem: /s-main-slot|s-search-results/.test(s) ? 'empty' : 'layout' };
+  let origin = 'https://www.amazon.com.au';
+  try { origin = new URL(base).origin; } catch { /* default */ }
+  const products = [];
+  for (const t of results) {
+    const asin = t.attrs['data-asin'];
+    const heads = findAll(t, (n) => n.tag === 'h2').map((h) => clean(h.attrs['aria-label'] || textContent(h))).filter(Boolean).sort((a, b) => b.length - a.length);
+    let title = heads[0] || '';
+    const brand = heads.slice(1).find((b) => b.length < 40 && !norm(title).includes(norm(b)));
+    if (brand) title = `${brand} ${title}`;
+    if (title.length < 4) continue;
+    const priceBox = findFirst(t, (n) => /\ba-price\b/.test(cls(n)) && !/\ba-text-price\b/.test(cls(n)));
+    const priceText = priceBox && findFirst(priceBox, (n) => /\ba-offscreen\b/.test(cls(n)));
+    const wasBox = findFirst(t, (n) => /\ba-text-price\b/.test(cls(n)));
+    const wasText = wasBox && findFirst(wasBox, (n) => /\ba-offscreen\b/.test(cls(n)));
+    const price = priceText ? money(textContent(priceText)) : null;
+    const was = wasText ? money(textContent(wasText)) : null;
+    const img = findFirst(t, (n) => n.tag === 'img' && /\bs-image\b/.test(cls(n)));
+    const text = tileText(t);
+    products.push({
+      sku: asin, aliases: [], title: clean(title), price, wasPrice: was && price && was > price ? was : null,
+      inStock: /\bcurrently unavailable\b/i.test(text) ? false : price !== null ? true : null,
+      preorder: /\bpre-?order\b|\bwill be released on\b/i.test(text), url: `${origin}/dp/${asin}`,
+      image: img ? httpsUrl(img.attrs.src, base) : '', marketplace: false,
+    });
+  }
+  return { products, total: null, problem: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +476,7 @@ export function parseGeneric(html, { base, productPath = null, skuFromPath = nul
   return { products: [...map.values()].slice(0, 300), problem: map.size ? null : 'empty' };
 }
 
-export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, generic: parseGeneric };
+export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, generic: parseGeneric };
 
 export function parseListing(parser, text, opts) {
   return (PARSERS[parser] || parseGeneric)(text, opts);

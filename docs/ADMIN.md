@@ -38,6 +38,14 @@ yet. Also lists anything still to set up.
 - **📣 Announce (on your own watchlist):** restocks of that SKU are posted in
   `#restocks` automatically, with the restock role pinged.
 
+**Blacklist.** Products that should never ping: a store and a SKU (or a
+product link) for one product, only a store for everything there, or only a
+SKU for that SKU at every store. Anything on it never alerts (dashboard or
+Discord), isn't tracked by the live sweeps, stays off the Monitor lists, and
+any monitor on it is removed. **Remove** takes it off again. Admins also have
+**🚫 Blacklist** on each product's page on the Monitor tab. See
+[MONITORING.md](MONITORING.md#the-blacklist).
+
 **Stores & flows.** Each store, its flow status (verified / beta / draft) and three switches:
 - **On**: off hides the store from members and stops its checks and flows.
 - **Server checks**: switch off for stores that block servers. Members'
@@ -56,7 +64,7 @@ role order, channel), **Post a test message** and **Register slash commands**
 it belongs to. Tick "only ones nobody has linked yet" to find people who paid
 but haven't connected their account.
 
-**Audit log.** Who changed what, including monitors added, paused, resumed and removed.
+**Audit log.** Who changed what, including monitors added, paused, resumed and removed, and blacklist entries added and removed.
 
 ## The Monitor feed
 
@@ -66,9 +74,10 @@ channels, page-check health and the check log are on the dashboard's
 **Monitor** tab. Admins see the controls there, and members see the feed. In
 Discord: `/monitor add · list · pause · resume · remove · status`.
 
-Kmart, BIG W, EB Games and Zing refuse Mugibot's server, so they're searched
-from an admin's browser: keep Chrome open with the extension connected to an
-admin account. See [MONITORING.md](MONITORING.md).
+BIG W, EB Games and Zing refuse Mugibot's server, so they're searched from an
+admin's browser: keep Chrome open with the extension (1.6.0 or later)
+connected to an admin account. Kmart, Target, JB Hi-Fi, Toys"R"Us, Trainer
+Town and Amazon AU are searched from the server. See [MONITORING.md](MONITORING.md).
 
 ## Command line (on the server)
 

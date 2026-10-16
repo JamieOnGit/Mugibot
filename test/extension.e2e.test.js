@@ -523,7 +523,7 @@ test("live sweeps from an admin's browser: a store that refuses the server is se
   store.set('kmart', '43818648', { listed: false });
   // A member's browser gets no searches…
   assert.deepEqual(await sw.evaluate(() => globalThis.mugibotSweepLoop()), undefined);
-  assert.ok(!store.state.requests.some((x) => x.path.startsWith('/kmart/search')));
+  assert.ok(!store.state.requests.some((x) => x.path.startsWith('/kmart/cnstrc/search')));
   // …an admin's does (the alarm starts it every 30 s; start it now).
   env.app.repo.updateUser(userId, { role: 'admin' });
   try {
@@ -532,7 +532,7 @@ test("live sweeps from an admin's browser: a store that refuses the server is se
     const h = sweeper.health().find((s) => s.store === 'demo-kmart');
     assert.equal(h.terms[0].source, 'browser');
     assert.equal(h.terms[0].baselineAt > 0, true);
-    assert.ok(store.state.requests.some((x) => x.path.startsWith('/kmart/search') && /Chrome|Mozilla/.test(x.ua)), 'a normal browser request');
+    assert.ok(store.state.requests.some((x) => x.path.startsWith('/kmart/cnstrc/search') && /Chrome|Mozilla/.test(x.ua)), "a normal browser request to Kmart's search provider");
     assert.equal(env.app.catalog.productFor('demo-kmart', '43818587').status, 'in_stock');
 
     // The store adds a product: the next sweep from this browser alerts it.
@@ -547,6 +547,39 @@ test("live sweeps from an admin's browser: a store that refuses the server is se
   } finally {
     env.app.repo.updateUser(userId, { role: 'user' });
     sweeper.save({ stores: { 'demo-kmart': 'off' } }, null);
+  }
+});
+
+test("BIG W's search page builds its products once it's open: an admin's browser opens it in a window of its own, waits, and reads them", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-bigw': 'browser' } }, null);
+  store.shop('bigw').clientSearch = true; // like the real BIG W
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    // Reading the page as it arrives finds nothing: its products aren't in it yet.
+    const raw = await (await fetch(`${store.url}/bigw/search?text=pokemon`)).text();
+    assert.ok(!raw.includes('/bigw/product/'));
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => env.app.catalog.productFor('demo-bigw', '6012346'), { timeout: 30000, message: 'products read from the opened page' });
+    const bundle = env.app.catalog.productFor('demo-bigw', '6012346');
+    assert.equal(bundle.status, 'in_stock');
+    assert.equal(bundle.price, 45);
+    assert.match(bundle.url, /\/bigw\/product\/.+\/p\/6012346$/);
+    await waitFor(() => env.app.catalog.productFor('demo-bigw', '6012345'), { timeout: 10000, message: 'the sold-out one too' });
+    assert.equal(env.app.catalog.productFor('demo-bigw', '6012345').status, 'out_of_stock');
+    assert.ok(store.state.requests.some((x) => x.path.startsWith('/bigw/api/search')), "the page's own code fetched its products");
+    assert.equal(sweeper.health().find((s) => s.store === 'demo-bigw').terms[0].source, 'browser');
+    // The sweep window: one tab, reused, without Mugibot's store panel.
+    const tabs = ctx.pages().filter((pg) => pg.url().includes('/bigw/search'));
+    assert.equal(tabs.length, 1);
+    await tabs[0].waitForTimeout(1500);
+    assert.equal(await tabs[0].evaluate((id) => !!document.getElementById(id), 'mugibot-qc'), false);
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    store.shop('bigw').clientSearch = false;
+    sweeper.save({ stores: off }, null);
   }
 });
 

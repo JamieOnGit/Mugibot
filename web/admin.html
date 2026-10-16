@@ -4,14 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Admin — {{APP_NAME}}</title>
-  <link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/img/favicon.png" type="image/png" sizes="64x64">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
   <link rel="stylesheet" href="/css/site.css">
   <script src="/js/theme.js"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="wrap">
-      <a class="logo" href="/app"><img src="/img/favicon.svg" alt=""> {{APP_NAME}} <span class="pill">Admin</span></a>
+      <a class="logo" href="/app"><img src="/img/logo.png" alt=""> {{APP_NAME}} <span class="pill">Admin</span></a>
       <nav><a class="link" href="/app">← Dashboard</a> <button class="btn small theme-toggle" id="theme-toggle" type="button" aria-label="Switch light or dark theme" title="Light / dark">☾</button></nav>
     </div>
   </header>
@@ -20,6 +21,7 @@
       <a href="#overview" data-tab="overview">Overview</a>
       <a href="#members" data-tab="members">Members</a>
       <a href="#skus" data-tab="skus">SKUs &amp; restock pings</a>
+      <a href="#blacklist" data-tab="blacklist">Blacklist</a>
       <a href="#retailers" data-tab="retailers">Stores &amp; flows</a>
       <a href="#integrations" data-tab="integrations">Setup check</a>
       <a href="#whop" data-tab="whop">Whop memberships</a>
@@ -68,6 +70,26 @@
         <div class="table-wrap"><table>
           <thead><tr><th>SKU</th><th>Watchers</th><th>Members' status</th><th>Server check</th><th></th></tr></thead>
           <tbody id="skus"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <section data-panel="blacklist" hidden>
+      <form class="card" id="bl-form">
+        <h2>Blacklist</h2>
+        <p class="muted">Products that should never ping. Anything on the blacklist never alerts (in the dashboard or Discord), isn't tracked by the live sweeps, stays off the Monitor lists, and any monitor on it is removed. Choose a store and a SKU for one product, only a store for everything at that store, or only a SKU for that SKU at every store. Members' own watchlists aren't affected.</p>
+        <div class="grid3">
+          <div><label for="bl-store">Store</label><select id="bl-store"><option value="">Every store</option></select></div>
+          <div><label for="bl-sku">SKU or product link <span class="muted">(empty: the whole store)</span></label><input id="bl-sku" placeholder="e.g. 43746880" autocomplete="off"></div>
+          <div><label for="bl-note">Note <span class="muted">(optional)</span></label><input id="bl-note" placeholder="e.g. not a trading-card product"></div>
+        </div>
+        <div class="form-actions"><button class="btn primary" type="submit">🚫 Add to the blacklist</button><span class="msg" id="bl-msg"></span></div>
+      </form>
+      <div class="card">
+        <h2>On the blacklist</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Product</th><th>Store</th><th>Note</th><th>Added</th><th></th></tr></thead>
+          <tbody id="blacklist"></tbody>
         </table></div>
       </div>
     </section>

@@ -48,11 +48,14 @@ function demoCopy(def, demoUrl) {
   const u = new URL(demoUrl);
   const port = u.port ? `:${u.port}` : '';
   const hosts = LOCAL.has(u.hostname) ? [...LOCAL].map((h) => `${h}${port}`) : [u.host];
+  const base = `${u.origin}${def.devPath}`;
   return {
     ...def,
     id: `demo-${def.id}`,
     name: `${def.name} (dummy store)`,
-    base: `${u.origin}${def.devPath}`,
+    base,
+    // A search provider (Kmart's Constructor.io): the dummy store has its own copy.
+    ...(def.sweep && def.sweep.apiBase ? { sweep: { ...def.sweep, apiBase: `${base}/cnstrc` } } : {}),
     hosts,
     pathPrefix: def.devPath,
     demo: true,

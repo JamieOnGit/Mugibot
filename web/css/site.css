@@ -80,7 +80,7 @@ input[type="checkbox"] { width: auto; margin: 0 6px 0 0; }
 .topbar { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
 .topbar .wrap { display: flex; align-items: center; gap: 14px; height: 60px; }
 .logo { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; font-size: 18px; text-decoration: none; letter-spacing: -.01em; }
-.logo img { width: 28px; height: 28px; }
+.logo img { width: 34px; height: 34px; }
 .topbar nav { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .topbar nav a.link { text-decoration: none; padding: 6px 10px; border-radius: 8px; color: var(--muted); font-weight: 600; font-size: 14px; }
 .topbar nav a.link:hover { color: var(--fg); background: var(--surface-2); }
@@ -219,7 +219,10 @@ pre.flow-json { background: var(--surface-2); padding: 10px; border-radius: 8px;
 }
 @media (max-width: 720px) {
   .topbar nav .opt { display: none; }
-  .topbar nav .pill { max-width: 42vw; overflow: hidden; text-overflow: ellipsis; }
+  /* The header always fits: the membership pill gives way first (cut short with "…"). */
+  .topbar .logo { flex-shrink: 0; }
+  .topbar nav { min-width: 0; }
+  .topbar nav .pill { max-width: 42vw; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
   .topbar .wrap { gap: 8px; }
 }
 .status-row select { width: auto; }

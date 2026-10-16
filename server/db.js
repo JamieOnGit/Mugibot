@@ -347,6 +347,24 @@ const MIGRATIONS = [
     PRIMARY KEY (store, keyword, page)
   );
   `,
+  // 6 — the blacklist (Admin → Blacklist): products, or whole stores, that never alert, aren't
+  //     tracked by the sweeps and stay off the Monitor lists. Its first entry: a Kmart bookcase
+  //     that kept pinging the restock channel.
+  `
+  CREATE TABLE blacklist (
+    id TEXT PRIMARY KEY,
+    store TEXT NOT NULL DEFAULT '',         -- '' = at every store
+    sku TEXT NOT NULL DEFAULT '',           -- '' = every product at the store
+    name TEXT NOT NULL DEFAULT '',          -- what it is, for the list
+    note TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX blacklist_entry ON blacklist(store, sku COLLATE NOCASE);
+  INSERT INTO blacklist (id, store, sku, name, note, created_at)
+    VALUES ('bl_kmart_43746880', 'kmart', '43746880', 'Wave Book Storage - Oak - One Size', 'Not a trading-card product; it kept pinging the restock channel.', CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  DELETE FROM monitors WHERE product_id IN (SELECT id FROM products WHERE store = 'kmart' AND sku = '43746880');
+  `,
 ];
 
 export class Db {

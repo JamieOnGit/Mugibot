@@ -32,8 +32,10 @@ community. Built on TCGCopBot's working Kmart flow.
   keywords (`pokemon`, `one piece`…) and alerts the moment it sees a 🆕 **new
   drop**, a 🟢 **restock** or a 📉 **price drop**: in the dashboard, in your
   Discord channels (image, store, price, stock and a ⚡ Buy button) and to
-  every member watching that SKU. Target, JB Hi-Fi, Toys"R"Us and Trainer Town
-  (each game's whole collection) are searched from the server; Kmart, BIG W, EB Games and Zing from an admin's browser
+  every member watching that SKU. Target, JB Hi-Fi, Toys"R"Us, Trainer Town
+  (each game's whole collection), Kmart (through its search provider) and
+  Amazon AU are searched from the server; BIG W (its page opened and read once
+  it has built its product list), EB Games and Zing from an admin's browser
   with the extension. Admins can also monitor single products. Each channel
   gets what its rule asks for (by category, store, kind or keyword). The
   dashboard's **Monitor** tab is a live console: each store's searches and
@@ -215,7 +217,9 @@ server/
 web/                landing, sign-in, dashboard, ⚡ Buy page, admin console, terms, privacy
 extension/          the browser extension (built per server by server/extension.js)
 devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, JB Hi-Fi-, Trainer Town-style)
-scripts/            demo, mockstore, discord-commands, make-admin, reset-link, backup, build-extension, publish-extension
+scripts/            demo, mockstore, discord-commands, make-admin, reset-link, backup, build-extension, publish-extension,
+                    make-icons.py (the site's and the extension's icons, from the logo)
+brand/              the logo (the straw-hat robot); after changing it: python3 scripts/make-icons.py
 docs/               setup guides
 test/               node:test + Playwright
 ```

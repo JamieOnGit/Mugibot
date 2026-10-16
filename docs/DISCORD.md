@@ -43,7 +43,7 @@ You need: a Discord server you own, and Mugibot's address (`BASE_URL`, e.g.
    - **Public Key** → this is `DISCORD_PUBLIC_KEY`.
    - **Interactions Endpoint URL**: leave it empty for now. You fill it in
      after the secrets are set (step 6).
-   - Optional: upload the icon (`web/img/icon-192.png`) and a description.
+   - Optional: upload the logo (`web/img/logo-512.png`) as the app's icon (it's also the bot's picture), and a description.
 3. **OAuth2** page:
    - **Client Secret** → **Reset Secret** → copy. This is `DISCORD_CLIENT_SECRET`.
    - **Redirects** → **Add Redirect** → `<BASE_URL>/auth/discord/callback` → **Save Changes**.

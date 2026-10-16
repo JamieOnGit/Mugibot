@@ -22,8 +22,10 @@ export default {
   skuFromPath: /\/p\/(\d+)/,
   productPath: /^(\/bigw)?\/product\/[^/]+\/p\/\d+/,
   searchPath: '/search?text={q}',
-  // Live sweeps: BIG W refuses servers, so an admin's browser (the extension) reads its search page.
-  sweep: { from: 'browser', parser: 'generic', path: '/search?text={q}' },
+  // Live sweeps: BIG W refuses servers (its search API too), so an admin's browser (the
+  // extension) reads its search page. The page builds its product list once it's open, so the
+  // extension opens it (in a minimised window of its own), waits for the products, then reads them.
+  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20 },
   monitor: { server: true, browser: true },
   flow: {
     product: {

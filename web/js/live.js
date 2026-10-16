@@ -11,7 +11,7 @@ import { $, $$, api, h, money, setMsg, toast, when } from './common.js';
 
 // Each store keeps its colour everywhere (validated categorical palette, see site.css --s1…--s8).
 // The stores with live sweeps, one colour each (the 8-colour palette in site.css). Any other store
-// (Amazon, other websites: no sweeps) is grey, and always shown with its name.
+// (Amazon, the ninth; other websites) is grey, and always shown with its name.
 const SLOT_ORDER = ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown'];
 export const slotOf = (id) => SLOT_ORDER.indexOf(String(id || '').replace(/^demo-/, '')) + 1;
 const ABBR = { kmart: 'KM', bigw: 'BW', target: 'TG', ebgames: 'EB', zing: 'ZG', jbhifi: 'JB', toysrus: 'TR', trainertown: 'TT', amazon: 'AZ' };
@@ -366,9 +366,10 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
   }
 
   function blip(id, R, cx, cy) {
-    const slot = slotOf(id) || 8;
+    // Eight coloured stores round the dial; a store without a colour of its own (Amazon) in between.
+    const slot = slotOf(id) || 8.5;
     const a = -Math.PI / 2 + ((slot - 1) / 8) * Math.PI * 2 + 0.35;
-    const r = slot % 2 ? 0.46 : 0.72;
+    const r = slotOf(id) ? (slot % 2 ? 0.46 : 0.72) : 0.3;
     return { x: cx + Math.cos(a) * R * r, y: cy + Math.sin(a) * R * r };
   }
 

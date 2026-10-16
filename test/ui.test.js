@@ -45,6 +45,14 @@ test('landing page: pitch, membership price, honest guardrails', async () => {
   assert.match(text, /You press the final buy button/);
   assert.match(text, /members-only Discord server/);
   assert.match(text, /Not affiliated with any retailer/);
+  // The logo (the straw-hat robot) in the header, and the browser tab's icon.
+  await page.waitForFunction(() => document.querySelector('.logo img').naturalWidth === 128);
+  assert.equal(await page.getAttribute('link[rel="icon"]', 'href'), '/img/favicon.png');
+  for (const [p, type] of [['/favicon.ico', 'image/x-icon'], ['/img/favicon.png', 'image/png'], ['/apple-touch-icon.png', 'image/png'], ['/img/logo-512.png', 'image/png']]) {
+    const res = await fetch(`${env.url}${p}`);
+    assert.equal(res.status, 200, p);
+    assert.equal(res.headers.get('content-type'), type, p);
+  }
   if (shots) await page.screenshot({ path: path.join(shots, 'landing.png'), fullPage: true });
   await page.click('text=Join now');
   await page.waitForURL(/\/signup$/);
@@ -267,7 +275,8 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   // The live console: each store with its state, its search in the event log, the response-time chart.
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"]');
   assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"]'), /Target\s*Searching.*searches\s*1.*last answer\s*400 ms.*server · \/search\?sEngine=c&text=/s);
-  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /Kmart\s*Waiting.*admin's browser/s);
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="bigw"]'), /BIG W\s*Waiting.*admin's browser/s);
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /Kmart\s*Starting.*server · ac\.cnstrc\.com\/search\//s);
   assert.match(await page.textContent('#m-log'), /Search\s*Target · "pokemon" — 2 products · 1 count · first look \(no alerts\)\s*400 ms/);
   await page.waitForSelector('#sn-chart svg circle.end.s3');
   assert.match(await page.textContent('#sn-legend'), /Target\s*400 ms/);
@@ -458,6 +467,26 @@ test('admin console: members and memberships, not personal details; SKU totals a
   page.once('dialog', (d) => d.accept());
   await page.click('#restock-form button[type=submit]');
   await page.waitForFunction(() => /Pinged \d+ of \d+ watchers and posted in the restock channel/.test(document.querySelector('#r-msg').textContent));
+
+  // The blacklist: the Kmart bookcase that kept pinging is already on it; add a SKU and a whole store, then take one off.
+  await page.click('a[data-tab="blacklist"]');
+  await page.waitForFunction(() => /Wave Book Storage - Oak - One Size/.test(document.querySelector('#blacklist').textContent));
+  assert.match(await page.textContent('#blacklist'), /SKU 43746880\s*Kmart/);
+  await page.selectOption('#bl-store', 'kmart');
+  await page.fill('#bl-sku', '43834044');
+  await page.fill('#bl-note', 'not wanted');
+  await page.click('#bl-form button[type=submit]');
+  await page.waitForFunction(() => /Added/.test(document.querySelector('#bl-msg').textContent));
+  await page.waitForFunction(() => /SKU 43834044/.test(document.querySelector('#blacklist').textContent));
+  await page.selectOption('#bl-store', 'amazon');
+  page.once('dialog', (d) => { assert.match(d.message(), /every product at Amazon AU/); d.accept(); });
+  await page.click('#bl-form button[type=submit]');
+  await page.waitForFunction(() => /Every product\s*Amazon AU/.test(document.querySelector('#blacklist').textContent));
+  assert.ok(env.app.catalog.isBlocked('amazon', 'B0ANYTHING1'), 'the whole store');
+  await page.locator('#blacklist tr', { hasText: '43834044' }).getByRole('button', { name: /Take SKU 43834044 at Kmart off the blacklist/ }).click();
+  await page.waitForFunction(() => !/43834044/.test(document.querySelector('#blacklist').textContent));
+  assert.ok(!env.app.catalog.isBlocked('kmart', '43834044'));
+  if (shots) await page.screenshot({ path: path.join(shots, 'admin-blacklist.png'), fullPage: true });
 
   await page.click('a[data-tab="retailers"]');
   await page.waitForSelector('#retailers tr');

@@ -178,6 +178,19 @@ export function setupMonitor({ showError }) {
   // ---------------------------------------------------------------------------
   // One product: details, price history, alerts; admins: settings and check log
   // ---------------------------------------------------------------------------
+  /** Admins: this product never pings again (it goes on the blacklist, and its monitor is removed). */
+  async function blacklist(p) {
+    if (!confirm(`Put ${p.name || p.sku} (${storeName(p.store)}) on the blacklist? It won't ping or show here again, and its monitor is removed. You can take it off in Admin → Blacklist.`)) return;
+    try {
+      await api('POST', '/api/admin/blacklist', { store: p.store, sku: p.sku, name: p.name || '' });
+      toast('On the blacklist', `${p.name || p.sku} won't ping again.`, 'success');
+      $('#m-detail').close();
+      await loadProducts();
+    } catch (e) {
+      toast("Couldn't do that", e.message, 'warn');
+    }
+  }
+
   async function openProduct(id) {
     let d;
     try {
@@ -202,6 +215,7 @@ export function setupMonitor({ showError }) {
     acts.textContent = '';
     acts.append(actions({ ...p, kind: p.status === 'out_of_stock' ? 'sold_out' : 'restock' }));
     if (d.cartUrl) $('.acts', acts).append(h('a', { class: 'btn small', href: d.cartUrl, target: '_blank', rel: 'noopener', title: "The store's own add-to-cart link" }, '🛒 Add to cart'));
+    if (m.admin) $('.acts', acts).append(h('button', { class: 'btn small', type: 'button', title: 'Never ping for this product again (Admin → Blacklist)', onclick: () => blacklist(p) }, '🚫 Blacklist'));
 
     const chartBox = $('#md-chart');
     chartBox.textContent = '';

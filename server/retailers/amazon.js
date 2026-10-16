@@ -17,6 +17,10 @@ export default {
   // Amazon's own add-to-cart link.
   cartPath: '/gp/aws/cart/add.html?ASIN.1={sku}&Quantity.1={qty}',
   searchPath: '/s?k={q}',
+  // Live sweeps, from Mugibot's server: Amazon's search, newest first (two pages of 48), with
+  // "tcg" added to the keyword. At most one search every 20 seconds. Amazon's results don't
+  // say who sells each product, so marketplace sellers can't be told apart here.
+  sweep: { from: 'server', parser: 'amazon', path: '/s?k={q}&s=date-desc-rank', pagePath: '&page={page}', pages: 2, addWord: 'tcg', minSeconds: 20 },
   monitor: { server: true, browser: true, hostGapSeconds: 10 },
   hints: { availabilityRe: /(^|[\s_-])(availability|outOfStock)([\s_-]|$)/i },
   flow: {

@@ -30,12 +30,34 @@ same products, the same alerts, the same ⚡ Buy.
 | JB Hi-Fi | Mugibot's server | JB Hi-Fi's search suggestions (Shopify): 10 products a search, with stock. "tcg" is added to each keyword ("pokemon tcg"), because "pokemon" alone finds plushies and games |
 | Toys"R"Us | Mugibot's server | Same as JB Hi-Fi (also a Shopify store) |
 | Trainer Town | Mugibot's server | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi) |
-| Kmart, BIG W, EB Games, Zing | **An admin's browser** (the extension) | Their search pages: product tiles, and product data in the page's scripts |
+| Kmart | Mugibot's server | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online |
+| Amazon AU | Mugibot's server | Amazon's search, newest first (2 pages of 48), with "tcg" added to each keyword. At most one search every 20 seconds |
+| BIG W | **An admin's browser** (the extension) | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list |
+| EB Games, Zing | **An admin's browser** (the extension) | Their search pages: product tiles, and product data in the page's scripts |
 
-Kmart, BIG W, EB Games and Zing refuse requests from servers (403 / bot
-check), so the extension in an **admin's** browser searches them instead,
-every 15 seconds per store. Members' browsers never do this: only Mugibot's
-server and admins can change what everyone sees.
+BIG W, EB Games and Zing refuse requests from servers (403 / bot check), so
+the extension in an **admin's** browser searches them instead, every 15
+seconds per store (BIG W every 20). Members' browsers never do this: only
+Mugibot's server and admins can change what everyone sees.
+
+**Why Kmart and BIG W showed 0 products:** neither has its products in the
+search page itself. The page fetches them with JavaScript once it's open, and
+the extension read the page as it arrived, so it found nothing there (not a
+block). Now:
+- **Kmart** is read where its own page gets its products: Kmart's search
+  provider, Constructor.io, with the public search key in Kmart's pages,
+  honestly identified as Mugibot. That answers Mugibot's server, so Kmart no
+  longer needs an admin's browser. (If Kmart changes its search key, the
+  searches fail with an error in the event log: update `key=` in
+  `server/retailers/kmart.js`.)
+- **BIG W** refuses servers, its search API too, so an admin's browser
+  **opens** its search page in a minimised window of the extension's own (one
+  tab, reused for every search; closing it is fine, the next search opens it
+  again), waits until the products are on the page, and reads them. The
+  Mugibot panel doesn't appear in that window.
+- **Amazon AU** wasn't swept at all before. Amazon's search results don't say
+  who sells each product, so marketplace sellers (often at high prices) are
+  included there: put any you don't want on the **blacklist** (below).
 
 You can change where each store is searched from (server, admin's browser or
 off) in **Monitor → Live sweeps → Settings**.
@@ -113,7 +135,9 @@ With the defaults (2 keywords, a search every 5 seconds per store):
   get around their cache.
 - JB Hi-Fi and Toys"R"Us: each keyword every ~10 s.
 - Trainer Town: each keyword's whole collection every ~10 s.
-- Kmart, BIG W, EB Games, Zing (admin's browser): each keyword every ~30 s.
+- Kmart: each keyword every ~10 s.
+- Amazon AU: each keyword every ~60 s (page 1), page 2 now and then.
+- BIG W (admin's browser): each keyword every ~40 s; EB Games, Zing: every ~30 s.
 
 More keywords means each one comes round a little less often. Each store has
 its own loop, so a slow store never holds up the others.
@@ -123,8 +147,8 @@ its own loop, so a slow store never holds up the others.
 1. Deploy as usual: merging into `main` deploys it, and the database upgrades
    itself. Sweeps start on their own, with the keywords `pokemon` and
    `one piece`.
-2. **Admins' browsers** (for Kmart, BIG W, EB Games, Zing): install the
-   extension (version 1.5.0 or later; 1.5.1 for ⚡ Buy at Trainer Town), connect it to an **admin** account, and
+2. **Admins' browsers** (for BIG W, EB Games, Zing): install the
+   extension (version 1.6.0 or later: BIG W needs it), connect it to an **admin** account, and
    keep Chrome open. If a store refuses that browser too, open the store's
    website in it once, then wait for the next search. The extension's popup
    shows **Live sweeps from this browser** with each store's last result.
@@ -140,6 +164,22 @@ its own loop, so a slow store never holds up the others.
    - **Where each store is searched from**.
    - **Alerts**: new drops, restocks, and "at most one restock alert a day per product".
    - **Which products count**: skip marketplace sellers, trading cards only, the trading-card words, and the "not trading cards" words.
+
+### The blacklist
+
+**Admin → Blacklist** (or **🚫 Blacklist** on a product's page on the Monitor
+tab) keeps products from ever pinging:
+
+- **A store and a SKU** (or a product link): that product.
+- **Only a store**: everything at that store.
+- **Only a SKU**: that SKU at every store.
+
+What's on it never alerts (dashboard or Discord), isn't tracked by the live
+sweeps, stays off the Monitor lists and its alert history, and any monitor on
+it is removed (and can't be added again until it's taken off). Members' own
+watchlists aren't affected. Take an entry off with **Remove**. The first
+entry came with the update: Kmart's *Wave Book Storage - Oak* (SKU 43746880),
+which kept pinging the restock channel.
 
 ## 4. Running it day to day: the live monitor
 
@@ -197,7 +237,9 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | **Waiting for an admin's browser** | No admin's browser is sweeping. Open Chrome with the extension connected to an admin account. The popup should show **Live sweeps from this browser** within 30 seconds. |
 | **refused the admin's browser** | Open that store's website in the admin's browser once (so it gets the store's cookies), then wait. It tries again on its own, waiting longer each time. |
 | **The page didn't have the product list Mugibot reads** | The store changed its search page. Send a copy of the page (right-click → Save as) so the reader can be updated. |
-| **No products on the page** for a store and keyword | The store has nothing for that keyword, or (Kmart, BIG W, EB Games, Zing) its page builds the list later with JavaScript. Check **Every search**: if it stays 0 for a keyword the store does sell, send a copy of the page. |
+| **No products on the page** for a store and keyword | The store has nothing for that keyword, or its page builds the list later with JavaScript (that's why Kmart and BIG W showed 0 before 1.6.0). Check **Every search**: if it stays 0 for a keyword the store does sell, send a copy of the page. |
+| A product keeps pinging that you don't want | Open it (the **Price history** button in the Discord post) and press **🚫 Blacklist**, or add it in **Admin → Blacklist** (by SKU or product link, or a whole store). |
+| "In stock" pings for something that never sold out | Fixed in 1.6.0: when a store refused the checks for a while and then answered again, that counted as a restock. Now it's compared with the last check that could read the page. |
 | A Target product shows **Out of stock** but it's on the site | It was missing from Target's results for 6 minutes. The next sweep that finds it puts it back (and alerts a restock). If it keeps happening, the keyword has more results than Mugibot reads: use a more specific keyword. |
 | A product you expect isn't tracked | Its name needs every word of the keyword and a trading-card word, no "not trading cards" word (unless it says TCG, trading card or card game), and it must be sold by the store itself. Adjust the word lists in the sweep settings. |
 | Clothes or toys in the list | MugiWatch's card words include "pack" and "sleeve", so "3 Pack Socks" looks like cards. Add the word (e.g. "onesie") to **Not trading cards**; products that no longer count leave the list when you save. |
