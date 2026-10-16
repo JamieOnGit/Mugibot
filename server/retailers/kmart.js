@@ -1,7 +1,7 @@
 // Kmart — the reference flow. Tested end to end on kmart.com.au.
 //
-// Product page: "Add to bag" (quantity box on the page)
-//   → "added to bag" popup → "Checkout"
+// Product page: "Add to bag" (pressed as soon as Kmart's page has wired it up)
+//   → as soon as it's in the bag: straight to /checkout
 //   → one-page checkout: Order summary → "Continue to details" → Details →
 //     "Continue to delivery" → Home delivery + address → "Continue to payment"
 //     → card (Adyen frame) → STOP at "Checkout securely".
@@ -40,10 +40,11 @@ export default {
   flow: {
     product: {
       add: [/\badd to (bag|cart)\b/i, /\bpre-?order\b/i],
-      quantity: 'page',
       waitMs: 12000,
-      // kmart.com.au shows "Add to bag" before its own code has started; pressing it
-      // that early does nothing. Wait this long after the page has loaded.
+      // kmart.com.au shows "Add to bag" before its own code has started; pressing it that
+      // early does nothing. ⚡ Buy presses it the moment Kmart's code has wired it up (it
+      // looks inside the page); only if it can't tell does it wait this long after the page
+      // has finished loading.
       settleMs: 1500,
     },
     added: {
@@ -56,6 +57,8 @@ export default {
     },
     checkout: {
       path: /\/checkout(\/|$)/i,
+      // Straight here once it's in the bag (no popup or bag page on the way).
+      url: '/checkout',
       steps: [/^continue to details$/i, /^continue to delivery$/i, /^continue to payment$/i],
       final: [/\bcheck ?out securely\b/i],
       delivery: 'home',

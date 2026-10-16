@@ -106,7 +106,7 @@ async function render() {
     a.title = `${p.storeName} · SKU ${p.sku}`;
     const meta = document.createElement('span');
     meta.className = `muted st-${p.status}`;
-    meta.textContent = `${STATUS[p.status] || p.status}${p.quantity > 1 ? ` · ×${p.quantity}` : ''}`;
+    meta.textContent = STATUS[p.status] || p.status;
     li.append(a, meta);
     list.appendChild(li);
   }

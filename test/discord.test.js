@@ -129,7 +129,6 @@ test('restock DMs carry a signed ⚡ Buy button that goes straight to the store;
   makeMember(env, erika);
   await connect(erika, 'd-erika');
   const it = (await erika.get('/api/items')).body.items[0];
-  await erika.put(`/api/items/${it.id}`, { quantity: 2 });
   const row = env.app.db.get('SELECT * FROM items WHERE id = :id', { id: it.id });
   const before = discord.dmsTo('d-erika').length;
   await env.app.monitor.applyResult(row, { status: 'in_stock', price: 360 }, 'server');
@@ -139,7 +138,9 @@ test('restock DMs carry a signed ⚡ Buy button that goes straight to the store;
   assert.match(msg.embeds[0].title, /In stock: Day UPC/);
   assert.match(msg.embeds[0].description, /Kmart · SKU 43818648 · \$360\.00/);
   const buttons = msg.components[0].components;
-  assert.equal(buttons[0].label, '⚡ Buy ×2');
+  assert.equal(buttons[0].label, '⚡ Buy');
+  assert.match(msg.embeds[0].description, /Press ⚡ Buy to go straight to checkout/);
+  assert.doesNotMatch(msg.embeds[0].description, /Quantity/);
   assert.equal(buttons[0].style, 5, 'a link button');
   assert.equal(buttons[1].url, it.url);
 
@@ -148,7 +149,7 @@ test('restock DMs carry a signed ⚡ Buy button that goes straight to the store;
   const go = await erika.get(link.pathname + link.search);
   assert.equal(go.status, 302);
   assert.match(go.headers.get('location'), /^https:\/\/www\.kmart\.com\.au\/product\/.*-43818648\/#mgb-go=[\w-]{20,}$/);
-  // Tampered quantity or signature: no code, just the buy page with a button.
+  // Tampered link or signature: no code, just the buy page with a button.
   const tampered = new URL(link);
   tampered.searchParams.set('qty', '9');
   const t = await erika.get(tampered.pathname + tampered.search);
@@ -201,8 +202,8 @@ test('slash commands: only signed requests; /watch, /watchlist, /buy, /unwatch, 
   const sab = await Client.signup(env.url, 'sabrina');
   makeMember(env, sab);
   await connect(sab, 'd-sabrina');
-  let r = await slash('d-sabrina', 'watch', [{ name: 'sku', value: '6012345' }, { name: 'store', value: 'bigw' }, { name: 'quantity', value: 2 }, { name: 'max_price', value: 380 }]);
-  assert.match(r.body.data.content, /Watching \*\*6012345\*\* — BIG W · SKU 6012345 · quantity 2/);
+  let r = await slash('d-sabrina', 'watch', [{ name: 'sku', value: '6012345' }, { name: 'store', value: 'bigw' }, { name: 'max_price', value: 380 }]);
+  assert.match(r.body.data.content, /Watching \*\*6012345\*\* — BIG W · SKU 6012345\. I'll DM you/);
   assert.match(r.body.data.content, /Not listed yet/);
   const item = (await sab.get('/api/items')).body.items.find((x) => x.sku === '6012345');
   assert.equal(item.store, 'bigw');
@@ -215,11 +216,11 @@ test('slash commands: only signed requests; /watch, /watchlist, /buy, /unwatch, 
   r = await slash('d-sabrina', 'watchlist');
   const desc = r.body.data.embeds[0].description;
   assert.match(desc, /Day UPC.*Kmart.*43818648/);
-  assert.match(desc, /\[⚡ Buy ×1\]\(http:\/\/127\.0\.0\.1:\d+\/buy\/itm_[\w-]+\?qty=1&t=/);
+  assert.match(desc, /\[⚡ Buy\]\(http:\/\/127\.0\.0\.1:\d+\/buy\/itm_[\w-]+\?qty=1&t=/);
 
-  r = await slash('d-sabrina', 'buy', [{ name: 'sku', value: '43818648' }, { name: 'quantity', value: 3 }]);
-  assert.equal(r.body.data.components[0].components[0].label, '⚡ Buy ×3');
-  assert.equal((await sab.get('/api/items')).body.items.find((x) => x.sku === '43818648').quantity, 3, 'quantity saved');
+  r = await slash('d-sabrina', 'buy', [{ name: 'sku', value: '43818648' }]);
+  assert.equal(r.body.data.components[0].components[0].label, '⚡ Buy');
+  assert.match(r.body.data.embeds[0].description, /straight to checkout with it in your bag/);
 
   r = await slash('d-sabrina', 'unwatch', [{ name: 'sku', value: '312345' }]);
   assert.match(r.body.data.content, /Stopped watching/);

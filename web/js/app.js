@@ -279,14 +279,10 @@ function statusOf(it) {
 
 function itemRow(it, i) {
   const st = statusOf(it);
-  const qty = h('input', { class: 'qty', type: 'number', min: '1', max: '10', value: String(it.quantity || 1), 'aria-label': `Quantity for ${it.name}` });
-  qty.addEventListener('change', async () => {
-    const q = Math.max(1, Math.min(10, parseInt(qty.value, 10) || 1));
-    qty.value = q;
-    await api('PUT', `/api/items/${it.id}`, { quantity: q }).catch(showError);
-  });
   const buy = h('button', { class: 'btn primary small', type: 'button', disabled: !it.url, title: it.url ? '' : 'The product page hasn\'t been found yet' }, '⚡ Buy');
-  buy.addEventListener('click', () => goBuy(it, qty));
+  // The one-time ⚡ Buy code is asked for as the button goes down, so the store opens the moment it's clicked.
+  buy.addEventListener('pointerdown', () => primeBuy(it));
+  buy.addEventListener('click', () => goBuy(it));
   const move = async (dir) => {
     const ids = state.items.map((x) => x.id);
     const j = i + dir;
@@ -308,7 +304,7 @@ function itemRow(it, i) {
       !it.url ? h('div', { class: 'meta' }, 'Waiting for the product page to be listed — it\'s found automatically from the SKU.') : null),
     h('span', { class: `pill ${st}` }, STATUS[st] || st),
     h('div', { class: 'acts' },
-      h('label', { class: 'small muted' }, 'Qty'), qty, buy,
+      buy,
       it.url ? h('a', { class: 'btn small', href: it.url, target: '_blank', rel: 'noopener' }, 'Open ↗') : null,
       h('button', { class: 'btn small', type: 'button', title: 'Check now', 'aria-label': `Check ${it.name} now`, onclick: () => checkNow(it) }, '↻'),
       h('button', { class: 'btn small', type: 'button', title: 'Move up', 'aria-label': 'Move up', onclick: () => move(-1) }, '↑'),
@@ -345,19 +341,42 @@ async function checkNow(it) {
   } catch (e) { showError(e); }
 }
 
-async function goBuy(it, qtyInput) {
-  const quantity = Math.max(1, Math.min(10, parseInt(qtyInput.value, 10) || 1));
-  // Open the tab straight away (browsers block pop-ups opened after a delay).
+// ⚡ Buy codes asked for ahead of the click (each works once, for a while).
+const primed = new Map();
+
+function primeBuy(it) {
+  const hit = primed.get(it.id);
+  if (hit && Date.now() - hit.at < 60 * 1000) return hit;
+  const entry = { at: Date.now(), result: null };
+  entry.promise = api('POST', `/api/items/${it.id}/go`, {});
+  entry.promise.then((r) => { entry.result = r; }, () => { if (primed.get(it.id) === entry) primed.delete(it.id); });
+  primed.set(it.id, entry);
+  return entry;
+}
+
+async function goBuy(it) {
+  const entry = primeBuy(it);
+  primed.delete(it.id); // this code is used now
+  const warn = () => {
+    if (!state.ext || !state.ext.paired) toast('Opened the product', "The extension isn't connected in this browser, so it won't take you to checkout automatically.", 'warn');
+  };
+  // The code is here already: open the store straight away.
+  if (entry.result) {
+    if (!window.open(entry.result.url, '_blank', 'noopener')) location.href = entry.result.url;
+    warn();
+    return;
+  }
+  // Open the tab straight away (browsers block pop-ups opened after a delay), then send it on.
   const win = window.open('about:blank', '_blank');
   try {
-    const r = await api('POST', `/api/items/${it.id}/go`, { quantity });
+    const r = await entry.promise;
     if (win) {
       win.opener = null;
       win.location.href = r.url;
     } else {
       location.href = r.url;
     }
-    if (!state.ext || !state.ext.paired) toast('Opened the product', "The extension isn't connected in this browser, so it won't add to bag automatically.", 'warn');
+    warn();
   } catch (e) {
     if (win) win.close();
     if (e.status === 402) {
@@ -400,7 +419,6 @@ async function editItem(it) {
   $('#w-store').value = it && !it.url ? it.store : '';
   $('#w-sku').value = it ? it.sku : '';
   $('#w-name').value = it ? it.name : '';
-  $('#w-qty').value = it ? it.quantity : 1;
   $('#w-price').value = it && typeof it.price === 'number' ? it.price : '';
   $('#w-max').value = it && typeof it.maxPrice === 'number' ? it.maxPrice : '';
   $('#w-announce').checked = !!(it && it.announce);
@@ -416,7 +434,7 @@ $('#w-form').addEventListener('submit', (e) => {
   busy(e.target, async () => {
     const body = {
       url: $('#w-url').value, store: $('#w-store').value, sku: $('#w-sku').value, name: $('#w-name').value,
-      quantity: $('#w-qty').value, price: $('#w-price').value, maxPrice: $('#w-max').value, profileId: $('#w-profile').value,
+      price: $('#w-price').value, maxPrice: $('#w-max').value, profileId: $('#w-profile').value,
     };
     if (state.me.user.role === 'admin') body.announce = $('#w-announce').checked;
     try {

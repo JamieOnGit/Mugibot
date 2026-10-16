@@ -96,7 +96,7 @@ test('one request per page however many watch it; honest User-Agent; alerts only
   assert.equal(env.webhooks.length - hooksBefore, 1, 'only Ash has a webhook');
   const hook = env.webhooks.at(-1).body;
   assert.match(hook.embeds[0].title, /In stock: OP-18 Box/);
-  assert.match(hook.embeds[0].description, /⚡ Buy ×1:\*\* http/, 'the ⚡ Buy link is in the webhook message');
+  assert.match(hook.embeds[0].description, /⚡ Buy:\*\* http/, 'the ⚡ Buy link is in the webhook message');
 
   // Stays in stock: no repeat. Sells out and pre-orders open: alerts again.
   await advance();

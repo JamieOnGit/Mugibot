@@ -11,6 +11,7 @@
 //   constructor      Constructor.io search results (Kmart's search provider): JSON, with
 //                    sellers and the states each product is out of stock in.
 //   amazon           Amazon's search page: a tile per result, with its ASIN.
+//   ebgames          EB Games' and Zing's search JSON (what their search page fetches).
 //   generic          Any other store: product data in the page's scripts (Next.js
 //                    data, JSON-LD, embedded state), plus product tiles in the HTML.
 //
@@ -198,6 +199,34 @@ export function parseConstructor(text, { base, storeBase } = {}) {
     });
   }
   return { products, total: typeof r.total_num_results === 'number' ? r.total_num_results : null, perPage: r.results.length, problem: null };
+}
+
+// ---------------------------------------------------------------------------
+// EB Games and Zing (one platform): the search page's own JSON (/search/query)
+// ---------------------------------------------------------------------------
+// The search page has no products in it: its script asks /search/query for them. Each result:
+// sku, title, productUrl, imageUrl, price, promotionPrice, isOutOfStock, isUnavailable,
+// isComingSoon, isPreowned, releaseDate.
+export function parseEbGames(text, { base, storeBase, now = Date.now() } = {}) {
+  const j = typeof text === 'string' ? shopifyJson(text) : text;
+  if (j === undefined) return { products: [], problem: pageProblem(text) || 'layout' };
+  if (!j || !Array.isArray(j.results)) return { products: [], problem: 'layout' };
+  const products = [];
+  for (const r of j.results) {
+    if (!r || !r.sku || !r.title) continue;
+    const full = money(r.price);
+    const promo = money(r.promotionPrice);
+    const price = promo && (!full || promo < full) ? promo : full;
+    const released = Date.parse(r.releaseDate || '');
+    products.push({
+      sku: String(r.sku), aliases: [], title: clean(`${r.title}${r.isPreowned ? ' (pre-owned)' : ''}`), price,
+      wasPrice: promo && full && promo < full ? full : null,
+      inStock: r.isOutOfStock === true || r.isUnavailable === true || r.isComingSoon === true ? false : true,
+      preorder: !r.isComingSoon && Number.isFinite(released) && released > now,
+      url: storeLink(storeBase || base, r.productUrl), image: httpsUrl(r.imageUrl, storeBase || base), marketplace: false,
+    });
+  }
+  return { products, total: typeof j.totalResults === 'number' ? j.totalResults : null, perPage: j.results.length, problem: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -476,7 +505,7 @@ export function parseGeneric(html, { base, productPath = null, skuFromPath = nul
   return { products: [...map.values()].slice(0, 300), problem: map.size ? null : 'empty' };
 }
 
-export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, generic: parseGeneric };
+export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, generic: parseGeneric };
 
 export function parseListing(parser, text, opts) {
   return (PARSERS[parser] || parseGeneric)(text, opts);

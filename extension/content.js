@@ -1,8 +1,9 @@
-// Mugibot — runs on store pages. Shows the small panel, runs Add to bag →
-// Checkout when you press a Mugibot button (the panel, or ⚡ Buy in your
-// dashboard or a Discord ping), carries it across page changes, then fills
-// in checkout up to the final button — which you press yourself. Every step
-// follows this store's own flow from your Mugibot server.
+// Mugibot — runs on store pages. Shows the small panel, takes you straight to
+// checkout with the product in your bag when you press a Mugibot button (the
+// panel, or ⚡ Buy in your dashboard or a Discord ping), carries it across
+// page changes, then fills in checkout up to the final button — which you
+// press yourself. Every step follows this store's own flow from your Mugibot
+// server.
 
 (async () => {
   'use strict';
@@ -26,15 +27,6 @@
     if (storeCopy) return;
   }
 
-  const state = await ask({ type: 'state' });
-  if (state && state.sweepTab) return; // the extension's own window for live sweeps
-  const items = (state && state.items) || [];
-  const retailers = MGBFlows.revive((state && state.flows) || []);
-  const retailer = MGBFlows.forLocation(retailers, location);
-  if (!retailer) return; // not a store Mugibot has a flow for (or a page outside it)
-  const checkoutFlow = MGBFlows.part(retailer, 'checkout');
-  MGBFill.startFocusBroker(); // payment frames ask the page to focus their card boxes
-
   // The ⚡ Buy code: grabbed by capture.js as the page started loading (or still in the address).
   let goCode = null;
   try {
@@ -46,6 +38,17 @@
     const m = location.hash.match(/mgb-go=([A-Za-z0-9_-]{8,64})/);
     if (m) goCode = m[1];
   }
+
+  // Your watchlist and the stores' flows, and the ⚡ Buy code confirmed — both at once.
+  const claiming = goCode ? ask({ type: 'claim', code: goCode }) : null;
+  const state = await ask({ type: 'state' });
+  if (state && state.sweepTab) return; // the extension's own window for live sweeps
+  const items = (state && state.items) || [];
+  const retailers = MGBFlows.revive((state && state.flows) || []);
+  const retailer = MGBFlows.forLocation(retailers, location);
+  if (!retailer) return; // not a store Mugibot has a flow for (or a page outside it)
+  const checkoutFlow = MGBFlows.part(retailer, 'checkout');
+  MGBFill.startFocusBroker(); // payment frames ask the page to focus their card boxes
 
   const store = MGBQuick.sessionStore('mgbFlow');
   const assistFlag = {
@@ -114,6 +117,26 @@
     report('error', `Card not filled in at ${retailer.name}: ${msg}${detail ? ` [${detail}; page focused: ${document.hasFocus() ? 'yes' : 'no'}; extension ${chrome.runtime.getManifest().version}]` : ''}`, null);
   }
 
+  // Has the store's own code wired up its Add button yet? (Asked of the page itself, by the extension.)
+  const probe = (add) => {
+    for (const el of document.querySelectorAll('[data-mgb-add]')) if (el !== add) el.removeAttribute('data-mgb-add');
+    add.setAttribute('data-mgb-add', '');
+    return ask({ type: 'probe' });
+  };
+
+  // At checkout: fill it in. A checkout that opens on this page (no new page): as soon as it
+  // shows. A Checkout button that opens a new page: there (this page is on its way out).
+  let leaving = false;
+  function atCheckout() {
+    addEventListener('beforeunload', () => { leaving = true; }, { once: true });
+    const until = Date.now() + 2500;
+    (function look() {
+      if (leaving) return;
+      if (MGBQuick.onCheckoutPage(retailer) || Date.now() > until) fillCheckout();
+      else setTimeout(look, 100);
+    })();
+  }
+
   async function go(fresh, extra = {}) {
     if (busy) return;
     busy = true;
@@ -121,9 +144,8 @@
     try {
       const flow = store.read();
       const product = extra.product || MGBQuick.productForPage(items, retailer) || (flow ? items.find((p) => p.sku === flow.sku) : null) || null;
-      const result = await MGBQuick.run({ fresh, retailer, product, products: items, store, setStatus: panel.setStatus, report, ...extra });
-      // Same-page checkouts (no reload): carry straight on with the form.
-      if (result === 'checkout') setTimeout(fillCheckout, 800);
+      const result = await MGBQuick.run({ fresh, retailer, product, products: items, store, setStatus: panel.setStatus, report, probe, ...extra });
+      if (result === 'checkout') atCheckout();
     } catch {
       store.clear();
       panel.setStatus('Interrupted — please continue yourself.');
@@ -153,15 +175,15 @@
   });
 
   if (goCode) {
-    const claim = await ask({ type: 'claim', code: goCode });
+    const claim = await claiming;
     if (claim && claim.ok) {
       const listed = items.find((p) => p.id === claim.itemId) || items.find((p) => p.sku === claim.sku);
-      const product = { ...(listed || {}), sku: claim.sku, name: claim.name || (listed && listed.name) || claim.sku, quantity: claim.quantity };
+      const product = { ...(listed || {}), sku: claim.sku, name: claim.name || (listed && listed.name) || claim.sku };
       assistFlag.on(claim.profileId);
-      panel.setNote(`Started from ⚡ Buy · Qty ${claim.quantity}`);
+      panel.setNote('Started from ⚡ Buy');
       // The buy box can take a few seconds to appear on a fresh page load.
       const waitMs = (MGBFlows.part(retailer, 'product').waitMs) || 12000;
-      go(true, { product, quantity: claim.quantity, waitForButtonMs: waitMs });
+      go(true, { product, waitForButtonMs: waitMs });
       return;
     }
     panel.setNote(!state || !state.paired ? 'This browser isn\'t connected to your account — click the Mugibot icon to connect, then press ⚡ Buy again.'

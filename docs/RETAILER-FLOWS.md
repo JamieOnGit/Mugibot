@@ -1,8 +1,27 @@
 # Retailer flows
 
 Every store has its own checkout flow in `server/retailers/<store>.js`. A flow
-says which buttons to press, in what order, where the quantity goes, and which
-button is the **final one**. The final button is never pressed.
+says which buttons to press, in what order, where the store's checkout page is,
+and which button is the **final one**. The final button is never pressed.
+
+⚡ Buy buys **one** of each product (quantities are off for now) and gets to
+checkout as fast as the store allows:
+
+- **Shopify stores** (JB Hi-Fi, Trainer Town, Toys"R"Us): the store's own cart
+  link, `/cart/<variant>:1`, which opens checkout with the product in the cart.
+  When the monitor has seen the product, the dashboard's ⚡ Buy opens that link
+  straight away — no product page at all. Otherwise the product page opens, the
+  extension looks up the product's option (`/products/<handle>.js`) and opens
+  the cart link from there.
+- **Other stores**: Add to bag is pressed **the moment the store's page can take
+  it**. Pages built with React or Vue (Kmart's) show the button before their code
+  has wired it up, and a press then does nothing; the extension looks inside the
+  page and presses as soon as the button is wired up, usually long before the
+  page has finished loading. Pages it can't see into wait for the page to load
+  plus `settleMs`. As soon as the store shows it went in, it goes **straight to
+  the checkout page** (`checkout.url`, e.g. Kmart's `/checkout`), or presses the
+  "added" popup's own Checkout button. Only stores with neither go through the
+  bag page.
 
 | Store | File | Status | Notes |
 |---|---|---|---|
@@ -34,7 +53,6 @@ in-stock item, **stopping before the final button**. At each step write down
 
 1. **Product page**
    - The product link (e.g. `https://www.bigw.com.au/product/…/p/123456`).
-   - The quantity control: a box, a dropdown, or − / + buttons? Is there a maximum?
    - The exact label of the add button ("Add to cart", "Add to trolley", "Pre-order").
 2. **After adding**
    - Does a popup, drawer or "added" message appear? What buttons does it have
@@ -42,6 +60,8 @@ in-stock item, **stopping before the final button**. At each step write down
    - Or does it go straight to the cart page?
 3. **Cart page** (if there is one)
    - Its address (e.g. `/cart`), and the checkout button's label ("Proceed to checkout").
+   - The checkout page's address you land on (e.g. `/checkout`): ⚡ Buy can go
+     straight there once the item is in the bag.
 4. **Checkout, step by step.** For each screen:
    - Its address (e.g. `/checkout`, `/checkout/delivery`).
    - Sign in or guest? The guest button's label ("Continue as guest").
@@ -87,15 +107,15 @@ export default {
   productPath: /^(\/bigw)?\/product\/[^/]+\/p\/\d+/,  // what a product link looks like (for search results)
   searchPath: '/search?text={q}',   // where a SKU is looked for before it has a link
   // productPathFromSku: '/products/{sku}',   // stores whose link is built from the SKU (Shopify, Amazon)
+  // cartPath: '/cart/{variant}:{qty}',       // Shopify: the store's cart link (⚡ Buy goes straight to checkout with it)
   monitor: { server: true, browser: true },   // default for server / in-browser checks (admins can switch)
   flow: {
     product: {
       add: [/\badd to (cart|trolley)\b/i, /\bpre-?order\b/i],  // the add button's label(s)
       addSelector: null,            // optional CSS selector for the add button
-      quantity: 'page',             // 'page' (set it on the product page, else in the cart) | 'bag' | 'none'
-      quantitySelector: null,       // optional CSS selector for the quantity control
       waitMs: 12000,                // how long to wait for the add button on a fresh page
-      settleMs: 800,                // after the page has loaded, wait this long before pressing Add
+      readyMs: 8000,                // a React / Vue page: how long to wait for its code to wire up Add
+      settleMs: 400,                // pages Mugibot can't see into: after the page has loaded, wait this long before pressing Add
     },
     added: {                        // the popup / drawer after adding
       checkout: [/^(secure )?check ?out( now)?$/i],
@@ -108,6 +128,7 @@ export default {
     },
     checkout: {
       path: /\/checkout(\/|$)/i,
+      url: '/checkout',                             // optional: go straight here once it's in the bag
       guest: [/^continue as (a )?guest$/i],         // pressed to check out as a guest
       choose: [/^home delivery$/i],                 // buttons to press once each (not radios)
       steps: [/^continue to payment$/i, /^continue$/i],   // "next step" buttons
@@ -131,9 +152,10 @@ stores. Some rules always apply, whatever a flow says:
 - Express payments (PayPal, Afterpay, Zip, Apple Pay…), click & collect,
   sign-in, newsletters and marketing boxes are never chosen.
 - Fields that already have a value (e.g. from a store account) are left alone.
-- The bag is only opened once the store shows the item went in: the "added"
-  popup, an "Added to bag" message, or the number on the store's bag icon going
-  up. If the page didn't react to the Add press at all (it wasn't ready yet), Add
+- Checkout (or the bag) is only opened once the store shows the item went in:
+  the "added" popup, an "Added to bag" message, the number on the store's bag
+  icon going up, or — where no number shows — the store's cart answering the
+  add. If the page didn't react to the Add press at all (it wasn't ready yet), Add
   is pressed once more; if it still doesn't go in, Mugibot stops and says so
   instead of opening an empty bag.
 

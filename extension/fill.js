@@ -419,8 +419,8 @@ var MGBFill = (function () {
   async function waitForChange(before, ms) {
     var end = Date.now() + ms;
     while (Date.now() < end) {
-      await wait(200);
-      if (signature() !== before) { await wait(300); return true; }
+      await wait(100);
+      if (signature() !== before) { await wait(150); return true; }
     }
     return false;
   }
@@ -444,13 +444,16 @@ var MGBFill = (function () {
     var box = toArray(document.querySelectorAll('input')).find(function (el) { return isVisible(el) && !el.value && classifyField(el, C) === 'addressLookup'; });
     if (!box || !values.address1) return false;
     typeInto(box, values.address1 + ', ' + values.suburb + ' ' + values.state + ' ' + values.postcode, 'addressLookup');
-    await wait(1500);
-    var options = toArray(document.querySelectorAll('[role="option"], [role="listbox"] li, .pac-item, [class*="suggestion" i] li, [class*="suggestion" i] [class*="item" i]')).filter(isVisible);
+    var options = [];
+    for (var end = Date.now() + 2500; !options.length && Date.now() < end;) {
+      await wait(150);
+      options = toArray(document.querySelectorAll('[role="option"], [role="listbox"] li, .pac-item, [class*="suggestion" i] li, [class*="suggestion" i] [class*="item" i]')).filter(isVisible);
+    }
     var want = String(values.postcode || '');
     var pick = options.find(function (o) { return want && o.innerText.indexOf(want) !== -1; }) || options[0];
     if (!pick) return false;
     pick.click();
-    await wait(800);
+    await wait(500);
     return true;
   }
 
@@ -484,7 +487,7 @@ var MGBFill = (function () {
       var fresh = steps.filter(function (b) { return !clicked[norm(b.text)]; });
 
       if (!fill.kinds.address1 && fill.kinds.addressLookup) {
-        if (manual && !manualTried) { manualTried = true; manual.el.click(); await wait(500); continue; }
+        if (manual && !manualTried) { manualTried = true; manual.el.click(); await wait(300); continue; }
         if (!manual && !lookupTried) { lookupTried = true; setStatus('Looking up your address…'); await useAddressLookup(opts.values, C); continue; }
       }
 
@@ -513,7 +516,7 @@ var MGBFill = (function () {
       }
 
       if (finals.length) {
-        await wait(400); // let the last fields settle
+        await wait(200); // let the last fields settle
         fillFields(document, opts.values, { flow: C });
         var fin = finals.find(function (b) { return !b.disabled; }) || finals[0];
         var card = opts.hasCard ? (fill.missingCard ? ' Type in anything still empty on the card (like the CVV).' : '') : (CARD_ISSUE[opts.cardIssue] || '');
@@ -526,7 +529,7 @@ var MGBFill = (function () {
 
       // A step button we already pressed is still there: maybe a field needs attention.
       var again = steps.find(function (b) { return clicked[norm(b.text)] && clicked[norm(b.text)] < 3; });
-      if (again && idle > 3) {
+      if (again && idle > 6) {
         clicked[norm(again.text)] += 1;
         again.el.click();
         await wait(1500);
@@ -534,13 +537,13 @@ var MGBFill = (function () {
         continue;
       }
       idle += 1;
-      if (idle > 40) {
+      if (idle > 64) {
         var stuck = steps[0] ? 'Stuck at "' + steps[0].text + '" — something on the page needs your input.' : "Couldn't find the next step — please continue yourself.";
         setStatus(stuck);
         report('error', stuck);
         return 'needs_you';
       }
-      await wait(400);
+      await wait(250);
     }
     setStatus('Took too long — please continue yourself.');
     return 'timeout';

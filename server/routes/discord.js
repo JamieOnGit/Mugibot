@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import { entitlement } from '../entitlement.js';
 import { CATEGORIES } from '../catalog.js';
 import { STATUS_LABEL } from '../monitor/status.js';
-import { HttpError, bad, item as checkItem, num, str } from '../schema.js';
+import { HttpError, bad, item as checkItem, str } from '../schema.js';
 
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const EPHEMERAL = 64;
@@ -40,13 +40,12 @@ export function commandDefinitions(retailers, { minInterval = 20 } = {}) {
       options: [
         { type: 3, name: 'sku', description: 'The SKU / keycode, or paste the product link', required: true },
         storeOpt(false),
-        { type: 4, name: 'quantity', description: 'How many ⚡ Buy adds to your bag (1–10)', min_value: 1, max_value: 10 },
         { type: 10, name: 'max_price', description: 'Only ping me at or below this price ($)', min_value: 0 },
       ],
     },
     { name: 'unwatch', description: 'Stop watching a SKU', dm_permission: true, options: [{ type: 3, name: 'sku', description: 'The SKU / keycode', required: true }, storeOpt(false)] },
     { name: 'watchlist', description: 'Your SKUs and their stock right now', dm_permission: true },
-    { name: 'buy', description: 'A ⚡ Buy button for one of your SKUs', dm_permission: true, options: [{ type: 3, name: 'sku', description: 'The SKU / keycode', required: true }, { type: 4, name: 'quantity', description: 'How many (1–10)', min_value: 1, max_value: 10 }] },
+    { name: 'buy', description: 'A ⚡ Buy button for one of your SKUs', dm_permission: true, options: [{ type: 3, name: 'sku', description: 'The SKU / keycode', required: true }] },
     { name: 'status', description: 'Your Mugibot membership, browser extension and Discord connection', dm_permission: true },
     {
       name: 'restock', description: '(Admins) Ping everyone watching a SKU that it is in stock', dm_permission: false, default_member_permissions: '32',
@@ -167,11 +166,10 @@ export function register(router, ctx) {
       const raw = str(opts.sku, 2000);
       const input = /^https?:\/\//i.test(raw) ? { url: raw } : { store: str(opts.store, 40), sku: raw };
       if (!input.url && !input.store) return reply('Which store? Add the `store` option, or paste the product link instead of the SKU.');
-      if (opts.quantity) input.quantity = opts.quantity;
       if (opts.max_price !== undefined) input.maxPrice = opts.max_price;
       const it = repo.addItem(user.id, checkItem(input, { retailers }));
       const note = ent.active ? '' : `\n⚠️ Monitoring starts once your membership is active: ${cfg.baseUrl}/app#membership`;
-      return reply(`👀 Watching **${it.name}** — ${retailers.name(it.store)} · SKU ${it.sku} · quantity ${it.quantity}. I'll DM you when it's in stock.${it.url ? '' : ' (Not listed yet — I\'ll find the product page when it goes up.)'}${note}`);
+      return reply(`👀 Watching **${it.name}** — ${retailers.name(it.store)} · SKU ${it.sku}. I'll DM you when it's in stock.${it.url ? '' : ' (Not listed yet — I\'ll find the product page when it goes up.)'}${note}`);
     }
 
     if (name === 'unwatch') {
@@ -187,7 +185,7 @@ export function register(router, ctx) {
       const items = repo.listItems(user.id);
       if (!items.length) return reply(`Your watchlist is empty. Add a SKU with \`/watch\` or at ${cfg.baseUrl}/app`);
       const lines = items.slice(0, 20).map((x) => {
-        const buy = x.url && ent.active ? ` · [⚡ Buy ×${x.quantity}](${ctx.notifier.buyLink(user.id, x)})` : '';
+        const buy = x.url && ent.active ? ` · [⚡ Buy](${ctx.notifier.buyLink(user.id, x)})` : '';
         return `${x.monitor ? '•' : '⏸'} **${x.name}** — ${retailers.name(x.store)} · \`${x.sku}\` · ${label(x.status)}${buy}`;
       });
       if (items.length > 20) lines.push(`…and ${items.length - 20} more at ${cfg.baseUrl}/app`);
@@ -200,11 +198,9 @@ export function register(router, ctx) {
       const it = repo.listItems(user.id).find((x) => x.sku.toLowerCase() === sku.toLowerCase());
       if (!it) return reply(`SKU ${sku} isn't on your watchlist — add it with \`/watch\` first.`);
       if (!it.url) return reply(`The product page for SKU ${sku} hasn't been found yet.`);
-      const qty = num(opts.quantity, { min: 1, max: 10, int: true, def: it.quantity });
-      if (qty !== it.quantity) repo.db.run('UPDATE items SET quantity = :q WHERE id = :id AND user_id = :u', { q: qty, id: it.id, u: user.id });
       return reply('', card({
-        level: 'urgent', title: `⚡ ${it.name}`, message: `${retailers.name(it.store)} · SKU ${it.sku} · ${label(it.status)}\nOpens in the browser where the ${cfg.appName} extension is connected, adds ${qty} to your bag and fills in checkout. You press the final button.`,
-        url: it.url, buttons: [{ label: `⚡ Buy ×${qty}`, url: ctx.notifier.buyLink(user.id, it, qty) }, { label: 'Open product', url: it.url }],
+        level: 'urgent', title: `⚡ ${it.name}`, message: `${retailers.name(it.store)} · SKU ${it.sku} · ${label(it.status)}\nOpens in the browser where the ${cfg.appName} extension is connected, straight to checkout with it in your bag, filled in. You press the final button.`,
+        url: it.url, buttons: [{ label: '⚡ Buy', url: ctx.notifier.buyLink(user.id, it) }, { label: 'Open product', url: it.url }],
       }));
     }
 

@@ -32,13 +32,29 @@ same products, the same alerts, the same ⚡ Buy.
 | Trainer Town | Mugibot's server | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi) |
 | Kmart | Mugibot's server | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online |
 | Amazon AU | Mugibot's server | Amazon's search, newest first (2 pages of 48), with "tcg" added to each keyword. At most one search every 20 seconds |
-| BIG W | **An admin's browser** (the extension) | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list |
-| EB Games, Zing | **An admin's browser** (the extension) | Their search pages: product tiles, and product data in the page's scripts |
+| BIG W | **An admin's browser** (the extension) | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list — or, if the page has downloaded its products but not drawn them (pages in a minimised window may not), the product data it downloaded |
+| EB Games | **An admin's browser** (the extension) | EB Games' own search data (the JSON its search page asks for: every product's code, price, picture, stock, pre-order and release date), newest first, 2 pages — asked for from inside an EB Games page in the extension's window |
+| Zing | Off | zingpopculture.com.au now sends every visitor to EB Games, so EB Games' sweeps cover it. An admin can switch it back on if Zing's own site returns |
 
-BIG W, EB Games and Zing refuse requests from servers (403 / bot check), so
-the extension in an **admin's** browser searches them instead, every 15
+BIG W and EB Games refuse requests from servers (403 / Cloudflare's bot check),
+so the extension in an **admin's** browser searches them instead, every 15
 seconds per store (BIG W every 20). Members' browsers never do this: only
 Mugibot's server and admins can change what everyone sees.
+
+**Why BIG W and EB Games showed nothing:** EB Games' search page has no
+products in it either (its page asks for them once it's open, and Cloudflare
+turns servers away); BIG W's page in a minimised window downloaded its products
+but sometimes never drew them. From extension **1.7.0**:
+- **EB Games**: the extension keeps an EB Games page open in its own window and
+  asks for EB Games' search data from inside that page, the way the page itself
+  does, so it passes Cloudflare like any visitor. If Cloudflare checks the page,
+  it opens the page again (a real visit passes the check) and asks once more. It
+  never tries to get past a check it doesn't pass.
+- **BIG W**: if the products aren't on the page within a couple of seconds of it
+  downloading them, the extension reads the product data the page downloaded
+  instead (asked for again from inside the page).
+- Both need an **admin's browser with extension 1.7.0** connected and open:
+  until then the Live sweeps console says **Waiting for an admin's browser**.
 
 **Why Kmart and BIG W showed 0 products:** neither has its products in the
 search page itself. The page fetches them with JavaScript once it's open, and
@@ -78,7 +94,7 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
    │ read every product: code, name, price, stock, link, picture          │──┐
    │ wait ~5 s (±20%), or back off after a failure (×2 each time, ≤15 min) │  │
    └──────────────────────────────────────────────────────────────────────┘  │
- admins' browsers (extension) do the same for Kmart, BIG W, EB Games, Zing ──┤
+ admins' browsers (extension) do the same for BIG W and EB Games ────────────┤
                                                                               ▼
           members' SKUs (any product):   watchlist status → their own DM / webhook / email
           products that count:           catalogue (products) → price history
@@ -137,7 +153,7 @@ With the defaults (2 keywords, a search every 5 seconds per store):
 - Trainer Town: each keyword's whole collection every ~10 s.
 - Kmart: each keyword every ~10 s.
 - Amazon AU: each keyword every ~60 s (page 1), page 2 now and then.
-- BIG W (admin's browser): each keyword every ~40 s; EB Games, Zing: every ~30 s.
+- BIG W (admin's browser): each keyword every ~40 s; EB Games: every ~30 s.
 
 More keywords means each one comes round a little less often. Each store has
 its own loop, so a slow store never holds up the others.
@@ -147,8 +163,8 @@ its own loop, so a slow store never holds up the others.
 1. Deploy as usual: merging into `main` deploys it, and the database upgrades
    itself. Sweeps start on their own, with the keywords `pokemon` and
    `one piece`.
-2. **Admins' browsers** (for BIG W, EB Games, Zing): install the
-   extension (version 1.6.0 or later: BIG W needs it), connect it to an **admin** account, and
+2. **Admins' browsers** (for BIG W and EB Games): install the
+   extension (version 1.7.0 or later: EB Games and BIG W need it), connect it to an **admin** account, and
    keep Chrome open. If a store refuses that browser too, open the store's
    website in it once, then wait for the next search. The extension's popup
    shows **Live sweeps from this browser** with each store's last result.
@@ -234,7 +250,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | You see | Do this |
 |---|---|
 | A store's status says **refused** (server) | The store is refusing Mugibot's server. Set it to **Admin's browser** in Live sweeps → Settings, and keep an admin's browser with the extension open. Don't make the searches more frequent: that makes it worse. |
-| **Waiting for an admin's browser** | No admin's browser is sweeping. Open Chrome with the extension connected to an admin account. The popup should show **Live sweeps from this browser** within 30 seconds. |
+| **Waiting for an admin's browser** (BIG W, EB Games: nothing coming through) | No admin's browser is sweeping. Open Chrome with the extension (1.7.0 or later — Extension tab → Download, or the Chrome Web Store copy) connected to an **admin** account, and leave it open. The popup should show **Live sweeps from this browser** within 30 seconds, and a small minimised window appears with a BIG W and an EB Games tab: leave it be. |
 | **refused the admin's browser** | Open that store's website in the admin's browser once (so it gets the store's cookies), then wait. It tries again on its own, waiting longer each time. |
 | **The page didn't have the product list Mugibot reads** | The store changed its search page. Send a copy of the page (right-click → Save as) so the reader can be updated. |
 | **No products on the page** for a store and keyword | The store has nothing for that keyword, or its page builds the list later with JavaScript (that's why Kmart and BIG W showed 0 before 1.6.0). Check **Every search**: if it stays 0 for a keyword the store does sell, send a copy of the page. |

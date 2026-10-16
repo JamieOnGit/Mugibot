@@ -1,7 +1,7 @@
 // EB Games — BETA. Tested against the EB Games-style dummy store, not yet on
 // ebgames.com.au.
 //
-// Product page: quantity box + "Add to Cart" / "Pre-order Now"
+// Product page: "Add to Cart" / "Pre-order Now"
 //   → mini-cart drawer → "Checkout"
 //   → sign in or "Continue as Guest" → shipping details (address lookup or
 //     "Enter address manually") → "Continue to delivery" → delivery option
@@ -20,13 +20,18 @@ export default {
   skuFromPath: /\/product\/[^/]+\/(\d+)/,
   productPath: /^(\/ebgames)?\/product\/[^/]+\/\d+/,
   searchPath: '/search?q={q}',
-  // Live sweeps: EB Games refuses servers, so an admin's browser (the extension) reads its search page.
-  sweep: { from: 'browser', parser: 'generic', path: '/search?q={q}' },
+  // Live sweeps, from an admin's browser: EB Games refuses servers (Cloudflare), and its search page
+  // has no products in it anyway: the page's own script asks /search/query for them, as JSON. So the
+  // extension keeps an EB Games page open (in a minimised window of its own) and asks /search/query
+  // from inside it, the way that page does: newest releases first.
+  sweep: {
+    from: 'browser', parser: 'ebgames', inPage: true, openPath: '/search?q={q}',
+    path: '/search/query?q={q}&sort=releasedate&order=desc', pagePath: '&page={page}', pages: 2,
+  },
   monitor: { server: true, browser: true },
   flow: {
     product: {
       add: [/\badd to cart\b/i, /\bpre-?order( now)?\b/i],
-      quantity: 'page',
       waitMs: 12000,
     },
     added: {

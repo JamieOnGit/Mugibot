@@ -7,14 +7,17 @@ community. Built on TCGCopBot's working Kmart flow.
   store and SKU, even before the product is listed. Mugibot checks every SKU
   about once a minute and notices when it goes from **sold out → in stock**,
   when **pre-orders open**, and when a new SKU is **first listed**.
-- **Get pinged on Discord.** The Mugibot bot DMs the member with a **⚡ Buy ×2**
+- **Get pinged on Discord.** The Mugibot bot DMs the member with a **⚡ Buy**
   button. Admins can also announce restocks in a server channel with a role
   ping, or send a manual restock ping to everyone watching a SKU.
-- **Press one button.** ⚡ Buy, from the dashboard or the Discord ping, opens the
-  product. The browser extension then follows **that store's own checkout
-  flow**: quantity, add to bag, checkout, delivery details, card. It **stops at
-  the store's final button** ("Checkout securely", "Place order") for the
-  member to press.
+- **Press one button.** ⚡ Buy, from the dashboard or the Discord ping, takes
+  the member **straight to the store's checkout with the product in their bag**
+  (one of it): Shopify stores through the store's own cart link, others by
+  pressing Add to bag the moment the store's page can take it and going straight
+  to checkout once it's in. The browser extension then fills in delivery details
+  and card, following **that store's own checkout flow**, and **stops at the
+  store's final button** ("Checkout securely", "Place order") for the member to
+  press.
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games and
   JB Hi-Fi are beta (tested on dummy copies of those stores). Target, Zing,
   Toys"R"Us, Trainer Town and Amazon are drafts. Flows live on the server, so fixing one

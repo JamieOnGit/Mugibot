@@ -2,7 +2,7 @@
 // BIG W-style dummy store, NOT yet on bigw.com.au. Send the real flow
 // (docs/RETAILER-FLOWS.md) and this file gets updated.
 //
-// Product page: quantity dropdown + "Add to cart"
+// Product page: "Add to cart"
 //   → "added to cart" drawer → "View cart"
 //   → cart: "Proceed to checkout"
 //   → checkout: email + "Continue as guest" → "Home delivery" → address
@@ -30,7 +30,6 @@ export default {
   flow: {
     product: {
       add: [/\badd to (cart|trolley)\b/i, /\bpre-?order\b/i],
-      quantity: 'page',
       waitMs: 12000,
     },
     added: {

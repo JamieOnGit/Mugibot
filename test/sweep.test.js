@@ -12,7 +12,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
-import { mentions, parseAmazon, parseConstructor, parseGeneric, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
+import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
 import { Sweeper } from '../server/monitor/sweep.js';
 
@@ -124,6 +124,27 @@ test("Kmart's search provider (Constructor.io): code, price, sellers, pre-orders
   assert.equal(r.products[0].url, 'https://www.kmart.com.au/product/pokemon-tcg:-30th-celebration-elite-trainer-box-43818587/', 'a link on Kmart, not the search provider');
   assert.deepEqual(r.products[0].aliases, ['P_43818587']);
   assert.equal(parseConstructor('{"nope":1}').problem, 'layout');
+});
+
+test("EB Games' (and Zing's) search JSON: what its search page asks for — code, price, promotions, stock, pre-orders", () => {
+  const now = Date.parse('2026-10-16T00:00:00Z');
+  const r = parseEbGames(JSON.stringify({ totalResults: 3, results: [
+    { sku: '312346', title: 'Pokémon TCG: 30th Celebration Elite Trainer Box', productUrl: '/product/toys-and-collectibles/312346-pokemon-tcg-30th-celebration-elite-trainer-box', imageUrl: '//c1-ebgames.eb-cdn.com.au/merchandising/images/packshots/a.jpg', price: 99.95, promotionPrice: 89.95, isOutOfStock: false, isComingSoon: false, releaseDate: '2026-03-01T00:00:00' },
+    { sku: '312345', title: 'One Piece Card Game OP-18 Booster Box', productUrl: '/product/toys-and-collectibles/312345-one-piece-op-18', price: 159, isOutOfStock: true, releaseDate: '2025-11-01T00:00:00' },
+    { sku: '312400', title: 'Pokémon TCG: Mega Evolution Booster Bundle', productUrl: '/product/toys-and-collectibles/312400-x', price: 54.95, isOutOfStock: false, isComingSoon: false, releaseDate: '2026-11-20T00:00:00' },
+    { sku: '312401', title: 'Pokémon TCG: Something Later', productUrl: '/product/toys-and-collectibles/312401-y', price: 10, isComingSoon: true, releaseDate: '2027-01-20T00:00:00' },
+  ] }), { base: 'https://www.ebgames.com.au/search/query?q=pokemon', storeBase: 'https://www.ebgames.com.au', now });
+  assert.equal(r.problem, null);
+  assert.equal(r.total, 3);
+  assert.deepEqual(r.products.map((p) => [p.sku, p.price, p.wasPrice, p.inStock, p.preorder]), [
+    ['312346', 89.95, 99.95, true, false],
+    ['312345', 159, null, false, false],
+    ['312400', 54.95, null, true, true],
+    ['312401', 10, null, false, false],
+  ]);
+  assert.equal(r.products[0].url, 'https://www.ebgames.com.au/product/toys-and-collectibles/312346-pokemon-tcg-30th-celebration-elite-trainer-box');
+  assert.equal(r.products[0].image, 'https://c1-ebgames.eb-cdn.com.au/merchandising/images/packshots/a.jpg');
+  assert.equal(parseEbGames('<html><head><title>Just a moment...</title></head><body>cf_chl_opt</body></html>').problem, 'blocked');
 });
 
 test("Amazon's search page: each result's ASIN, full name (brand + title), price, was-price and picture", () => {
@@ -569,15 +590,17 @@ test("admins' browsers sweep the stores that refuse servers; members' browsers n
   assert.equal(due.status, 200);
   const [t] = due.body.terms;
   assert.equal(t.store, 'demo-ebgames');
-  assert.equal(t.parser, 'generic');
-  assert.match(t.url, /\/ebgames\/search\?q=pokemon$/);
+  assert.equal(t.parser, 'ebgames');
+  assert.equal(t.inPage, true, "EB Games' search JSON, asked for from inside one of its pages");
+  assert.match(t.url, /\/ebgames\/search\/query\?q=pokemon&sort=releasedate&order=desc$/);
+  assert.match(t.pageUrl, /\/ebgames\/search\?q=pokemon$/);
   assert.equal(t.productPath.re, R('demo-ebgames').productPath.source);
   assert.ok(due.body.waitMs >= 1000);
   assert.equal((await admin.call('GET', '/api/ext/sweeps')).body.terms.length, 0, 'leased: the next one comes after the wait');
 
-  // The browser reads the page with the same code the server uses (lib/listing.js) and sends what it found.
-  const html = await (await fetch(t.url, { headers: { 'user-agent': 'Mozilla/5.0 Chrome' } })).text();
-  const found = parseGeneric(html, { base: t.url, productPath: R('demo-ebgames').productPath, skuFromPath: R('demo-ebgames').skuFromPath, storeName: 'EB Games' });
+  // The browser reads EB Games' search JSON with the same code the server uses (lib/listing.js) and sends what it found.
+  const json = await (await fetch(t.url, { headers: { 'user-agent': 'Mozilla/5.0 Chrome' } })).text();
+  const found = parseEbGames(json, { base: t.url, storeBase: t.storeBase });
   assert.equal(found.products.length, 1);
   found.products.push({ sku: '999', title: 'Pokemon TCG: Elsewhere Box', price: 5, inStock: true, url: 'https://evil.example/product/x/999', image: 'javascript:alert(1)' });
   let r = await admin.call('POST', '/api/ext/sweeps', { results: [{ store: t.store, keyword: t.keyword, page: t.page, ok: true, status: 200, ms: 300, products: found.products }] });
@@ -674,6 +697,18 @@ test('not trading cards: "3 Pack Socks" and "Short Sleeve T-Shirt" are left out 
   assert.equal((await boss.put('/api/monitor/sweep', { notCardTerms: sw.settings.notCardTerms.filter((x) => x !== 'onesie') })).status, 200);
 });
 
+test("EB Games' search JSON read end to end (from the server here, so the dummy store answers): products tracked, stock and links right", async () => {
+  const eb = R('demo-ebgames');
+  const r = await sw.sweepTerm(eb, { keyword: 'pokemon', page: 1 });
+  assert.equal(r.ok, true, r.error);
+  assert.ok(r.found >= 1);
+  const etb = product('demo-ebgames', '312346');
+  assert.equal(etb.status, 'in_stock');
+  assert.match(etb.url, /\/ebgames\/product\/toys-and-collectibles\/312346-/);
+  assert.match(etb.image, /\/img\/ebgames\/312346\.svg$/);
+  assert.equal(store.state.requests.at(-1).path, '/ebgames/search/query');
+});
+
 test("where each store is searched: Kmart moved to the server (a saved 'browser', its old default, gives way), Amazon at most every 20 s, BIG W opened in the browser", async () => {
   const saved = env.app.repo.getSetting('sweep');
   try {
@@ -698,11 +733,18 @@ test("where each store is searched: Kmart moved to the server (a saved 'browser'
   assert.equal(sw.paceFor(R('amazon')), 20000);
   assert.equal(sw.paceFor(R('target')), 5000);
   // BIG W builds its product list once the page is open: the browser is told to open it and wait.
-  await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, 'demo-bigw': 'browser' } });
+  await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, 'demo-bigw': 'browser', 'demo-ebgames': 'browser' } });
   try {
     const due = sw.browserDue(env.app.repo.userByUsername('boss'));
     const t = due.terms.find((x) => x.store === 'demo-bigw');
     assert.equal(t.render, true);
+    // EB Games: its search JSON, asked for from inside one of its pages.
+    const eb = due.terms.find((x) => x.store === 'demo-ebgames');
+    assert.equal(eb.inPage, true);
+    assert.equal(eb.parser, 'ebgames');
+    const q = encodeURIComponent(eb.keyword);
+    assert.equal(eb.url.startsWith(`${store.url}/ebgames/search/query?q=${q}&sort=releasedate&order=desc`), true, eb.url);
+    assert.equal(eb.pageUrl, `${store.url}/ebgames/search?q=${q}`);
     assert.equal(t.storeBase, `${store.url}/bigw`);
     assert.equal(sw.paceFor(R('demo-bigw'), true), 20000);
   } finally {

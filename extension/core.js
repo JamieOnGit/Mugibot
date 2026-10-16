@@ -1,12 +1,14 @@
 /* Mugibot — the store-page part of ⚡ Buy (built on TCGBot's Quick Checkout).
 
-   On a product page it does: set quantity → Add to bag → (the "added"
-   popup, or the bag page, where it sets the quantity if the product page
-   couldn't) → Checkout, then hands over to fill.js, which stops at the final
-   button for you to press. Which buttons it presses comes from that store's
-   flow (server/retailers/<store>.js); general rules cover anything a flow
-   doesn't say. It only runs when you press a Mugibot button and never
-   reloads pages on its own. */
+   One of each, straight to checkout, as fast as the store allows:
+   - Shopify stores: the store's own cart link (/cart/<variant>:1) opens checkout with the
+     product already in it — no product page clicks at all.
+   - Other stores: Add to bag the moment the store's page can take the press, then — as
+     soon as the store shows it went in — straight to its checkout page (or its "added"
+     popup's Checkout button).
+   Then fill.js fills checkout in and stops at the final button for you to press. Which
+   buttons it presses comes from that store's flow (server/retailers/<store>.js); general
+   rules cover anything a flow doesn't say. It only runs when you press a Mugibot button. */
 
 var MGBQuick = (function () {
   'use strict';
@@ -15,12 +17,16 @@ var MGBQuick = (function () {
   // Panels from other scripts (TCGBot, TCGCopBot, Tampermonkey) — ignored, and flagged if present.
   var OTHER_PANELS = ['tcgcopbot-qc', 'tcgbot-qc', 'tcgbot-quick-checkout', 'kmart-upc-quick-checkout'];
   var FLOW_MAX_AGE = 90000;
-  // After pressing Add, the bag is only opened once the store shows the item went in.
+  // How often the page is looked at while ⚡ Buy runs.
+  var POLL_MS = 100;
+  // After pressing Add, checkout is only opened once the store shows the item went in.
   // If the page didn't react at all by QUIET_MS, the press came before the page was
   // ready: press once more. CONFIRM_MS: the bag count still hasn't moved — press once
-  // more; or, if the count can't be read, open the bag anyway.
+  // more; or, if the count can't be read, go on anyway.
   var QUIET_MS = 5000;
   var CONFIRM_MS = 6000;
+  // How long to wait for a page built with React or Vue to wire up its Add button.
+  var READY_MS = 8000;
   var ADDED_RE = /\badded to (your )?(bag|cart|basket|trolley)\b|\bitems? added\b/i;
   var RECOMMENDATIONS = '[class*="recommend" i], [id*="recommend" i], [class*="carousel" i], [class*="related" i], [class*="upsell" i], [class*="product-card" i], [class*="product-tile" i], [class*="also-like" i]';
   var DRAWER = '[role="dialog"], [aria-modal="true"], [class*="drawer" i], [class*="minicart" i], [class*="mini-cart" i], [class*="mini-bag" i], [class*="minibag" i], [class*="flyout" i], [class*="modal" i], [class*="side-cart" i], [class*="added-to" i], [class*="addedto" i]';
@@ -28,8 +34,6 @@ var MGBQuick = (function () {
   var ADD_RE = /\b(add to (bag|cart|basket|trolley)|pre-?order)\b/i;
   // The final "buy" buttons are never pressed by Mugibot, whatever a flow says.
   var FINAL = /check ?out securely|place (my |your )?order|pay now|pay securely|complete (my |your )?(order|purchase|payment)|submit (my )?(order|payment)|confirm (and|&) pay|pay \$|buy now/i;
-  var QTY_BOX = 'input[type="number"], input[name*="qty" i], input[name*="quantity" i], input[id*="quantity" i], input[aria-label*="quantity" i], '
-    + 'select[name*="qty" i], select[name*="quantity" i], select[id*="quantity" i], select[aria-label*="quantity" i]';
 
   var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
   var toArray = function (list) { return Array.prototype.slice.call(list); };
@@ -189,15 +193,72 @@ var MGBQuick = (function () {
     });
   }
 
-  /** On a page that has only just opened, give the store's own code time to start. */
+  /**
+   * On a page that has only just opened, give the store's own code time to start: until the
+   * page has loaded, and settleMs after. Only for pages where Mugibot can't see when the
+   * store's code has wired up its Add button (see whenReady).
+   */
   async function settle(R) {
     var P = part(R, 'product');
-    var ms = P.settleMs == null ? 800 : P.settleMs;
-    var end = Date.now() + 15000;
-    while (document.readyState !== 'complete' && Date.now() < end) await wait(100);
+    var ms = P.settleMs == null ? 400 : P.settleMs;
+    var end = Date.now() + 10000;
+    while (document.readyState !== 'complete' && Date.now() < end) await wait(50);
     var nav = performance.getEntriesByType ? performance.getEntriesByType('navigation')[0] : null;
     var left = (nav && nav.loadEventEnd ? nav.loadEventEnd : 0) + ms - performance.now();
     if (left > 0) await wait(Math.min(left, ms));
+  }
+
+  /**
+   * Press Add as soon as the store's page can take it. Pages built with React or Vue
+   * (Kmart's) show their Add button before their code has wired it up, and a press then
+   * does nothing: `probe` (from the extension) looks into the page and says when the
+   * button is wired up — usually long before the page has finished loading. Pages it
+   * can't tell about wait for the page to load (settle).
+   */
+  async function whenReady(R, add, probe, setStatus) {
+    var end = Date.now() + (part(R, 'product').readyMs || READY_MS);
+    if (probe) {
+      for (var said = false; ;) {
+        var r = null;
+        try { r = await probe(add); } catch (e) { r = null; }
+        if (!r) break;
+        if (r.ready) {
+          if (said) await wait(POLL_MS); // just wired up: a moment for the page's own start-up to finish
+          return findAddToBag(R) || add;
+        }
+        if (!r.framework || Date.now() > end) break;
+        if (!said) { said = true; setStatus('Waiting for the store\'s page to be ready…'); }
+        await wait(POLL_MS);
+        add = findAddToBag(R) || add; // the page may have re-drawn it
+      }
+    }
+    await settle(R);
+    return findAddToBag(R) || add;
+  }
+
+  /** The store's site (any of its addresses): a request to it is the store, not an advert. */
+  function sameSite(host) {
+    var site = location.hostname.replace(/^www\./, '');
+    return host === site || host.slice(-(site.length + 1)) === '.' + site;
+  }
+
+  /** A request to the store's cart, made by the page after `since` (Date.now() time), that has come back OK. */
+  function cartRequestDone(since) {
+    if (!performance.getEntriesByType) return false;
+    var t0 = since - (performance.timeOrigin || 0);
+    return performance.getEntriesByType('resource').some(function (e) {
+      if ((e.initiatorType !== 'fetch' && e.initiatorType !== 'xmlhttprequest') || e.startTime < t0 || !e.responseEnd) return false;
+      if (e.responseStatus && (e.responseStatus < 200 || e.responseStatus >= 300)) return false;
+      try {
+        var u = new URL(e.name);
+        return sameSite(u.hostname) && /cart|basket|bag|trolley/i.test(u.pathname + u.search);
+      } catch (x) { return false; }
+    });
+  }
+
+  /** A path on this store (the dummy store keeps each store under its own folder). */
+  function storePath(R, p) {
+    return ((R && R.pathPrefix) || '') + p;
   }
 
   function onBagPage(R) {
@@ -231,149 +292,22 @@ var MGBQuick = (function () {
     for (;;) {
       var el = find();
       if (el || Date.now() >= end) return el;
-      await wait(200);
+      await wait(POLL_MS);
     }
   }
 
-  // --------------------------------------------------------------------------
-  // Quantity — on the product page, or else on the bag page
-  // --------------------------------------------------------------------------
-  function usable(el) {
-    return isVisible(el) && !isDisabled(el) && !inAnyPanel(el) && !el.closest('header, nav');
-  }
-
-  /** The product's buy box: a few levels up from the Add button. */
-  function buyBox(add) {
-    var root = add;
-    for (var i = 0; i < 5 && root.parentElement && root.parentElement !== document.body; i++) root = root.parentElement;
-    return root;
-  }
-
-  function isIncrease(el) {
-    var label = labelOf(el);
-    return label.length <= 40 && /\b(increase|increment)\b|add one|^\+$|^plus$/i.test(label) && !/add to/i.test(label);
-  }
-
-  /** A quantity box/dropdown or a + button inside `root`. */
-  function quantityControlIn(root, excludeRecs, selector) {
-    var ok = function (el) { return usable(el) && !(excludeRecs && el.closest(RECOMMENDATIONS)); };
-    var box = toArray(root.querySelectorAll(selector || QTY_BOX)).find(ok);
-    if (box) return { box: box };
-    var plus = toArray(root.querySelectorAll('button, [role="button"]')).find(function (el) { return ok(el) && isIncrease(el); });
-    return plus ? { plus: plus } : null;
-  }
-
-  /** Set a form field the way typing would, so the site's own code notices. */
-  function setFieldValue(el, value) {
-    var proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new Event('blur', { bubbles: true }));
-  }
-
-  /** The number shown next to a + button (stepper). */
-  function stepperValue(plus) {
-    var root = plus.parentElement;
-    for (var i = 0; i < 2 && root; i++, root = root.parentElement) {
-      var input = root.querySelector('input');
-      if (input && /^\d+$/.test(input.value)) return parseInt(input.value, 10);
-      var texts = toArray(root.querySelectorAll('span, output, div, p')).map(function (e) { return (e.textContent || '').trim(); })
-        .filter(function (t) { return /^\d{1,2}$/.test(t); });
-      if (texts.length) return parseInt(texts[0], 10);
-    }
-    return null;
-  }
-
-  /**
-   * Set quantity using a control. Resolves to {ok, got, max, capped}.
-   * `capped` = the store won't allow that many (it offers fewer).
-   */
-  async function applyQuantity(ctl, qty) {
-    if (ctl.box) {
-      var box = ctl.box;
-      var max = null;
-      if (box.tagName === 'SELECT') {
-        var nums = toArray(box.options).map(function (o) { return parseInt(o.value, 10) || parseInt(o.textContent, 10); }).filter(function (n) { return n > 0; });
-        max = nums.length ? Math.max.apply(null, nums) : null;
-        var target = max ? Math.min(qty, max) : qty;
-        var opt = toArray(box.options).find(function (o) { return parseInt(o.value, 10) === target || parseInt(o.textContent, 10) === target; });
-        if (!opt) return { ok: false, got: parseInt(box.value, 10) || 1, max: max, capped: false };
-        setFieldValue(box, opt.value);
-      } else {
-        var m = parseInt(box.getAttribute('max'), 10);
-        max = m > 0 ? m : null;
-        setFieldValue(box, String(max ? Math.min(qty, max) : qty));
-      }
-      await wait(250);
-      var got = parseInt(box.value, 10) || (box.tagName === 'SELECT' ? parseInt(box.options[box.selectedIndex].textContent, 10) : 1);
-      return { ok: got === qty, got: got, max: max, capped: got < qty && max !== null && got === max };
-    }
-    if (ctl.plus) {
-      var current = stepperValue(ctl.plus) || 1;
-      for (var i = 0; i < 12 && current < qty; i++) {
-        ctl.plus.click();
-        await wait(250);
-        var next = stepperValue(ctl.plus);
-        if (next === null) { current += 1; continue; } // can't read it — trust the click
-        if (next <= current || isDisabled(ctl.plus)) { current = next; break; } // reached the store's limit
-        current = next;
-      }
-      return { ok: current === qty, got: current, max: current < qty ? current : null, capped: current < qty };
-    }
-    return { ok: false, got: 1, max: null, capped: false };
-  }
-
-  /** Quantity on the product page. method 'none' = the page has no quantity control. */
-  async function setQuantity(R, add, qty) {
-    if (!qty || qty <= 1) return { ok: true, method: 'default', got: 1 };
-    var P = part(R, 'product');
-    if (P.quantity === 'bag') return { ok: false, method: 'none', got: 1 };
-    var ctl = quantityControlIn(buyBox(add), true, P.quantitySelector) || quantityControlIn(document, true, P.quantitySelector);
-    if (!ctl) return { ok: false, method: 'none', got: 1 };
-    var r = await applyQuantity(ctl, qty);
-    r.method = ctl.box ? 'box' : 'plus';
-    return r;
-  }
-
-  /** The bag row for a product: up from a link to its page until a quantity control appears. */
-  function bagRowFor(product) {
-    var sku = String(product.sku || '').toLowerCase();
-    var links = toArray(document.querySelectorAll('a[href]')).filter(function (a) {
-      var href = '';
-      try { href = decodeURIComponent(a.getAttribute('href')).toLowerCase(); } catch (e) { href = String(a.getAttribute('href')).toLowerCase(); }
-      return sku && href.indexOf(sku) !== -1 && !a.closest('header, nav') && !inAnyPanel(a);
-    });
-    for (var i = 0; i < links.length; i++) {
-      var row = links[i];
-      for (var j = 0; j < 8 && row.parentElement; j++) {
-        row = row.parentElement;
-        if (quantityControlIn(row, false)) return row;
-      }
-    }
-    return null;
-  }
-
-  /** Quantity on the bag page. */
-  async function setBagQuantity(product, qty) {
-    var row = bagRowFor(product);
-    if (!row) {
-      // A bag with a single line: use the only quantity control on the page.
-      var all = toArray(document.querySelectorAll(QTY_BOX)).filter(usable);
-      if (all.length === 1) row = all[0].parentElement || document.body;
-    }
-    var ctl = row ? quantityControlIn(row, false) : null;
-    if (!ctl) return { ok: false, method: 'none', got: null };
-    var r = await applyQuantity(ctl, qty);
-    r.method = 'bag';
-    await wait(1200); // let the bag save the change
-    return r;
-  }
-
-  function qtyMessage(r, qty) {
-    if (r.ok) return '';
-    if (r.capped) return 'the store only allows ' + r.got + ' — added ' + r.got;
-    return "couldn't set quantity " + qty + ' — check your bag';
+  /** Shopify: the product's option to buy — the one in the link, else the first in stock. */
+  async function shopifyVariant(R) {
+    var m = MGBFlows.decodedPath(location).match(/\/products\/([^/?#.]+)/);
+    if (!m) return null;
+    var want = new URLSearchParams(location.search).get('variant');
+    try {
+      var res = await fetch(storePath(R, '/products/' + encodeURIComponent(m[1]) + '.js'), { credentials: 'include', headers: { accept: 'application/json' } });
+      if (!res.ok) return null;
+      var vars = ((await res.json()) || {}).variants || [];
+      var v = vars.find(function (x) { return String(x.id) === want; }) || vars.find(function (x) { return x.available; }) || vars[0];
+      return v && /^\d{1,20}$/.test(String(v.id)) ? String(v.id) : null;
+    } catch (e) { return null; }
   }
 
   // --------------------------------------------------------------------------
@@ -383,14 +317,14 @@ var MGBQuick = (function () {
    * opts: {
    *   fresh: true when a button was just pressed (false = resuming after the page changed),
    *   retailer: this store's flow (from the server),
-   *   product: the matching watchlist item (or null) — {sku, name, quantity},
-   *   products: your whole watchlist (used on the bag page),
+   *   product: the matching watchlist item (or null) — {sku, name},
+   *   products: your whole watchlist,
    *   store: {read(), save(flow), clear()} — where progress is kept between pages,
    *   setStatus(text), report(type, message, product),
-   *   quantity: how many (default: the item's quantity, else 1),
-   *   waitForButtonMs: how long to wait for Add to bag to appear (slow-loading pages).
+   *   waitForButtonMs: how long to wait for Add to bag to appear (slow-loading pages),
+   *   probe(addButton): resolves to {ready, framework} — has the store's own code wired the button up yet?
    * }
-   * Resolves to 'checkout' | 'bag' | 'error' | 'stopped' | 'timeout'.
+   * Resolves to 'checkout' | 'navigating' (to checkout, on a new page) | 'error' | 'stopped' | 'timeout'.
    */
   async function run(opts) {
     var page = { before: null, watch: null }; // what was on the page before Add was pressed, and changes since
@@ -414,33 +348,30 @@ var MGBQuick = (function () {
     var setStatus = opts.setStatus || function () {};
     var report = opts.report || function () {};
     var product = opts.product || null;
+    var C = part(R, 'checkout');
 
     function goCheckout(el) {
       store.clear();
-      setStatus('Opening checkout — finish the purchase yourself.');
+      setStatus('Opening checkout…');
       report('checkout', 'Opening checkout', product);
       el.click();
       return 'checkout';
     }
 
-    async function checkoutFromBag(flow) {
-      // Set quantities still owed (product page had no quantity control).
-      var owed = [];
-      if (flow && flow.needBagQty && product) owed.push({ product: product, qty: flow.qty });
-      if (!flow) {
-        (opts.products || []).forEach(function (p) {
-          if ((p.quantity || 1) > 1 && bagRowFor(p)) owed.push({ product: p, qty: p.quantity });
-        });
-      }
-      for (var i = 0; i < owed.length; i++) {
-        setStatus('Setting quantity ' + owed[i].qty + ' in your bag…');
-        var r = await setBagQuantity(owed[i].product, owed[i].qty);
-        var msg = qtyMessage(r, owed[i].qty);
-        report(r.ok ? 'basket' : 'error', r.ok ? 'Set quantity ' + owed[i].qty + ' in the bag' : 'Bag: ' + msg, owed[i].product);
-        if (msg) setStatus(msg.charAt(0).toUpperCase() + msg.slice(1) + '.');
-      }
-      var checkout = await waitForEl(function () { return findCheckout(R, true) || findCheckout(R, false); }, 3000);
+    /** Added: straight to the store's checkout page, or its popup's Checkout button. */
+    function openCheckout(popup) {
+      if (!C.url && popup) return goCheckout(popup);
+      store.clear();
+      setStatus('Added — opening checkout…');
+      report('checkout', 'Opening checkout', product);
+      location.assign(storePath(R, C.url));
+      return 'navigating';
+    }
+
+    async function checkoutFromBag() {
+      var checkout = await waitForEl(function () { return findCheckout(R, true) || findCheckout(R, false); }, 4000);
       if (!checkout) {
+        store.clear();
         setStatus(bagCount() === 0 ? 'Your bag is empty — the item wasn\'t added. Go back and press Add to bag yourself.' : "Couldn't find the Checkout button on this page.");
         return 'error';
       }
@@ -449,10 +380,20 @@ var MGBQuick = (function () {
 
     if (opts.fresh) {
       store.clear();
-      if (onBagPage(R)) return checkoutFromBag(null);
-      if (onCheckoutPage(R)) { setStatus('You are already at checkout.'); return 'checkout'; }
+      if (onCheckoutPage(R)) { setStatus('At checkout — filling it in…'); return 'checkout'; }
+      if (onBagPage(R)) return checkoutFromBag();
       if (!product) { setStatus('Open one of your SKUs first (list below).'); return 'error'; }
-      var qty = Math.max(1, Math.min(10, parseInt(opts.quantity || product.quantity || 1, 10) || 1));
+      // Shopify: the store's own cart link puts it in the cart and opens checkout — no clicks.
+      if (R && R.cartPath && R.cartPath.indexOf('{variant}') !== -1) {
+        setStatus('Opening checkout with it in your cart…');
+        var variant = await shopifyVariant(R);
+        if (variant) {
+          store.save({ stage: 'cart-link', startedAt: Date.now(), sku: product.sku, name: product.name });
+          report('add', 'Opened the store\'s cart link — straight to checkout', product);
+          location.assign(storePath(R, R.cartPath.replace('{variant}', variant).replace('{qty}', '1')));
+          return 'navigating';
+        }
+      }
       setStatus('Looking for the Add button…');
       var waitMs = opts.waitForButtonMs == null ? 1500 : opts.waitForButtonMs;
       var add = await waitForEl(function () { return findAddToBag(R); }, waitMs);
@@ -461,33 +402,19 @@ var MGBQuick = (function () {
         report('error', 'Add button not available', product);
         return 'error';
       }
-      setStatus('Waiting for the page to finish loading…');
-      await settle(R);
-      add = findAddToBag(R) || add;
-      var needBagQty = false;
-      var note = '';
-      if (qty > 1) {
-        setStatus('Setting quantity to ' + qty + '…');
-        var q = await setQuantity(R, add, qty);
-        if (q.method === 'none' || (!q.ok && !q.capped)) needBagQty = true; // try again in the bag
-        else if (q.capped) {
-          note = ' — the store only allows ' + q.got;
-          report('error', 'The store only allows ' + q.got + ' per order (you asked for ' + qty + ')', product);
-        }
-        add = findAddToBag(R) || add; // the site may have re-drawn the button
-      }
+      add = await whenReady(R, add, opts.probe, setStatus);
       // Save before clicking in case the site changes page straight away.
-      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, qty: qty, needBagQty: needBagQty, countBefore: bagCount() });
-      setStatus('Adding to your bag' + (needBagQty ? ' (quantity set in the bag next)' : '') + '…' + note);
+      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, countBefore: bagCount() });
+      setStatus('Adding to your bag…');
       pressAdd(page, add);
-      report('add', 'Clicked "' + textOf(add).slice(0, 40) + '"' + (qty > 1 ? ' (quantity ' + qty + (needBagQty ? ', setting it in the bag' : '') + ')' : ''), product);
+      report('add', 'Clicked "' + textOf(add).slice(0, 40) + '"', product);
     }
 
     var deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
       var flow = store.read();
       if (!flow) { setStatus('Stopped.'); return 'stopped'; }
-      if (!product) product = (opts.products || []).find(function (p) { return p.sku === flow.sku; }) || { sku: flow.sku, name: flow.name, quantity: flow.qty };
+      if (!product) product = (opts.products || []).find(function (p) { return p.sku === flow.sku; }) || { sku: flow.sku, name: flow.name };
       if (Date.now() - flow.startedAt > FLOW_MAX_AGE) {
         store.clear();
         setStatus('Timed out. Check your bag and continue yourself.');
@@ -500,23 +427,25 @@ var MGBQuick = (function () {
         report('checkout', 'Reached checkout', product);
         return 'checkout';
       }
-      if (flow.stage === 'add-clicked') {
+      if (flow.stage === 'cart-link') {
+        // The cart link opened the cart instead of checkout (e.g. the store wants you to look first).
+        if (onBagPage(R)) return checkoutFromBag();
+      } else if (flow.stage === 'add-clicked') {
         var since = Date.now() - (flow.clickedAt || flow.startedAt);
-        // Give the bag a moment to update before trusting any Checkout button.
-        if (since > 500 && !flow.needBagQty) {
-          var popupCheckout = findCheckout(R, true, page.before);
-          if (popupCheckout) return goCheckout(popupCheckout);
-        }
+        // The store's "added" popup, with its own Checkout button (one that wasn't there before the press).
+        var popup = since > 200 ? findCheckout(R, true, page.before) : null;
+        if (popup) return openCheckout(popup);
         if (onBagPage(R)) {
           // The store opened its bag by itself after adding.
           store.save(Object.assign({}, flow, { stage: 'bag-clicked', bagAt: Date.now() }));
           continue;
         }
-        // Only open the bag once the store shows it was added: its bag count went up, or
-        // an "Added to bag" message. Opening it sooner leaves the page before the add finishes.
+        // Only leave the page once the store shows it was added: its bag count went up, an
+        // "Added to bag" message, or (where no count shows) its cart answered the add. Leaving
+        // sooner can leave the page before the add finishes.
         var count = bagCount();
         var went = count != null && (flow.countBefore == null ? count > 0 : count > flow.countBefore);
-        if (!flow.added && (went || addedMessage(R))) {
+        if (!flow.added && (went || addedMessage(R) || (count == null && cartRequestDone(flow.clickedAt)))) {
           flow = Object.assign({}, flow, { added: true, addedAt: Date.now() });
           store.save(flow);
           setStatus('Added — going to checkout…');
@@ -525,16 +454,15 @@ var MGBQuick = (function () {
         var ignored = !!page.watch && page.watch.changes() === 0 && since > QUIET_MS;
         var unmoved = count != null && flow.countBefore != null && count === flow.countBefore && since > CONFIRM_MS;
         if (flow.added || (!ignored && !unmoved && since > CONFIRM_MS)) {
-          // Added: give the store's "added" popup a moment to show its Checkout button first.
+          if (C.url) return openCheckout(null);
+          // No checkout page to go to: the "added" popup's Checkout button (a moment for it to show), else the bag.
           var waited = flow.addedAt ? Date.now() - flow.addedAt : since;
-          if (flow.needBagQty || waited > 1500) {
-            var bag = findBag(R);
-            if (bag) {
-              store.save(Object.assign({}, flow, { stage: 'bag-clicked', bagAt: Date.now() }));
-              setStatus(flow.needBagQty ? 'Opening your bag to set the quantity…' : 'Opening your bag…');
-              report('basket', 'Opening the bag', product);
-              bag.click();
-            }
+          var bag = waited > 400 ? findBag(R) : null;
+          if (bag) {
+            store.save(Object.assign({}, flow, { stage: 'bag-clicked', bagAt: Date.now() }));
+            setStatus('Opening your bag…');
+            report('basket', 'Opening the bag', product);
+            bag.click();
           }
         } else if (ignored || unmoved) {
           var again = flow.retried ? null : findAddToBag(R);
@@ -551,20 +479,12 @@ var MGBQuick = (function () {
           pressAdd(page, again);
         }
       } else if (flow.stage === 'bag-clicked') {
-        if (flow.needBagQty) {
-          // Wait for the bag (page or popup) to show this product's row.
-          if (onBagPage(R) || bagRowFor(product)) {
-            await waitForEl(function () { return bagRowFor(product); }, 4000);
-            return checkoutFromBag(flow);
-          }
-        } else {
-          // A bag drawer the general rules don't recognise: after a moment, any Checkout button will do.
-          var late = Date.now() - (flow.bagAt || 0) > 2500;
-          var checkout = findCheckout(R, true) || (onBagPage(R) || late ? findCheckout(R, false) : null);
-          if (checkout) return goCheckout(checkout);
-        }
+        // A bag drawer the general rules don't recognise: after a moment, any Checkout button will do.
+        var late = Date.now() - (flow.bagAt || 0) > 1500;
+        var checkout = findCheckout(R, true) || (onBagPage(R) || late ? findCheckout(R, false) : null);
+        if (checkout) return goCheckout(checkout);
       }
-      await wait(250);
+      await wait(POLL_MS);
     }
     store.clear();
     setStatus("Checkout button wasn't found in time. Open your bag and continue yourself.");
@@ -659,8 +579,7 @@ var MGBQuick = (function () {
     var products = opts.products || [];
     function renderProducts() {
       var cur = productForPage(products, R);
-      var q = cur && (cur.quantity || 1) > 1 ? ' · Qty ' + cur.quantity : '';
-      info.textContent = cur ? cur.name + ' · SKU ' + cur.sku + q
+      info.textContent = cur ? cur.name + ' · SKU ' + cur.sku
         : onBagPage(R) ? 'Your bag' : onCheckoutPage(R) ? 'Checkout' : 'Open one of your SKUs';
       info.title = info.textContent;
       // This store's SKUs first.
@@ -670,8 +589,7 @@ var MGBQuick = (function () {
       list.textContent = '';
       shown.forEach(function (p, i) {
         var price = typeof p.price === 'number' ? ' — $' + p.price : '';
-        var qq = (p.quantity || 1) > 1 ? ' ×' + p.quantity : '';
-        var b = smallButton((i + 1) + '. ' + p.name + price + qq);
+        var b = smallButton((i + 1) + '. ' + p.name + price);
         Object.assign(b.style, { display: 'block', width: '100%', marginTop: '4px', textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
         if (cur && cur.id === p.id) b.style.borderColor = '#3b2a7a';
         b.title = (p.storeName || p.store) + ' · SKU ' + p.sku;
@@ -767,8 +685,6 @@ var MGBQuick = (function () {
     onCheckoutPage: onCheckoutPage,
     onBagPage: onBagPage,
     productForPage: productForPage,
-    setQuantity: setQuantity,
-    setBagQuantity: setBagQuantity,
     run: run,
     makePanel: makePanel,
     sessionStore: sessionStore,

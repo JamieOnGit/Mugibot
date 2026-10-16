@@ -73,7 +73,7 @@ test('sign up with a username and land on the watchlist', async () => {
   if (shots) await page.screenshot({ path: path.join(shots, 'dashboard.png'), fullPage: true });
 });
 
-test('Watchlist: add by link, add by store + SKU, edit, reorder, quantity, pause, announce, delete', async () => {
+test('Watchlist: add by link, add by store + SKU, edit, reorder, pause, announce, delete — and no quantity boxes', async () => {
   await page.click('#w-add-toggle');
   await page.fill('#w-url', 'https://www.ebgames.com.au/product/toys-and-collectibles/312345-one-piece-card-game-op-18-booster-box');
   await page.fill('#w-name', 'OP-18 Box');
@@ -87,7 +87,7 @@ test('Watchlist: add by link, add by store + SKU, edit, reorder, quantity, pause
   await page.waitForFunction(() => /\/p\//.test(document.querySelector('#w-store-note').textContent));
   await page.fill('#w-sku', '6012345');
   await page.fill('#w-name', 'BIG W UPC');
-  await page.fill('#w-qty', '2');
+  assert.equal(await page.locator('#w-qty').count(), 0, 'no quantity in the form (one of each for now)');
   await page.fill('#w-max', '380');
   await page.click('#w-save');
   await page.waitForFunction(() => document.querySelectorAll('#w-list li[data-id]').length === 9);
@@ -100,10 +100,7 @@ test('Watchlist: add by link, add by store + SKU, edit, reorder, quantity, pause
   await last.getByRole('button', { name: 'Move up' }).click();
   await page.waitForFunction(() => /OP-18 Box/.test(document.querySelector('#w-list li:nth-child(7)').textContent));
   const row = page.locator('#w-list li', { hasText: 'OP-18 Box' });
-  await row.locator('input.qty').fill('3');
-  await row.locator('input.qty').dispatchEvent('change');
-  const owner = env.app.repo.userByUsername('owner');
-  await waitFor(() => env.app.repo.listItems(owner.id).find((p) => p.sku === '312345').quantity === 3, { message: 'quantity saved' });
+  assert.equal(await row.locator('input.qty').count(), 0, 'no quantity box next to ⚡ Buy');
   await row.getByRole('button', { name: 'Edit' }).click();
   await page.fill('#w-name', 'OP-18 Booster Box');
   await page.click('#w-save');

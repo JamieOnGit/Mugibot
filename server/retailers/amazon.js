@@ -24,7 +24,7 @@ export default {
   monitor: { server: true, browser: true, hostGapSeconds: 10 },
   hints: { availabilityRe: /(^|[\s_-])(availability|outOfStock)([\s_-]|$)/i },
   flow: {
-    product: { add: [/^add to cart$/i], quantity: 'page', waitMs: 12000 },
+    product: { add: [/^add to cart$/i], waitMs: 12000 },
     added: { checkout: [/\bproceed to (checkout|buy)\b/i], viewBag: [/^go to cart$/i] },
     bag: { path: /\/(gp\/cart|cart)/i, checkout: [/\bproceed to (checkout|buy)\b/i] },
     checkout: {
