@@ -91,9 +91,15 @@ export class Feed {
    * The first successful check only sets the scene; changes after it are news.
    */
   async transitions(before, fresh) {
-    const prev = before.status;
+    let prev = before.status;
     const wasKnown = prev !== 'pending' && !!before.last_ok_at;
     if (!wasKnown) return;
+    // Back after the store refused the checks for a while: compared with what the last check that could
+    // read the page said (in stock then and now isn't a restock; with nothing to compare, nothing alerts).
+    if (FAILED.has(prev)) {
+      prev = this.catalog.lastReadStatus(before.id);
+      if (!prev) return;
+    }
     if (isOrderable(fresh.status) && !isOrderable(prev)) {
       await this.alert(fresh, 'restock', { note: prev === STATUS.NOT_LISTED ? 'Just listed.' : '' });
     } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.NOT_FOUND, STATUS.UNKNOWN].includes(fresh.status)) {
@@ -117,6 +123,8 @@ export class Feed {
    * Returns the saved alert, or null when a monitor isn't asking for it or the cooldown is running.
    */
   async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null } = {}) {
+    // On the blacklist (Admin → Blacklist): never alerts. (An admin's own restock ping still goes out.)
+    if (!manual && this.catalog.isBlocked(product.store, product.sku)) return null;
     const monitor = this.catalog.monitorForProduct(product.id);
     if (!manual && !announce && !sweep) {
       if (!monitor || monitor.paused) return null;

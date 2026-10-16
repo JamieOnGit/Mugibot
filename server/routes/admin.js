@@ -145,6 +145,38 @@ export function register(router, ctx) {
     return out;
   }, opts);
 
+  // --- The blacklist: products (or whole stores) that never alert or show in the Monitor -----
+  router.get('/api/admin/blacklist', async () => ({ entries: ctx.catalog.listBlacklist().map((e) => ({ ...e, storeName: e.store ? retailers.name(e.store) : 'Every store' })) }), opts);
+
+  router.post('/api/admin/blacklist', async (req) => {
+    let store = str(req.body.store, 40);
+    let sku = str(req.body.sku, 2000);
+    if (store && !retailers.get(store)) throw bad('Unknown store');
+    // A product link instead of a SKU: its store and SKU.
+    if (/^https?:\/\//i.test(sku)) {
+      const r = retailers.forUrl(sku);
+      if (!r || r.id === 'other') throw bad("That link isn't on one of Mugibot's stores");
+      if (store && store !== r.id) throw bad(`That link is on ${r.name}, not ${retailers.name(store)}`);
+      store = r.id;
+      sku = retailers.skuFromUrl(sku);
+      if (!sku) throw bad("Couldn't find the product code in that link: enter the SKU instead");
+    }
+    if (sku.length > 80) throw bad('That SKU is too long');
+    if (!store && !sku) throw bad('Choose a store, enter a SKU, or both');
+    const known = store && sku ? ctx.catalog.productFor(store, sku) : null;
+    const name = str(req.body.name, 200) || (known && known.name) || '';
+    const out = ctx.catalog.addBlacklist({ store, sku, name, note: str(req.body.note, 300), createdBy: req.user.id });
+    if (out.created) repo.audit(req.user.id, null, 'blacklist-add', `${store || 'every store'} ${sku || '(every product)'}${out.monitorsRemoved ? ` · ${out.monitorsRemoved} monitor(s) removed` : ''}`);
+    return out;
+  }, opts);
+
+  router.delete('/api/admin/blacklist/:id', async (req) => {
+    const e = ctx.catalog.removeBlacklist(req.params.id);
+    if (!e) throw new HttpError(404, 'That entry is already gone');
+    repo.audit(req.user.id, null, 'blacklist-remove', `${e.store || 'every store'} ${e.sku || '(every product)'}`);
+    return { ok: true };
+  }, opts);
+
   // --- Retailers and their checkout flows ----------------------------------------------
   router.get('/api/admin/retailers', async () => ({
     retailers: retailers.list.map((r) => ({

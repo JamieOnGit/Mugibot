@@ -9,7 +9,7 @@ let offset = 0;
 let total = 0;
 const date = (ts) => (ts ? new Date(ts).toLocaleDateString() : '—');
 const loaders = {};
-const TABS = ['overview', 'members', 'skus', 'retailers', 'integrations', 'whop', 'audit'];
+const TABS = ['overview', 'members', 'skus', 'blacklist', 'retailers', 'integrations', 'whop', 'audit'];
 const STATUS = { in_stock: 'in stock', preorder: 'pre-order', out_of_stock: 'sold out', coming_soon: 'coming soon', not_listed: 'not listed', not_found: 'gone', blocked: 'blocked', error: 'error', pending: 'pending', unknown: 'unknown' };
 
 function showTab() {
@@ -184,6 +184,54 @@ $('#restock-form').addEventListener('submit', async (e) => {
     $('#r-msg').textContent = `Pinged ${r.pinged} of ${r.watchers} watchers${r.posted ? ' and posted in the restock channel' : ''}.`;
     $('#r-msg').className = 'msg ok';
   }
+});
+
+// --- Blacklist: products (or whole stores) that never ping -----------------------------
+loaders.blacklist = async () => {
+  const [{ entries }, retailers] = await Promise.all([api('GET', '/api/admin/blacklist'), ensureRetailers()]);
+  const sel = $('#bl-store');
+  if (sel.options.length < 2) for (const r of retailers) sel.append(h('option', { value: r.id }, r.name));
+  const body = $('#blacklist');
+  body.textContent = '';
+  if (!entries.length) body.append(h('tr', {}, h('td', { colspan: '5', class: 'empty' }, 'Nothing on the blacklist.')));
+  for (const e of entries) {
+    const what = e.sku ? (e.name || `SKU ${e.sku}`) : 'Every product';
+    body.append(h('tr', {},
+      h('td', {}, h('b', {}, what), e.sku ? h('div', { class: 'muted small' }, `SKU ${e.sku}`) : null),
+      h('td', {}, e.storeName),
+      h('td', { class: 'small' }, e.note || '—'),
+      h('td', { class: 'small' }, date(e.createdAt)),
+      h('td', {}, h('button', {
+        class: 'btn small', type: 'button', 'aria-label': `Take ${what} at ${e.storeName} off the blacklist`,
+        onclick: async () => {
+          try {
+            await api('DELETE', `/api/admin/blacklist/${e.id}`);
+            $('#bl-msg').textContent = '';
+            toast('Off the blacklist', `${what} · ${e.storeName}`, 'success');
+            loaders.blacklist();
+          } catch (err) { toast("Couldn't do that", err.message, 'warn'); }
+        },
+      }, 'Remove'))));
+  }
+};
+
+$('#bl-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const store = $('#bl-store').value;
+  const sku = $('#bl-sku').value.trim();
+  if (!store && !sku) {
+    $('#bl-msg').textContent = 'Choose a store, enter a SKU, or both.';
+    $('#bl-msg').className = 'msg err';
+    return;
+  }
+  if (store && !sku && !confirm(`Blacklist every product at ${$('#bl-store').selectedOptions[0].textContent}? Nothing there will ping until you take it off.`)) return;
+  const r = await post('/api/admin/blacklist', { store, sku, note: $('#bl-note').value });
+  if (!r) return;
+  $('#bl-msg').textContent = r.created ? `Added${r.monitorsRemoved ? `, and removed ${r.monitorsRemoved} monitor${r.monitorsRemoved === 1 ? '' : 's'}` : ''}.` : 'Already on the blacklist.';
+  $('#bl-msg').className = 'msg ok';
+  $('#bl-sku').value = '';
+  $('#bl-note').value = '';
+  loaders.blacklist();
 });
 
 // --- Stores and flows -------------------------------------------------------------------

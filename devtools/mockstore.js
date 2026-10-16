@@ -208,6 +208,18 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1>${hits.map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}"><img src="${imagePath(shop, x)}" alt="">${esc(x.name)}</a><div class="price">$${x.price.toFixed(2)}</div>${button(x)}</div>`).join('') || '<p>No results</p>'}`);
   }
 
+  // A search page whose products are only filled in by its own code once it's open (BIG W's real one).
+  function clientSearchPage(shop, q) {
+    return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1><div id="results"><p>Loading…</p></div>
+      <script>
+        setTimeout(async () => {
+          const d = await (await fetch('/${shop}/api/search?q=' + encodeURIComponent(${JSON.stringify(q)}))).json();
+          document.getElementById('results').innerHTML = d.products.map((x) => '<article class="product-card"><a href="' + x.url + '"><img src="' + x.image + '" alt="">' + x.name.replace(/</g, '&lt;') + '</a>'
+            + '<div class="price">$' + x.price.toFixed(2) + '</div>' + (x.status === 'in_stock' ? '<button type="button">Add to cart</button>' : '<button type="button" disabled>Out of stock</button>') + '</article>').join('') || '<p>No results</p>';
+        }, 400);
+      </script>`);
+  }
+
   function cartPage(shop) {
     const cart = shopOf(shop).cart;
     const rows = cart.map((c) => {
@@ -508,7 +520,40 @@ for (const el of document.querySelectorAll('input')) {
       return html(200, productPage(shop, prod));
     }
 
-    if (sub === '/search' || sub === '/search/') return html(200, searchPage(shop, u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || ''));
+    if (sub === '/search' || sub === '/search/') {
+      const q = u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || '';
+      // Like BIG W's real site: the page has no products in it until its own code fetches them.
+      if (S.clientSearch) return html(200, clientSearchPage(shop, q));
+      return html(200, searchPage(shop, q));
+    }
+    if (sub === '/api/search') {
+      const tiles = searchHits(shop, u.searchParams.get('q')).map((x) => ({ name: x.name, url: pathFor(shop, x), image: imagePath(shop, x), price: x.price, status: x.status }));
+      return json(200, { products: tiles });
+    }
+    // Kmart's search provider (Constructor.io) — what Mugibot's live sweeps read for Kmart: each
+    // product with its sellers and the states it's out of stock in (every state: sold out online).
+    const cio = shop === 'kmart' && sub.match(/^\/cnstrc\/search\/([^/]+)$/);
+    if (cio) {
+      const all = searchHits(shop, decodeURIComponent(cio[1]));
+      const per = Number(u.searchParams.get('num_results_per_page')) || 20;
+      const pg = Number(u.searchParams.get('page')) || 1;
+      const states = ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'];
+      return json(200, {
+        response: {
+          total_num_results: all.length,
+          results: all.slice((pg - 1) * per, pg * per).map((x) => ({
+            value: x.name,
+            data: {
+              id: `P_${x.sku}`, url: pathFor(shop, x).replace(/^\/kmart/, ''), image_url: `http://${req.headers.host}${imagePath(shop, x)}`, price: x.price,
+              Seller: [x.marketplace ? 'Marketplace' : 'Kmart'], isPreOrderActive: x.status === 'preorder',
+              ...(x.was ? { SavePrice: `WAS $${x.was}` } : {}),
+              ...(x.status === 'in_stock' || x.status === 'preorder' ? {} : { stateOOS: Object.fromEntries(states.map((st) => [st, '6'])) }),
+            },
+          })),
+        },
+        request: { term: decodeURIComponent(cio[1]), page: pg },
+      });
+    }
     // Shopify's search suggestions (what Mugibot's live sweeps read at JB Hi-Fi).
     if (SHOPIFY.has(shop) && sub === '/search/suggest.json') {
       const hits = searchHits(shop, u.searchParams.get('q')).slice(0, 10);

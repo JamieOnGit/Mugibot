@@ -27,6 +27,7 @@
   }
 
   const state = await ask({ type: 'state' });
+  if (state && state.sweepTab) return; // the extension's own window for live sweeps
   const items = (state && state.items) || [];
   const retailers = MGBFlows.revive((state && state.flows) || []);
   const retailer = MGBFlows.forLocation(retailers, location);

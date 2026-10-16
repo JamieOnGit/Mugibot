@@ -246,6 +246,31 @@ test('a store refusing the server: last known stock kept, no alert, shown in hea
   store.state.blockNonBrowsers = false;
 });
 
+test('back after the store refused the checks: no restock ping if it was in stock before; a real restock still pings', async () => {
+  const restocks = () => env.app.catalog.recentAlerts({ kind: 'restock', productId: op.productId, limit: 100 }).length;
+  const before = restocks();
+  const check = async () => { await boss.post(`/api/monitor/monitors/${op.id}/check`); await advance(1); };
+  store.state.blockNonBrowsers = true;
+  for (let i = 0; i < 3; i++) await check();
+  assert.equal((await productOf(op.id)).status, 'blocked', 'refused 3 times in a row: the failure shows');
+  store.state.blockNonBrowsers = false;
+  await advance(11 * 60);
+  await check();
+  assert.equal((await productOf(op.id)).status, 'in_stock');
+  assert.equal(restocks(), before, 'in stock before the refusals and after: not a restock');
+
+  // Sold out, refused for a while, then back in stock: that is a restock.
+  store.set('ebgames', '312345', { status: 'out_of_stock' });
+  await check();
+  store.state.blockNonBrowsers = true;
+  for (let i = 0; i < 3; i++) await check();
+  store.state.blockNonBrowsers = false;
+  store.set('ebgames', '312345', { status: 'in_stock' });
+  await advance(11 * 60);
+  await check();
+  assert.equal(restocks(), before + 1, 'sold out before the refusals, in stock after: a restock');
+});
+
 test('stores that refuse servers: admins\' browsers check the monitors there; members\' browsers can\'t change the feed', async () => {
   await boss.put('/api/admin/retailers/demo-kmart', { serverChecks: false });
   store.set('kmart', '43818648', { status: 'out_of_stock' });

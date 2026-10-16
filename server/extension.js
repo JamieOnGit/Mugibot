@@ -32,6 +32,8 @@ export function extensionManifest(cfg, { version } = {}) {
   // Match patterns can't include a port; without one they match every port.
   const appPatterns = [...new Set(appOrigins(cfg).map((o) => { const u = new URL(o); return `${u.protocol}//${u.hostname}/*`; }))];
   const stores = [...new Set(RETAILER_DEFS.flatMap((r) => r.hosts).map((h) => `https://${h}/*`))];
+  // Stores' search providers (Kmart's Constructor.io), for admins' browsers that sweep them.
+  const searchApis = [...new Set(RETAILER_DEFS.filter((r) => r.sweep && r.sweep.apiBase).map((r) => `${new URL(r.sweep.apiBase).origin}/*`))];
   const local = isLocal(cfg.baseUrl) || (cfg.demoStoreUrl && isLocal(cfg.demoStoreUrl));
   // A server on your own computer also lets the extension work on the dummy store there.
   const dev = local ? ['http://127.0.0.1/*', 'http://localhost/*'] : [];
@@ -43,7 +45,7 @@ export function extensionManifest(cfg, { version } = {}) {
   if (version) m.version = version;
   m.name = cfg.appName === 'Mugibot' ? m.name : `${cfg.appName} Checkout`;
   // The app (your account, on any of the site's addresses) and the stores (in-browser restock checks of your own SKUs).
-  m.host_permissions = [...new Set([...appPatterns, ...stores, ...dev])];
+  m.host_permissions = [...new Set([...appPatterns, ...stores, ...searchApis, ...dev])];
   m.content_scripts = [
     { matches: appPatterns, js: ['bridge.js'], run_at: 'document_start' },
     { matches: [...stores, ...dev], js: ['capture.js'], run_at: 'document_start' },

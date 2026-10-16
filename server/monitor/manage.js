@@ -52,6 +52,7 @@ export class MonitorAdmin {
   /** input: { url } or { store, sku }, plus name, category, intervalSeconds, kinds, note. */
   add(input, user) {
     const parsed = checkItem({ url: input.url, store: input.store, sku: input.sku, name: input.name }, { retailers: this.ctx.retailers });
+    if (this.catalog.isBlocked(parsed.store, parsed.sku)) throw bad('That product is on the blacklist (Admin → Blacklist). Take it off the blacklist first.');
     const category = categoryFrom(input.category);
     const product = this.catalog.upsertProduct({ store: parsed.store, sku: parsed.sku, url: parsed.url, name: str(input.name, 120), category });
     const { monitor, created } = this.catalog.addMonitor(product.id, {

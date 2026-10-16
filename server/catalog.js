@@ -36,6 +36,13 @@ export function toProduct(r) {
 // How long a product a sweep stopped seeing stays in the list (sold out products often drop out of search).
 const SWEPT_DAYS = 14;
 
+// Not on the blacklist (Admin → Blacklist): a product there, or its whole store, stays off the lists.
+const unblocked = (t) => `NOT EXISTS (SELECT 1 FROM blacklist b WHERE (b.store = '' OR b.store = ${t}.store) AND (b.sku = '' OR b.sku = ${t}.sku COLLATE NOCASE))`;
+
+export function toBlacklisted(r) {
+  return r && { id: r.id, store: r.store, sku: r.sku, name: r.name, note: r.note, createdBy: r.created_by, createdAt: r.created_at };
+}
+
 export function toMonitor(r) {
   return r && {
     id: r.id, productId: r.product_id, intervalSeconds: r.interval_seconds, paused: !!r.paused,
@@ -61,6 +68,42 @@ export function toRoute(r) {
 export class Catalog {
   constructor({ db, repo, now = () => Date.now() }) {
     Object.assign(this, { db, repo, now });
+    this.blacklistCache = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // The blacklist: products (a store and a SKU), a SKU at any store, or a whole store
+  // ---------------------------------------------------------------------------
+  listBlacklist() {
+    return this.db.all('SELECT * FROM blacklist ORDER BY created_at DESC').map(toBlacklisted);
+  }
+
+  /** Is this product on the blacklist? codes: its SKU and any other codes it goes by. */
+  isBlocked(store, ...codes) {
+    if (!this.blacklistCache) this.blacklistCache = this.db.all('SELECT store, sku FROM blacklist');
+    const cs = codes.flat().filter(Boolean).map((c) => String(c).toLowerCase());
+    return this.blacklistCache.some((b) => (!b.store || b.store === store) && (!b.sku || cs.includes(b.sku.toLowerCase())));
+  }
+
+  /** Add an entry, and remove the monitors it covers. Returns { entry, created, monitorsRemoved }. */
+  addBlacklist({ store = '', sku = '', name = '', note = '', createdBy = null }) {
+    const existing = this.db.get('SELECT * FROM blacklist WHERE store = :s AND sku = :k COLLATE NOCASE', { s: store, k: sku });
+    if (existing) return { entry: toBlacklisted(existing), created: false, monitorsRemoved: 0 };
+    const id = newId('bl');
+    this.db.run(`INSERT INTO blacklist (id, store, sku, name, note, created_by, created_at) VALUES (:id, :s, :k, :n, :note, :by, :t)`,
+      { id, s: store, k: sku, n: String(name || '').slice(0, 200), note: String(note || '').slice(0, 300), by: createdBy, t: this.now() });
+    this.blacklistCache = null;
+    const monitorsRemoved = this.db.run(`DELETE FROM monitors WHERE product_id IN (SELECT id FROM products p WHERE (:s = '' OR p.store = :s) AND (:k = '' OR p.sku = :k COLLATE NOCASE))`,
+      { s: store, k: sku }).changes;
+    return { entry: toBlacklisted(this.db.get('SELECT * FROM blacklist WHERE id = :id', { id })), created: true, monitorsRemoved };
+  }
+
+  removeBlacklist(id) {
+    const row = this.db.get('SELECT * FROM blacklist WHERE id = :id', { id: String(id || '') });
+    if (!row) return null;
+    this.db.run('DELETE FROM blacklist WHERE id = :id', { id: row.id });
+    this.blacklistCache = null;
+    return toBlacklisted(row);
   }
 
   // ---------------------------------------------------------------------------
@@ -169,7 +212,7 @@ export class Catalog {
 
   /** Monitors with their products, filtered and searched. */
   listMonitors({ q = '', category = '', store = '', status = '', paused = null, limit = 500 } = {}) {
-    const where = ['1 = 1'];
+    const where = [unblocked('p')];
     const params = { limit };
     if (q) { where.push('(p.name LIKE :q OR p.sku LIKE :q)'); params.q = `%${q}%`; }
     if (category) { where.push('p.category = :category'); params.category = category; }
@@ -194,7 +237,7 @@ export class Catalog {
    * filtered and searched. Members don't see paused monitors that no sweep tracks.
    */
   listProducts({ q = '', category = '', store = '', status = '', admin = false, limit = 600 } = {}) {
-    const where = [`(m.id IS NOT NULL${admin ? '' : ' AND m.paused = 0'} OR p.sweep_seen_at >= :swept)`];
+    const where = [`(m.id IS NOT NULL${admin ? '' : ' AND m.paused = 0'} OR p.sweep_seen_at >= :swept)`, unblocked('p')];
     const params = { limit, swept: this.now() - SWEPT_DAYS * 86400000 };
     if (q) { where.push('(p.name LIKE :q OR p.sku LIKE :q)'); params.q = `%${q}%`; }
     if (category) { where.push('p.category = :category'); params.category = category; }
@@ -216,7 +259,7 @@ export class Catalog {
 
   /** Is this product in the shared list (monitored, or tracked by a sweep lately)? */
   isListed(product, { admin = false } = {}) {
-    if (!product) return false;
+    if (!product || this.isBlocked(product.store, product.sku)) return false;
     const m = this.monitorForProduct(product.id);
     if (m && (admin || !m.paused)) return true;
     return !!product.sweep_seen_at && product.sweep_seen_at >= this.now() - SWEPT_DAYS * 86400000;
@@ -237,6 +280,13 @@ export class Catalog {
     this.db.run(`INSERT INTO check_log (product_id, store, url, source, status, price, ms, error, at)
       VALUES (:p, :store, :url, :source, :status, :price, :ms, :error, :at)`,
     { p: productId, store: store || '', url, source, status, price, ms, error: String(error || '').slice(0, 300), at: this.now() });
+  }
+
+  /** What the last check that could read the page said, before the latest refused or failed one (null: none). */
+  lastReadStatus(productId) {
+    const row = this.db.get(`SELECT status FROM check_log WHERE product_id = :p AND status NOT IN ('blocked', 'error')
+      AND id < (SELECT MAX(id) FROM check_log WHERE product_id = :p AND status IN ('blocked', 'error')) ORDER BY id DESC LIMIT 1`, { p: productId });
+    return row ? row.status : null;
   }
 
   listLog({ productId = null, store = '', errorsOnly = false, limit = 100 } = {}) {
@@ -275,7 +325,7 @@ export class Catalog {
   }
 
   recentAlerts({ limit = 30, before = null, kind = '', category = '', store = '', productId = null } = {}) {
-    const where = ['1 = 1'];
+    const where = [unblocked('feed_alerts')];
     const params = { limit: Math.min(100, limit) };
     if (before) { where.push('id < :before'); params.before = Number(before); }
     if (kind === 'price') where.push("kind IN ('price_drop', 'price_rise')");
@@ -329,10 +379,10 @@ export class Catalog {
       monitors: one('SELECT COUNT(*) FROM monitors WHERE paused = 0'),
       paused: one('SELECT COUNT(*) FROM monitors WHERE paused = 1'),
       available: one(`SELECT COUNT(*) FROM products p LEFT JOIN monitors m ON m.product_id = p.id
-        WHERE ((m.id IS NOT NULL AND m.paused = 0) OR p.sweep_seen_at >= :d) AND p.status IN ('in_stock', 'preorder')`, { d: day }),
+        WHERE ((m.id IS NOT NULL AND m.paused = 0) OR p.sweep_seen_at >= :d) AND p.status IN ('in_stock', 'preorder') AND ${unblocked('p')}`, { d: day }),
       restocks24h: one("SELECT COUNT(*) FROM feed_alerts WHERE kind = 'restock' AND at >= :d", { d: day }),
       drops24h: one("SELECT COUNT(*) FROM feed_alerts WHERE kind = 'listed' AND at >= :d", { d: day }),
-      tracked: one('SELECT COUNT(*) FROM products WHERE sweep_seen_at >= :d', { d: day }),
+      tracked: one(`SELECT COUNT(*) FROM products p WHERE p.sweep_seen_at >= :d AND ${unblocked('p')}`, { d: day }),
       priceChanges24h: one("SELECT COUNT(*) FROM feed_alerts WHERE kind IN ('price_drop', 'price_rise') AND at >= :d", { d: day }),
       checks1h: checks.n || 0,
       ok1h: checks.ok || 0,

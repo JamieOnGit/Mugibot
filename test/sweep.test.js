@@ -12,7 +12,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
-import { mentions, parseGeneric, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
+import { mentions, parseAmazon, parseConstructor, parseGeneric, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
 import { Sweeper } from '../server/monitor/sweep.js';
 
@@ -103,6 +103,53 @@ test("a Shopify collection's product list (Trainer Town): every product, in stoc
   // Shopify's bot check instead of the list.
   assert.equal(parseShopifyProducts('<!DOCTYPE html><html><head><title>Verifying your connection...</title></head><body><script>window._cf_chl_opt = {}</script></body></html>').problem, 'blocked');
   assert.equal(parseShopifyProducts('{"collections":[]}').problem, 'layout');
+});
+
+test("Kmart's search provider (Constructor.io): code, price, sellers, pre-orders, and sold out when every state is out of stock", () => {
+  const every = Object.fromEntries(['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'].map((st) => [st, '6']));
+  const r = parseConstructor(JSON.stringify({ response: { total_num_results: 68, results: [
+    { value: 'Pokemon TCG: 30th Celebration Elite Trainer Box', data: { id: 'P_43818587', url: '/product/pokemon-tcg:-30th-celebration-elite-trainer-box-43818587/', image_url: 'https://assets.kmart.com.au/transform/x/43818587-1', price: 100, Seller: ['Kmart'], isPreOrderActive: false, stateOOS: { NT: '6', WA: '6', SA: '6', TAS: '6', ACT: '6', VIC: '6', QLD: '6' } } },
+    { value: 'OP10 One Piece Trading Card Game: Royal Blood Booster Pack', data: { id: 'P_43556861', url: '/product/op10-one-piece-trading-card-game:-royal-blood-booster-pack-43556861/', price: 8, Seller: ['Kmart'], stateOOS: every, SavePrice: 'WAS $12' } },
+    { value: 'Pokemon TCG: 30th Celebration Booster Bundle', data: { id: 'P_43818617', url: '/product/x-43818617/', price: 54, Seller: ['Kmart'], isPreOrderActive: true } },
+    { value: 'Pokemon Chaos Rising Booster - Assorted', data: { id: 'P_43756025', url: '/product/y-43756025/', price: 355.14, Seller: ['Marketplace'] } },
+  ] } }), { base: 'https://ac.cnstrc.com/search/pokemon?key=k', storeBase: 'https://www.kmart.com.au' });
+  assert.equal(r.problem, null);
+  assert.equal(r.total, 68);
+  assert.deepEqual(r.products.map((p) => [p.sku, p.price, p.wasPrice, p.inStock, p.preorder, p.marketplace]), [
+    ['43818587', 100, null, true, false, false],
+    ['43556861', 8, 12, false, false, false],
+    ['43818617', 54, null, true, true, false],
+    ['43756025', 355.14, null, true, false, true],
+  ]);
+  assert.equal(r.products[0].url, 'https://www.kmart.com.au/product/pokemon-tcg:-30th-celebration-elite-trainer-box-43818587/', 'a link on Kmart, not the search provider');
+  assert.deepEqual(r.products[0].aliases, ['P_43818587']);
+  assert.equal(parseConstructor('{"nope":1}').problem, 'layout');
+});
+
+test("Amazon's search page: each result's ASIN, full name (brand + title), price, was-price and picture", () => {
+  const tile = (asin, { brand = '', title, price = '', was = '', extra = '' }) => `<div data-asin="${asin}" data-component-type="s-search-result" class="s-result-item">
+    <img class="s-image" src="https://m.media-amazon.com/images/I/${asin}.jpg">${brand ? `<h2 class="a-size-mini s-line-clamp-1"><span>${brand}</span></h2>` : ''}
+    <a class="a-link-normal" href="/x/dp/${asin}/ref=sr_1_1"><h2 aria-label="${title}" class="a-size-base-plus"><span>${title}</span></h2></a>
+    ${price ? `<span class="a-price"><span class="a-offscreen">${price}</span><span aria-hidden="true">${price}</span></span>` : ''}
+    ${was ? `<span class="a-price a-text-price"><span class="a-offscreen">${was}</span></span>` : ''}${extra}</div>`;
+  const html = `<html><head><title>Amazon.com.au : pokemon tcg</title></head><body><div class="s-main-slot">
+    ${tile('B0H8SV3WJ8', { brand: 'Pokémon', title: 'TCG: 30th Celebration Elite Trainer Box', price: '$314.95' })}
+    ${tile('B0H783FY5Z', { title: 'Pokemon TCG 30th Celebration Booster Bundle', price: '$159.95', was: '$168.00' })}
+    ${tile('B0HJJQJHYF', { title: 'One Piece Card Game Official Sleeves Vol. 16', extra: '<span>Currently unavailable.</span>' })}
+    ${tile('B0GP9QHQ3Y', { title: 'Pokemon Card Game MEGA Expansion Pack', extra: '<span>No featured offers available</span>' })}
+    </div></body></html>`;
+  const r = parseAmazon(html, { base: 'https://www.amazon.com.au/s?k=pokemon+tcg&s=date-desc-rank' });
+  assert.equal(r.problem, null);
+  assert.deepEqual(r.products.map((p) => [p.sku, p.title, p.price, p.wasPrice, p.inStock]), [
+    ['B0H8SV3WJ8', 'Pokémon TCG: 30th Celebration Elite Trainer Box', 314.95, null, true],
+    ['B0H783FY5Z', 'Pokemon TCG 30th Celebration Booster Bundle', 159.95, 168, true],
+    ['B0HJJQJHYF', 'One Piece Card Game Official Sleeves Vol. 16', null, null, false],
+    ['B0GP9QHQ3Y', 'Pokemon Card Game MEGA Expansion Pack', null, null, null],
+  ]);
+  assert.equal(r.products[0].url, 'https://www.amazon.com.au/dp/B0H8SV3WJ8');
+  assert.equal(r.products[0].image, 'https://m.media-amazon.com/images/I/B0H8SV3WJ8.jpg');
+  assert.equal(parseAmazon('<html><body>To discuss automated access to Amazon data please contact api-services-support@amazon.com.</body></html>').problem, 'blocked');
+  assert.equal(parseAmazon('<html><body><div class="s-main-slot"></div></body></html>').problem, 'empty');
 });
 
 test('any store: product tiles in the page, and product data in its scripts (JSON-LD, Next.js data, embedded state)', () => {
@@ -221,7 +268,9 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   assert.equal(mode('target'), 'server');
   assert.equal(mode('jbhifi'), 'server');
   assert.equal(mode('trainertown'), 'server', 'Trainer Town answers servers');
-  assert.equal(mode('kmart'), 'browser', 'stores that refuse servers: from an admin\'s browser');
+  assert.equal(mode('kmart'), 'server', "Kmart: from the server, through its search provider");
+  assert.equal(mode('amazon'), 'server');
+  assert.equal(mode('bigw'), 'browser', 'stores that refuse servers: from an admin\'s browser');
   assert.equal(mode('demo-kmart'), 'off');
   assert.equal((await boss.put('/api/monitor/sweep', { keywords: '' })).status, 400, 'at least one keyword');
   assert.equal((await boss.put('/api/monitor/sweep', { everySeconds: 1 })).body.settings.everySeconds, 3, 'never faster than every 3 seconds');
@@ -229,7 +278,7 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   // The real stores off (tests never touch them); the dummy ones swept from the server.
   r = await boss.put('/api/monitor/sweep', {
     everySeconds: 5, keywords: 'Pokemon, one piece',
-    stores: { target: 'off', jbhifi: 'off', toysrus: 'off', trainertown: 'off', kmart: 'off', bigw: 'off', ebgames: 'off', zing: 'off', 'demo-kmart': 'server', 'demo-jbhifi': 'server', 'demo-bigw': 'server', 'demo-ebgames': 'browser', 'demo-trainertown': 'server' },
+    stores: { target: 'off', jbhifi: 'off', toysrus: 'off', trainertown: 'off', amazon: 'off', kmart: 'off', bigw: 'off', ebgames: 'off', zing: 'off', 'demo-kmart': 'server', 'demo-jbhifi': 'server', 'demo-bigw': 'server', 'demo-ebgames': 'browser', 'demo-trainertown': 'server' },
   });
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(r.body.settings.keywords, ['pokemon', 'one piece']);
@@ -625,13 +674,115 @@ test('not trading cards: "3 Pack Socks" and "Short Sleeve T-Shirt" are left out 
   assert.equal((await boss.put('/api/monitor/sweep', { notCardTerms: sw.settings.notCardTerms.filter((x) => x !== 'onesie') })).status, 200);
 });
 
+test("where each store is searched: Kmart moved to the server (a saved 'browser', its old default, gives way), Amazon at most every 20 s, BIG W opened in the browser", async () => {
+  const saved = env.app.repo.getSetting('sweep');
+  try {
+    // Settings saved before this update: every store's mode, Kmart's old default among them.
+    env.app.repo.setSetting('sweep', { ...saved, modesVersion: undefined, stores: { ...saved.stores, kmart: 'browser' } });
+    assert.equal(sw.modeFor(R('kmart')), 'server', 'the old default, saved with the rest, gives way to the new one');
+    // A store's own default isn't saved, so a better default later reaches everyone.
+    const r = await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'server', bigw: 'browser' } });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.settings.stores.kmart, undefined);
+    assert.equal(r.body.settings.stores.bigw, undefined);
+    // An admin who wants Kmart from a browser after all: that sticks.
+    assert.equal((await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'browser' } })).body.settings.stores.kmart, 'browser');
+    assert.equal(sw.modeFor(R('kmart')), 'browser');
+  } finally {
+    env.app.repo.setSetting('sweep', saved);
+  }
+  assert.match(sw.urlFor(R('kmart'), 'one piece'), /^https:\/\/ac\.cnstrc\.com\/search\/one%20piece\?key=key_\w+&.*filters%5Bgroup_id%5D=\w+&filters%5BSeller%5D=Kmart&filters%5BSeller%5D=Target$/);
+  assert.equal(sw.urlFor(R('demo-kmart'), 'pokemon').startsWith(`${store.url}/kmart/cnstrc/search/pokemon?`), true, "the dummy Kmart's own search provider");
+  assert.equal(sw.endpoint(R('kmart')), 'ac.cnstrc.com/search/');
+  assert.equal(sw.urlFor(R('amazon'), 'pokemon', 2), 'https://www.amazon.com.au/s?k=pokemon%20tcg&s=date-desc-rank&page=2');
+  assert.equal(sw.paceFor(R('amazon')), 20000);
+  assert.equal(sw.paceFor(R('target')), 5000);
+  // BIG W builds its product list once the page is open: the browser is told to open it and wait.
+  await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, 'demo-bigw': 'browser' } });
+  try {
+    const due = sw.browserDue(env.app.repo.userByUsername('boss'));
+    const t = due.terms.find((x) => x.store === 'demo-bigw');
+    assert.equal(t.render, true);
+    assert.equal(t.storeBase, `${store.url}/bigw`);
+    assert.equal(sw.paceFor(R('demo-bigw'), true), 20000);
+  } finally {
+    await boss.put('/api/monitor/sweep', { stores: saved.stores });
+  }
+});
+
+test('🚫 the blacklist: a product, a SKU or a whole store never pings, isn\'t tracked and stays off the lists; its monitor goes', async () => {
+  const bl = () => boss.get('/api/admin/blacklist');
+  // The upgrade puts the Kmart bookcase that kept pinging on it.
+  let r = await bl();
+  assert.equal(r.status, 200);
+  const first = r.body.entries.find((e) => e.store === 'kmart' && e.sku === '43746880');
+  assert.equal(first.name, 'Wave Book Storage - Oak - One Size');
+  assert.notEqual((await ash.get('/api/admin/blacklist')).status, 200, 'admins only');
+  assert.equal((await boss.post('/api/admin/blacklist', {})).status, 400, 'a store, a SKU, or both');
+  const listed = async (storeId) => (await ash.get(`/api/monitor/products?store=${storeId}`)).body.products.map((p) => p.sku);
+  const added = [];
+  const add = async (body) => {
+    const res = await boss.post('/api/admin/blacklist', body);
+    assert.equal(res.status, 200, res.text);
+    added.push(res.body.entry.id);
+    return res.body;
+  };
+  try {
+    // A product link: its store and SKU, and its name from the catalogue.
+    assert.ok((await listed('demo-kmart')).includes('43818587'));
+    const etb = await add({ sku: store.productUrl('kmart', '43818587'), note: 'testing' });
+    assert.equal(etb.entry.store, 'demo-kmart');
+    assert.equal(etb.entry.sku, '43818587');
+    assert.match(etb.entry.name, /Elite Trainer Box/);
+    assert.ok(!(await listed('demo-kmart')).includes('43818587'), 'off the products list');
+    assert.equal((await boss.post('/api/admin/blacklist', { store: 'demo-kmart', sku: '43818587' })).body.created, false, 'once');
+
+    // A monitor on a product that goes on the blacklist is removed, and can't be added again.
+    const m = await boss.post('/api/monitor/monitors', { store: 'demo-kmart', sku: '43818556' });
+    assert.equal(m.status, 200, m.text);
+    assert.equal((await add({ store: 'demo-kmart', sku: '43818556' })).monitorsRemoved, 1);
+    assert.ok(!env.app.catalog.monitorById(m.body.monitor.id));
+    const again = await boss.post('/api/monitor/monitors', { store: 'demo-kmart', sku: '43818556' });
+    assert.equal(again.status, 400);
+    assert.match(again.body.error, /blacklist/);
+
+    // A new drop that's on the blacklist: not tracked, no alert.
+    await add({ store: 'demo-kmart', sku: '43899990' });
+    store.shop('kmart').products.push({ sku: '43899990', name: 'Pokémon TCG: Blacklisted Booster Box', price: 199, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499990 });
+    const swept = await sweep('demo-kmart');
+    assert.equal(swept.new, 0);
+    assert.ok(!product('demo-kmart', '43899990'));
+    const p = env.app.catalog.upsertProduct({ store: 'demo-kmart', sku: '43899990', url: '', name: 'Pokémon TCG: Blacklisted Booster Box' });
+    assert.equal(await env.app.feed.alert(p, 'listed', { sweep: true }), null, 'no alert, anywhere');
+
+    // A SKU at every store.
+    await add({ sku: 'pokemon-tcg-30th-celebration-etb' });
+    assert.ok(!(await listed('demo-jbhifi')).includes('pokemon-tcg-30th-celebration-etb'));
+    // A whole store.
+    const jb = await add({ store: 'demo-jbhifi' });
+    assert.equal(jb.entry.sku, '');
+    assert.equal((await sweep('demo-jbhifi')).kept, 0);
+    assert.deepEqual(await listed('demo-jbhifi'), []);
+    r = await bl();
+    assert.equal(r.body.entries.find((e) => e.id === jb.entry.id).storeName, 'JB Hi-Fi (dummy store)');
+    assert.equal(r.body.entries.find((e) => e.sku === 'pokemon-tcg-30th-celebration-etb').storeName, 'Every store');
+  } finally {
+    for (const id of added) assert.equal((await boss.del(`/api/admin/blacklist/${id}`)).status, 200);
+  }
+  // Off the blacklist: back on the lists.
+  assert.ok((await listed('demo-kmart')).includes('43818587'));
+  assert.ok((await listed('demo-jbhifi')).length > 0);
+  const audit = env.app.repo.listAudit(80).map((a) => a.action);
+  assert.ok(audit.includes('blacklist-add') && audit.includes('blacklist-remove'));
+});
+
 test('the loops: each store swept from the server on its own loop, every few seconds; switched off, it stops', async () => {
-  const before = store.state.requests.filter((x) => x.path.startsWith('/kmart/search')).length;
+  const before = store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length;
   sw.running = false;
   sw.cfg.monitor.enabled = true;
   sw.start();
   try {
-    await waitFor(() => store.state.requests.filter((x) => x.path.startsWith('/kmart/search')).length >= before + 2, { timeout: 15000, message: 'two Kmart searches' });
+    await waitFor(() => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length >= before + 2, { timeout: 15000, message: 'two Kmart searches' });
     assert.ok(sw.loops.has('demo-kmart'));
     assert.ok(sw.events.some((e) => e.type === 'sys' && /Live sweeps started — .*Kmart \(dummy store\).* from Mugibot's server · .*EB Games \(dummy store\) from admins' browsers/.test(e.message)));
     assert.ok(sw.loops.has('demo-jbhifi'));

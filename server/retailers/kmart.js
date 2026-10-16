@@ -20,8 +20,22 @@ export default {
   skuFromPath: /-(\d{6,10})\/?$/,
   productPath: /^(\/kmart)?\/product\/[^/]*-\d{6,10}\/?$/,
   searchPath: '/search/?searchTerm={q}',
-  // Live sweeps: Kmart refuses servers, so an admin's browser (the extension) reads its search page.
-  sweep: { from: 'browser', parser: 'generic', path: '/search/?searchTerm={q}' },
+  // Live sweeps, from Mugibot's server. Kmart's search page has no products in it: once it's open,
+  // the page asks Kmart's search provider, Constructor.io, for them (with the public search key in
+  // Kmart's pages). Mugibot asks Constructor.io the same way, as Mugibot: each keyword within
+  // Kmart's Trading Cards category, sold by Kmart or Target (not marketplace sellers), newest
+  // first. (Until this, an admin's browser read the search page, and found nothing in it.)
+  sweep: {
+    from: 'server',
+    formerDefault: 'browser',
+    parser: 'constructor',
+    apiBase: 'https://ac.cnstrc.com',
+    path: '/search/{q}?key=key_GZTqlLr41FS2p7AY&c=mugibot-1.0&i=mugibot-monitor&s=1&section=Products&num_results_per_page=100'
+      + '&sort_by=numberOfDaysSinceStartDate&sort_order=ascending&filters%5Bgroup_id%5D=65839471a7eefbf864519e8c4009fc29'
+      + '&filters%5BSeller%5D=Kmart&filters%5BSeller%5D=Target',
+    pagePath: '&page={page}',
+    pages: 3,
+  },
   monitor: { server: true, browser: true },
   flow: {
     product: {
