@@ -1,9 +1,10 @@
-// Pokémon Center (Australia) — DRAFT. pokemoncenter.com/en-au. Its pages are behind a bot
-// check (Imperva) that turns servers away, so neither Mugibot's server nor anyone here could
-// open them: the checkout steps below are a best guess from Pokémon Center's other regions,
-// not tested anywhere yet. Members' browsers pass the check like any visitor. During big
-// drops Pokémon Center may put everyone in a queue first: ⚡ Buy waits behind it like you do,
-// and never tries to skip it.
+// Pokémon Center (Australia) — DRAFT. pokemoncenter.com/en-au only: every search, product
+// link, ⚡ Buy and checkout is on the Australian store; other regions' pages (/en-gb, the US
+// store) are left alone. Its pages are behind a bot check (Imperva) that turns servers away,
+// so neither Mugibot's server nor anyone here could open them: the checkout steps below are a
+// best guess, not tested anywhere yet. Members' browsers pass the check like any visitor.
+// During big drops Pokémon Center may put everyone in a queue first: ⚡ Buy waits behind it
+// like you do, and never tries to skip it.
 //
 // Product page: "Add to Cart" → straight to the cart → "Checkout" → guest → shipping
 //   address → delivery → payment → STOP at "Place Order".
@@ -23,9 +24,10 @@ export default {
   flowStatus: 'draft',
   flowNote: 'A best guess — Pokémon Center turns servers away, so its checkout hasn\'t been seen or tested. Watch each step.',
   skuLabel: 'Product code',
-  skuHint: 'The code after /product/ in the link, e.g. …/product/10-10447-108/…',
+  skuHint: 'The code after /product/ in an Australian store link, e.g. pokemoncenter.com/en-au/product/10-10447-108/…',
   skuFromPath: /\/product\/([0-9A-Za-z]+(?:-[0-9A-Za-z]+)+)\//,
-  productPath: /^(\/pokemoncenter)?(\/en-au)?\/product\/[0-9A-Za-z]+(-[0-9A-Za-z]+)+\/[^/?#]+\/?$/,
+  // Australian product pages only (the dummy store's copy lives under /pokemoncenter).
+  productPath: /^(\/en-au|\/pokemoncenter)\/product\/[0-9A-Za-z]+(-[0-9A-Za-z]+)+\/[^/?#]+\/?$/,
   searchPath: '/search/{q}',
   sweep: { from: 'browser', parser: 'generic', render: true, path: '/search/{q}', minSeconds: 30 },
   monitor: { server: true, browser: true },

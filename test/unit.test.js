@@ -85,6 +85,12 @@ test('retailers: each store has its own flow; product codes from links; demo cop
   assert.equal(retailers.forUrl('https://www.pokemoncenter.com/en-au/product/10-10447-108/pokemon-tcg-etb').id, 'pokemoncenter');
   assert.equal(sku('https://www.pokemoncenter.com/en-au/product/10-10447-108/pokemon-tcg-etb'), '10-10447-108');
   assert.equal(retailers.forUrl('https://www.pokemoncenter.com/product/10-10447-108/pokemon-tcg-etb'), null, "the US store isn't Pokémon Center Australia");
+  assert.equal(retailers.forUrl('https://www.pokemoncenter.com/en-gb/product/10-10447-108/pokemon-tcg-etb'), null, "nor is the UK one");
+  const pc = retailers.get('pokemoncenter');
+  assert.equal(pc.base, 'https://www.pokemoncenter.com/en-au');
+  assert.equal(retailers.searchUrl(pc, '43818648'), 'https://www.pokemoncenter.com/en-au/search/43818648');
+  assert.ok(pc.productPath.test('/en-au/product/10-10447-108/pokemon-tcg-etb'));
+  assert.ok(!pc.productPath.test('/en-gb/product/10-10447-108/pokemon-tcg-etb') && !pc.productPath.test('/product/10-10447-108/pokemon-tcg-etb'), 'only Australian product pages count in its search results');
   assert.equal(retailers.forUrl('https://p-bandai.com/au/item/N2863373001').id, 'pbandai');
   assert.equal(sku('https://p-bandai.com/au/item/N2863373001'), 'N2863373001');
   assert.equal(retailers.forUrl('https://p-bandai.com/us/item/N2863373001'), null);
