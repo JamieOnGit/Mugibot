@@ -176,11 +176,9 @@ export class Feed {
   message(alert, product = {}, { mention = '' } = {}) {
     const k = alert.kind === 'restock' && alert.status === STATUS.PREORDER ? KIND.preorder : KIND[alert.kind] || KIND.restock;
     const storeName = this.retailers.name(alert.store);
-    const q = new URLSearchParams({ store: alert.store, sku: alert.sku });
-    if (alert.url) q.set('url', alert.url);
-    if (alert.name) q.set('name', alert.name);
     const buttons = [];
-    if (alert.kind !== 'sold_out') buttons.push({ label: '⚡ Buy with Mugibot', url: `${this.cfg.baseUrl}/buy?${q}` });
+    // One click to the store, with whoever presses it's own checkout (signed: see Notifier.alertBuyLink).
+    if (alert.kind !== 'sold_out') buttons.push({ label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(alert) });
     if (alert.url) buttons.push({ label: 'Open product', url: alert.url });
     const cart = alert.kind !== 'sold_out' && this.retailers.cartUrl(alert.store, { sku: alert.sku, variantId: product.variant_id || product.variantId });
     if (cart) buttons.push({ label: 'Add to cart', url: cart });

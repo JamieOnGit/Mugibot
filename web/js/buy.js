@@ -1,4 +1,6 @@
-// The ⚡ Buy page: opened from a Discord ping. One press and you're on your way to checkout.
+// The ⚡ Buy page. ⚡ Buy links normally go straight to the store (server/routes/web.js); this page
+// is for the ones that can't: an expired or old link, or one from another website. One press and
+// you're on your way to checkout.
 import { $, api, setMsg } from './common.js';
 
 const q = new URLSearchParams(location.search);

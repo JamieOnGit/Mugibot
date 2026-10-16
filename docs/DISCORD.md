@@ -5,7 +5,7 @@ Discord is where members get pinged and hang out. Mugibot's bot:
 - **adds members to your server** with the `Member` role when they connect
   Discord and have an active membership, and **takes the role away** when the
   membership ends (or removes them from the server, if you choose)
-- **DMs each member** their own restock pings, with a **⚡ Buy ×N** button
+- **DMs each member** their own restock pings, with a **⚡ Buy** button
 - **posts restocks** of the SKUs admins announce in `#restocks`, pinging a role
 - answers **slash commands**: `/watch`, `/watchlist`, `/buy`, `/unwatch`,
   `/status`, and `/restock` (admins only)
@@ -186,10 +186,12 @@ Mugibot also checks that they're an admin in Mugibot.
    > Seen by the Mugibot monitor. Press ⚡ Buy to go straight to checkout.
    > [⚡ Buy] [Open product] [Watchlist]
 
-   **⚡ Buy** opens the store in their browser. With the extension connected,
-   it goes straight to checkout with one of it in the bag, and fills checkout
-   in up to the final button. The link is signed for that member and that
-   SKU, and it works for 30 minutes.
+   **⚡ Buy** opens the store in their browser straight away: one click, no
+   page in between. With the extension connected, it goes straight to
+   checkout with one of it in the bag, and fills checkout in up to the final
+   button. The link is signed for that member and that SKU (it only works
+   signed in as them) and goes straight through for 7 days; after that it
+   opens the ⚡ Buy page, where they press ⚡ Buy once.
 4. Slash commands work in the server and in DMs with the bot.
 
 If someone's membership ends, the bot takes the `Member` role away (within 10
@@ -209,9 +211,11 @@ When it restocks, the bot posts:
 > Kmart · SKU 43818648 · $360.00
 > [⚡ Buy with Mugibot] [Open product]
 
-**⚡ Buy with Mugibot** opens a page on your site where each member presses ⚡ Buy
-once. It uses their own details, and adds the SKU to their
-watchlist if it wasn't there. A SKU is posted at most once every 10 minutes.
+**⚡ Buy with Mugibot** is one click for whoever presses it: straight to the store
+with their own checkout and details, adding the SKU to their watchlist if it
+wasn't there. The link is signed by Mugibot and goes straight through for 7
+days; an older one (or one someone changed) opens the ⚡ Buy page first, where
+they press ⚡ Buy once. A SKU is posted at most once every 10 minutes.
 
 Seen something in stock yourself? `/restock store:Kmart sku:43818648 note:online only`,
 or Admin → **SKUs & restock pings**, DMs everyone watching that SKU and posts in

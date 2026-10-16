@@ -3,7 +3,7 @@
 
 import { purposeKey, verifyParts } from '../crypto.js';
 import { entitlement } from '../entitlement.js';
-import { num, str } from '../schema.js';
+import { item as checkItem, num, str } from '../schema.js';
 import { startBuy } from './user.js';
 
 function redirect(res, to) {
@@ -41,23 +41,79 @@ export async function handleWebRoute(ctx, req, res, url) {
   }
 
   // --- ⚡ Buy links -----------------------------------------------------------------------
-  // /buy/<item>?qty=1&t=<signed>: from your own DM — goes straight to the store (one of it; the
-  // qty is only part of what was signed, so links from before quantities were dropped still work).
-  // Without a valid signature (or from a channel post: /buy?store=…&sku=…) the
-  // buy page asks you to press ⚡ Buy once.
+  // One click: every ⚡ Buy goes straight to the store, with the product on its way into your bag.
+  //   /buy/<item>?qty=1&t=<signed>: from your own DM (the qty is only part of what was signed, so
+  //     links from before quantities were dropped still work).
+  //   /buy?store=…&sku=…&url=…&name=…&t=<signed>: a Monitor alert in a Discord channel — the same
+  //     link for everyone, each with their own checkout; not on your watchlist yet, it's added.
+  //   The same without a signature, pressed on Mugibot's own pages (the Monitor tab's ⚡ Buy).
+  // Anything else (an expired link, someone else's link to /buy from another website) opens the
+  // buy page, which asks you to press ⚡ Buy once: another site can't start a checkout for you.
+  // (Pressed on one of Mugibot's pages: the browser says so — Referer, and Sec-Fetch-Site where it
+  // sends it. Not passed on by the sign-in page, which follows any link it's given.)
+  const fromHere = (() => {
+    const site = req.headers['sec-fetch-site'];
+    if (site && site !== 'same-origin') return false;
+    try {
+      const ref = new URL(req.headers.referer);
+      return ref.host === String(req.headers.host || '') && !/^\/(login|signup|forgot|reset)\/?$/.test(ref.pathname);
+    } catch {
+      return false;
+    }
+  })();
   const m = p.match(/^\/buy\/([\w-]{4,60})$/);
   if (m) {
     if (!req.user) return loginFirst(res, url);
     const it = repo.getItem(req.user.id, m[1]);
     const qty = num(url.searchParams.get('qty'), { min: 1, max: 10, int: true, def: it ? it.quantity : 1 });
     const t = url.searchParams.get('t');
-    if (it && it.url && t && entitlement(req.user, repo.now()).active
-      && verifyParts(purposeKey(cfg.dataKey, 'buy-link'), [req.user.id, it.id, String(qty)], t, repo.now())) {
+    const signed = t && verifyParts(purposeKey(cfg.dataKey, 'buy-link'), [req.user.id, it ? it.id : '', String(qty)], t, repo.now());
+    if (it && it.url && (signed || fromHere) && entitlement(req.user, repo.now()).active && ctx.limiter.hit(`go:${req.user.id}`, 60, 60 * 1000)) {
       const { url: go } = startBuy(ctx, req.user, it);
       return redirect(res, go);
     }
     return false; // the buy page (pages.js) shows the item and a ⚡ Buy button
   }
-  if (p === '/buy' && !req.user) return loginFirst(res, url);
+  if (p === '/buy') {
+    if (!req.user) return loginFirst(res, url);
+    if (fromHere || ctx.notifier.verifyAlertBuyLink(url.searchParams)) {
+      const go = buyFromAlert(ctx, req.user, url.searchParams);
+      if (go) return redirect(res, go);
+    }
+    return false; // the buy page: what went wrong, or the ⚡ Buy button
+  }
   return false;
+}
+
+/**
+ * A Monitor alert's ⚡ Buy, for this member: their own watchlist item for that product (added if
+ * it isn't on it), then straight to the store. Null when it can't (no membership, a full
+ * watchlist, no product link yet…): the buy page then says why.
+ */
+function buyFromAlert(ctx, user, params) {
+  const { cfg, repo, retailers } = ctx;
+  if (!entitlement(user, repo.now()).active || !ctx.limiter.hit(`go:${user.id}`, 60, 60 * 1000)) return null;
+  const store = str(params.get('store'), 40);
+  const sku = str(params.get('sku'), 60);
+  // The alert's product link, as a watchlist item (only if it's that store's page).
+  const fromLink = () => {
+    if (!params.get('url')) return null;
+    const c = checkItem({ url: params.get('url'), store, sku, name: params.get('name') || '' }, { retailers });
+    return c.store === store && c.url ? c : null;
+  };
+  try {
+    let it = repo.itemBySku(user.id, store, sku);
+    if (!it) {
+      const add = repo.countItems(user.id) < cfg.limits.items ? fromLink() : null;
+      if (!add) return null;
+      it = repo.addItem(user.id, add);
+    } else if (!it.url) {
+      // On the watchlist before its page was found: the alert has it.
+      const found = fromLink();
+      if (found) it = { ...it, url: found.url };
+    }
+    return startBuy(ctx, user, it).url;
+  } catch {
+    return null;
+  }
 }
