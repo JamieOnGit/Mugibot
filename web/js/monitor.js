@@ -4,6 +4,7 @@
 // the live sweeps, add and change monitors, set up the Discord alert
 // channels, and see health and the check log here.
 import { $, $$, ago, api, busy, h, money, setMsg, toast, when } from './common.js';
+import { setupLive, slotOf } from './live.js';
 
 const KINDS = {
   restock: { emoji: '🟢', label: 'In stock' },
@@ -28,6 +29,11 @@ export function setupMonitor({ showError }) {
   const filters = () => ({ q: $('#m-q').value.trim(), category: $('#m-category').value, store: $('#m-store').value, status: $('#m-status').value });
   const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v)).toString();
   const buyUrl = (a) => `/buy?${qs({ store: a.store, sku: a.sku, url: a.url, name: a.name })}`;
+  const live = setupLive({
+    storeName, buyUrl, panelOpen, openProduct: (id) => openProduct(id),
+    sampleProduct: () => m.products.find((p) => p.image && p.price) || m.products[0] || null,
+    onSettings: (d) => { fillSweepForm(d); renderSweep(d); },
+  });
 
   // ---------------------------------------------------------------------------
   // Loading
@@ -38,43 +44,41 @@ export function setupMonitor({ showError }) {
       data = await api('GET', '/api/monitor');
     } catch (e) {
       if (e.status !== 402) throw e;
-      $('#m-stats').textContent = '';
-      $('#m-stats').append(h('div', { class: 'notice warn' }, h('b', {}, 'The Monitor feed is for members. '), h('a', { href: '#membership' }, 'Start your membership'), ' to see live restocks and price changes.'));
+      const box = $('#m-paywall');
+      box.textContent = '';
+      box.append(h('div', { class: 'notice warn' }, h('b', {}, 'The live monitor is for members. '), h('a', { href: '#membership' }, 'Start your membership'), ' to see every store\'s searches, new drops and restocks as they happen.'));
+      $('#sn-shell').hidden = true;
       return;
     }
+    $('#m-paywall').textContent = '';
+    $('#sn-shell').hidden = false;
     m.admin = data.admin;
     m.stores = data.stores;
     if (!m.loaded) fillChoices();
     m.loaded = true;
-    renderStats(data.overview);
     $('#m-add-toggle').hidden = !m.admin;
+    $('#ms-now').hidden = !m.admin;
     $('#m-admin').hidden = !m.admin;
-    await Promise.all([loadFeed(), loadProducts(), m.admin ? loadAdmin() : null]);
-  }
-
-  async function loadFeed(more = false) {
-    const f = filters();
-    const before = more && m.alerts.length ? m.alerts.at(-1).id : '';
-    const { alerts } = await api('GET', `/api/monitor/alerts?${qs({ kind: $('#m-kind').value, category: f.category, store: f.store, before })}`);
-    m.alerts = more ? [...m.alerts, ...alerts] : alerts;
-    const list = $('#m-feed');
-    if (!more) list.textContent = '';
-    if (!m.alerts.length) list.append(h('li', { class: 'empty' }, 'No alerts yet. They appear here the moment a product drops, restocks or changes price.'));
-    for (const a of alerts) list.append(feedItem(a));
-    $('#m-more').hidden = alerts.length < 30;
+    await Promise.all([live.load(), loadProducts(), m.admin ? loadAdmin() : null]);
   }
 
   async function loadProducts() {
     const { products } = await api('GET', `/api/monitor/products?${qs(filters())}`);
+    const seen = new Set(m.products.map((p) => p.id));
+    const fresh = m.products.length ? products.filter((p) => !seen.has(p.id)).map((p) => p.id) : [];
     m.products = products;
     const list = $('#m-products');
     list.textContent = '';
-    $('#m-count').textContent = `(${products.length})`;
+    $('#m-count').textContent = `${products.length} tracked`;
     if (!products.length) {
       list.append(h('li', { class: 'empty' }, filters().q || filters().category || filters().store || filters().status
         ? 'Nothing matches those filters.' : m.admin ? 'Nothing tracked yet — the live sweeps fill this in within a minute (or press + Add monitor).' : 'No products are being tracked yet.'));
     }
-    for (const p of products) list.append(productRow(p));
+    for (const p of products) {
+      const r = productRow(p);
+      if (fresh.includes(p.id)) r.classList.add('flash');
+      list.append(r);
+    }
   }
 
   function fillChoices() {
@@ -96,26 +100,6 @@ export function setupMonitor({ showError }) {
   }
   const ticked = (box) => $$('input:checked', box).map((i) => i.value);
   const tick = (box, values) => $$('input', box).forEach((i) => { i.checked = values.includes(i.value); });
-
-  // ---------------------------------------------------------------------------
-  // Health numbers
-  // ---------------------------------------------------------------------------
-  function renderStats(o) {
-    const health = o.okRate1h === null ? { cls: '', icon: '…', label: 'No checks yet' }
-      : o.okRate1h >= 90 ? { cls: 'good', icon: '✓', label: 'Healthy' }
-        : o.okRate1h >= 60 ? { cls: 'warning', icon: '!', label: 'Some failing' } : { cls: 'critical', icon: '✕', label: 'Mostly failing' };
-    const tile = (label, value, sub = '', cls = '') => h('div', { class: `stat ${cls}` }, h('div', { class: 'stat-label' }, label), h('div', { class: 'stat-value' }, String(value)), sub ? h('div', { class: 'stat-sub' }, sub) : null);
-    const box = $('#m-stats');
-    box.textContent = '';
-    box.append(
-      tile('Tracked', o.tracked + o.monitors, `${o.tracked} from sweeps · ${o.monitors} monitor${o.monitors === 1 ? '' : 's'}`),
-      tile('Available now', o.available, 'in stock or pre-order'),
-      tile('New drops', o.drops24h, 'last 24 hours'),
-      tile('Restocks', o.restocks24h, 'last 24 hours'),
-      tile('Price changes', o.priceChanges24h, 'last 24 hours'),
-      tile('Checks OK', o.okRate1h === null ? '—' : `${o.okRate1h}%`, `${health.icon} ${health.label}${o.checks1h ? ` · ${o.checks1h.toLocaleString()} / hour` : ''}`, health.cls),
-    );
-  }
 
   // ---------------------------------------------------------------------------
   // The feed and the products
@@ -171,16 +155,24 @@ export function setupMonitor({ showError }) {
 
   const isNewProduct = (p) => !!(p.sweep && p.sweep.firstAt && Date.now() - p.sweep.firstAt < DAY);
 
+  // One tracked product: picture, name, store, price (and the old one), stock, the last change, ⚡ Buy.
   function productRow(p) {
     const was = typeof p.previousPrice === 'number' && p.previousPrice !== p.price ? h('s', { class: 'muted small' }, money(p.previousPrice)) : null;
+    const diff = typeof p.previousPrice === 'number' && typeof p.price === 'number' ? Math.round((p.price - p.previousPrice) * 100) / 100 : 0;
+    const acts = [];
+    if (p.status !== 'not_found') acts.push(h('a', { class: 'btn small primary', href: buyUrl(p), target: '_blank', rel: 'noopener', title: 'Adds it to your watchlist and runs your checkout with the extension' }, '⚡ Buy'));
+    if (p.url) acts.push(h('a', { class: 'btn small', href: p.url, target: '_blank', rel: 'noopener', 'aria-label': `Open ${p.name || p.sku} at the store` }, '↗'));
     return h('li', { class: `product ${p.monitor && p.monitor.paused ? 'paused' : ''}`, dataset: { id: p.id } },
       thumb(p.image, p.name || p.sku),
       h('div', { class: 'info' },
-        h('button', { class: 'link-btn name', type: 'button', onclick: () => openProduct(p.id) }, p.name || p.sku),
-        isNewProduct(p) ? h('span', { class: 'pill info new-tag', title: `Found ${ago(p.sweep.firstAt)}` }, '🆕 New') : null,
-        h('div', { class: 'meta' }, `${storeName(p.store)} · ${CATEGORY[p.category]} · SKU ${p.sku}${p.monitor && p.monitor.paused ? ' · ⏸ paused' : ''}${p.sweep && p.sweep.seenAt ? ` · seen ${ago(p.sweep.seenAt)}` : ''}`)),
+        h('button', { class: 'link-btn name', type: 'button', onclick: () => openProduct(p.id), title: p.name || p.sku }, p.name || p.sku),
+        h('div', { class: 'meta' }, isNewProduct(p) ? h('span', { class: 'pill info new-tag', title: `Found ${ago(p.sweep.firstAt)}` }, '🆕 New') : null,
+          ` SKU ${p.sku}${p.monitor && p.monitor.paused ? ' · ⏸ paused' : ''}${p.sweep && p.sweep.seenAt ? ` · seen ${ago(p.sweep.seenAt)}` : ''}`)),
+      h('div', { class: 'store' }, h('span', { class: `sn-swatch s${slotOf(p.store)}`, 'aria-hidden': 'true' }), storeName(p.store)),
       h('div', { class: 'price' }, h('b', {}, money(p.price) || '—'), ' ', was),
-      h('div', { class: 'state' }, statusPill(p), h('div', { class: 'muted small' }, p.statusAt ? `since ${ago(p.statusAt)}` : '')));
+      h('div', { class: 'state' }, statusPill(p), h('div', { class: 'muted small' }, p.statusAt ? `since ${ago(p.statusAt)}` : '')),
+      h('div', { class: `delta ${diff < 0 ? 'down' : diff > 0 ? 'up' : ''}`, title: diff ? `Was ${money(p.previousPrice)}` : 'No price change' }, diff < 0 ? `▼ ${money(-diff)}` : diff > 0 ? `▲ ${money(diff)}` : '—'),
+      h('div', { class: 'acts' }, ...acts));
   }
 
   // ---------------------------------------------------------------------------
@@ -349,10 +341,12 @@ export function setupMonitor({ showError }) {
     $('#ms-drop').value = s.priceDropPercent;
     $('#ms-new').checked = s.newAlerts;
     $('#ms-restock').checked = s.restockAlerts;
+    $('#ms-price').checked = s.priceAlerts;
     $('#ms-once').checked = s.restockOncePerDay;
     $('#ms-market').checked = s.skipMarketplace;
     $('#ms-tcg').checked = s.tcgOnly;
     $('#ms-terms-input').value = s.tcgTerms.join(', ');
+    $('#ms-notcard-input').value = (s.notCardTerms || []).join(', ');
     const box = $('#ms-stores');
     $$('.store-mode', box).forEach((e) => e.remove());
     for (const st of d.stores) {
@@ -404,8 +398,9 @@ export function setupMonitor({ showError }) {
     renderSweep(d);
   }
 
-  // Each sweep tells open admin dashboards straight away; the table refreshes at most every 2 seconds.
-  function onSweep() {
+  // Each search: the live console straight away; the admins' table at most every 2 seconds.
+  function onSweep(ev) {
+    live.onSweep(ev);
     if (!m.admin || !panelOpen() || m.sweepTimer) return;
     m.sweepTimer = setTimeout(() => { m.sweepTimer = null; loadSweep({ form: false }).catch(() => null); }, 2000);
   }
@@ -505,11 +500,11 @@ export function setupMonitor({ showError }) {
   // Controls
   // ---------------------------------------------------------------------------
   let filterTimer = null;
-  const refilter = () => { clearTimeout(filterTimer); filterTimer = setTimeout(() => Promise.all([loadProducts(), loadFeed()]).catch(showError), 200); };
+  const refilter = () => { clearTimeout(filterTimer); filterTimer = setTimeout(() => loadProducts().catch(showError), 200); };
   $('#m-q').addEventListener('input', refilter);
   for (const id of ['#m-category', '#m-store', '#m-status']) $(id).addEventListener('change', refilter);
-  $('#m-kind').addEventListener('change', () => loadFeed().catch(showError));
-  $('#m-more').addEventListener('click', () => loadFeed(true).catch(showError));
+  $('#m-kind').addEventListener('change', () => live.setFilter($('#m-kind').value));
+  $('#m-more').addEventListener('click', () => live.loadOlder().catch(showError));
   $('#m-add-toggle').addEventListener('click', () => { const f = $('#m-add'); f.hidden = !f.hidden; if (!f.hidden) $('#ma-url').focus(); });
 
   $('#m-add').addEventListener('submit', (e) => {
@@ -558,18 +553,23 @@ export function setupMonitor({ showError }) {
       try {
         const d = await api('PUT', '/api/monitor/sweep', {
           enabled: $('#ms-enabled').checked, keywords: $('#ms-keywords').value, everySeconds: $('#ms-every').value, browserEverySeconds: $('#ms-bevery').value,
-          priceDropPercent: $('#ms-drop').value, newAlerts: $('#ms-new').checked, restockAlerts: $('#ms-restock').checked, restockOncePerDay: $('#ms-once').checked,
-          skipMarketplace: $('#ms-market').checked, tcgOnly: $('#ms-tcg').checked, tcgTerms: $('#ms-terms-input').value, stores,
+          priceDropPercent: $('#ms-drop').value, newAlerts: $('#ms-new').checked, restockAlerts: $('#ms-restock').checked, priceAlerts: $('#ms-price').checked, restockOncePerDay: $('#ms-once').checked,
+          skipMarketplace: $('#ms-market').checked, tcgOnly: $('#ms-tcg').checked, tcgTerms: $('#ms-terms-input').value, notCardTerms: $('#ms-notcard-input').value, stores,
         });
         fillSweepForm(d);
         renderSweep(d);
+        live.setSettings(d.settings);
         setMsg($('#ms-msg'), 'Saved. New keywords and filters start by noting what\'s already there, so the first search of each doesn\'t alert.', true);
       } catch (err) {
         setMsg($('#ms-msg'), err.message);
       }
     });
   });
-  $('#ms-reset-terms').addEventListener('click', () => { if (m.sweepDefaults) $('#ms-terms-input').value = m.sweepDefaults.tcgTerms.join(', '); });
+  $('#ms-reset-terms').addEventListener('click', () => {
+    if (!m.sweepDefaults) return;
+    $('#ms-terms-input').value = m.sweepDefaults.tcgTerms.join(', ');
+    $('#ms-notcard-input').value = m.sweepDefaults.notCardTerms.join(', ');
+  });
   $('#ms-now').addEventListener('click', async (e) => {
     e.target.disabled = true;
     try {
@@ -631,19 +631,8 @@ export function setupMonitor({ showError }) {
   // Live updates (from the dashboard's event stream)
   // ---------------------------------------------------------------------------
   function onFeed(a) {
-    if (a.kind === 'restock') toast(`${KINDS.restock.emoji} ${a.status === 'preorder' ? 'Pre-order open' : 'In stock'}: ${a.name}`, `${storeName(a.store)} · ${money(a.price)} — see the Monitor tab`, 'urgent', 15000);
-    if (!panelOpen()) return;
-    const list = $('#m-feed');
-    $('.empty', list)?.remove();
-    const kind = $('#m-kind').value;
-    const f = filters();
-    const fits = (!kind || kind === a.kind || (kind === 'price' && a.kind.startsWith('price'))) && (!f.category || f.category === a.category) && (!f.store || f.store === a.store);
-    if (fits) {
-      const li = feedItem(a);
-      li.classList.add('new');
-      list.prepend(li);
-    }
-    schedule();
+    live.onFeed(a);
+    if (panelOpen()) schedule(); // the product it's about has changed too
   }
 
   // A product changed: its row updates in place; a product that isn't listed yet brings a refresh.
@@ -656,8 +645,6 @@ export function setupMonitor({ showError }) {
       m.products[m.products.indexOf(known)] = merged;
       row.replaceWith(productRow(merged));
       if (m.current && m.current.product.id === p.id) openProduct(p.id).catch(() => null);
-      clearTimeout(m.statsTimer);
-      m.statsTimer = setTimeout(() => api('GET', '/api/monitor').then((d) => renderStats(d.overview)).catch(() => null), 1500);
       return;
     }
     schedule();
@@ -668,8 +655,6 @@ export function setupMonitor({ showError }) {
     clearTimeout(m.timer);
     m.timer = setTimeout(async () => {
       try {
-        const data = await api('GET', '/api/monitor');
-        renderStats(data.overview);
         await loadProducts();
         if (m.current) await openProduct(m.current.product.id);
       } catch { /* the next update will try again */ }

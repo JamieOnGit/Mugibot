@@ -26,6 +26,7 @@ function showTab() {
     return;
   }
   $$('[data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== tab; });
+  document.body.classList.toggle('wide-main', tab === 'monitor'); // the live monitor uses the full width
   $$('.side a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
   if (loaders[tab]) {
     loaders[tab]().then(() => {
@@ -772,7 +773,7 @@ function connectStream() {
   });
   es.addEventListener('monitor-feed', (e) => monitorUI.onFeed(JSON.parse(e.data)));
   es.addEventListener('monitor-product', (e) => monitorUI.onProduct(JSON.parse(e.data)));
-  es.addEventListener('monitor-sweep', () => monitorUI.onSweep());
+  es.addEventListener('monitor-sweep', (e) => monitorUI.onSweep(JSON.parse(e.data)));
   es.addEventListener('devices', () => {
     if (!$('[data-panel="extension"]').hidden) loadDevices().catch(() => null);
     renderExtStatus().catch(() => null);

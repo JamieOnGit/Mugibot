@@ -36,8 +36,10 @@ community. Built on TCGCopBot's working Kmart flow.
   from the server; Kmart, BIG W, EB Games and Zing from an admin's browser
   with the extension. Admins can also monitor single products. Each channel
   gets what its rule asks for (by category, store, kind or keyword). The
-  dashboard's **Monitor** tab shows the live feed, every tracked product, each
-  store's health and each product's price history.
+  dashboard's **Monitor** tab is a live console: each store's searches and
+  response times as they happen, an event log of every search and alert (with
+  the product's picture, price and ⚡ Buy), drop pop-ups with a sound and a
+  desktop notification, every tracked product and its price history.
 - **Admin console** at `/admin`: members, memberships, Discord status, SKU
   totals, restock pings, stores and flows, a setup check, Whop memberships and
   an audit log.

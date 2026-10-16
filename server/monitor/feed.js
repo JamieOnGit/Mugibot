@@ -112,10 +112,11 @@ export class Feed {
   /**
    * Send an alert for a product: kind 'restock' | 'listed' | 'sold_out' | 'price_drop' | 'price_rise'.
    * opts: { manual (an admin reported it: skips the cooldown), announce (an admin's 📣 SKU: no monitor needed),
-   *         sweep (a live sweep found it: no monitor needed, the sweep settings decide), note, pct }
+   *         sweep (a live sweep found it: no monitor needed, the sweep settings decide), note, pct,
+   *         detectedAt (when the store's answer came in: the alert says how long it took to reach dashboards) }
    * Returns the saved alert, or null when a monitor isn't asking for it or the cooldown is running.
    */
-  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null } = {}) {
+  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null } = {}) {
     const monitor = this.catalog.monitorForProduct(product.id);
     if (!manual && !announce && !sweep) {
       if (!monitor || monitor.paused) return null;
@@ -132,7 +133,7 @@ export class Feed {
       image: product.image || '', category: product.category, status: product.status, price: product.price ?? null,
       previous_price: product.previous_price ?? null, manual: manual ? 1 : 0, note: [note, pct !== null ? `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%` : ''].filter(Boolean).join(' '),
     });
-    const alert = toAlert(row);
+    const alert = { ...toAlert(row), ttnMs: detectedAt ? Math.max(0, this.now() - detectedAt) : null };
     this.broadcast('feed', alert);
     const posted = await this.post(alert, product);
     if (posted.length) this.catalog.setPosted(row.id, posted);
@@ -190,14 +191,6 @@ export class Feed {
       message: [alert.note, alert.manual ? 'Reported by an admin.' : ''].filter(Boolean).join('\n'),
       url: alert.url, image: alert.image, fields, footer: `${this.cfg.appName} Monitor`, embedColor: k.color, buttons,
     }, { mention });
-  }
-
-  /** Live updates for admins' open dashboards only (each sweep, as it happens). */
-  broadcastAdmins(type, data) {
-    for (const userId of this.hub.userIds()) {
-      const u = this.repo.userById(userId);
-      if (u && !u.disabled && u.role === 'admin') this.hub.publish(userId, `monitor-${type}`, data);
-    }
   }
 
   /** Live updates for every open dashboard of a member (or admin). */

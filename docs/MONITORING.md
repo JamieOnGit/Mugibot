@@ -61,6 +61,7 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
           products that count:           catalogue (products) → price history
             · every word of the keyword in the name ("pokemon" matches "Pokémon")
             · a trading-card word in the name (card, booster, ETB, tin, …)
+            · no "not cards" word (socks, T-shirt, plush, puzzle, …) unless it says TCG
             · not sold by a marketplace seller
                                          → 🆕 / 🟢 / 📉 alerts → feed, Discord, dashboards
 ```
@@ -127,19 +128,41 @@ its own loop, so a slow store never holds up the others.
    - **Price drop alert from**: 10% to start with; 0 turns price drop alerts off.
    - **Where each store is searched from**.
    - **Alerts**: new drops, restocks, and "at most one restock alert a day per product".
-   - **Which products count**: skip marketplace sellers, trading cards only, and the trading-card words.
+   - **Which products count**: skip marketplace sellers, trading cards only, the trading-card words, and the "not trading cards" words.
 
-## 4. Running it day to day
+## 4. Running it day to day: the live monitor
 
-- **Monitor tab** (every member):
-  - the live feed: new drops, restocks, price changes
-  - numbers: products tracked, available now, new drops / restocks / price changes in 24 h, checks OK in the last hour
-  - every tracked product, searchable and filterable by category, store and stock (and **New today**); 🆕 marks products found in the last 24 hours
-  - click a product for its price chart, alert history and (admins) check log
-- **Admins**, in the same tab:
-  - **Live sweeps**: each store's last search, products found, searches in the last hour, average time and any problem; **Every search** lists each keyword and page; **Sweep now** searches everything again straight away
-  - monitors (add, edit, pause, check now, remove), Discord alert channels, page-check health and the check log
-- **Discord**: `/monitor list`, `/monitor status`, `/restocks` as before.
+Dashboard → **Monitor** is a live console, laid out like DropSonar and
+styled like the rest of Mugibot. Everything on it is real: it comes from the
+sweeps as they happen.
+
+| Part | What it shows |
+|---|---|
+| **01 Live sonar** | A sweeping radar with a blip per store; a blip rings each time that store answers a search (red when a search fails). |
+| **02 Stores** | Each store: searching / slowed / retrying / waiting (for an admin's browser), searches so far, how long its last answer took, when its next search is, and where it's searched from. |
+| **03 Keywords** | What every store is searched for. Admins add (type + **Add**) and remove (×) keywords right here. |
+| **04 Tuning** | Admins: how often stores are searched (server stores 3–15 s, browser stores 5–60 s) and which alerts go out (new drops, restocks, price drops). Everyone: this browser's **Sound**, **Desktop notifications** and **Pop-up**. |
+| **Numbers** | Uptime, searches (and per hour), drops caught in 24 h, mean alert time (from a store's answer to your screen), errors / OK-in-a-row, available now. |
+| **05 Response times** | How long each store took to answer over the last 5 minutes, one line per store (hover or use the arrow keys for the exact times; **Show as a table** for the numbers). |
+| **06 Event log** | Every search ("Target · "pokemon" — 48 products · 412 ms"), fault, setting change and product that drops out of the results, plus every alert with the product's picture, price (and old price), **⚡ Buy** and a link to the store. Filter: everything, alerts only, new drops, restocks, price changes, searches, problems. |
+| **07 Tracked products** | Every product the sweeps track: picture, name, store, price (and old price), stock, the last price change, **⚡ Buy**. 🆕 marks products found in the last 24 hours. Click a name for its price history. |
+
+**Alerts:** a new drop or restock pops up on whatever dashboard tab you're on,
+with the picture, price, SKU, how fast it was alerted, **⚡ Buy**, **Open
+product** and **Dismiss** (it closes by itself after 10 seconds; more than one
+queue up). Press **🔔 Arm alerts** once per visit so the browser lets the
+monitor play a sound and show desktop notifications; the tab title also
+flashes while you're on another tab. **⚡ Test alert** runs the whole chain in
+your browser only, to check the sound and pop-up.
+
+**⚡ Buy** opens a new tab that adds the product to your watchlist and starts
+your checkout with the extension, as before.
+
+**Admins** also get **Sweep now** (search everything again straight away),
+**+ Add monitor**, and below the console: the full sweep settings and **Every
+search**, Discord alert channels, page-check health and the check log.
+
+**Discord**: `/monitor list`, `/monitor status`, `/restocks` as before.
 
 ## 5. Settings (environment variables, all optional)
 
@@ -165,7 +188,10 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | **The page didn't have the product list Mugibot reads** | The store changed its search page. Send a copy of the page (right-click → Save as) so the reader can be updated. |
 | **No products on the page** for a store and keyword | The store has nothing for that keyword, or (Kmart, BIG W, EB Games, Zing) its page builds the list later with JavaScript. Check **Every search**: if it stays 0 for a keyword the store does sell, send a copy of the page. |
 | A Target product shows **Out of stock** but it's on the site | It was missing from Target's results for 6 minutes. The next sweep that finds it puts it back (and alerts a restock). If it keeps happening, the keyword has more results than Mugibot reads: use a more specific keyword. |
-| A product you expect isn't tracked | Its name needs every word of the keyword and a trading-card word, and it must be sold by the store itself. Add the word to the trading-card words, or a keyword that matches it. |
+| A product you expect isn't tracked | Its name needs every word of the keyword and a trading-card word, no "not trading cards" word (unless it says TCG, trading card or card game), and it must be sold by the store itself. Adjust the word lists in the sweep settings. |
+| Clothes or toys in the list | MugiWatch's card words include "pack" and "sleeve", so "3 Pack Socks" looks like cards. Add the word (e.g. "onesie") to **Not trading cards**; products that no longer count leave the list when you save. |
+| No sound | Press **🔔 Arm alerts** (browsers only play sound after a click on the page), and check **Sound** is on under Tuning. |
+| No desktop notifications | Allow notifications for mugibot.com in the browser (the icon left of the address), then **Arm alerts** again. |
 | Lots of new drops after changing settings | Shouldn't happen: a changed keyword or filter sets the scene again first. If it does, tell me which store and keyword. |
 | Alerts in the dashboard but not in Discord | Admin → Setup check → **Check the Discord bot**, then **Post a test message**. Check the rule's channel ID, that it ticks 🆕 / 🟢 / 📉, and that the bot can post there. |
 
@@ -182,7 +208,8 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Catalogue, price history, alert history | `server/catalog.js`; `products`, `sweep_terms`, `price_history`, `feed_alerts` (`server/db.js`, migration 5) |
 | Admin API | `GET/PUT /api/monitor/sweep`, `POST /api/monitor/sweep/now` (`server/routes/monitor.js`) |
 | Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
-| Dashboard | `web/app.html`, `web/js/monitor.js` |
+| Dashboard | `web/app.html`, `web/js/live.js` (the live console: sonar, stores, chart, event log, alerts), `web/js/monitor.js` (products, product page, admin tools) |
+| The live event log | `emit()` and `live()` in `server/monitor/sweep.js`; `GET /api/monitor/live`; `monitor-sweep` events on the dashboard's stream |
 | Tests | `test/sweep.test.js`, plus the Monitor tab in `test/ui.test.js` and the admin's-browser sweep in `test/extension.e2e.test.js` |
 
 ### What changed from MugiWatch
