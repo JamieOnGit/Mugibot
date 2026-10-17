@@ -161,6 +161,28 @@ export function register(router, ctx) {
     return { ...out, routes: catalog.listRoutes() };
   }, admin);
   router.put('/api/monitor/routes/:id', async (req) => ({ route: manage.saveRoute(req.params.id, req.body) }), admin);
+
+  // --- VIP drops (monitor/vip.js): admins' watches, alerted in #vip-drop ----------------
+  const vipView = () => ({
+    watches: ctx.vip.view(), route: catalog.listRoutes().find((r) => r.vip) || null, fastSeconds: ctx.vip.fastSeconds, sweepSeconds: ctx.vip.sweepSeconds,
+    stores: sweeper.stores().map(({ retailer: r, mode }) => ({ id: r.id, name: r.name, mode, aco: !!r.flow })),
+  });
+  router.get('/api/monitor/vip', async () => vipView(), admin);
+  router.post('/api/monitor/vip', async (req) => {
+    const watch = ctx.vip.add(req.body || {}, req.user, manage);
+    // Searched straight away (its first search is what it compares the drop with).
+    if (watch.store) sweeper.sweepNow();
+    return { watch, ...vipView() };
+  }, admin);
+  router.delete('/api/monitor/vip/:id', async (req) => {
+    if (!ctx.vip.remove(req.params.id, req.user)) throw new HttpError(404, 'That VIP watch no longer exists');
+    return vipView();
+  }, admin);
+  router.post('/api/monitor/vip/channel', async (req) => {
+    if (!limiter.hit(`vipsetup:${req.user.id}`, 5, 10 * 60 * 1000)) throw new HttpError(429, 'Try again in a few minutes');
+    const out = await manage.setupVip({ roleId: req.body.roleId }, req.user);
+    return { ...out, ...vipView() };
+  }, admin);
   router.delete('/api/monitor/routes/:id', async (req) => ({ ok: catalog.deleteRoute(req.params.id) }), admin);
 
   router.post('/api/monitor/routes/:id/test', async (req) => {

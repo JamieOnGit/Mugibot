@@ -37,6 +37,7 @@ same products, the same alerts, the same ⚡ Buy.
 | Amazon AU | **An admin's browser** (the extension, 1.11.0 or later) | Amazon's search page, newest first (2 pages of 48), with "tcg" added to each keyword — asked for from inside an Amazon page in the extension's window. Amazon turns Mugibot's server away (**HTTP 503**, "An error occurred"), so nothing came through from the server. At most one search every 20 seconds |
 | EB Games | **An admin's browser** (the extension) | EB Games' own search data (the JSON its search page asks for: every product's code, price, picture, stock, pre-order and release date), newest first, 2 pages — asked for from inside an EB Games page in the extension's window |
 | Zing | Off | zingpopculture.com.au now sends every visitor to EB Games, so EB Games' sweeps cover it. An admin can switch it back on if Zing's own site returns |
+| City Beach | Mugibot's server | Its search page (Salesforce Commerce Cloud, made on the server): a tile per product with its code, name, brand and price (48 a search). Stock isn't in the tiles: it comes from the product page, which the monitor reads. At most one search every 10 seconds (every 4 in a VIP drop's window) |
 | Pokémon Center (Australia) | **An admin's browser** (the extension, 1.8.1 or later) | Its search page (`/en-au/search/<keyword>`, 32 a page), opened in the extension's window and read once it has built its product list, like BIG W's. Its bot check (Imperva) may reload the page first: the extension waits for it. At most one search every 30 seconds |
 | Premium Bandai (Australia) | **An admin's browser** (the extension, 1.8.1 or later) | The site's own search JSON (`/api/search?keyword=…`, newest arrivals first, up to 100), asked for from inside a Premium Bandai page in the extension's window with the region its own code sends (`x-g1-area-code: au`), like EB Games'. At most one search every 30 seconds |
 
@@ -228,6 +229,49 @@ watchlists aren't affected. Take an entry off with **Remove**. The first
 entry came with the update: Kmart's *Wave Book Storage - Oak* (SKU 43746880),
 which kept pinging the restock channel.
 
+### ⭐ VIP drops
+
+**Monitor → Settings → ⭐ VIP drops** (admins) is for drops you pick out:
+a limited release you know is coming, at any store, cards or not. They're
+posted in **`#vip-drop`** the moment they drop, and not in the store channels.
+
+1. **Make the #vip-drop channel** (once). The bot makes a **VIP** category with
+   `#vip-drop` in it, or uses a `#vip-drop` that's already there, with a rule
+   that takes VIP drops only. It can ping a role (e.g. @VIP). Until there's one,
+   VIP drops go to the store channels like any other alert.
+2. **Add a VIP watch**, either:
+   - **A store and the words in its name**: City Beach, *pokemon skate*.
+     - Those words are searched at that store, every other search.
+     - Anything with **every** word in its name counts (`skate` also matches
+       "Skateboard"; accents don't matter). "Trading cards only" doesn't apply.
+     - A product that's new since the watch's first search is a 🆕 new drop.
+     - The store's own keyword searches count a match too.
+   - **A product page**: any shop's link (a "misc" site too). A monitor reads it.
+3. **Drops at** (optional, your time). From 15 minutes before to 3 hours after:
+   - The store is searched for those words only, every **4 seconds**.
+   - What the watch found has its page read every **5 seconds**.
+   - Otherwise its pages are read every 15 seconds.
+4. **🤖 Auto-checkout it for me, up to $…** (optional). What the watch finds
+   goes on your watchlist, armed for Auto-checkout up to that max price. Your
+   browser checks out the moment its page says it's in stock. Your Auto-checkout
+   settings and limits still apply (switch it on, keep Chrome open with the
+   extension). It's armed the first time it's found, once: after a purchase it
+   stays disarmed.
+
+What a keyword watch finds gets a monitor of its own, so its page is read
+straight away for its stock: 🆕 when it's found, 🟢 when its page says it's in
+stock. Removing a watch removes the monitors it made. The list shows what each
+watch found, with its stock.
+
+**Add the watch before the drop.** Its first search is the "before" picture
+(nothing alerts then); what shows up after that is the drop. A keyword watch
+relies on the store's search showing the product. Some stores add new
+products to their search a few minutes late. If you have the product's link
+before the drop, add that as well: its page is read directly.
+
+Settings (environment variables): `VIP_FAST_SECONDS` (5), `VIP_SLOW_SECONDS`
+(15), `VIP_SWEEP_SECONDS` (4).
+
 ## 4. Running it day to day: the live monitor
 
 Dashboard → **Monitor** has three pages. Members see **Live**; admins also get
@@ -346,6 +390,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Admin API | `GET/PUT /api/monitor/sweep`, `POST /api/monitor/sweep/now`, `POST /api/monitor/sweep/reset` (`{store}`, or nothing for every store), `POST /api/monitor/routes/setup` (store channels) (`server/routes/monitor.js`) |
 | Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
 | Dashboard | `web/app.html` (Live, Settings and Check log pages), `web/js/live.js` (the live page: sonar, stores, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log) |
+| ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |
 | The live event log | `emit()` and `live()` in `server/monitor/sweep.js`; `GET /api/monitor/live`; `monitor-sweep` events on the dashboard's stream |
 | Tests | `test/sweep.test.js`, plus the Monitor tab in `test/ui.test.js` and the admin's-browser sweep in `test/extension.e2e.test.js` |

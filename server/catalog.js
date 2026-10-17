@@ -45,7 +45,7 @@ export function toBlacklisted(r) {
 
 export function toMonitor(r) {
   return r && {
-    id: r.id, productId: r.product_id, intervalSeconds: r.interval_seconds, paused: !!r.paused,
+    id: r.id, productId: r.product_id, intervalSeconds: r.interval_seconds, paused: !!r.paused, vipWatch: r.vip_watch || null,
     kinds: json(r.kinds, DEFAULT_KINDS), note: r.note, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -54,14 +54,14 @@ export function toAlert(r) {
   return r && {
     id: r.id, productId: r.product_id, kind: r.kind, store: r.store, sku: r.sku, name: r.name, url: r.url, image: r.image,
     category: r.category, status: r.status, price: r.price, previousPrice: r.previous_price, manual: !!r.manual, note: r.note,
-    posted: json(r.posted, []), at: r.at,
+    posted: json(r.posted, []), vip: !!r.vip, at: r.at,
   };
 }
 
 export function toRoute(r) {
   return r && {
     id: r.id, name: r.name, channelId: r.channel_id, roleId: r.role_id, categories: json(r.categories, []), stores: json(r.stores, []),
-    kinds: json(r.kinds, ['restock', 'listed']), keywords: r.keywords, enabled: !!r.enabled, fallback: !!r.fallback, createdAt: r.created_at,
+    kinds: json(r.kinds, ['restock', 'listed']), keywords: r.keywords, enabled: !!r.enabled, fallback: !!r.fallback, vip: !!r.vip, createdAt: r.created_at,
   };
 }
 
@@ -310,9 +310,9 @@ export class Catalog {
   // Alerts
   // ---------------------------------------------------------------------------
   addAlert(a) {
-    const { lastInsertRowid } = this.db.run(`INSERT INTO feed_alerts (product_id, kind, store, sku, name, url, image, category, status, price, previous_price, manual, note, at)
-      VALUES (:product_id, :kind, :store, :sku, :name, :url, :image, :category, :status, :price, :previous_price, :manual, :note, :at)`,
-    { previous_price: null, price: null, note: '', image: '', url: '', name: '', status: '', manual: 0, ...a, at: this.now() });
+    const { lastInsertRowid } = this.db.run(`INSERT INTO feed_alerts (product_id, kind, store, sku, name, url, image, category, status, price, previous_price, manual, note, vip, at)
+      VALUES (:product_id, :kind, :store, :sku, :name, :url, :image, :category, :status, :price, :previous_price, :manual, :note, :vip, :at)`,
+    { previous_price: null, price: null, note: '', image: '', url: '', name: '', status: '', manual: 0, vip: 0, ...a, at: this.now() });
     return this.db.get('SELECT * FROM feed_alerts WHERE id = :id', { id: Number(lastInsertRowid) });
   }
 
@@ -352,6 +352,7 @@ export class Catalog {
       name: r.name, channel_id: r.channelId, role_id: r.roleId || '', categories: JSON.stringify(r.categories || []),
       stores: JSON.stringify(r.stores || []), kinds: JSON.stringify(r.kinds || ['restock', 'listed']), keywords: r.keywords || '', enabled: r.enabled === false ? 0 : 1,
       fallback: r.fallback ? 1 : 0,
+      vip: r.vip ? 1 : 0,
     };
     if (id) {
       this.db.run(`UPDATE alert_routes SET ${Object.keys(row).map((c) => `${c} = :${c}`).join(', ')} WHERE id = :id`, { ...row, id });

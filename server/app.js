@@ -3,6 +3,7 @@
 
 import http from 'node:http';
 import { Aco } from './aco.js';
+import { Vip } from './monitor/vip.js';
 import { Catalog } from './catalog.js';
 import { loadConfig } from './config.js';
 import { Db } from './db.js';
@@ -55,7 +56,11 @@ export async function createApp(options = {}) {
   const monitor = new Monitor({ cfg, repo, retailers, notifier, hub, catalog, feed, fetchImpl: storeFetchImpl, now });
   const sweeper = new Sweeper({ cfg, repo, catalog, feed, monitor, retailers, hub, fetchImpl: storeFetchImpl, now });
   const limiter = new RateLimiter(now);
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, limiter, pageCache: new Map() };
+  // VIP drops: admins' watches, alerted in #vip-drop and checked fast around their drop time.
+  const vip = new Vip({ cfg, db, repo, catalog, retailers, hub, now });
+  monitor.vip = vip;
+  sweeper.vip = vip;
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, limiter, pageCache: new Map() };
   // Auto-checkout: started by the monitor when an armed item drops.
   const aco = new Aco({ ...ctx, now });
   ctx.aco = aco;

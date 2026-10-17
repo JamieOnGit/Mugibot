@@ -277,6 +277,31 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   assert.equal(await page.locator('#mr-list li', { hasText: 'misc-retailers' }).locator('.pill', { hasText: 'catch-all' }).count(), 1);
   assert.ok(discord.state.channels.some((c) => c.name === 'zing-pokemon' && c.type === 0 && c.parent_id), 'made in a "Mugibot alerts" category');
 
+  // ⭐ VIP drops: the #vip-drop channel, and a watch (City Beach, "pokemon skate", its drop time, Auto-checkout for me).
+  await page.waitForSelector('#vip-store option[value="citybeach"]', { state: 'attached' });
+  assert.match(await page.textContent('#vip-channel'), /No #vip-drop channel yet/);
+  await page.click('#vip-setup');
+  await page.waitForFunction(() => /Done: #vip-drop made/.test(document.querySelector('#vip-setup-msg').textContent), null, { timeout: 15000 });
+  assert.match(await page.textContent('#vip-channel'), /Posting in #vip-drop/);
+  await page.waitForFunction(() => /#vip-drop/.test(document.querySelector('#mr-list').textContent));
+  const tomorrow = new Date(Date.now() + 86400000);
+  const pad = (n) => String(n).padStart(2, '0');
+  await page.selectOption('#vip-store', 'citybeach');
+  await page.fill('#vip-words', 'Pokemon Skate');
+  await page.fill('#vip-drop', `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}T00:00`);
+  await page.fill('#vip-label', 'Pokémon skateboard');
+  await page.check('#vip-aco');
+  await page.click('#vip-form button[type=submit]');
+  await page.waitForFunction(() => /max price/.test(document.querySelector('#vip-msg').textContent), null, { timeout: 5000 });
+  await page.fill('#vip-max', '150');
+  await page.click('#vip-form button[type=submit]');
+  await page.waitForFunction(() => /Pokémon skateboard/.test(document.querySelector('#vip-list').textContent));
+  const vipList = await page.textContent('#vip-list');
+  assert.match(vipList, /City Beach: every word of "pokemon skate"/);
+  assert.match(vipList, /auto-checkout for owner up to \$150/);
+  assert.match(vipList, /Nothing with those words yet/);
+  if (shots) await page.screenshot({ path: path.join(shots, 'monitor-settings-vip.png'), fullPage: false });
+
   // The check log.
   await page.click('[data-panel="monitor-settings"] .mon-tabs a[data-mtab="monitor-log"]');
   await page.waitForFunction(() => /switched off|Monitor loop/.test(document.querySelector('#mh-loop').textContent));

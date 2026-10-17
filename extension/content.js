@@ -144,6 +144,28 @@
     return null;
   }
 
+  /**
+   * A store with a last "place order" stage after its final button (flow checkout.review: City
+   * Beach's ?stage=placeOrder): that stage's own final button, pressed once in the run — never again,
+   * even if the page comes back.
+   */
+  async function pressReview(run) {
+    const R = checkoutFlow && checkoutFlow.review;
+    if (!R || !(R.path instanceof RegExp) || !R.path.test(location.pathname + location.search)) return false;
+    const key = `mgbReview:${run.id || ''}`;
+    try { if (sessionStorage.getItem(key)) return false; } catch { return false; }
+    const finals = (checkoutFlow.final || []).filter((re) => re instanceof RegExp);
+    const btn = [...document.querySelectorAll('button, input[type="submit"], [role="button"]')]
+      .find((el) => MGBFill.isVisible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' && finals.some((re) => re.test((el.innerText || el.value || '').replace(/\s+/g, ' ').trim())));
+    if (!btn) return false;
+    try { sessionStorage.setItem(key, '1'); } catch { return false; }
+    const text = (btn.innerText || btn.value || '').trim();
+    report('step', `Auto-checkout pressed "${text}" on the last step (place order)`, null);
+    panel.setStatus('🤖 Placing your order…');
+    btn.click();
+    return true;
+  }
+
   /** After the final button: what happened (up to 45 s here; a new page carries on by itself). */
   async function watchOutcome(run, total) {
     const until = Date.now() + 45000;
@@ -151,6 +173,7 @@
     while (Date.now() < until) {
       await new Promise((r) => setTimeout(r, 400));
       const o = outcome();
+      if (!o && await pressReview(run)) continue;
       if (!o || (said && said === o.status)) continue;
       said = o.status;
       if (o.status === 'placed') {

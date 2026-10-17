@@ -77,7 +77,7 @@ export function setupMonitor({ showError }) {
   async function loadSettings() {
     if (!(await base())) return;
     if (!m.admin) { location.hash = '#monitor'; return; }
-    await Promise.all([live.load(), loadSweep(), loadRoutes()]);
+    await Promise.all([live.load(), loadSweep(), loadRoutes(), loadVip()]);
   }
 
   // Check log (admins): page checks and how each store answered.
@@ -497,6 +497,39 @@ export function setupMonitor({ showError }) {
     }
   }
 
+  // ⭐ VIP drops: admins' watches (a store and words, or a product page), posted in #vip-drop.
+  async function loadVip() {
+    renderVip(await api('GET', '/api/monitor/vip'));
+  }
+
+  function renderVip(d) {
+    const sel = $('#vip-store');
+    if (sel.options.length <= 1) for (const s of d.stores) sel.append(h('option', { value: s.id }, `${s.name}${s.mode === 'off' ? ' (sweeps off)' : ''}`));
+    $('#vip-meta').textContent = d.watches.length ? `${d.watches.length} watch${d.watches.length === 1 ? '' : 'es'}` : 'None yet';
+    $('#vip-channel').textContent = d.route ? `Posting in ${d.route.name}${d.route.enabled ? '' : ' (its rule is off)'} ✓` : 'No #vip-drop channel yet — until there is, VIP drops go to the store channels.';
+    $('#vip-setup').textContent = d.route ? 'Set up #vip-drop again' : 'Make the #vip-drop channel';
+    const list = $('#vip-list');
+    list.textContent = '';
+    for (const w of d.watches) {
+      const what = w.url ? 'Product page' : `${w.storeName || w.store}: every word of "${w.words}"`;
+      const bits = [
+        w.url ? w.url : '',
+        w.dropAt ? `drops ${new Date(w.dropAt).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}` : 'no drop time',
+        w.maxPrice !== null ? `🤖 auto-checkout for ${w.acoUserName || 'you'} up to ${money(w.maxPrice)}` : '',
+      ].filter(Boolean).join(' · ');
+      const found = w.found.length ? h('div', { class: 'meta' }, 'Found: ', ...w.found.map((p, i) => h('span', {}, i ? ', ' : '', h('a', { href: p.url || '#', target: '_blank', rel: 'noopener' }, p.name || p.id), ` (${STATUS[p.status] || p.status}${typeof p.price === 'number' ? `, ${money(p.price)}` : ''})`)))
+        : h('div', { class: 'meta' }, w.url ? 'Reading the page…' : 'Nothing with those words yet — it alerts the moment something shows up.');
+      list.append(h('li', {},
+        h('div', { class: 'info' },
+          h('div', { class: 'name' }, w.label || what, w.fastNow ? h('span', { class: 'pill info' }, `⚡ every ${w.url ? d.fastSeconds : d.sweepSeconds} s`) : null),
+          h('div', { class: 'meta' }, w.label ? `${what} · ${bits}` : bits), found),
+        h('div', { class: 'acts' }, h('button', {
+          class: 'btn small danger', type: 'button',
+          onclick: async () => { if (!confirm(`Remove the VIP watch "${w.label || what}"?`)) return; renderVip(await api('DELETE', `/api/monitor/vip/${w.id}`)); },
+        }, 'Remove'))));
+    }
+  }
+
   async function testRoute(r, button) {
     button.disabled = true;
     try {
@@ -638,6 +671,41 @@ export function setupMonitor({ showError }) {
     $('#ms-notcard-input').value = m.sweepDefaults.notCardTerms.join(', ');
   });
   $('#ms-reset-all').addEventListener('click', (e) => resetStore(null, e.currentTarget));
+  $('#vip-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const drop = $('#vip-drop').value;
+    const body = {
+      store: $('#vip-store').value, words: $('#vip-words').value.trim(), url: $('#vip-url').value.trim(), label: $('#vip-label').value.trim(),
+      dropAt: drop ? new Date(drop).getTime() : null, aco: $('#vip-aco').checked, maxPrice: $('#vip-max').value ? Number($('#vip-max').value) : null,
+    };
+    const form = e.target;
+    busy(form, async () => {
+      try {
+        const d = await api('POST', '/api/monitor/vip', body);
+        renderVip(d);
+        form.reset();
+        setMsg($('#vip-msg'), d.watch.url ? 'Added — its page is being read now.' : 'Added — searching for it now.', true);
+        setTimeout(() => loadVip().catch(() => {}), 4000);
+      } catch (err) {
+        setMsg($('#vip-msg'), err.message);
+      }
+    });
+  });
+  $('#vip-setup').addEventListener('click', async (e) => {
+    const button = e.currentTarget;
+    button.disabled = true;
+    setMsg($('#vip-setup-msg'), 'Setting up…', true);
+    try {
+      const d = await api('POST', '/api/monitor/vip/channel', { roleId: $('#vip-role').value.trim() });
+      setMsg($('#vip-setup-msg'), `Done: #${d.channel.name} ${d.channel.made ? 'made (in a "VIP" category)' : 'found'} — VIP drops are posted there now, and only there.`, true);
+      renderVip(d);
+      await loadRoutes();
+    } catch (err) {
+      setMsg($('#vip-setup-msg'), err.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
   // "Set up store channels": the bot finds or makes a channel per store and game, with a rule each.
   $('#mr-setup').addEventListener('click', async (e) => {
     const replace = $('#mr-setup-replace').checked;

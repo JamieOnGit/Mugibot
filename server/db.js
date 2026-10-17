@@ -406,6 +406,26 @@ const MIGRATIONS = [
   CREATE INDEX aco_runs_user ON aco_runs (user_id, created_at);
   CREATE INDEX aco_runs_status ON aco_runs (status, created_at);
   `,
+  // 9 — VIP drops (server/monitor/vip.js): admins' watches (a store + words, or a link) whose
+  //     alerts go to the VIP channel (#vip-drop), checked fast around their drop time.
+  `
+  CREATE TABLE vip_watches (
+    id TEXT PRIMARY KEY,
+    store TEXT NOT NULL DEFAULT '',      -- a keyword watch: the store searched ('' for a link)
+    words TEXT NOT NULL DEFAULT '',      -- …every word in the product's name
+    url TEXT NOT NULL DEFAULT '',        -- a link watch: the product page
+    label TEXT NOT NULL DEFAULT '',
+    drop_at INTEGER,                     -- when it drops: checked every few seconds around then
+    aco_user TEXT,                       -- an admin it's bought for (Auto-checkout), up to max_price
+    max_price REAL,
+    found TEXT NOT NULL DEFAULT '[]',    -- products it found: [{ productId, at }]
+    created_by TEXT,
+    created_at INTEGER NOT NULL
+  );
+  ALTER TABLE monitors ADD COLUMN vip_watch TEXT;
+  ALTER TABLE alert_routes ADD COLUMN vip INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE feed_alerts ADD COLUMN vip INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export class Db {

@@ -66,7 +66,7 @@ test('connection codes are easy to type', () => {
 });
 
 test('retailers: each store has its own flow; product codes from links; demo copies on the dummy store', () => {
-  assert.deepEqual(RETAILER_DEFS.map((r) => r.id), ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown', 'amazon', 'thegamescube', 'gamerholic', 'pokemoncenter', 'pbandai']);
+  assert.deepEqual(RETAILER_DEFS.map((r) => r.id), ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown', 'amazon', 'thegamescube', 'gamerholic', 'pokemoncenter', 'pbandai', 'citybeach']);
   for (const r of RETAILER_DEFS) {
     assert.ok(r.flow && r.flow.product && r.flow.checkout, `${r.id} has a flow`);
     assert.ok(r.flow.checkout.final.length, `${r.id} names its final button`);
