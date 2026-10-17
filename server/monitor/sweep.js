@@ -824,6 +824,8 @@ export class Sweeper {
         render: !!r.sweep.render,
         // A search the store's own page asks for (EB Games' JSON): asked from inside a page of the store.
         inPage: !!r.sweep.inPage,
+        // What the store answers with: 'html' (Amazon's search page) — else JSON.
+        expect: r.sweep.expect || 'json',
         // (Which page: openPath, '' for the store's front page. None: the site's address.)
         pageUrl: typeof r.sweep.openPath === 'string' ? `${r.base}${r.sweep.openPath.replace('{q}', encodeURIComponent(this.query(r, term.keyword)))}` : null,
         // The headers the store's own code sends with it (Premium Bandai's region: x-g1-area-code).

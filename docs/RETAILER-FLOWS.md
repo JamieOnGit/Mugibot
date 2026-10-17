@@ -144,7 +144,7 @@ export default {
       manual: [/enter address manually/i],          // optional: extra "type the address yourself" links
       fields: { 'input[name="mobile"]': 'phone' },  // optional: CSS selector → which detail goes there
       delivery: 'home',                             // pick home delivery (never click & collect)
-      payment: 'card',                              // pick card payment
+      payment: 'card',                              // pick card payment ('account': the card saved in the store account, e.g. Amazon)
       done: /confirmation|thank-?you/i,             // the order-placed page
     },
   },
@@ -162,6 +162,10 @@ stores. Some rules always apply, whatever a flow says:
 - "Add more" pop-ups after Add to bag ("Often Bought Together", "You may also
   like", a warranty offer) are closed with their ✕ or "No thanks", never
   accepted.
+- Checkout opened, but the store showed its bag, empty (the add didn't go
+  through, though the page looked busy — Kmart's shows nothing readable after
+  Add): back to the product, Add pressed once more; still empty, it stops and
+  says so, with what the page said.
 - Express payments (PayPal, Afterpay, Zip, Apple Pay…), click & collect,
   sign-in, newsletters and marketing boxes are never chosen.
 - Fields that already have a value (e.g. from a store account) are left alone.

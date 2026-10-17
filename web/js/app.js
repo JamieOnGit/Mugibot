@@ -642,7 +642,7 @@ const ACO_STEP = {
   placed: 'Order placed', ready: 'Filled in', needs_you: 'Needs you', failed: 'Failed', skipped: "Didn't start", expired: "Didn't start",
 };
 const ACO_FILTER = { placed: ['placed'], needs: ['needs_you', 'ready'], failed: ['failed', 'expired'], skipped: ['skipped'] };
-const TRIGGER = { sweep: 'seen by the live monitor', server: 'seen by the monitor', browser: 'seen by your browser', manual: 'reported by an admin' };
+const TRIGGER = { sweep: 'seen by the live monitor', server: 'seen by the monitor', browser: 'seen by your browser', manual: 'reported by an admin', test: 'test run (Trigger ACO)' };
 const versionBelow = (a, b) => {
   const pa = String(a || '0').split('.').map(Number);
   const pb = String(b || '0').split('.').map(Number);
@@ -695,15 +695,27 @@ function signInPill(store) {
   return h('a', { class: 'pill', href: l.signInUrl, target: '_blank', rel: 'noopener', title: 'Open the store once in the browser with the extension' }, 'Sign-in not seen yet');
 }
 
+// Armed items: a table, 10 to a page (the page kept while things change).
+const ACO_PAGE_SIZE = 10;
 function renderAcoItems() {
-  const list = $('#aco-items');
-  list.textContent = '';
-  const items = state.items;
-  const armed = items.filter((it) => it.aco).length;
+  const body = $('#aco-items');
+  body.textContent = '';
+  const armed = state.items.filter((it) => it.aco).length;
   $('#aco-armed-count').textContent = `${armed} armed`;
-  if (!items.length) { list.append(h('li', { class: 'empty' }, 'Your watchlist is empty — add SKUs on the Watchlist tab, then arm them here.')); return; }
+  const show = $('#aco-show').value;
+  const items = state.items.filter((it) => show !== 'armed' || it.aco);
+  const pages = Math.max(1, Math.ceil(items.length / ACO_PAGE_SIZE));
+  state.acoPage = Math.min(Math.max(1, state.acoPage || 1), pages);
+  renderAcoPager(pages, items.length);
+  if (!items.length) {
+    body.append(h('tr', { class: 'empty' }, h('td', { colspan: '5' }, show === 'armed'
+      ? 'Nothing armed yet — show every item and switch one on.'
+      : 'Your watchlist is empty — add SKUs on the Watchlist tab, then arm them here.')));
+    return;
+  }
   const lastRun = (id) => (state.aco.runs || []).find((r) => r.itemId === id);
-  for (const it of items) {
+  const from = (state.acoPage - 1) * ACO_PAGE_SIZE;
+  for (const it of items.slice(from, from + ACO_PAGE_SIZE)) {
     const can = it.acoCan;
     const toggle = h('button', { type: 'button', class: 'sn-sw', role: 'switch', 'aria-checked': it.aco ? 'true' : 'false', 'aria-label': `Auto-checkout ${it.name}`, disabled: !can });
     const max = h('input', { type: 'number', min: '0', step: '0.01', value: it.maxPrice ?? '', placeholder: 'Max $', 'aria-label': `Max price for ${it.name}`, class: 'aco-max' });
@@ -720,16 +732,69 @@ function renderAcoItems() {
     };
     toggle.addEventListener('click', () => save({ aco: !it.aco, maxPrice: max.value }));
     max.addEventListener('change', () => save({ maxPrice: max.value }));
+    const on = state.aco.settings.enabled;
+    const test = h('button', {
+      type: 'button', class: 'btn small aco-test', disabled: !can || !on,
+      title: !can ? 'No checkout for this store yet' : !on ? 'Switch Auto-checkout on first (above)' : 'Run Auto-checkout for this item now, as if it had just dropped',
+    }, 'Trigger ACO');
+    test.addEventListener('click', () => triggerAco(it, max, test));
     const run = lastRun(it.id);
-    list.append(h('li', { class: `aco-item${it.aco ? ' armed' : ''}`, dataset: { id: it.id } },
-      toggle,
-      h('div', { class: 'info' },
+    body.append(h('tr', { class: `aco-item${it.aco ? ' armed' : ''}`, dataset: { id: it.id } },
+      h('td', { class: 'sw' }, toggle),
+      h('td', { class: 'info' },
         h('div', { class: 'name' }, it.name),
         h('div', { class: 'meta' }, [it.storeName, `SKU ${it.sku}`, money(it.lastPrice ?? it.price)].filter(Boolean).join(' · '),
           !can ? ' · no checkout for this store yet' : !it.acoPlaces ? ' · stops at the final button here (its payment form is another site\'s)' : ''),
         run ? h('div', { class: `meta aco-last ${ACO_TONE[run.status] || ''}` }, `Last: ${ACO_ICON[run.status] || '⏳'} ${run.statusText}${run.reasonText ? ` — ${run.reasonText}` : ''} · ${ago(run.createdAt)}`) : null),
-      signInPill(it.store),
-      h('label', { class: 'aco-max-wrap' }, 'Max $ ', max)));
+      h('td', { class: 'signin' }, signInPill(it.store) || h('span', { class: 'muted' }, '—')),
+      h('td', { class: 'max' }, h('label', { class: 'aco-max-wrap' }, h('span', { 'aria-hidden': 'true' }, '$'), max)),
+      h('td', { class: 'act' }, test)));
+  }
+}
+
+function renderAcoPager(pages, total) {
+  const nav = $('#aco-pager');
+  nav.textContent = '';
+  nav.hidden = pages <= 1;
+  if (pages <= 1) return;
+  const go = (p) => { state.acoPage = p; renderAcoItems(); };
+  const from = (state.acoPage - 1) * ACO_PAGE_SIZE + 1;
+  const prev = h('button', { type: 'button', class: 'btn small', disabled: state.acoPage <= 1, 'aria-label': 'Previous page' }, '‹ Prev');
+  const next = h('button', { type: 'button', class: 'btn small', disabled: state.acoPage >= pages, 'aria-label': 'Next page' }, 'Next ›');
+  prev.addEventListener('click', () => go(state.acoPage - 1));
+  next.addEventListener('click', () => go(state.acoPage + 1));
+  const nums = [];
+  for (let p = 1; p <= pages; p++) {
+    const b = h('button', { type: 'button', class: `btn small pg${p === state.acoPage ? ' on' : ''}`, 'aria-label': `Page ${p}`, 'aria-current': p === state.acoPage ? 'page' : null }, String(p));
+    b.addEventListener('click', () => go(p));
+    nums.push(b);
+  }
+  nav.append(prev, ...nums, next, h('span', { class: 'muted small pg-sum' }, `${from}–${Math.min(from + ACO_PAGE_SIZE - 1, total)} of ${total}`));
+}
+
+/** Trigger ACO: a test run for one item, now (after saying what it will do). */
+async function triggerAco(it, maxInput, btn) {
+  const s = state.aco.settings;
+  const maxNow = maxInput.value === '' ? null : Number(maxInput.value);
+  const how = s.mode === 'place'
+    ? `If everything checks out it PLACES A REAL ORDER — one of it${maxNow != null ? `, up to ${money(maxNow)} plus delivery` : ''}, within your limits.`
+    : 'It fills checkout in and stops at the final button for you (your mode).';
+  if (!confirm(`Trigger ACO for ${it.name}?\n\nYour browser opens ${it.storeName} now and checks out as if it had just dropped. ${how}`)) return;
+  btn.disabled = true;
+  try {
+    // A max price typed in but not saved yet: saved first.
+    if (String(maxInput.value) !== String(it.maxPrice ?? '')) await api('PUT', `/api/items/${it.id}`, { maxPrice: maxInput.value });
+    const { run } = await api('POST', `/api/aco/test/${it.id}`);
+    if (run.status === 'skipped') toast("Auto-checkout didn't start", run.message || run.reasonText, 'warn');
+    else toast('Auto-checkout test started', `Your browser is opening ${it.storeName} — follow it in the Activity list below.`, 'success');
+    // This browser picks it up now (it listens while something waits for it).
+    askExtension('acoListen', {}, 4000);
+    await Promise.all([loadItems(), loadAco()]);
+    renderAco();
+  } catch (e) {
+    toast("Couldn't trigger it", e.message, 'warn');
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -836,6 +901,7 @@ $('#aco-form').addEventListener('submit', (e) => {
   });
 });
 $('#aco-filter').addEventListener('change', () => renderAcoRuns());
+$('#aco-show').addEventListener('change', () => { state.acoPage = 1; renderAcoItems(); });
 $('#aco-recheck').addEventListener('click', () => renderAcoChecks().catch(() => null));
 
 // ---------------------------------------------------------------------------

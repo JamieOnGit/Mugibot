@@ -88,7 +88,7 @@
   // The run in this tab (from its ⚡ Buy code, or — on later pages — from the tab's pass in the extension).
   let aco = null;
   const acoReport = (status, reason, message, total) => ask({ type: 'acoReport', status, reason: reason || '', message: message || '', total: typeof total === 'number' ? total : undefined });
-  const acoWhy = (reason) => { if (aco) acoReport('failed', reason, null); };
+  const acoWhy = (reason, message) => { if (aco) acoReport('failed', reason, message || null); };
 
   const CONFIRM_RE = /thank you for (your )?(order|purchase|shopping)|order (number|no\.?|#)\s*[:#]?\s*[A-Z0-9-]{4,}|your order (has been|is) (placed|confirmed|received)|order (confirmed|received|complete)\b/i;
   const DECLINE_RE = /declined|payment (failed|unsuccessful|was not (successful|processed)|could not be processed|didn.?t go through)|card (was|has been) (declined|rejected)|unable to (process|authori[sz]e) (your )?(payment|card)|insufficient funds|transaction (failed|was declined)|card number is (invalid|incorrect)|(expired|invalid) card/i;
@@ -199,8 +199,10 @@
       return;
     }
     if (run.placing) return; // pressed already in this run (the page came back): never twice
-    if (!data.card) return acoStop('needs_you', 'card_missing', 'No card is saved in the extension — add it (icon → Card settings) and finish this yourself.', fin);
-    if (checkoutFlow && checkoutFlow.payment === 'card' && !(await cardIn())) return acoStop('needs_you', 'card_not_filled', "Your card didn't go into the store's card boxes — type it in and press the button yourself.", fin);
+    // (Stores that pay with the card saved in your account there — Amazon's — need none from the extension.)
+    const ownCard = !checkoutFlow || checkoutFlow.payment !== 'account';
+    if (ownCard && !data.card) return acoStop('needs_you', 'card_missing', 'No card is saved in the extension — add it (icon → Card settings) and finish this yourself.', fin);
+    if (ownCard && checkoutFlow && checkoutFlow.payment === 'card' && !(await cardIn())) return acoStop('needs_you', 'card_not_filled', "Your card didn't go into the store's card boxes — type it in and press the button yourself.", fin);
     await new Promise((r) => setTimeout(r, 400)); // the page's own checks on the last boxes
     const err = pageError();
     if (err) return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);

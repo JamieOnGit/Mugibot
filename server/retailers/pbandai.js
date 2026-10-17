@@ -41,7 +41,8 @@ export default {
     minSeconds: 30,
   },
   // Store login monitor: the page's USER_DATA has the member ("loggedInMember") once you're signed in.
-  account: { signIn: '', check: { path: '', signedIn: /USER_DATA\s*=\s*\{[^\n]*"loggedInMember"\s*:\s*\{/, signedOut: /USER_DATA\s*=\s*\{/ } },
+  // required: Premium Bandai only sells to signed-in members (Auto-checkout doesn't start while you're signed out).
+  account: { signIn: '', required: true, check: { path: '', signedIn: /USER_DATA\s*=\s*\{[^\n]*"loggedInMember"\s*:\s*\{/, signedOut: /USER_DATA\s*=\s*\{/ } },
   monitor: { server: true, browser: true },
   flow: {
     product: {

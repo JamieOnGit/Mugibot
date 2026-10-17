@@ -33,6 +33,7 @@ var MGBQuick = (function () {
   // How long to wait for a page built with React or Vue to wire up its Add button.
   var READY_MS = 8000;
   var ADDED_RE = /\badded to (your )?(bag|cart|basket|trolley)\b|\bitems? added\b/i;
+  var EMPTY_RE = /\b(bag|cart|basket|trolley) is (currently )?empty\b|\bno items in (your )?(shopping )?(bag|cart|basket|trolley)\b|\bnothing in (your )?(bag|cart|basket|trolley)\b/i;
   var RECOMMENDATIONS = '[class*="recommend" i], [id*="recommend" i], [class*="carousel" i], [class*="related" i], [class*="upsell" i], [class*="product-card" i], [class*="product-tile" i], [class*="also-like" i]';
   var DRAWER = '[role="dialog"], [aria-modal="true"], [class*="drawer" i], [class*="minicart" i], [class*="mini-cart" i], [class*="mini-bag" i], [class*="minibag" i], [class*="flyout" i], [class*="modal" i], [class*="side-cart" i], [class*="added-to" i], [class*="addedto" i]';
   var EXPRESS = /paypal|afterpay|zip ?pay|\bzip\b|klarna|humm|latitude|apple ?pay|google ?pay|shop ?pay|express|continue shopping/i;
@@ -248,6 +249,29 @@ var MGBQuick = (function () {
   }
 
   /**
+   * The bag page says there's nothing in it ("Your bag is empty"). Its words, not the number on the
+   * bag icon: that can show 0 for a moment while a slow bag page loads (and pressing Add again
+   * then would add a second one).
+   */
+  function bagLooksEmpty() {
+    var main = document.querySelector('main') || document.body;
+    return EMPTY_RE.test((main.innerText || '').slice(0, 5000)) && !(bagCount() > 0);
+  }
+
+  /** What the store's page is saying right now (an error, a pop-up's title), for "why it wasn't added". */
+  function pageSays() {
+    var els = toArray(document.querySelectorAll('[role="alert"], [role="alertdialog"], [role="dialog"], [aria-live="assertive"], [class*="error" i], [class*="toast" i]'));
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (inAnyPanel(el) || !isVisible(el)) continue;
+      var head = el.querySelector('h1, h2, h3, h4');
+      var t = ((head && head.innerText) || el.innerText || '').trim().replace(/\s+/g, ' ');
+      if (t && /[a-z]{3}/i.test(t) && !ADDED_RE.test(t)) return t.slice(0, 100);
+    }
+    return '';
+  }
+
+  /**
    * On a page that has only just opened, give the store's own code time to start: until the
    * page has loaded, and settleMs after. Only for pages where Mugibot can't see when the
    * store's code has wired up its Add button (see whenReady).
@@ -392,6 +416,7 @@ var MGBQuick = (function () {
 
   function pressAdd(page, add) {
     page.before = new Set(controls());
+    page.saidBefore = pageSays(); // (a message already showing isn't about this press)
     if (page.watch) page.watch.stop();
     page.watch = watchPage();
     add.click();
@@ -424,14 +449,45 @@ var MGBQuick = (function () {
       return 'checkout';
     }
 
-    /** Added: straight to the store's checkout page, or its popup's Checkout button. */
-    function openCheckout(popup) {
+    /**
+     * Added: straight to the store's checkout page, or its popup's Checkout button. The trip is
+     * remembered: a store sends an empty bag to its bag page instead of checkout (the add didn't go
+     * through, though the page looked busy), and that's caught there.
+     */
+    function openCheckout(popup, flow) {
       if (!C.url && popup) return goCheckout(popup);
-      store.clear();
-      setStatus('Added — opening checkout…');
+      store.save(Object.assign({}, flow, { stage: 'to-checkout', leftAt: Date.now() }));
+      setStatus(flow && flow.added ? 'Added — opening checkout…' : 'Opening checkout…');
       report('checkout', 'Opening checkout', product);
       location.assign(storePath(R, C.url));
       return 'navigating';
+    }
+
+    /**
+     * On the bag page with no Checkout button after a few seconds, and the bag looks empty: the add
+     * didn't go through (the page only looked busy) — back to the product to press Add once more,
+     * or say so. null: the bag isn't empty (keep looking).
+     */
+    function emptyBag(flow, how) {
+      if (!bagLooksEmpty()) return null;
+      if (!flow.retried && flow.productUrl) {
+        store.save(Object.assign({}, flow, { stage: 'add-again', retried: true, startedAt: Date.now() }));
+        setStatus('Your bag is empty — the add didn\'t go through. Going back to press Add again…');
+        report('error', how + ', but the bag was empty — pressing Add again', product);
+        location.assign(flow.productUrl);
+        return 'navigating';
+      }
+      return notAdded(flow.said || '');
+    }
+
+    /** The add didn't go through (nothing to show for it, or the store sent an empty bag back). */
+    function notAdded(said) {
+      store.clear();
+      var name = (R && R.name) || 'The store';
+      setStatus(name + ' didn\'t add it to your bag' + (said ? ' — the page said: "' + said + '"' : '') + '. Press Add to bag yourself, then Checkout.');
+      report('error', name + ' did not add it to the bag' + (said ? ' (the page said: "' + said + '")' : ''), product);
+      why('not_added', said ? 'The page said: "' + said + '"' : '');
+      return 'error';
     }
 
     async function checkoutFromBag() {
@@ -473,12 +529,13 @@ var MGBQuick = (function () {
       }
       add = await whenReady(R, add, opts.probe, setStatus);
       // Save before clicking in case the site changes page straight away.
-      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, countBefore: bagCount() });
+      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, countBefore: bagCount(), productUrl: location.href.split('#')[0] });
       setStatus('Adding to your bag…');
       pressAdd(page, add);
       report('add', 'Clicked "' + textOf(add).slice(0, 40) + '"', product);
     }
 
+    var arrived = Date.now(); // when this page started looking (a bag page takes a moment to show what's in it)
     var deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
       var flow = store.read();
@@ -499,19 +556,56 @@ var MGBQuick = (function () {
         report('checkout', 'Reached checkout', product);
         return 'checkout';
       }
-      if (flow.stage === 'cart-link') {
+      if (flow.stage === 'to-checkout') {
+        // On the way to checkout, and the store opened its bag instead: with the item in it, its
+        // Checkout button; empty, the add didn't go through — back to the product to press Add once
+        // more, or say so.
+        // (Somewhere else — a sign-in page on the way, say: checkout's own steps take it from here, as before.)
+        if (!onBagPage(R)) { store.clear(); return 'checkout'; }
+        if (onBagPage(R)) {
+          var fromBag = findCheckout(R, true) || findCheckout(R, false);
+          if (fromBag) return goCheckout(fromBag);
+          if (Date.now() - arrived > 4000) {
+            var gone = emptyBag(flow, 'Opened checkout');
+            if (gone) return gone;
+            store.clear();
+            setStatus("Couldn't find the Checkout button on your bag page. Continue yourself.");
+            report('error', 'The store opened its bag instead of checkout, with no Checkout button', product);
+            why('no_checkout');
+            return 'error';
+          }
+        }
+      } else if (flow.stage === 'add-again') {
+        // Back on the product page after an empty bag: press Add once more (then as before).
+        var again2 = await waitForEl(function () { skipUpsell(); return findAddToBag(R); }, (opts.waitForButtonMs || part(R, 'product').waitMs || 12000));
+        if (!again2) {
+          store.clear();
+          setStatus("Add to bag isn't available any more — sold out, or the page is still loading.");
+          report('error', 'Add button not available', product);
+          why('sold_out');
+          return 'error';
+        }
+        again2 = await whenReady(R, again2, opts.probe, setStatus);
+        store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), added: false, said: '' }));
+        setStatus('Adding to your bag again…');
+        pressAdd(page, again2);
+        report('add', 'Pressed "' + textOf(again2).slice(0, 40) + '" again', product);
+      } else if (flow.stage === 'cart-link') {
         // The cart link opened the cart instead of checkout (e.g. the store wants you to look first).
         if (onBagPage(R)) return checkoutFromBag();
       } else if (flow.stage === 'add-clicked') {
         var since = Date.now() - (flow.clickedAt || flow.startedAt);
         // The store's "added" popup, with its own Checkout button (one that wasn't there before the press).
         var popup = since > 200 ? findCheckout(R, true, page.before) : null;
-        if (popup) return openCheckout(popup);
+        if (popup) return openCheckout(popup, flow);
         if (onBagPage(R)) {
           // The store opened its bag by itself after adding.
           store.save(Object.assign({}, flow, { stage: 'bag-clicked', bagAt: Date.now() }));
           continue;
         }
+        // Anything the store says after the press (an error, a pop-up) — kept, for "why it wasn't added".
+        var said = flow.added ? '' : pageSays();
+        if (said && said !== page.saidBefore && said !== flow.said) { flow = Object.assign({}, flow, { said: said }); store.save(flow); }
         // Only leave the page once the store shows it was added: its bag count went up, an
         // "Added to bag" message, or (where no count shows) its cart answered the add. Leaving
         // sooner can leave the page before the add finishes.
@@ -526,7 +620,7 @@ var MGBQuick = (function () {
         var ignored = !!page.watch && page.watch.changes() === 0 && since > QUIET_MS;
         var unmoved = count != null && flow.countBefore != null && count === flow.countBefore && since > CONFIRM_MS;
         if (flow.added || (!ignored && !unmoved && since > CONFIRM_MS)) {
-          if (C.url) return openCheckout(null);
+          if (C.url) return openCheckout(null, flow);
           // No checkout page to go to: the "added" popup's Checkout button (a moment for it to show), else the bag.
           var waited = flow.addedAt ? Date.now() - flow.addedAt : since;
           var bag = waited > 400 ? findBag(R) : null;
@@ -538,13 +632,7 @@ var MGBQuick = (function () {
           }
         } else if (ignored || unmoved) {
           var again = flow.retried ? null : findAddToBag(R);
-          if (!again) {
-            store.clear();
-            setStatus("The store didn't add it to your bag. Press Add to bag yourself, then Checkout.");
-            report('error', 'The store did not add it to the bag', product);
-            why('not_added');
-            return 'error';
-          }
+          if (!again) return notAdded(flow.said || '');
           // The first press came before the page was ready: press once more.
           store.save(Object.assign({}, flow, { retried: true, clickedAt: Date.now() }));
           setStatus('The page wasn\'t ready — pressing "' + textOf(again).slice(0, 30) + '" again…');
@@ -556,6 +644,11 @@ var MGBQuick = (function () {
         var late = Date.now() - (flow.bagAt || 0) > 1500;
         var checkout = findCheckout(R, true) || (onBagPage(R) || late ? findCheckout(R, false) : null);
         if (checkout) return goCheckout(checkout);
+        // The bag page, empty: the add didn't go through.
+        if (onBagPage(R) && Date.now() - arrived > 4000) {
+          var empty2 = emptyBag(flow, 'Opened the bag');
+          if (empty2) return empty2;
+        }
       }
       await wait(POLL_MS);
     }

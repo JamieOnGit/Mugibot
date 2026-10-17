@@ -52,10 +52,11 @@ const SHOPS = {
   pokemoncenter: { name: 'Pokémon Center (dummy)', color: '#d32f2f' },
   pbandai: { name: 'Premium Bandai (dummy)', color: '#1f2937' },
   target: { name: 'Target (dummy)', color: '#cc0000' },
+  amazon: { name: 'Amazon AU (dummy)', color: '#232f3e' },
 };
 // The Shopify-style shops: the same product, cart and checkout pages.
 const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic']);
-const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target)(\/.*|$)/;
+const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target|amazon)(\/.*|$)/;
 const LD_AVAIL = { in_stock: 'InStock', preorder: 'PreOrder', out_of_stock: 'OutOfStock' };
 const STATES = '<option value="">Select state</option><option value="NSW">New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option><option value="WA">Western Australia</option><option value="SA">South Australia</option><option value="TAS">Tasmania</option><option value="ACT">Australian Capital Territory</option><option value="NT">Northern Territory</option>';
 
@@ -68,6 +69,10 @@ export function defaultShops() {
       // Like a real store on a fresh page: "Add" does nothing until the page's code has
       // started (hydrateMs after load), and the add itself can be slow (addDelayMs).
       hydrateMs: 0, addDelayMs: 0, refuseAdds: false,
+      // quiet: the page shows nothing Mugibot can read after an add (no count on the bag link, no
+      // "added" message) — only a busy button. refuseAdds: true, or how many adds to refuse first
+      // (each says "Something went wrong" for a moment, like a store under load).
+      quiet: false,
       // A React-style page (like Kmart's): its code wires up "Add" reactMs after the page
       // opens, long before a slow picture lets the page finish loading (slowLoadMs).
       // vueMs: the same for a Vue page (Premium Bandai's).
@@ -208,6 +213,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       pokemoncenter: { in_stock: 'Add to Cart', preorder: 'Pre-order', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
       pbandai: { in_stock: 'Add to Cart', preorder: 'Add to Cart', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
       target: { in_stock: 'Add to basket', preorder: 'Pre-order', out_of_stock: 'Out of stock online', coming_soon: 'Coming soon' },
+      amazon: { in_stock: 'Add to Cart', preorder: 'Pre-order now', out_of_stock: 'Currently unavailable', coming_soon: 'Currently unavailable' },
       thegamescube: {},
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     const orderable = p.status === 'in_stock' || p.status === 'preorder';
@@ -224,6 +230,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       ebgames: '<div class="drawer mini-cart" id="drawer"><h3>Added to cart</h3><p id="drawer-msg"></p><a class="btn" href="/ebgames/checkout">Checkout</a> <a href="/ebgames/cart">View cart</a></div>',
       pokemoncenter: '<div class="drawer mini-cart" id="drawer" role="dialog" aria-label="Added to cart"><h3>Added to cart</h3><p id="drawer-msg"></p><a class="btn" href="/pokemoncenter/cart">View Cart</a> <a href="/pokemoncenter/">Continue Shopping</a></div>',
       pbandai: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Item added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/pbandai/cart">Go to Cart</a></div>',
+      amazon: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to Cart"><h3>Added to Cart</h3><p id="drawer-msg"></p><a href="/amazon/cart">Go to Cart</a></div>',
       // Target: "Often Bought Together" — four more things to add, and a ✕ to close it.
       target: `<div class="drawer modal upsell-modal" id="drawer" role="dialog" aria-modal="true" aria-labelledby="obt-title">
         <button type="button" class="modal-close" aria-label="Close" id="obt-close" style="float:right;background:none;color:#000;font-size:22px">✕</button>
@@ -275,9 +282,21 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         document.addEventListener('click', async (e) => {
           if (!e.target.closest('#atc') || !started) return;
           ${readQtyJs}
+          const btn = document.getElementById('atc');
+          btn.classList.add('busy');
           const r = await fetch('/${shop}/api/cart/add', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({sku:'${p.sku}', qty})});
           const d = await r.json();
-          if (!d.ok) return;
+          btn.classList.remove('busy');
+          if (!d.ok) {
+            if (d.said) {
+              const t = document.createElement('div');
+              t.className = 'toast'; t.setAttribute('role', 'alert'); t.textContent = d.said;
+              document.querySelector('main').append(t);
+              setTimeout(() => t.remove(), 2500);
+            }
+            return;
+          }
+          if (${shopOf(shop).quiet ? 'true' : 'false'}) return; // (a store whose page shows nothing Mugibot can read)
           const showBag = () => {
             const bag = document.getElementById('bag-link');
             bag.setAttribute('aria-label', '${shop === 'kmart' ? 'Bag' : 'Cart'}, ' + d.items + ' items');
@@ -288,7 +307,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     ? "window.__afterUpsell = showBag; document.getElementById('drawer').classList.add('open');"
     : "showBag(); setTimeout(() => { document.getElementById('drawer-msg').textContent = d.count + ' item(s) in your " + (shop === 'kmart' ? 'bag' : 'cart') + "'; document.getElementById('drawer').classList.add('open'); }, 150);"}
         });
-      </script>`, { head: ldFor(p, shop), bagCount: bagCount(shop) });
+      </script>`, { head: ldFor(p, shop), bagCount: shopOf(shop).quiet ? null : bagCount(shop) });
   }
 
   // CrystalCommerce (The Games Cube): each option in stock has its own small cart button — an icon, no words.
@@ -383,7 +402,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       thegamescube: '<a class="utility-button checkout" href="/thegamescube/checkout/proceed_to_checkout">Checkout &rarr;</a>', pokemoncenter: '<a class="btn" href="/pokemoncenter/checkout">Checkout</a>', pbandai: '<a class="btn" href="/pbandai/checkout">Proceed to checkout</a>',
       target: '<a class="btn" href="/target/checkout">Checkout</a>',
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
-    return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || '<li>Empty</li>'}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
+    return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || `<li>Your ${shop === 'kmart' ? 'bag' : 'cart'} is empty</li>`}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
       <script>
         for (const s of document.querySelectorAll('[data-sku]')) s.addEventListener('change', () => fetch('/${shop}/api/cart/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: s.dataset.sku, qty: Number(s.value) }) }));
         document.getElementById('to-checkout')?.addEventListener('click', () => { location.href = '${SHOPIFY.has(shop) ? `/${shop}/checkouts/c/abc123` : `/${shop}/checkout`}'; });
@@ -683,7 +702,7 @@ for (const el of document.querySelectorAll('input')) {
     const redirect = (to) => { res.writeHead(302, { location: to }); res.end(); };
 
     // Product pictures (a coloured card with the product's name).
-    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target)\/([^/]+)\.svg$/);
+    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target|amazon)\/([^/]+)\.svg$/);
     if (img) {
       const prod = find(img[1], decodeURIComponent(img[2]));
       if (!prod) return html(404, 'Not found');
@@ -754,6 +773,7 @@ for (const el of document.querySelectorAll('input')) {
     if (shop === 'pokemoncenter') sku = (sub.match(/^\/product\/([0-9A-Za-z-]+)\/[^/]+$/) || [])[1];
     if (shop === 'pbandai') sku = (sub.match(/^\/item\/([A-Z]\d+)$/) || [])[1];
     if (shop === 'target') sku = (sub.match(/^\/p\/[^/]+\/(\d+)$/) || [])[1];
+    if (shop === 'amazon') sku = (sub.match(/^\/dp\/([A-Z0-9]{10})$/) || [])[1];
     if (SHOPIFY.has(shop)) {
       const js = sub.match(/^\/products\/([^/]+)\.js$/);
       if (js) {
@@ -817,6 +837,16 @@ for (const el of document.querySelectorAll('input')) {
     if (sub === '/api/search') {
       const tiles = searchHits(shop, u.searchParams.get('q')).map((x) => ({ name: x.name, url: pathFor(shop, x), image: imagePath(shop, x), price: x.price, status: x.status, inStock: x.status === 'in_stock' || x.status === 'preorder' }));
       return json(200, { products: tiles });
+    }
+    // Amazon's search page: a tile per result with its ASIN (what Mugibot's sweeps read, from an admin's
+    // browser). Like amazon.com.au, servers get "503 - An error occurred".
+    if (shop === 'amazon' && sub === '/s') {
+      if (!/Mozilla|Chrome/i.test(req.headers['user-agent'] || '')) return html(503, '<html><head><title>500 - An error occurred</title></head><body>Sorry! Something went wrong.</body></html>');
+      const hits = searchHits(shop, (u.searchParams.get('k') || '').replace(/\s*\btcg\b/i, ''));
+      return html(200, `<!doctype html><html><head><title>Amazon.com.au : ${esc(u.searchParams.get('k'))}</title></head><body><div class="s-main-slot s-search-results">${hits.map((x) => `<div data-asin="${x.sku}" data-component-type="s-search-result" class="s-result-item">
+        <img class="s-image" src="${imagePath(shop, x)}"><h2 aria-label="${esc(x.name)}" class="a-size-base-plus"><span>${esc(x.name)}</span></h2>
+        ${x.status === 'in_stock' || x.status === 'preorder' ? `<span class="a-price"><span class="a-offscreen">$${x.price.toFixed(2)}</span></span>` : '<span class="a-color-secondary">Currently unavailable.</span>'}
+      </div>`).join('')}</div></body></html>`);
     }
     // EB Games' search JSON (what its search page's own script asks for, and Mugibot's sweeps read).
     if (shop === 'ebgames' && sub === '/search/query') {
@@ -917,7 +947,9 @@ for (const el of document.querySelectorAll('input')) {
       const b = await parseBody(req);
       S.addedAt = Date.now();
       if (S.addDelayMs) await new Promise((r) => setTimeout(r, S.addDelayMs));
-      const r = S.refuseAdds ? { ok: false } : addToCart(shop, b.sku, b.qty);
+      const refuse = S.refuseAdds === true || (typeof S.refuseAdds === 'number' && S.refuseAdds > 0);
+      if (typeof S.refuseAdds === 'number' && S.refuseAdds > 0) S.refuseAdds -= 1;
+      const r = refuse ? { ok: false, said: S.quiet ? 'Something went wrong. Please try again.' : undefined } : addToCart(shop, b.sku, b.qty);
       return json(r.ok ? 200 : 409, r);
     }
     // Shopify cart links: /cart/<variant>:<quantity> puts the product in the cart and opens checkout.
@@ -960,7 +992,11 @@ for (const el of document.querySelectorAll('input')) {
     if (sub === '/checkout/confirmation') return html(200, page(shop, 'Order confirmed', `<h1>Thank you for your order!</h1><p>Order number: DUMMY-${1000 + S.orders.length}</p>`));
 
     // ---------------- Kmart-style one-page checkout
-    if (shop === 'kmart' && sub === '/checkout') return html(200, page(shop, 'Checkout', kmartCheckout()));
+    if (shop === 'kmart' && sub === '/checkout') {
+      // (Like kmart.com.au: checkout with an empty bag opens the bag instead.)
+      if (!S.cart.length) return redirect('/kmart/cart');
+      return html(200, page(shop, 'Checkout', kmartCheckout()));
+    }
     // ---------------- Target-style one-page checkout (/checkout opens it at /spc/order)
     if (shop === 'target' && sub === '/checkout') return redirect('/target/spc/order');
     if (shop === 'target' && sub === '/spc/order') return html(200, page(shop, 'Checkout', targetCheckout()));

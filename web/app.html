@@ -358,9 +358,16 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h3>Armed items</h3><span class="muted small" id="aco-armed-count"></span></div>
-          <p class="muted small">Arm items from your watchlist. Each needs a max price: Mugibot never pays more than that.</p>
-          <ul class="aco-items" id="aco-items"></ul>
+          <div class="card-head"><h3>Armed items</h3>
+            <div class="aco-items-tools"><span class="muted small" id="aco-armed-count"></span>
+              <select id="aco-show" aria-label="Show"><option value="">Every item</option><option value="armed">Armed only</option></select></div>
+          </div>
+          <p class="muted small">Arm items from your watchlist. Each needs a max price: Mugibot never pays more than that. <b>Trigger ACO</b> runs one now, as if it had just dropped, to see Auto-checkout work.</p>
+          <div class="table-wrap"><table class="aco-table">
+            <thead><tr><th scope="col">Armed</th><th scope="col">Item</th><th scope="col">Sign-in</th><th scope="col">Max price</th><th scope="col"><span class="sr-only">Test</span></th></tr></thead>
+            <tbody id="aco-items"></tbody>
+          </table></div>
+          <nav class="pager" id="aco-pager" aria-label="Armed items pages"></nav>
         </div>
 
         <div class="card">

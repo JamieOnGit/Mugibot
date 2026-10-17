@@ -638,8 +638,22 @@ test('admin console: members and memberships, not personal details; SKU totals a
 
 test('Auto-checkout tab: switched on only with the agreement; limits; arming needs a max price; every attempt shows up with why', async () => {
   const owner = env.app.repo.userByUsername('owner');
+  // More than a page of items (10 to a page).
+  for (let i = 0; i < 6; i += 1) env.app.repo.addItem(owner.id, { store: 'kmart', sku: `4390000${i}`, name: `Extra box ${i + 1}`, url: `https://www.kmart.com.au/product/extra-box-${i + 1}-4390000${i}/`, price: 30, maxPrice: null, quantity: 1, profileId: null, monitor: true, announce: false, aco: false });
+  const total = env.app.repo.listItems(owner.id).length;
+  assert.ok(total > 10, `${total} items`);
   await page.goto(`${env.url}/app#aco`);
-  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-items li.aco-item');
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-items tr.aco-item');
+  // A table of 10, and pages.
+  assert.equal(await page.locator('#aco-items tr.aco-item').count(), 10);
+  assert.match(await page.textContent('#aco-pager'), new RegExp(`1–10 of ${total}`));
+  await page.click('#aco-pager button[aria-label="Next page"]');
+  assert.equal(await page.locator('#aco-items tr.aco-item').count(), total - 10);
+  assert.match(await page.textContent('#aco-items'), /Extra box 6/);
+  await page.click('#aco-pager button[aria-label="Page 1"]');
+  assert.equal(await page.getAttribute('#aco-pager button[aria-label="Page 1"]', 'aria-current'), 'page');
+  // Trigger ACO needs Auto-checkout switched on.
+  assert.equal(await page.isDisabled('#aco-items tr.aco-item >> nth=0 >> .aco-test'), true);
   assert.match(await page.textContent('#aco-state'), /^Off$/);
   assert.match(await page.textContent('#aco-runs'), /Nothing yet/);
   // The switch asks for the agreement first.
@@ -665,15 +679,20 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   await page.waitForFunction(() => /Install the extension/.test(document.querySelector('#aco-checks').textContent));
 
   // Arming: not without a max price.
-  const day = page.locator('#aco-items li.aco-item', { hasText: 'Day UPC' });
+  const day = page.locator('#aco-items tr.aco-item', { hasText: 'Day UPC' });
   await day.locator('.sn-sw').click();
   await page.waitForFunction(() => /Set a max price/.test(document.querySelector('#toasts')?.textContent || ''));
   const dayItem = env.app.db.get("SELECT * FROM items WHERE user_id = :u AND name = 'Day UPC'", { u: owner.id });
   assert.equal(dayItem.aco, 0);
   await day.locator('input.aco-max').fill('380');
   await day.locator('.sn-sw').click();
-  await page.waitForSelector('#aco-items li.aco-item.armed');
+  await page.waitForSelector('#aco-items tr.aco-item.armed');
   assert.match(await page.textContent('#aco-armed-count'), /1 armed/);
+  // Armed only.
+  await page.selectOption('#aco-show', 'armed');
+  assert.equal(await page.locator('#aco-items tr.aco-item').count(), 1);
+  assert.equal(await page.isHidden('#aco-pager'), true, 'one page');
+  await page.selectOption('#aco-show', '');
   assert.equal(env.app.db.get('SELECT aco, max_price FROM items WHERE id = :id', { id: dayItem.id }).max_price, 380);
 
   // It drops at $360, over the $250 an order limit: kept as "didn't start", with why — live.
@@ -700,6 +719,30 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   await page.selectOption('#aco-filter', 'failed');
   assert.match(await page.textContent('#aco-runs'), /Nothing here/);
   await page.selectOption('#aco-filter', '');
+
+  // Trigger ACO: a test run now, as if it had dropped — it says what it will do first. (A browser
+  // with the extension is connected to the account, to pick it up.)
+  const { device } = env.app.repo.addDevice(owner.id, 'Chrome on Mac', '1.11.0');
+  const ko = page.locator('#aco-items tr.aco-item', { hasText: 'Knock Out Collection' });
+  await ko.locator('input.aco-max').fill('30');
+  page.once('dialog', (d) => { assert.match(d.message(), /Trigger ACO for Knock Out Collection\?.*checks out as if it had just dropped.*stops at the final button/s); d.accept(); });
+  await ko.locator('.aco-test').click();
+  await page.waitForFunction(() => /Auto-checkout test started/.test(document.querySelector('#toasts')?.textContent || ''));
+  const koItem = env.app.db.get("SELECT * FROM items WHERE user_id = :u AND name = 'Knock Out Collection'", { u: owner.id });
+  assert.equal(koItem.max_price, 30, 'the max price typed in was saved first');
+  assert.equal(koItem.aco, 0, "a test doesn't arm it");
+  await page.waitForFunction(() => /test run \(Trigger ACO\)/.test(document.querySelector('#aco-runs').textContent));
+  assert.match(await page.textContent('#aco-runs li.aco-run.active'), /Knock Out Collection.*test run \(Trigger ACO\).*Waiting for your browser/s);
+  // …and when it can't start, why: Day UPC at $360 is over the $250 an order limit.
+  page.once('dialog', (d) => d.accept());
+  await day.locator('.aco-test').click();
+  await page.waitForFunction(() => /didn't start/.test(document.querySelector('#toasts')?.textContent || ''));
+  assert.match(await page.textContent('#toasts'), /over your limit of \$250\.00 an order/);
+  // A test run already going: not twice.
+  page.once('dialog', (d) => d.accept());
+  await ko.locator('.aco-test').click();
+  await page.waitForFunction(() => /already checking out/.test(document.querySelector('#toasts')?.textContent || ''));
+  env.app.repo.deleteDevice(owner.id, device.id);
   // On the watchlist, an armed item says so.
   await page.click('a[data-tab="watch"]');
   await page.waitForSelector('#w-list li[data-id]');

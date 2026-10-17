@@ -60,6 +60,11 @@ export const DUMMY_PRODUCTS = {
     { sku: '70000003', name: 'Lily Loves Australian Cotton Tie Detail T-Shirt', price: 25, status: 'in_stock', upsell: true },
     { sku: '70000004', name: 'Lily Loves European Linen Blend Puff Sleeve Midi Dress', price: 65, status: 'in_stock', upsell: true },
   ],
+  // Amazon-style: ASINs, Amazon's search tiles (the live sweeps read those, from an admin's browser).
+  amazon: [
+    { sku: 'B0MGBTEST1', name: 'Pokémon TCG: Destined Rivals Booster Bundle', price: 59, status: 'in_stock' },
+    { sku: 'B0MGBTEST2', name: 'Pokémon TCG: Surging Sparks Elite Trainer Box', price: 89, status: 'out_of_stock' },
+  ],
   pbandai: [
     { sku: 'N2903432001', name: 'ONE PIECE CARD GAME Premium Card Collection -29th Anniversary Edition-', price: 25, status: 'in_stock' },
     { sku: 'N2863373001', name: 'ONE PIECE CARD GAME Official Playmat Limited Edition vol.6', price: 51, status: 'out_of_stock' },
@@ -81,6 +86,7 @@ export function dummyProductPath(store, p) {
     case 'pokemoncenter': return `/pokemoncenter/product/${p.sku}/${slugify(p.name)}`;
     case 'pbandai': return `/pbandai/item/${p.sku}`;
     case 'target': return `/target/p/${slugify(p.name)}/${p.sku}`;
+    case 'amazon': return `/amazon/dp/${p.sku}`;
     default: return null;
   }
 }
