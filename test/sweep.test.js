@@ -666,13 +666,17 @@ test('the live monitor: every search, fault and setting change as an event for m
   assert.equal(live.admin, false);
   const jb = live.stores.find((x) => x.id === 'demo-jbhifi');
   assert.equal(jb.status, 'ok');
-  assert.equal(jb.from, "Mugibot's server");
   assert.ok(jb.searches >= 1);
   assert.equal(typeof jb.lastMs, 'number');
   assert.ok(jb.latency.length >= 1);
-  assert.match(jb.endpoint, /\/search\/suggest\.json\?q=$/);
-  assert.equal(live.stores.find((x) => x.id === 'demo-ebgames').mode, 'browser');
+  // Where a store is searched from (Mugibot's server or an admin's browser): admins only.
+  assert.deepEqual([jb.from, jb.mode, jb.endpoint], [undefined, undefined, undefined]);
+  assert.equal(live.stores.find((x) => x.id === 'demo-ebgames').mode, undefined);
   assert.ok(!live.stores.some((x) => x.id === 'target'), 'stores that are off are left out');
+  const asAdmin = (await boss.get('/api/monitor/live')).body.stores;
+  assert.equal(asAdmin.find((x) => x.id === 'demo-jbhifi').from, "Mugibot's server");
+  assert.match(asAdmin.find((x) => x.id === 'demo-jbhifi').endpoint, /\/search\/suggest\.json\?q=$/);
+  assert.equal(asAdmin.find((x) => x.id === 'demo-ebgames').mode, 'browser');
   assert.equal(typeof live.meanAlertMs, 'number');
   assert.ok(live.events.some((e) => e.type === 'hb'));
   assert.ok(live.alerts.some((x) => x.sku === 'pokemon-tcg-live-test-etb'));
