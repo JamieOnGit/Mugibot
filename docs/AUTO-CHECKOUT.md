@@ -29,13 +29,17 @@ is bought for an item until they **arm** it, and each arming buys **once**.
      The sign-in status comes from the store login monitor.
 4. **Arm items.** In the "Armed items" table on the same tab (10 to a page;
    "Armed only" shows just those), or with "🤖 Auto-checkout this item when it
-   drops" when you add or edit an item on the watchlist. Each armed item needs a
-   **max price**. Mugibot never starts if the price is over it.
+   drops" when you add or edit an item on your watchlist (Monitor → **My
+   watchlist**). Each armed item needs a **max price**. Mugibot never starts if
+   the price is over it. The live searches, the store switches and the watchlist
+   all live on the Monitor page; this tab is only for what Auto-checkout does
+   with your armed items.
 5. **Keep Chrome open** with the extension connected. The "Ready to check out?"
    list shows what's missing:
    - an active membership;
    - the newest extension in this browser (1.12.0 or newer for City Beach);
-   - a card saved in the extension;
+   - a card saved in the extension (or backed up in your account: after a new
+     install, restore it with your card passphrase, see "Card backup" below);
    - your delivery details;
    - Discord, for a DM on every attempt (optional);
    - whether this browser is listening.
@@ -53,7 +57,7 @@ work before a real drop.
   switch to "Fill in checkout and stop at the final button" first.
 - The limits and checks are the same as for a real drop. A test run's failures
   don't count towards the 3 a day.
-- It shows up in the Activity log as a "test run (Trigger ACO)".
+- It shows up in the Run history as a "test run (Trigger ACO)".
 
 ### One purchase per arming
 
@@ -99,16 +103,19 @@ It presses the final button **once** per run, then watches the page:
 It **never** gets past your bank's check or a store's bot check. It stops and
 tells you.
 
-### The Activity log
+### Run history
 
-Every time an armed item drops, the Auto-checkout tab logs it, even when
-Auto-checkout didn't start. Each entry shows:
+Every time an armed item drops, the Auto-checkout tab logs it in the **Run
+history**, even when Auto-checkout didn't start. It's 10 runs to a page, with
+page buttons underneath (no endless scrolling). Each entry shows:
 
 - what triggered it;
 - each step, with the time;
 - how it ended, and **why**.
 
-The filter shows orders placed, needed you, failed or didn't start. The tiles on
+The filter shows orders placed, needed you, failed or didn't start, and goes
+back to the first page. Your general activity (restocks, alerts, sign-ins) is on
+the Monitor page, under **My activity**. The tiles on
 top count the last 30 days. You also get a Discord DM for every start and every
 ending, and an email if "Email me when checkout is waiting for me" is on (Discord tab).
 
@@ -119,6 +126,35 @@ ending, and an email if "Email me when checkout is waiting for me" is on (Discor
 | ⚠️ Needs you | Your bank's check, a bot check, the total over your limit, no confirmation after pressing |
 | ❌ Failed | Sold out by the time your browser got there, not added to the bag, couldn't reach checkout, card declined, the card didn't go in, another item in the bag, it took too long |
 | ⏭️ Didn't start | Over the item's max price, over your order or daily limits, 3 failures today, signed out (if you chose that, or at a store that only sells signed in: Amazon, Premium Bandai), no browser with the extension open, membership not active |
+
+### Card backup: no typing the card again after a new install
+
+The card is saved in the extension, so a fresh install (or another browser) starts
+without it. From extension 1.13.0 you can back it up to your Mugibot account:
+
+1. **Back it up.** In the extension's Card settings, tick **Also back it up to my
+   account** when you save the card, or use **Back up my card** under a card
+   that's already saved. Pick a **card passphrase** (10 characters or more, a few
+   words is easiest) and type it twice.
+2. **Restore it.** After a new install, connect the extension to your account
+   and open Card settings (the popup and the dashboard's Checkout details say
+   "Restore your card"). Type the card passphrase once: the card is ready for
+   every ⚡ Buy and Auto-checkout in that browser, with nothing to unlock again.
+
+How it's kept safe:
+
+- The extension locks the card **in your browser** before sending it: a key made
+  from your passphrase (PBKDF2-SHA256, 600,000 rounds, a new random salt each
+  time) and AES-256-GCM, tied to your account. Mugibot keeps that locked copy,
+  plus the brand, last 4 digits and expiry so it can show which card it is.
+- The passphrase never leaves your browser. **Mugibot can't open the backup or
+  tell you the passphrase.** Forget it, and save the card again (and back it up
+  with a new passphrase).
+- Delete the backup any time: **Delete the backup** on Checkout details or in
+  the extension's Card settings. It's deleted with your account too. Removing the
+  card from one browser leaves the backup alone.
+- **Download my data** lists the backup's brand, last 4 and expiry, not the
+  locked copy.
 
 ## Stores
 
@@ -184,8 +220,9 @@ the monitor sees an armed item drop (live sweep, page check or a browser's check
   → final button (once) → watches the page → POST /api/ext/aco/:id with how it went
 ```
 
-- **The card never leaves the browser.** Mugibot's server decides when to start.
-  It never sees the card and never talks to the store's checkout itself.
+- **The card is only readable in the browser.** Mugibot's server decides when to
+  start. It never sees the card and never talks to the store's checkout itself.
+  A card backup (below) is locked in the browser before it's sent.
 - **Limits come from the server**, with the run, not from anything the store's
   page could change. The server also counts the day's orders and spending.
 - **Runs that stall are closed.**

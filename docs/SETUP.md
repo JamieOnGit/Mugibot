@@ -116,7 +116,7 @@ double-click `start-demo-mac.command` in the Mugibot folder (Windows:
    **Save delivery details**. Press **Add your card** and save a test card
    (`4242 4242 4242 4242`, expiry `12/30`, CVV `123`). That's all: it stays
    ready for every ⚡ Buy, even after you restart the browser.
-4. **Watchlist** tab → **Add dummy-store test items**. You get two products from
+4. **Monitor** → **My watchlist** → **Add dummy-store test items**. You get two products from
    each dummy shop, e.g. "30th Celebration Ultra-Premium Collection (dummy
    kmart)". The sold-out ones show **Sold out** within a minute.
 5. Open http://localhost:5055 (the control panel). Next to a sold-out dummy

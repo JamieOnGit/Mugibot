@@ -17,7 +17,7 @@ const SLOT_ORDER = ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toy
 export const slotOf = (id) => SLOT_ORDER.indexOf(String(id || '').replace(/^demo-/, '')) + 1;
 const ABBR = { kmart: 'KM', bigw: 'BW', target: 'TG', ebgames: 'EB', zing: 'ZG', jbhifi: 'JB', toysrus: 'TR', trainertown: 'TT', amazon: 'AZ', thegamescube: 'GC', gamerholic: 'GH', pokemoncenter: 'PC', pbandai: 'PB' };
 const abbr = (id) => ABBR[String(id || '').replace(/^demo-/, '')] || String(id || '?').slice(0, 2).toUpperCase();
-const STATE = { ok: ['ok', 'Searching'], slowed: ['warn', 'Slowed'], retrying: ['err', 'Retrying'], waiting: ['warn', 'Waiting'], starting: ['', 'Starting'] };
+const STATE = { ok: ['ok', 'Searching'], slowed: ['warn', 'Slowed'], retrying: ['err', 'Retrying'], waiting: ['warn', 'Waiting'], starting: ['', 'Starting'], off: ['off', 'Off'] };
 const ALERT = { listed: ['drop', 'New drop'], restock: ['restock', 'Restock'], price_drop: ['price', 'Price ↓'], price_rise: ['price', 'Price ↑'], sold_out: ['out', 'Sold out'] };
 const LOG_MAX = 300;
 const ROWS_MAX = 220;
@@ -37,8 +37,10 @@ function loadPrefs() {
   try { return { ...def, ...(JSON.parse(localStorage.getItem(PREFS_KEY)) || {}) }; } catch { return def; }
 }
 
-export function setupLive({ storeName, buyUrl, openProduct, panelOpen, sampleProduct, onSettings, resetStore, setMode }) {
+export function setupLive({ storeName, buyUrl, openProduct, panelOpen, sampleProduct, onSettings, resetStore, setMode, onStores = () => {} }) {
   const L = {
+    // Stores this member switched off: hidden from their live feed, products and this browser's alerts.
+    hidden: new Set(),
     // (The feed shows drops and restocks first: searches and the rest are one choice away.)
     data: null, stores: new Map(), log: [], filter: 'alerts', admin: false, open: new Set(), settings: null, skew: 0, pings: [], pingCount: 0, audio: null,
     queue: [], showing: null, popTimer: null, flashTimer: null, renderTimer: null, frame: null, beam: 0, ttns: [], olderBefore: null, loaded: false,
@@ -60,6 +62,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     L.settings = d.settings;
     L.skew = d.now - Date.now();
     L.stores = new Map(d.stores.map((s) => [s.id, s]));
+    L.hidden = new Set((d.prefs && d.prefs.hiddenStores) || []);
     L.ttns = [];
     const known = new Set(L.log.filter((x) => x.alert && x.alert.test).map((x) => x.alert.id));
     L.log = [
@@ -158,8 +161,9 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     const box = $('#sn-channels');
     box.textContent = '';
     const list = sortedStores();
-    const trouble = list.filter((s) => s.status === 'retrying' || (s.status === 'waiting' && s.lastError));
-    $('#sn-stores-meta').textContent = trouble.length ? `${trouble.length} need${trouble.length === 1 ? 's' : ''} attention` : `${list.length} active`;
+    const trouble = list.filter((s) => !hiddenStore(s.id) && (s.status === 'retrying' || (s.status === 'waiting' && s.lastError)));
+    const off = list.filter((s) => s.status === 'off' || hiddenStore(s.id)).length;
+    $('#sn-stores-meta').textContent = trouble.length ? `${trouble.length} need${trouble.length === 1 ? 's' : ''} attention` : `${list.length - off} on${off ? ` · ${off} off` : ''}`;
     $('#sn-stores-meta').classList.toggle('warn', trouble.length > 0);
     $('#sn-reset-all').hidden = !L.admin || !list.length;
     renderAttention(trouble);
@@ -168,11 +172,14 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
       return;
     }
     for (const s of list) {
-      const [cls, label] = STATE[s.status] || STATE.starting;
+      const mine = hiddenStore(s.id);
+      const [cls, label] = mine ? STATE.off : STATE[s.status] || STATE.starting;
       const open = L.open.has(s.id);
       const waiting = s.status === 'waiting';
-      const sub = s.fails ? h('span', {}, s.lastError || `${s.fails} failed`)
-        : waiting ? h('span', {}, s.lastError || "Waiting for an admin's browser")
+      const sub = s.status === 'off' ? h('span', {}, 'Switched off: not searched')
+        : mine ? h('span', {}, 'Off for you: hidden from your feed, products and alerts')
+          : s.fails ? h('span', {}, s.lastError || `${s.fails} failed`)
+        : waiting ? h('span', {}, s.lastError || (L.admin ? "Waiting for an admin's browser" : 'Waiting'))
           : typeof s.lastMs === 'number' ? h('span', {}, `Answered in ${msText(s.lastMs)} · next `, h('span', { class: 'sn-next' }, nextText(s)))
             : h('span', {}, 'Starting…');
       const toggle = h('button', { class: 'st-toggle', type: 'button', 'aria-expanded': open ? 'true' : 'false', title: open ? 'Hide the details' : 'Show the details' },
@@ -182,19 +189,55 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
         h('div', { class: 'r' }, h('span', {}, 'searches'), h('b', {}, s.searches.toLocaleString())),
         h('div', { class: 'r' }, h('span', {}, 'last answer'), h('b', {}, msText(s.lastMs))),
         h('div', { class: 'r' }, h('span', {}, 'next search'), h('b', { class: 'sn-next' }, nextText(s))),
-        h('div', { class: 'r' }, h('span', {}, 'from'), h('b', {}, `${s.mode === 'browser' ? "admin's browser" : 'server'} · ${s.endpoint}`)),
+        // (Where the searches come from: admins only — members aren't sent it.)
+        L.admin && s.mode ? h('div', { class: 'r' }, h('span', {}, 'from'), h('b', {}, `${s.mode === 'browser' ? "admin's browser" : s.mode === 'off' ? 'off' : 'server'} · ${s.endpoint}`)) : null,
         s.retryAt ? h('div', { class: 'r' }, h('span', {}, 'store asked'), h('b', {}, `wait until ${clockOf(s.retryAt - L.skew)}`)) : null,
         s.fails || s.lastError ? h('div', { class: 'r' }, h('span', {}, s.fails ? 'problem' : 'note'), h('b', {}, s.lastError || `${s.fails} failed`)) : null,
         waiting && !/extension/i.test(s.lastError || '') ? h('div', { class: 'r' }, h('span', {}, ''), h('b', {}, 'Keep Chrome open with the extension connected to an admin account')) : null,
         // A store that keeps refusing the server: an admin's browser may get through.
         L.admin && s.refused && s.mode === 'server' ? h('div', { class: 'st-acts' }, h('span', {}, 'Still refused after a reset?'),
           h('button', { class: 'btn small', type: 'button', onclick: () => setMode(s.id, 'browser') }, "Search it from an admin's browser")) : null);
-      box.append(h('div', { class: `sn-chan st-${cls || 'idle'}${open ? ' open' : ''}`, dataset: { store: s.id } },
+      box.append(h('div', { class: `sn-chan st-${cls || 'idle'}${open ? ' open' : ''}${mine || s.status === 'off' ? ' st-dim' : ''}`, dataset: { store: s.id } },
         h('div', { class: 'hd' }, toggle,
-          L.admin ? h('button', { class: 'btn small ghost st-reset', type: 'button', title: `Reset ${s.name}: search it again now, gently`, 'aria-label': `Reset ${s.name}`, onclick: (e) => resetStore(s.id, e.currentTarget) }, '↻') : null),
+          L.admin && s.status !== 'off' ? h('button', { class: 'btn small ghost st-reset', type: 'button', title: `Reset ${s.name}: search it again now, gently`, 'aria-label': `Reset ${s.name}`, onclick: (e) => resetStore(s.id, e.currentTarget) }, '↻') : null,
+          storeSwitch(s, mine)),
         h('div', { class: `st-sub${s.fails ? ' bad' : waiting ? ' warn' : ''}` }, sub),
         rows));
     }
+  }
+
+  /**
+   * A store's switch. Members: show or hide it for themselves (their feed, products and dashboard
+   * alerts — the monitor carries on for everyone). Admins: the store's searches on or off for everyone.
+   */
+  function storeSwitch(s, mine) {
+    const on = L.admin ? s.status !== 'off' : !mine;
+    const what = L.admin ? (on ? `Switch ${s.name}'s monitoring off for everyone` : `Switch ${s.name}'s monitoring back on`) : on ? `Hide ${s.name} from your monitor` : `Show ${s.name} on your monitor again`;
+    const b = h('button', { type: 'button', class: 'sn-sw small st-sw', role: 'switch', 'aria-checked': on ? 'true' : 'false', 'aria-label': `${s.name} ${L.admin ? 'monitoring' : 'on your monitor'}`, title: what });
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        if (L.admin) {
+          if (on && !confirm(`Switch ${s.name}'s monitoring off for everyone? Nobody gets its drops until it's switched back on.`)) return;
+          await setMode(s.id, on ? 'off' : s.defaultMode && s.defaultMode !== 'off' ? s.defaultMode : 'server');
+          refreshSoon();
+        } else {
+          const next = new Set(L.hidden);
+          if (on) next.add(s.id); else next.delete(s.id);
+          const r = await api('PUT', '/api/monitor/prefs', { hiddenStores: [...next] });
+          L.hidden = new Set(r.hiddenStores);
+          toast(on ? `${s.name} is off for you` : `${s.name} is back on`, on ? 'Hidden from your feed, products and dashboard alerts. Switch it on again any time.' : 'Its drops and restocks show up here again.', 'success');
+          renderChannels();
+          renderLog();
+          onStores();
+        }
+      } catch (e) {
+        toast("Couldn't change that", e.message, 'warn');
+      } finally {
+        b.disabled = false;
+      }
+    });
+    return b;
   }
 
   // Stores that need attention, above everything: what's wrong, and (admins) Reset all.
@@ -509,7 +552,9 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
   // ---------------------------------------------------------------------------
   // The event log
   // ---------------------------------------------------------------------------
+  const hiddenStore = (id) => !!id && L.hidden.has(id);
   function passes(item) {
+    if (hiddenStore(item.alert ? item.alert.store : item.ev && item.ev.store)) return false;
     const f = L.filter;
     if (!f) return true;
     const kind = item.alert ? item.alert.kind : null;
@@ -812,7 +857,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
       t.searches += 1;
       if (ev.type === 'hb') t.streak += 1;
       else { t.errors += 1; t.streak = 0; }
-      ping(ev.store, ev.type === 'err');
+      if (!hiddenStore(ev.store)) ping(ev.store, ev.type === 'err');
     } else if (ev.type === 'sys' && /changed the sweeps|started|switched off|searching it|needs mugibot's extension/i.test(ev.message || '')) {
       refreshSoon();
     }
@@ -848,6 +893,8 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
       if (a.kind === 'restock') o.restocks24h = (o.restocks24h || 0) + 1;
     }
     addLog({ at: a.at, alert: a });
+    // (A store switched off for you: no sound, pop-up or desktop alert.)
+    if (hiddenStore(a.store)) { scheduleRender(); return; }
     if (a.kind === 'listed' || a.kind === 'restock') alertChain(a);
     else if (a.kind === 'price_drop') chirp('price_drop');
     scheduleRender();
@@ -865,5 +912,5 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     renderSub();
   }
 
-  return { load, onSweep, onFeed, setFilter, setSettings, loadOlder, render: renderAll, renderLog };
+  return { load, onSweep, onFeed, setFilter, setSettings, loadOlder, render: renderAll, renderLog, hiddenStores: () => L.hidden };
 }

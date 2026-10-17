@@ -4,9 +4,9 @@
 
 import { discordBotConfigured, discordOAuthConfigured } from '../config.js';
 import { entitlement } from '../entitlement.js';
-import { EXTENSION_VERSION, storeUrl } from '../extension.js';
+import { ACO_EXTENSION_VERSION, EXTENSION_VERSION, storeUrl } from '../extension.js';
 import { DUMMY_PRODUCTS, STARTER_ITEMS, dummyProductPath } from '../presets.js';
-import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
+import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, cardBackupInfo, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
 import { publicUser } from './auth.js';
 
 const notFound = (what) => new HttpError(404, `${what} not found`);
@@ -145,10 +145,23 @@ export function register(router, ctx) {
     return { ok: true, sent: r.sent };
   });
 
+  // --- The card's locked backup (made and opened in the extension; routes/ext.js) ----------
+  router.get('/api/card-backup', async (req) => ({ backup: cardBackupInfo(repo.getData(req.user.id, 'cardBackup', null)) }));
+  router.delete('/api/card-backup', async (req) => {
+    repo.deleteData(req.user.id, 'cardBackup');
+    repo.addEvent(req.user.id, { type: 'card', level: 'info', message: 'Card backup deleted from your account' });
+    ctx.hub.publish(req.user.id, 'card', { backup: null });
+    return { ok: true };
+  });
+
   // --- Activity -------------------------------------------------------------
-  router.get('/api/events', async (req) => ({
-    events: repo.listEvents(req.user.id, { limit: num(req.query.get('limit'), { min: 1, max: 500, def: 100, int: true }), beforeId: num(req.query.get('before'), { int: true, def: null }) }),
-  }));
+  // (page: one page of the Activity table, newest first, with how many there are in all.)
+  router.get('/api/events', async (req) => {
+    const limit = num(req.query.get('limit'), { min: 1, max: 500, def: 100, int: true });
+    const page = num(req.query.get('page'), { min: 1, max: 100000, def: null, int: true });
+    const events = repo.listEvents(req.user.id, { limit, beforeId: num(req.query.get('before'), { int: true, def: null }), offset: page ? (page - 1) * limit : 0 });
+    return page ? { events, page, pageSize: limit, total: repo.countEvents(req.user.id) } : { events };
+  });
 
   router.get('/api/stream', async (req, res) => {
     ctx.hub.subscribe(req.user.id, req, res);
@@ -162,7 +175,7 @@ export function register(router, ctx) {
     today: ctx.aco.today(req.user.id),
     stats: ctx.aco.stats(req.user.id, 30),
     armed: ctx.aco.armedCount(req.user.id),
-    extensionVersion: EXTENSION_VERSION,
+    extensionVersion: ACO_EXTENSION_VERSION,
     runs: ctx.aco.list(req.user.id, num(req.query.get('limit'), { min: 1, max: 200, def: 50, int: true })),
   }));
 

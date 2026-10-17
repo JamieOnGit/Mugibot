@@ -76,7 +76,7 @@ Each member:
 - sees every attempt there, with each step and why it ended.
 
 When a member asks why a run didn't buy, ask them for the reason shown in that
-tab's Activity list. [AUTO-CHECKOUT.md](AUTO-CHECKOUT.md) explains each one.
+tab's Run history. [AUTO-CHECKOUT.md](AUTO-CHECKOUT.md) explains each one.
 
 A store's flow that changes on the real site breaks ⚡ Buy and Auto-checkout
 alike. Fixing the flow ([RETAILER-FLOWS.md](RETAILER-FLOWS.md)) fixes both.
