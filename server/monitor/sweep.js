@@ -478,7 +478,8 @@ export class Sweeper {
       counts.kept += 1;
       const ev = await this.track(r, p, { status, keyword: term.keyword, baseline, now, vip: !!watch });
       for (const k of ev) counts[k] += 1;
-      if (watch) this.vip.found(watch, [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean));
+      // (Found in the watch's first search: listed already, so armed only if it isn't on sale yet.)
+      if (watch) this.vip.found(watch, [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean), { baseline });
     }
     const out = this.record(r, term, { ok: true, url, source, ms, baseline, total: parsed.total ?? null, ...counts, error: parsed.problem === 'empty' ? 'No products on the page' : '' });
     out.gone = await this.markGone(r, term.keyword, now);
