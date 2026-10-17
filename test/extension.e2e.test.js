@@ -947,12 +947,13 @@ async function acoListen() {
 
 /** The store sells out, then it's back: the monitor's page checks see both. */
 async function drop(shop, sku, { price } = {}) {
+  // The product's page checked by the server straight away, sold out then in stock. (Not through the
+  // monitor's schedule: it skips pages a live sweep saw lately — an earlier test's sweep of the dummy Kmart.)
+  const pages = () => env.app.db.all("SELECT url FROM page_checks WHERE kind = 'product' AND sku = :sku", { sku }).map((r) => r.url);
   store.set(shop, sku, { status: 'out_of_stock' });
-  env.app.db.run('UPDATE page_checks SET next_check_at = 0');
-  await env.app.monitor.tick();
+  for (const url of pages()) await env.app.monitor.checkPage(url);
   store.set(shop, sku, { status: 'in_stock', ...(price ? { price } : {}) });
-  env.app.db.run('UPDATE page_checks SET next_check_at = 0');
-  await env.app.monitor.tick();
+  for (const url of pages()) await env.app.monitor.checkPage(url);
 }
 
 const acoRuns = async () => (await browserApi('GET', '/api/aco')).body.runs;
