@@ -18,6 +18,15 @@ community. Built on TCGCopBot's working Kmart flow.
   and card, following **that store's own checkout flow**, and **stops at the
   store's final button** ("Checkout securely", "Place order") for the member to
   press.
+- **Auto-checkout (optional, per member).** A member who switches it on and
+  agrees can **arm** items (each with a max price). When one drops, their own
+  browser checks out by itself: adds it, closes "add more" pop-ups (Target's
+  "Often Bought Together"), fills checkout in and presses the final button.
+  It works within their limits (per order, orders and spending a day) and buys
+  **once per arming**. It stops at a bank's or a bot check, a declined card,
+  another item in the bag or a total over the limit. Every attempt is logged on
+  the Auto-checkout tab with each step and why it ended, and DM'd. See
+  [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md).
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games and
   JB Hi-Fi are beta (tested on dummy copies of those stores). Target, Zing,
   Toys"R"Us, Trainer Town, Amazon, The Games Cube, Gamerholic, Pokémon Center
@@ -73,6 +82,7 @@ community. Built on TCGCopBot's working Kmart flow.
 | Set up the Discord server, bot, roles and slash commands | [docs/DISCORD.md](docs/DISCORD.md) |
 | Set up the Whop product, A$19.99 plan, API key and webhook | [docs/WHOP.md](docs/WHOP.md) |
 | Send a retailer's checkout flow (BIG W, Target…) or change one | [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md) |
+| Understand Auto-checkout: arming, limits, what it checks, the Activity log | [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md) |
 | Run the community day to day (admin console) | [docs/ADMIN.md](docs/ADMIN.md) |
 | Set up the Monitor feed: products, alert channels, schedules | [docs/MONITORING.md](docs/MONITORING.md) |
 | Put the extension on the Chrome Web Store, so it updates itself | [docs/CHROME-WEB-STORE.md](docs/CHROME-WEB-STORE.md) |
@@ -146,7 +156,11 @@ Discord and Whop are optional for this. Add them later with the guides.
 
 ## Fair play (same guardrails as TCGBot/TCGCopBot)
 
-- The member always presses the final purchase button. Mugibot never places an order.
+- ⚡ Buy always stops at the final purchase button for the member to press.
+  Only **Auto-checkout** presses it, and only for a member who switched it on and
+  agreed, for items they armed, within their limits, once per arming
+  (docs/AUTO-CHECKOUT.md). It runs in the member's own browser, and the card
+  never leaves it.
 - No CAPTCHA, queue or bot-protection bypassing, and no proxies.
 - Store purchase limits are respected: if a store allows 2, it adds 2 and says so.
 
@@ -202,7 +216,8 @@ npm test
   links; blocked stores keep their last status; admins' browsers for stores
   that refuse servers; `/monitor` and `/restocks`.
 - **The real extension in Chromium:** Kmart (verified), BIG W, EB Games,
-  JB Hi-Fi, Trainer Town, The Games Cube, Gamerholic, Pokémon Center and
+  JB Hi-Fi, Trainer Town, The Games Cube, Gamerholic, Target (its "Often
+  Bought Together" pop-up closed), Pokémon Center and
   Premium Bandai (its checkout in a Global-e-style frame) flows each stop at
   their final button with nothing pressed, plus the
   card saved without a passphrase and still ready after the browser restarts,
@@ -214,6 +229,15 @@ npm test
   that refuses the server, and two accounts in one browser.
 - **Chrome Web Store:** the package, the admin's listing link, and the GitHub
   job that publishes each new version (against a fake Chrome Web Store API).
+- **Auto-checkout** (server, plus the real extension on the dummy stores):
+  - the agreement and limits; arming needs a max price;
+  - a drop starting a run, picked up at once by a waiting browser;
+  - an order placed once, then disarmed;
+  - failures staying armed, and 3 a day stopping it;
+  - the day's limits, and the "stop at the final button" mode;
+  - runs that stall, and other members' browsers kept out;
+  - at the dummy Kmart and Target: Target's upsell pop-up closed, the total
+    over the limit, another item in the bag, a declined card and a bank's check.
 - **Website in a browser:** every dashboard and admin tab, including the
   Monitor tab (live alerts, live sweeps' health and settings, product page with
   price chart, alert rules, light and dark themes), phone-sized screens, no
@@ -232,11 +256,13 @@ server/
   discord.js        Discord OAuth, server roles, DMs, channel posts
   whop.js           Whop checkout links, webhooks, membership sync
   notifier.js       a member's pings: activity feed, Discord DM, webhook, email
+  aco.js            Auto-checkout: runs, limits, why each one ended (docs/AUTO-CHECKOUT.md)
   routes/           auth, user, ext (extension API), membership, discord (+ slash commands), monitor, admin, web
 web/                landing, sign-in, dashboard, ⚡ Buy page, admin console, terms, privacy
 extension/          the browser extension (built per server by server/extension.js)
 devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, Shopify- (JB Hi-Fi, Trainer Town, Gamerholic),
-                    CrystalCommerce- (The Games Cube), Pokémon Center- and Premium Bandai-style)
+                    CrystalCommerce- (The Games Cube), Target- (with its upsell pop-up), Pokémon Center- and
+                    Premium Bandai-style)
 scripts/            demo, mockstore, discord-commands, make-admin, reset-link, backup, build-extension, publish-extension,
                     make-icons.py (the site's and the extension's icons, from the logo)
 brand/              the logo (the straw-hat robot); after changing it: python3 scripts/make-icons.py

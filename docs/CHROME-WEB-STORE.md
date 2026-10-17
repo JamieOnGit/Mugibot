@@ -57,7 +57,8 @@ Description:
 > Mugibot is the browser extension for Mugibot members. It needs a Mugibot account.
 >
 > • ⚡ Buy: from your Mugibot dashboard or a Discord restock ping, it takes you straight to the store's checkout with the product in your bag, following each store's own steps.
-> • Fills in your delivery details and your saved card at checkout, and stops at the store's final button. You always press "Place order" yourself.
+> • Fills in your delivery details and your saved card at checkout, and stops at the store's final button for you to press.
+> • Auto-checkout (optional, off until you switch it on and agree in your Mugibot dashboard): for items you arm, each with a max price, it checks out by itself when they drop and places the order within your limits — once per arming. It stops at your bank's or a store's check.
 > • Checks your own watchlist at stores that refuse checks from servers, from your browser, about once a minute (you can switch this off).
 >
 > Your card is saved only in this browser, encrypted, and is never sent to Mugibot's servers. It never solves CAPTCHAs, skips queues or hides who it is.
@@ -67,8 +68,8 @@ Description:
 - **Single purpose:** `Checkout assist and restock checks for the user's own Mugibot account.`
 - **Permission justifications:**
   - `storage`: Keeps the connection to the user's Mugibot account, their watchlist and their encrypted card in this browser.
-  - `alarms`: Runs the user's own restock checks about once a minute, and the update check.
-  - Host permissions (the store sites): Fills in checkout on the supported stores' pages when the user presses ⚡ Buy, and checks the user's own watchlist items there.
+  - `alarms`: Runs the user's own restock checks about once a minute, the update check, and keeps listening for the items the user armed for Auto-checkout.
+  - Host permissions (the store sites): Fills in checkout on the supported stores' pages when the user presses ⚡ Buy (or an item they armed for Auto-checkout drops), and checks the user's own watchlist items there.
   - Host permissions (payment provider sites): The card boxes on those stores' checkout pages are hosted by payment providers; the extension types the user's saved card into them.
   - Host permissions (mugibot.com): Connects the extension to the user's Mugibot account.
 - **Remote code:** "No, I am not using remote code." (The store steps it downloads are data, not code.)

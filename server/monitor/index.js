@@ -303,15 +303,28 @@ export class Monitor {
   async alertRestock(item, { status, price, source, manual = false, note = '' }) {
     if (item.max_price !== null && item.max_price !== undefined && typeof price === 'number' && price > item.max_price) {
       this.repo.addEvent(item.user_id, { type: 'restock', level: 'info', message: `${item.name} is available but $${price.toFixed(2)} is over your limit of $${item.max_price.toFixed(2)}`, name: item.name, sku: item.sku, url: item.url || null });
+      await this.autoCheckout(item, { status, price, source, manual }); // (armed: kept as "skipped, over your max")
       return false;
     }
     this.db.run('UPDATE items SET last_alert_at = :now WHERE id = :id', { now: this.now(), id: item.id });
+    // Armed for Auto-checkout (server/aco.js): the member's browser starts checking out straight away.
+    await this.autoCheckout(item, { status, price, source, manual });
     await this.notifier.itemAlert(item.user_id, item, 'restock', { status, price, source, manual, note });
     if (item.announce) {
       const owner = this.repo.userById(item.user_id);
       if (owner && owner.role === 'admin') await this.announce(item, { status, price, manual, note });
     }
     return true;
+  }
+
+  async autoCheckout(item, info) {
+    if (!this.aco || !item.aco) return null;
+    try {
+      return await this.aco.trigger(item, info);
+    } catch (e) {
+      this.cfg.log('[aco]', e.message);
+      return null;
+    }
   }
 
   /** An admin's 📣 SKU restocked: post it in the Discord channels (through the feed, with its cooldown). */

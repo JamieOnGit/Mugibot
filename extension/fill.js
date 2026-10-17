@@ -2,7 +2,9 @@
    empty fields from your delivery details/card, presses the store's
    "Continue to …" step buttons in order, picks home delivery and card
    payment, and STOPS at the final button ("Checkout securely", "Place
-   order", "Pay now"…) — that one is never pressed.
+   order", "Pay now"…) — that one is never pressed here. (An armed
+   Auto-checkout run hands it to content.js, which checks the order against
+   your limits before pressing it.)
 
    The store's flow (server/retailers/<store>.js → checkout) says which step,
    guest, choice and final buttons that store uses; the general rules below
@@ -458,8 +460,9 @@ var MGBFill = (function () {
   }
 
   /**
-   * Walk through the checkout. opts: { values, flow (the store's checkout flow), storeName, setStatus, report, isActive(), hasCard, cardIssue }
-   * Resolves to 'ready' | 'needs_you' | 'stopped' | 'timeout' | 'done'.
+   * Walk through the checkout. opts: { values, flow (the store's checkout flow), storeName, setStatus, report, isActive(), hasCard, cardIssue,
+   *   auto: an Auto-checkout run — at the final button, onFinal({ el, text }) is called and 'final' returned (nothing highlighted) }
+   * Resolves to 'ready' | 'final' | 'needs_you' | 'stopped' | 'timeout' | 'done'.
    */
   async function assist(opts) {
     var C = opts.flow || {};
@@ -476,6 +479,12 @@ var MGBFill = (function () {
     while (Date.now() < deadline) {
       if (opts.isActive && !opts.isActive()) { setStatus('Stopped.'); return 'stopped'; }
       if (done.test(location.pathname)) { setStatus('Order placed.'); return 'done'; }
+
+      // "Add a protection plan?" and the like: closed, never accepted.
+      if (typeof MGBQuick !== 'undefined' && MGBQuick.dismissUpsell) {
+        var popup = MGBQuick.dismissUpsell({ flow: { checkout: C } });
+        if (popup) { report('step', 'Closed the "' + popup + '" pop-up'); await wait(300); continue; }
+      }
 
       var fill = fillFields(document, opts.values, { flow: C });
       if (fill.filled.length) setStatus('Filled: ' + fill.filled.join(', '));
@@ -519,6 +528,11 @@ var MGBFill = (function () {
         await wait(200); // let the last fields settle
         fillFields(document, opts.values, { flow: C });
         var fin = finals.find(function (b) { return !b.disabled; }) || finals[0];
+        if (opts.auto) {
+          setStatus('Filled in — checking the order before placing it…');
+          if (opts.onFinal) opts.onFinal({ el: fin.el, text: fin.text });
+          return 'final';
+        }
         var card = opts.hasCard ? (fill.missingCard ? ' Type in anything still empty on the card (like the CVV).' : '') : (CARD_ISSUE[opts.cardIssue] || '');
         var msg = 'Ready — review everything and press "' + fin.text + '" yourself.' + card;
         highlight(fin.el, 'Mugibot: ' + msg);

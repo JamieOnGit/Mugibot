@@ -2,7 +2,9 @@
 
 Every store has its own checkout flow in `server/retailers/<store>.js`. A flow
 says which buttons to press, in what order, where the store's checkout page is,
-and which button is the **final one**. The final button is never pressed.
+and which button is the **final one**. ⚡ Buy never presses the final button;
+only Auto-checkout does, for members who switched it on and armed the item
+([AUTO-CHECKOUT.md](AUTO-CHECKOUT.md)).
 
 ⚡ Buy buys **one** of each product (quantities are off for now) and gets to
 checkout as fast as the store allows:
@@ -125,6 +127,7 @@ export default {
       checkout: [/^(secure )?check ?out( now)?$/i],
       viewBag: [/\bview (cart|trolley)\b/i],
       confirm: [/added to (your )?trolley/i],   // optional: the store's "added" message
+      upsell: [/often bought together/i],       // optional: an "add more" pop-up's wording — closed with its ✕, never accepted
     },
     bag: {                          // the cart page
       path: /\/cart(\/|$)/i,
@@ -137,7 +140,7 @@ export default {
       guest: [/^continue as (a )?guest$/i],         // pressed to check out as a guest
       choose: [/^home delivery$/i],                 // buttons to press once each (not radios)
       steps: [/^continue to payment$/i, /^continue$/i],   // "next step" buttons
-      final: [/\bplace (my |your )?order\b/i],      // NEVER pressed — where it stops
+      final: [/\bplace (my |your )?order\b/i],      // where ⚡ Buy stops (only Auto-checkout presses it)
       manual: [/enter address manually/i],          // optional: extra "type the address yourself" links
       fields: { 'input[name="mobile"]': 'phone' },  // optional: CSS selector → which detail goes there
       delivery: 'home',                             // pick home delivery (never click & collect)
@@ -153,7 +156,12 @@ Whatever a flow doesn't say is covered by general rules that work on most
 stores. Some rules always apply, whatever a flow says:
 
 - Final buttons ("Place order", "Pay now", "Checkout securely", "Buy now"…) are
-  **never** pressed.
+  **never** pressed by ⚡ Buy. Auto-checkout presses one once per run, after
+  its checks (docs/AUTO-CHECKOUT.md), and never in a checkout inside another
+  site's frame (Premium Bandai's Global-e).
+- "Add more" pop-ups after Add to bag ("Often Bought Together", "You may also
+  like", a warranty offer) are closed with their ✕ or "No thanks", never
+  accepted.
 - Express payments (PayPal, Afterpay, Zip, Apple Pay…), click & collect,
   sign-in, newsletters and marketing boxes are never chosen.
 - Fields that already have a value (e.g. from a store account) are left alone.

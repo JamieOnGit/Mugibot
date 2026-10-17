@@ -1,18 +1,24 @@
 // Target — DRAFT. Product links and restock checks are set up; the checkout
-// steps below are a first guess and have NOT been tested anywhere yet. Send
-// the real flow (docs/RETAILER-FLOWS.md).
+// steps below are a first guess and have NOT been tested on target.com.au yet
+// (they're tested on the Target-style dummy store). Send the real flow
+// (docs/RETAILER-FLOWS.md).
+//
+// After "Add to basket", Target shows an "Often Bought Together" pop-up offering
+// more things to add: ⚡ Buy and Auto-checkout close it with its ✕ and carry on.
 
 export default {
   id: 'target',
   name: 'Target',
   base: 'https://www.target.com.au',
   hosts: ['www.target.com.au'],
+  // Where this retailer's copy lives in the dummy store (npm run mockstore).
+  devPath: '/target',
   flowStatus: 'draft',
   flowNote: 'Not tested yet — the checkout fill is a best guess. Waiting for the real flow.',
   skuLabel: 'Product code',
   skuHint: 'The code at the end of the link, e.g. …/p/…/71234567',
-  skuFromPath: /^\/p\/[^/]+\/([A-Za-z0-9_-]+)/,
-  productPath: /^\/p\/[^/]+\/[A-Za-z0-9_-]+\/?$/,
+  skuFromPath: /^(?:\/target)?\/p\/[^/]+\/([A-Za-z0-9_-]+)/,
+  productPath: /^(?:\/target)?\/p\/[^/]+\/[A-Za-z0-9_-]+\/?$/,
   searchPath: '/search?text={q}',
   // Live sweeps (docs/MONITORING.md): the newest listings first, up to four pages of 48. Target
   // leaves products that are sold out online out of its results, so one that's gone from every
@@ -24,7 +30,8 @@ export default {
   monitor: { server: true, browser: true },
   flow: {
     product: { add: [/\badd to (cart|basket|bag)\b/i, /\bpre-?order\b/i], waitMs: 12000 },
-    added: { checkout: [/^(secure )?check ?out( now)?$/i], viewBag: [/\bview (basket|cart|bag)\b/i] },
+    // upsell: the "Often Bought Together" pop-up after Add to basket — closed with its ✕, never accepted.
+    added: { checkout: [/^(secure )?check ?out( now)?$/i], viewBag: [/\bview (basket|cart|bag)\b/i], upsell: [/often bought together/i] },
     bag: { path: /\/(basket|cart)(\/|$)/i, checkout: [/^(secure )?check ?out( now)?$/i, /^proceed to checkout$/i] },
     checkout: {
       // target.com.au/checkout opens its one-page checkout at /spc/order.

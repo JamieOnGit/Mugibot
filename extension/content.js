@@ -4,6 +4,13 @@
 // page changes, then fills in checkout up to the final button — which you
 // press yourself. Every step follows this store's own flow from your Mugibot
 // server.
+//
+// Auto-checkout (docs/AUTO-CHECKOUT.md): a run for an item you armed opens this tab
+// with its own ⚡ Buy code. Its limits come from your account, through the
+// extension (never from this page). At the final button it checks the order —
+// your card is in, nothing on the page is wrong, the total is within your limits —
+// then presses it once, and watches what happens: the order confirmation, a
+// declined card, or your bank's or the store's check (left for you: never got past).
 
 (async () => {
   'use strict';
@@ -75,6 +82,146 @@
     event: { type, message, sku: product ? product.sku : null, name: product ? product.name : null, url: location.href },
   });
 
+  // ---------------------------------------------------------------------------
+  // Auto-checkout
+  // ---------------------------------------------------------------------------
+  // The run in this tab (from its ⚡ Buy code, or — on later pages — from the tab's pass in the extension).
+  let aco = null;
+  const acoReport = (status, reason, message, total) => ask({ type: 'acoReport', status, reason: reason || '', message: message || '', total: typeof total === 'number' ? total : undefined });
+  const acoWhy = (reason) => { if (aco) acoReport('failed', reason, null); };
+
+  const CONFIRM_RE = /thank you for (your )?(order|purchase|shopping)|order (number|no\.?|#)\s*[:#]?\s*[A-Z0-9-]{4,}|your order (has been|is) (placed|confirmed|received)|order (confirmed|received|complete)\b/i;
+  const DECLINE_RE = /declined|payment (failed|unsuccessful|was not (successful|processed)|could not be processed|didn.?t go through)|card (was|has been) (declined|rejected)|unable to (process|authori[sz]e) (your )?(payment|card)|insufficient funds|transaction (failed|was declined)|card number is (invalid|incorrect)|(expired|invalid) card/i;
+  const BANK_RE = /3-?d ?secure|verify (it.?s you|your (identity|payment|purchase))|authenticat(e|ion)( your)? (payment|purchase)|one-?time (pass(code|word)|code)|enter the code (we|sent)|confirm (the )?payment in your (bank|banking) app|verified by visa|id check/i;
+  const BANK_FRAME = /3ds|\/acs|acs\.|challenge|authenticat|cardinalcommerce|securecode|threeds|3dsecure/i;
+  const HUMAN_FRAME = /recaptcha|hcaptcha|challenges\.cloudflare|turnstile|captcha|arkoselabs|funcaptcha/i;
+  const AMOUNT_RE = /(?:AUD\s?\$?|A\$|\$)\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/g;
+  const OURS = '#mugibot-qc, #mugibot-banner';
+
+  const visibleText = (el) => (el && MGBFill.isVisible(el) && !el.closest(OURS) ? (el.innerText || '').replace(/\s+/g, ' ').trim() : '');
+  const frameSrcs = () => [...document.querySelectorAll('iframe')].filter((f) => MGBFill.isVisible(f)).map((f) => f.src || f.getAttribute('src') || '');
+
+  /** The biggest amount of money shown on the checkout page: at least the order total (each line is at most that). */
+  function orderTotal() {
+    let best = null;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const el = n.parentElement;
+      if (!el || el.closest(`${OURS}, script, style, noscript, [class*="carousel" i], [class*="recommend" i], [class*="upsell" i]`)) continue;
+      const t = n.nodeValue;
+      if (!/\d/.test(t) || !/\$/.test(t)) continue;
+      if (!MGBFill.isVisible(el)) continue;
+      for (const m of t.matchAll(AMOUNT_RE)) {
+        const v = parseFloat(m[1].replace(/,/g, ''));
+        if (Number.isFinite(v) && (best === null || v > best)) best = v;
+      }
+    }
+    return best;
+  }
+
+  /** What the page says is wrong (an error message, or a box marked invalid), or ''. */
+  function pageError() {
+    for (const el of document.querySelectorAll('[role="alert"], .error, .err, [class*="error" i], [class*="invalid" i]')) {
+      if (el.matches('input, select, textarea, form, body')) continue;
+      const t = visibleText(el);
+      if (t && t.length < 300 && /[a-z]/i.test(t)) return t.slice(0, 160);
+    }
+    const bad = [...document.querySelectorAll('[aria-invalid="true"]')].find((el) => MGBFill.isVisible(el));
+    return bad ? `"${(bad.getAttribute('aria-label') || bad.name || bad.id || 'a field').slice(0, 40)}" needs attention` : '';
+  }
+
+  function outcome() {
+    const done = (checkoutFlow && checkoutFlow.done) || /confirmation|thank-?you|order-?(complete|received|success)/i;
+    if (done.test(location.pathname)) return { status: 'placed' };
+    const text = (document.body.innerText || '').slice(0, 20000);
+    if (CONFIRM_RE.test(text)) return { status: 'placed' };
+    const frames = frameSrcs();
+    if (frames.some((f) => HUMAN_FRAME.test(f))) return { status: 'needs_you', reason: 'human_check', message: `${retailer.name} wants to check you're human — finish it yourself in this tab (Mugibot never gets past these).` };
+    if (frames.some((f) => BANK_FRAME.test(f)) || BANK_RE.test(text)) return { status: 'needs_you', reason: 'bank_check', message: 'Your bank wants you to confirm the payment — finish it in this tab.' };
+    const err = pageError();
+    if (err && DECLINE_RE.test(err)) return { status: 'failed', reason: 'card_declined', message: `${retailer.name} said: ${err}` };
+    if (DECLINE_RE.test(text.slice(0, 4000))) return { status: 'failed', reason: 'card_declined', message: `${retailer.name} declined the payment.` };
+    return null;
+  }
+
+  /** After the final button: what happened (up to 45 s here; a new page carries on by itself). */
+  async function watchOutcome(run, total) {
+    const until = Date.now() + 45000;
+    let said = null;
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 400));
+      const o = outcome();
+      if (!o || (said && said === o.status)) continue;
+      said = o.status;
+      if (o.status === 'placed') {
+        panel.setStatus('🤖 Order placed.');
+        await acoReport('placed', '', `Order confirmed at ${retailer.name}`, total);
+        assistFlag.off();
+        ask({ type: 'endFill' });
+        return;
+      }
+      panel.setStatus(o.message);
+      await acoReport(o.status, o.reason, o.message, total);
+      if (o.status === 'failed') return;
+    }
+  }
+
+  /** Stop short of the final button, say why, and leave the rest to you. */
+  async function acoStop(status, reason, message, fin, total) {
+    panel.setStatus(`🤖 ${message}`);
+    if (fin && fin.el) {
+      fin.el.style.setProperty('outline', '4px solid #f59e0b', 'important');
+      try { fin.el.scrollIntoView({ block: 'center' }); } catch { /* ignore */ }
+    }
+    await acoReport(status, reason, message, total);
+  }
+
+  /** The card is in: on the page, or in the payment provider's boxes (up to 15 s for those). */
+  async function cardIn() {
+    for (let i = 0; i < 15; i++) {
+      const onPage = [...document.querySelectorAll('input, select')]
+        .some((el) => /^card(Number|Expiry|ExpMonth)$/.test(MGBFill.classifyField(el, checkoutFlow) || '') && MGBFill.isVisible(el) && el.value);
+      if (onPage) return true;
+      const frames = (await ask({ type: 'cardFrames' })) || [];
+      if (frames.some((f) => f.filled > 0)) return true;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return false;
+  }
+
+  /** At the final button of an Auto-checkout run: check the order, then press it — once. */
+  async function acoFinish(run, fin, data) {
+    if (run.mode !== 'place') {
+      fin.el.style.setProperty('outline', '4px solid #22c55e', 'important');
+      try { fin.el.scrollIntoView({ block: 'center' }); } catch { /* ignore */ }
+      panel.setStatus(`🤖 Filled in — review everything and press "${fin.text}" yourself.`);
+      await acoReport('ready', '', `Filled in at ${retailer.name} — waiting for you to press "${fin.text}"`);
+      return;
+    }
+    if (run.placing) return; // pressed already in this run (the page came back): never twice
+    if (!data.card) return acoStop('needs_you', 'card_missing', 'No card is saved in the extension — add it (icon → Card settings) and finish this yourself.', fin);
+    if (checkoutFlow && checkoutFlow.payment === 'card' && !(await cardIn())) return acoStop('needs_you', 'card_not_filled', "Your card didn't go into the store's card boxes — type it in and press the button yourself.", fin);
+    await new Promise((r) => setTimeout(r, 400)); // the page's own checks on the last boxes
+    const err = pageError();
+    if (err) return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);
+    const total = orderTotal();
+    if (total === null) return acoStop('needs_you', 'no_total', "Couldn't read the order total to check it against your limit — check it and press the button yourself.", fin);
+    if (total > run.maxTotal) return acoStop('needs_you', 'over_limit', `The total, $${total.toFixed(2)}, is over your limit of $${run.maxTotal.toFixed(2)} — check it and press the button yourself if it's right.`, fin, total);
+    // The button, ready to press (some turn on a moment after the last box is filled).
+    let btn = fin.el;
+    for (let i = 0; i < 25 && (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true' || !MGBFill.isVisible(btn)); i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (!btn.isConnected) btn = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')].find((el) => MGBFill.isVisible(el) && (el.innerText || el.value || '').trim() === fin.text) || btn;
+    }
+    if (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true') return acoStop('needs_you', 'needs_details', `"${fin.text}" didn't become available — check the page and press it yourself.`, fin, total);
+    // Said first (the page may leave the moment it's pressed): this run's final button, pressed once.
+    await acoReport('placing', '', `Pressing "${fin.text}" — total $${total.toFixed(2)}`, total);
+    panel.setStatus(`🤖 Placing your order ($${total.toFixed(2)})…`);
+    report('step', `Auto-checkout pressed "${fin.text}" (total $${total.toFixed(2)})`, null);
+    btn.click();
+    watchOutcome(run, total);
+  }
+
   async function fillCheckout() {
     if (assisting || !assistFlag.active()) return;
     assisting = true;
@@ -89,9 +236,27 @@
         // The whole checkout is in a frame (Global-e's): frame.js fills your details and card in there.
         panel.setStatus(`${retailer.name}'s checkout is in the form on this page: your details and card go in there as each step shows them. Check them and press the final button yourself.`);
         report('ready', `Checkout open at ${retailer.name} — your details and card go into its checkout form`, null);
+        if (data.aco) {
+          // (Auto-checkout can't press a button inside another site's form: it's left for you.)
+          aco = data.aco;
+          if (data.aco.mode === 'place') acoReport('needs_you', 'payment_frame', `${retailer.name}'s checkout is in a payment form Mugibot can't press — your details are going in; check them and press the final button yourself.`);
+          else acoReport('ready', '', `${retailer.name}'s checkout is open with your details going in — press the final button yourself.`);
+        }
         if (data.card && checkoutFlow.payment === 'card') checkCard();
         return;
       }
+      const run = data.aco || null;
+      if (run) aco = run;
+      if (run && run.placing) {
+        // Back at checkout after the final button was pressed: what happened, without pressing it again.
+        const o = outcome();
+        if (o) await acoReport(o.status, o.reason, o.message);
+        if (o && o.status === 'placed') { assistFlag.off(); ask({ type: 'endFill' }); }
+        else if (!o) watchOutcome(run, null);
+        return;
+      }
+      if (run) await acoReport('checkout', '', `At ${retailer.name}'s checkout — filling it in`);
+      let fin = null;
       const result = await MGBFill.assist({
         values: MGBFill.fieldValues(data.profile, data.card),
         flow: checkoutFlow,
@@ -101,7 +266,15 @@
         setStatus: panel.setStatus,
         report: (type, message) => report(type === 'ready' ? 'ready' : type === 'error' ? 'error' : 'step', message, null),
         isActive: assistFlag.active,
+        auto: !!run,
+        onFinal: (f) => { fin = f; },
       });
+      if (result === 'final' && run && fin) {
+        await acoFinish(run, fin, data);
+        return;
+      }
+      if (run && result === 'done') await acoReport('placed', '', `Order confirmed at ${retailer.name}`);
+      if (run && (result === 'needs_you' || result === 'timeout')) await acoReport('needs_you', result === 'timeout' ? 'timeout' : 'needs_details', `Checkout got stuck at ${retailer.name} — finish it yourself in this tab.`);
       if (result !== 'ready' && result !== 'stopped') assistFlag.off();
       if (result === 'done') ask({ type: 'endFill' });
       if (result === 'ready' && data.card && checkoutFlow && checkoutFlow.payment === 'card') checkCard();
@@ -162,7 +335,7 @@
     try {
       const flow = store.read();
       const product = extra.product || MGBQuick.productForPage(items, retailer) || (flow ? items.find((p) => p.sku === flow.sku) : null) || null;
-      const result = await MGBQuick.run({ fresh, retailer, product, products: items, store, setStatus: panel.setStatus, report, probe, ...extra });
+      const result = await MGBQuick.run({ fresh, retailer, product, products: items, store, setStatus: panel.setStatus, report, probe, why: acoWhy, ...extra });
       if (result === 'checkout') atCheckout();
     } catch {
       store.clear();
@@ -189,7 +362,12 @@
       if (ok) assistFlag.on(item && item.profileId);
       go(true);
     },
-    onStop: () => { store.clear(); assistFlag.off(); panel.setStatus('Stopped. You can continue yourself.'); },
+    onStop: () => {
+      store.clear();
+      assistFlag.off();
+      panel.setStatus('Stopped. You can continue yourself.');
+      if (aco && !aco.placing) acoReport('failed', 'stopped', 'You stopped it');
+    },
   });
 
   if (goCode) {
@@ -197,8 +375,17 @@
     if (claim && claim.ok) {
       const listed = items.find((p) => p.id === claim.itemId) || items.find((p) => p.sku === claim.sku);
       const product = { ...(listed || {}), sku: claim.sku, name: claim.name || (listed && listed.name) || claim.sku };
+      aco = claim.aco || null;
+      // Auto-checkout only ever buys the one item: a bag with other things in it is left for you.
+      const inBag = aco ? MGBQuick.bagCount() : null;
+      if (aco && inBag) {
+        panel.setNote('🤖 Auto-checkout');
+        panel.setStatus(`Your ${retailer.name} bag already has ${inBag} item${inBag === 1 ? '' : 's'} in it — Auto-checkout only buys the one item. Empty it, or buy this yourself.`);
+        acoReport('needs_you', 'wrong_item', `Your ${retailer.name} bag already had ${inBag} item${inBag === 1 ? '' : 's'} in it`);
+        return;
+      }
       assistFlag.on(claim.profileId);
-      panel.setNote('Started from ⚡ Buy');
+      panel.setNote(aco ? `🤖 Auto-checkout${aco.mode === 'place' ? ' — places the order within your limits' : ' — stops at the final button for you'}` : 'Started from ⚡ Buy');
       // The buy box can take a few seconds to appear on a fresh page load.
       const waitMs = (MGBFlows.part(retailer, 'product').waitMs) || 12000;
       go(true, { product, waitForButtonMs: waitMs });
@@ -210,7 +397,9 @@
           : 'That ⚡ Buy link has expired or belongs to another account — press ⚡ Buy again.');
   }
 
-  // Carry on where we left off after the store changed page.
+  // Carry on where we left off after the store changed page (an Auto-checkout run: still this tab's).
+  if (store.read() || assistFlag.active()) aco = await ask({ type: 'acoInfo' });
+  if (aco) panel.setNote('🤖 Auto-checkout');
   if (store.read()) go(false);
   else if (assistFlag.active()) fillCheckout();
 })();

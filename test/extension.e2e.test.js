@@ -554,6 +554,26 @@ test('Pokémon Center (draft): "Add to Cart" → "View Cart" → "Checkout" → 
   await dash.close();
 });
 
+test('Target (draft): "Add to basket" → the "Often Bought Together" pop-up closed with its ✕ → "Checkout" → guest → home delivery → card → stops at "Place order"', async () => {
+  await useItems([{ url: store.productUrl('target', '71234568'), name: 'Target Bundle' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Target Bundle');
+  await waitReady(shop, 'Place order');
+  const S = store.shop('target');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['71234568', 1]], 'none of the pop-up\'s clothes');
+  assert.deepEqual(S.steps.map((x) => x.step), ['contact', 'delivery']);
+  assert.equal(S.data.contact.email, PROFILE_A.email);
+  assert.equal(S.data.delivery.method, 'home', 'never Click & Collect');
+  assert.deepEqual([S.data.delivery.firstName, S.data.delivery.address1, S.data.delivery.postcode], ['Ash', PROFILE_A.address1, '2000']);
+  assert.match(await shop.inputValue('input[name=cardNumber]'), /^4242 ?4242 ?4242 ?4242$/);
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /Closed the "Often Bought Together" pop-up/.test(e.message)), 'the pop-up closed');
+  await shop.waitForTimeout(800);
+  assert.equal(ordersPlaced(), 0, '"Place order" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
 test("Premium Bandai (draft): Add pressed once its Vue page has wired it up → \"Go to Cart\" → \"Proceed to checkout\" → the whole checkout in a Global-e-style frame: your details and card go in there, and it's left for you to place", async () => {
   await useItems([{ url: store.productUrl('pbandai', 'N2903432001'), name: 'PB PCC' }]);
   const S = store.shop('pbandai');
@@ -909,6 +929,178 @@ test("store login monitor: the extension sees where you're signed in (its checks
   await popup.close();
   await page.close();
   store.state.signedIn = {};
+});
+
+// ---------------------------------------------------------------------------
+// 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md)
+// ---------------------------------------------------------------------------
+/** The extension starts listening for Auto-checkout runs now (instead of at its next alarm). */
+async function acoListen() {
+  await sw.evaluate(async () => {
+    const all = await chrome.storage.local.get(null);
+    await chrome.storage.local.remove(Object.keys(all).filter((k) => k.startsWith('state:')));
+    globalThis.mugibotAcoLoop();
+    return true;
+  });
+  await waitFor(() => [...env.app.aco.waiters.values()].some((set) => set.size > 0), { message: 'the browser listening for Auto-checkout runs' });
+}
+
+/** The store sells out, then it's back: the monitor's page checks see both. */
+async function drop(shop, sku, { price } = {}) {
+  store.set(shop, sku, { status: 'out_of_stock' });
+  env.app.db.run('UPDATE page_checks SET next_check_at = 0');
+  await env.app.monitor.tick();
+  store.set(shop, sku, { status: 'in_stock', ...(price ? { price } : {}) });
+  env.app.db.run('UPDATE page_checks SET next_check_at = 0');
+  await env.app.monitor.tick();
+}
+
+const acoRuns = async () => (await browserApi('GET', '/api/aco')).body.runs;
+const lastRun = async () => (await acoRuns())[0];
+const closeStorePages = async (host) => { for (const pg of ctx.pages()) if (pg.url().startsWith(`${store.url}/${host}`)) await pg.close(); };
+
+test('🤖 Auto-checkout: switched on with your agreement and limits; an item is armed with a max price', async () => {
+  if (!env.app.repo.userByUsername('ash').discord_id) {
+    // (Running on its own: connect Discord for the DMs, like the ⚡ Buy DM test does.)
+    const page = await ctx.newPage();
+    discord.state.nextUser = 'd-ash';
+    await page.goto(`${env.url}/auth/discord`);
+    await page.waitForURL(/discord=linked/);
+    await page.close();
+  }
+  let r = await browserApi('PUT', '/api/aco', { enabled: true });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /agree/);
+  r = await browserApi('PUT', '/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.settings.enabled, true);
+  assert.ok(r.body.settings.agreedAt > 0);
+  await useItems([]);
+  let res = await browserApi('POST', '/api/items', { url: store.productUrl('kmart', '43818587'), name: 'ACO ETB', aco: true });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /max price/);
+  res = await browserApi('POST', '/api/items', { url: store.productUrl('kmart', '43818587'), name: 'ACO ETB', aco: true, maxPrice: 120 });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.aco, true);
+  assert.equal(res.body.acoPlaces, true);
+});
+
+test('🤖 Auto-checkout at Kmart: it drops → your browser opens the store by itself, adds it, fills checkout in and places the order — once; armed again only by you', async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const dmsBefore = discord.dmsTo('d-ash').length;
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(() => store.shop('kmart').orders.length === 1, { timeout: 45000, message: 'the order placed at the dummy Kmart' });
+  const order = store.shop('kmart').orders[0];
+  assert.deepEqual(order.cart.map((c) => [c.sku, c.qty]), [['43818587', 1]], 'one of it');
+  assert.equal(order.data.delivery.address1, PROFILE_A.address1);
+  assert.equal(order.form.cardNumber, '4242 4242 4242 4242', "the card from this browser's vault");
+  await waitFor(async () => (await lastRun()).status === 'placed', { message: 'the run says placed' });
+  const run = await lastRun();
+  assert.equal(run.name, 'ACO ETB');
+  assert.equal(run.total, 110, 'the order total read at checkout');
+  assert.equal(run.trigger, 'server');
+  assert.deepEqual(run.steps.map((x) => x.status), ['queued', 'sent', 'started', 'checkout', 'placing', 'placed']);
+  // One purchase per arming: it waits to be armed again.
+  const item = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB');
+  assert.equal(item.aco, false);
+  await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /Auto-checkout placed your order: ACO ETB/.test(m.body.embeds[0].title)), { message: 'the "order placed" DM' });
+  assert.ok(discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /Auto-checkout started: ACO ETB/.test(m.body.embeds[0].title)), 'the "started" DM');
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /Auto-checkout pressed "Checkout securely" \(total \$110\.00\)/.test(e.message)));
+  // It drops again: nothing is bought (not armed).
+  const runsBefore = (await acoRuns()).length;
+  await drop('kmart', '43818587');
+  await new Promise((r) => setTimeout(r, 2500));
+  assert.equal(store.shop('kmart').orders.length, 1, 'not bought again');
+  assert.equal((await acoRuns()).length, runsBefore, 'no new run');
+  await closeStorePages('kmart');
+});
+
+test('🤖 Auto-checkout stops short — and buys nothing — when the total is over your limit, or the bag already has other things in it', async () => {
+  // Over the limit: the store wants more than you allowed (the server saw $100; checkout says $110).
+  await browserApi('PUT', '/api/aco', { maxOrder: 105 });
+  const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB');
+  await browserApi('PUT', `/api/items/${it.id}`, { aco: true });
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await lastRun()).status === 'needs_you', { timeout: 45000, message: 'stopped at the final button' });
+  let run = await lastRun();
+  assert.equal(run.reason, 'over_limit');
+  assert.match(run.message, /\$110\.00, is over your limit of \$105\.00/);
+  assert.equal(store.shop('kmart').orders.length, 0, 'nothing bought');
+  assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB').aco, true, 'never pressed: still armed');
+  await closeStorePages('kmart');
+  await browserApi('PUT', '/api/aco', { maxOrder: 200 });
+
+  // Something else already in the bag: Auto-checkout only ever buys the one item.
+  store.shop('kmart').cart.push({ sku: '43818556', qty: 1, price: 20, name: 'Knock Out Collection' });
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await lastRun()).reason === 'wrong_item', { timeout: 45000, message: 'stopped: the bag had other things' });
+  assert.equal(store.shop('kmart').orders.length, 0);
+  run = await lastRun();
+  assert.equal(run.status, 'needs_you');
+  await closeStorePages('kmart');
+});
+
+test("🤖 Auto-checkout when the card is declined, or your bank wants you to confirm: it says so, and never tries again by itself", async () => {
+  store.shop('kmart').decline = true;
+  const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB');
+  await browserApi('PUT', `/api/items/${it.id}`, { aco: true });
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await lastRun()).reason === 'card_declined', { timeout: 45000, message: 'the declined card noticed' });
+  let run = await lastRun();
+  assert.equal(run.status, 'failed');
+  assert.equal(store.shop('kmart').declined, 1, 'pressed once');
+  assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB').aco, false, 'the final button was pressed: armed again only by you');
+  await closeStorePages('kmart');
+
+  store.reset();
+  store.state.account = KMART_ACCOUNT;
+  store.shop('kmart').threeDS = true;
+  await browserApi('PUT', `/api/items/${it.id}`, { aco: true });
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await lastRun()).reason === 'bank_check', { timeout: 45000, message: "the bank's check noticed" });
+  run = await lastRun();
+  assert.equal(run.status, 'needs_you');
+  assert.match(run.message, /bank/);
+  assert.equal(store.shop('kmart').challenged, 1);
+  await closeStorePages('kmart');
+});
+
+test('🤖 Auto-checkout at Target: the "Often Bought Together" pop-up is closed with its ✕ (nothing else added), then the order is placed', async () => {
+  await useItems([{ url: store.productUrl('target', '71234567'), name: 'ACO Target ETB', aco: true, maxPrice: 90 }]);
+  await acoListen();
+  await drop('target', '71234567');
+  await waitFor(() => store.shop('target').orders.length === 1, { timeout: 45000, message: 'the order placed at the dummy Target' });
+  const order = store.shop('target').orders[0];
+  assert.deepEqual(order.cart.map((c) => [c.sku, c.qty]), [['71234567', 1]], 'one of the item — none of the "Often Bought Together" clothes');
+  assert.deepEqual(store.shop('target').steps.map((x) => x.step), ['contact', 'delivery']);
+  assert.equal(store.shop('target').data.delivery.method, 'home');
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /Closed the "Often Bought Together" pop-up/.test(e.message)), 'the pop-up closed');
+  await waitFor(async () => (await lastRun()).status === 'placed', { message: 'placed' });
+  assert.equal((await lastRun()).total, 88, '$79 + $9 delivery');
+  await closeStorePages('target');
+});
+
+test('🤖 Auto-checkout set to stop at the final button: fills checkout in and leaves the button to you', async () => {
+  await browserApi('PUT', '/api/aco', { mode: 'fill' });
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO fill', aco: true, maxPrice: 120 }]);
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await lastRun()).status === 'ready', { timeout: 45000, message: 'filled in, waiting for you' });
+  await new Promise((r) => setTimeout(r, 1200));
+  assert.equal(store.shop('kmart').orders.length, 0, 'not pressed');
+  const page = ctx.pages().find((pg) => /\/kmart\/checkout$/.test(pg.url()));
+  assert.ok(page, 'the checkout left open for you');
+  assert.match(await panel(page).textContent(), /review everything and press "Checkout securely" yourself/);
+  assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO fill').aco, false, 'filled in once: armed again only by you');
+  await closeStorePages('kmart');
+  await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
+  await useItems([]);
 });
 
 test("another account's ⚡ Buy link does nothing in this browser", async () => {

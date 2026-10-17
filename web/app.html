@@ -28,6 +28,7 @@
       <a href="#watch" data-tab="watch">🔔 Watchlist</a>
       <a href="#monitor" data-tab="monitor">📡 Monitor</a>
       <a href="#checkout" data-tab="checkout">📦 Checkout details</a>
+      <a href="#aco" data-tab="aco">🤖 Auto-checkout</a>
       <a href="#discord" data-tab="discord">💬 Discord</a>
       <a href="#extension" data-tab="extension">🧩 Extension</a>
       <a href="#membership" data-tab="membership">⭐ Membership</a>
@@ -55,12 +56,13 @@
           <div class="grid3">
             <div><label for="w-name">Name</label><input id="w-name" name="name" placeholder="Shown on your list"></div>
             <div><label for="w-price">Price ($)</label><input id="w-price" name="price" type="number" min="0" step="0.01"></div>
-            <div><label for="w-max">Ping me at or below ($)</label><input id="w-max" name="maxPrice" type="number" min="0" step="0.01" placeholder="Any price"></div>
+            <div><label for="w-max">Max price ($)</label><input id="w-max" name="maxPrice" type="number" min="0" step="0.01" placeholder="Any price" title="Pinged (and, if armed, bought) only at or below this price"></div>
           </div>
           <div class="grid2">
             <div><label for="w-profile">Deliver to</label><select id="w-profile" name="profileId"></select></div>
             <div id="w-announce-wrap" hidden><label class="check mt"><input type="checkbox" id="w-announce"> <span>📣 Announce restocks in the members' Discord channel</span></label></div>
           </div>
+          <label class="check"><input type="checkbox" id="w-aco"> <span>🤖 Auto-checkout this item when it drops (once — then arm it again). Needs a max price. <a href="#aco">Auto-checkout settings</a></span></label>
           <div class="form-actions">
             <button class="btn primary" type="submit" id="w-save">Add SKU</button>
             <button class="btn" type="button" id="w-cancel">Cancel</button>
@@ -68,7 +70,7 @@
           </div>
         </form>
         <div class="card">
-          <p class="muted small">Each SKU is checked about every <span id="w-interval">60</span> seconds. When it goes from sold out to <b>in stock</b> (or pre-orders open) you get a Discord DM with a <b>⚡ Buy</b> button. Press ⚡ Buy here or there: a new tab opens the product and the extension adds it to your bag, goes to checkout and fills it in. You press the final button.</p>
+          <p class="muted small">Each SKU is checked about every <span id="w-interval">60</span> seconds. When it goes from sold out to <b>in stock</b> (or pre-orders open) you get a Discord DM with a <b>⚡ Buy</b> button. Press ⚡ Buy here or there: a new tab opens the product and the extension adds it to your bag, goes to checkout and fills it in. You press the final button — or arm an item for <a href="#aco">🤖 Auto-checkout</a> and it's bought by itself when it drops, within your limits.</p>
           <ul class="items" id="w-list"></ul>
           <div class="form-actions">
             <button class="btn small" type="button" id="w-starter">Add the Kmart starter list</button>
@@ -317,6 +319,56 @@
           <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close the browser. It's typed into the {{APP_NAME}} extension's own card page (not this website), saved in this browser only, encrypted and tied to your account. It's <b>never sent to our servers</b>.</p>
           <p id="card-state" class="notice">Checking this browser…</p>
           <div class="form-actions"><button class="btn primary" type="button" id="card-open">Add your card</button></div>
+        </div>
+      </section>
+
+      <!-- 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md) -->
+      <section data-panel="aco" hidden>
+        <div class="tab-head"><h2>Auto-checkout</h2><span class="pill" id="aco-state">Off</span></div>
+        <p class="muted aco-lead">When an item you've armed drops, your browser checks out by itself: it opens the store, adds it to your bag, closes any "add more" pop-ups, fills in checkout with your details and the card saved in the extension, and places the order — within your limits. <b>One purchase per arming:</b> to buy it again, arm it again.</p>
+
+        <div class="aco-stats" id="aco-stats"></div>
+
+        <div class="aco-grid">
+          <form class="card" id="aco-form">
+            <div class="card-head"><h3>Your switch and limits</h3></div>
+            <div class="aco-switch-row">
+              <button type="button" class="sn-sw" id="aco-enabled" role="switch" aria-checked="false" aria-label="Auto-checkout on"></button>
+              <div><b id="aco-enabled-label">Auto-checkout is off</b><div class="muted small" id="aco-enabled-note">Nothing is bought by itself until you switch it on.</div></div>
+            </div>
+            <label class="check aco-agree" id="aco-agree-wrap" hidden><input type="checkbox" id="aco-agree"> <span>I agree that Mugibot may check out <b>by itself, in my browser, with my saved card</b>, for the items I arm and within these limits. I'm responsible for these orders, and I understand stores can cancel orders, or close accounts, that use automated checkout.</span></label>
+            <fieldset class="kinds"><legend>When an armed item drops</legend>
+              <label class="check inline"><input type="radio" name="aco-mode" value="place"> Place the order for me</label>
+              <label class="check inline"><input type="radio" name="aco-mode" value="fill"> Fill in checkout and stop at the final button — I press it</label>
+            </fieldset>
+            <div class="grid3">
+              <div><label for="aco-max">Most an order may cost ($)</label><input id="aco-max" type="number" min="1" max="10000" step="1" required></div>
+              <div><label for="aco-perday">Orders a day</label><input id="aco-perday" type="number" min="1" max="10" step="1" required></div>
+              <div><label for="aco-spend">Spending a day ($)</label><input id="aco-spend" type="number" min="1" max="20000" step="1" required></div>
+            </div>
+            <label class="check"><input type="checkbox" id="aco-signedin"> <span>Only at stores where this browser is signed in (checkout is faster signed in: the store fills in your saved details)</span></label>
+            <p class="muted small">Every order is also checked at checkout: the total (delivery included) must be within the item's max price + $40 and your limit above. Anything off — another item in the bag, a declined card, your bank's or the store's check — and it stops and tells you. It never gets past a bot check or your bank's check.</p>
+            <div class="form-actions"><button class="btn primary" type="submit">Save</button><span class="msg" id="aco-msg"></span></div>
+          </form>
+
+          <div class="card" id="aco-ready">
+            <div class="card-head"><h3>Ready to check out?</h3><button class="btn small" type="button" id="aco-recheck">Check again</button></div>
+            <ul class="checks aco-checks" id="aco-checks"></ul>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Armed items</h3><span class="muted small" id="aco-armed-count"></span></div>
+          <p class="muted small">Arm items from your watchlist. Each needs a max price: Mugibot never pays more than that.</p>
+          <ul class="aco-items" id="aco-items"></ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Activity</h3>
+            <select id="aco-filter" aria-label="Show"><option value="">Everything</option><option value="placed">Orders placed</option><option value="needs">Needed you</option><option value="failed">Failed</option><option value="skipped">Didn't start</option></select>
+          </div>
+          <p class="muted small">Every time an armed item dropped: whether Auto-checkout started, each step it took, and how it ended — with why.</p>
+          <ul class="aco-runs" id="aco-runs"></ul>
         </div>
       </section>
 

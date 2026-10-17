@@ -25,6 +25,13 @@
 //             wired it up), its search JSON (only with its region header),
 //             "Go to Cart" → "Proceed to checkout" → the whole checkout in a
 //             Global-e-style frame from another address
+//   /target   Target-style: "Add to basket" → an "Often Bought Together" pop-up
+//             offering clothes (closed with its ✕) → /checkout → its one-page
+//             checkout at /spc/order: guest → home delivery → card → "Place order";
+//             its search page's product data in __NEXT_DATA__ (the live sweeps)
+//
+// Placing an order: each shop's `decline` (the card is declined) and `threeDS` (the
+// bank's "verify it's you" check, in a frame) options, for Auto-checkout's tests.
 //
 // Open the root (/) for the control panel: restock, sell out, list or unlist
 // products and watch Mugibot react. A second server on another port serves
@@ -44,10 +51,11 @@ const SHOPS = {
   thegamescube: { name: 'The Games Cube (dummy CrystalCommerce)', color: '#0f766e' },
   pokemoncenter: { name: 'Pokémon Center (dummy)', color: '#d32f2f' },
   pbandai: { name: 'Premium Bandai (dummy)', color: '#1f2937' },
+  target: { name: 'Target (dummy)', color: '#cc0000' },
 };
 // The Shopify-style shops: the same product, cart and checkout pages.
 const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic']);
-const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai)(\/.*|$)/;
+const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target)(\/.*|$)/;
 const LD_AVAIL = { in_stock: 'InStock', preorder: 'PreOrder', out_of_stock: 'OutOfStock' };
 const STATES = '<option value="">Select state</option><option value="NSW">New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option><option value="WA">Western Australia</option><option value="SA">South Australia</option><option value="TAS">Tasmania</option><option value="ACT">Australian Capital Territory</option><option value="NT">Northern Territory</option>';
 
@@ -70,6 +78,8 @@ export function defaultShops() {
       botCheck: false,
       // When the product page was last sent, and when the last add arrived.
       servedAt: 0, addedAt: 0,
+      // Placing an order: the card is declined; or the bank's "verify it's you" check comes up first.
+      decline: false, threeDS: false,
       // What the bag page showed each time it was opened (number of items in it).
       bagViews: [],
     };
@@ -86,6 +96,7 @@ button,.btn{background:${s.color};color:#fff;border:0;padding:10px 16px;border-r
 button[disabled]{background:#999;cursor:default}label{display:block;margin:8px 0}input,select{padding:6px;font-size:15px;width:320px;max-width:100%}
 .drawer{position:fixed;right:0;top:0;bottom:0;width:320px;background:#fff;box-shadow:-4px 0 12px rgba(0,0,0,.2);padding:20px;display:none}.drawer.open{display:block}
 .tile{display:inline-block;border:1px solid #ddd;padding:10px;margin:6px;width:200px;vertical-align:top}.err{color:#c00;font-weight:600}
+.drawer.modal{left:8%;right:8%;top:8%;bottom:auto;width:auto;border-radius:8px}.obt-item{display:inline-block;width:22%;vertical-align:top;margin:4px}
 .choice[aria-pressed=true]{outline:3px solid #0a0}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style>${head}</head>
 <body><div class="dummy">⚠ Dummy store for testing Mugibot — nothing here is real. <a href="/">Control panel</a></div>
 <header><a href="${base}/">${esc(s.name)}</a> · ${bagLink(shop, bagCount)} · <!--mgb-account--></header><main>${body}</main>
@@ -186,7 +197,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
 
   // -------------------------------------------------------------------- product pages
   function productPage(shop, p) {
-    const others = shopOf(shop).products.filter((x) => x.sku !== p.sku && x.listed);
+    const others = shopOf(shop).products.filter((x) => x.sku !== p.sku && x.listed && !x.upsell);
+    const upsellItems = shopOf(shop).products.filter((x) => x.upsell && x.sku !== p.sku);
     const other = others[0];
     const labels = {
       kmart: { in_stock: 'Add to bag', preorder: 'Pre-order', out_of_stock: 'Sold out online', coming_soon: 'Coming soon' },
@@ -195,6 +207,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       jbhifi: { in_stock: 'Add to cart', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon' },
       pokemoncenter: { in_stock: 'Add to Cart', preorder: 'Pre-order', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
       pbandai: { in_stock: 'Add to Cart', preorder: 'Add to Cart', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
+      target: { in_stock: 'Add to basket', preorder: 'Pre-order', out_of_stock: 'Out of stock online', coming_soon: 'Coming soon' },
       thegamescube: {},
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     const orderable = p.status === 'in_stock' || p.status === 'preorder';
@@ -211,6 +224,15 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       ebgames: '<div class="drawer mini-cart" id="drawer"><h3>Added to cart</h3><p id="drawer-msg"></p><a class="btn" href="/ebgames/checkout">Checkout</a> <a href="/ebgames/cart">View cart</a></div>',
       pokemoncenter: '<div class="drawer mini-cart" id="drawer" role="dialog" aria-label="Added to cart"><h3>Added to cart</h3><p id="drawer-msg"></p><a class="btn" href="/pokemoncenter/cart">View Cart</a> <a href="/pokemoncenter/">Continue Shopping</a></div>',
       pbandai: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Item added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/pbandai/cart">Go to Cart</a></div>',
+      // Target: "Often Bought Together" — four more things to add, and a ✕ to close it.
+      target: `<div class="drawer modal upsell-modal" id="drawer" role="dialog" aria-modal="true" aria-labelledby="obt-title">
+        <button type="button" class="modal-close" aria-label="Close" id="obt-close" style="float:right;background:none;color:#000;font-size:22px">✕</button>
+        <h2 id="obt-title">Often Bought Together</h2><p id="drawer-msg" hidden></p>
+        <div class="obt-items">${upsellItems.map((x) => `<div class="obt-item"><img src="${imagePath(shop, x)}" alt="" width="120"><div>${esc(x.name)}</div><b>$${x.price}</b>
+          <select aria-label="Colour"><option>Black</option></select> <select aria-label="Size"><option value="">Select Size</option><option>10</option></select></div>`).join('')}</div>
+        <p>Total Price: $${upsellItems.reduce((t, x) => t + x.price, 0)}</p>
+        <button type="button" id="obt-add">Add ${upsellItems.length} Items To Basket</button>
+      </div>`,
     }[shop];
     return page(shop, `${p.name} | ${SHOPS[shop].name}`, `
       <div class="product-detail">
@@ -243,16 +265,28 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           const atc = document.getElementById('atc'); // what Vue leaves on an element it has wired up
           if (atc) atc._vei = { onClick() {} };
         }, ${Number(shopOf(shop).vueMs)});` : ''}
+        // Target's pop-up: ✕ closes it; "Add 4 Items To Basket" adds them all (what ⚡ Buy must never press).
+        document.getElementById('obt-close')?.addEventListener('click', () => { document.getElementById('drawer').classList.remove('open'); window.__afterUpsell?.(); });
+        document.getElementById('obt-add')?.addEventListener('click', async () => {
+          for (const sku of ${JSON.stringify(upsellItems.map((x) => x.sku))}) await fetch('/${shop}/api/cart/add', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({sku, qty: 1})});
+          document.getElementById('drawer').classList.remove('open');
+          window.__afterUpsell?.();
+        });
         document.addEventListener('click', async (e) => {
           if (!e.target.closest('#atc') || !started) return;
           ${readQtyJs}
           const r = await fetch('/${shop}/api/cart/add', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({sku:'${p.sku}', qty})});
           const d = await r.json();
           if (!d.ok) return;
-          const bag = document.getElementById('bag-link');
-          bag.setAttribute('aria-label', '${shop === 'kmart' ? 'Bag' : 'Cart'}, ' + d.items + ' items');
-          bag.innerHTML = '${shop === 'kmart' ? 'Bag' : 'Cart'} <span class="bag-count">' + d.items + '</span>';
-          setTimeout(() => { document.getElementById('drawer-msg').textContent = d.count + ' item(s) in your ${shop === 'kmart' ? 'bag' : 'cart'}'; document.getElementById('drawer').classList.add('open'); }, 150);
+          const showBag = () => {
+            const bag = document.getElementById('bag-link');
+            bag.setAttribute('aria-label', '${shop === 'kmart' ? 'Bag' : 'Cart'}, ' + d.items + ' items');
+            bag.innerHTML = '${shop === 'kmart' ? 'Bag' : 'Cart'} <span class="bag-count">' + d.items + '</span>';
+          };
+          ${shop === 'target'
+    // Target: the "Often Bought Together" pop-up straight away, over the page; the basket shows the item once it's closed.
+    ? "window.__afterUpsell = showBag; document.getElementById('drawer').classList.add('open');"
+    : "showBag(); setTimeout(() => { document.getElementById('drawer-msg').textContent = d.count + ' item(s) in your " + (shop === 'kmart' ? 'bag' : 'cart') + "'; document.getElementById('drawer').classList.add('open'); }, 150);"}
         });
       </script>`, { head: ldFor(p, shop), bagCount: bagCount(shop) });
   }
@@ -312,6 +346,16 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1>${hits.map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}"><img src="${imagePath(shop, x)}" alt="">${esc(x.name)}</a><div class="price">$${x.price.toFixed(2)}</div>${button(x)}</div>`).join('') || '<p>No results</p>'}`);
   }
 
+  // Target's search page: its product data in __NEXT_DATA__, newest first; sold-out products left out (like the real one).
+  function targetSearchPage(q) {
+    const hits = searchHits('target', q).filter((x) => !x.upsell && (x.status === 'in_stock' || x.status === 'preorder'));
+    const data = { props: { pageProps: { metadata: { productList: { totalNumProducts: hits.length, products: hits.map((x) => ({
+      id: `P${x.sku}`, title: x.name, baseProductUrl: pathFor('target', x), imageUrl: imagePath('target', x), price: { offerPrice: x.price },
+      variations: [{ colourVariantCode: x.sku, url: pathFor('target', x), inStock: true, productDisplayType: x.status === 'preorder' ? 'PRE_ORDER' : 'IN_STOCK' }],
+    })) } } } } };
+    return page('target', `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>`);
+  }
+
   // A search page whose products are only filled in by its own code once it's open (BIG W's real one).
   function clientSearchPage(shop, q) {
     return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1><div id="results"><p>Loading…</p></div>
@@ -337,6 +381,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const go = {
       kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>',
       thegamescube: '<a class="utility-button checkout" href="/thegamescube/checkout/proceed_to_checkout">Checkout &rarr;</a>', pokemoncenter: '<a class="btn" href="/pokemoncenter/checkout">Checkout</a>', pbandai: '<a class="btn" href="/pbandai/checkout">Proceed to checkout</a>',
+      target: '<a class="btn" href="/target/checkout">Checkout</a>',
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || '<li>Empty</li>'}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
       <script>
@@ -356,6 +401,16 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const box = (field, label) => `<label>${label}<br><iframe class="sf" data-field="${field}" src="${cardOrigin}/card-frame?style=strict&mode=${mode}&field=${field}" width="300" height="44" style="border:1px solid #ccc"></iframe></label>`;
     return `<p><b>Pay with credit or debit card</b></p>${box('number', 'Card number')}${box('expiry', 'Expiry')}${box('cvc', 'CVV')}`;
   }
+
+
+  // After the final button: the order confirmed — or the card declined, or the bank's "verify it's you" check (in a frame).
+  const placeJs = (shop, errId) => `async (body) => {
+    const r = await fetch('/${shop}/checkout/place', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (d.error) { const e = document.getElementById('${errId}'); e.textContent = d.error; e.setAttribute('role', 'alert'); return; }
+    if (d.challenge) { document.querySelector('main').insertAdjacentHTML('beforeend', '<section id="threeds"><h2>Verify it\\'s you</h2><p>Your bank needs to confirm this payment.</p><iframe src="' + d.challenge + '" width="400" height="300"></iframe></section>'); return; }
+    location.href = '/${shop}/checkout/confirmation';
+  }`;
 
   function kmartCheckout() {
     const acc = state.account || {};
@@ -388,6 +443,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <label>Postcode* <input name="postcode" required maxlength="4"></label>
         <button type="button" id="k-to-payment">Continue to payment</button></section>
       <section id="k-payment" hidden><h2>④ Payment</h2><p>Select a payment method</p>
+        <p class="order-total"><b>Total $${(total('kmart') + 10).toFixed(2)}</b></p>
         <label><input type="radio" name="pay" value="card" checked> Credit or debit card</label>
         <label><input type="radio" name="pay" value="paypal"> PayPal</label>
         <label><input type="radio" name="pay" value="afterpay"> afterpay</label>
@@ -410,12 +466,55 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         $('k-to-details').addEventListener('click', () => step('summary', $('k-summary'), $('k-details')));
         $('k-to-delivery').addEventListener('click', () => step('details', $('k-details'), $('k-delivery')));
         $('k-to-payment').addEventListener('click', () => step('delivery', $('k-delivery'), $('k-payment')));
-        $('k-place').addEventListener('click', async () => {
-          await fetch('/kmart/checkout/place', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data($('k-payment'))) });
-          location.href = '/kmart/checkout/confirmation';
-        });
+        const place = ${placeJs('kmart', 'k-error')};
+        $('k-place').addEventListener('click', () => place(data($('k-payment'))));
         for (const el of document.querySelectorAll('input[name=cardNumber]')) el.addEventListener('input', () => { el.value = el.value.replace(/\\D/g, '').slice(0, 16).replace(/(\\d{4})(?=\\d)/g, '$1 '); });
         for (const el of document.querySelectorAll('input[name=cardExpiry]')) el.addEventListener('input', () => { const d = el.value.replace(/\\D/g, '').slice(0, 4); el.value = d.length > 2 ? d.slice(0, 2) + '/' + d.slice(2) : d; });
+      </script>`;
+  }
+
+  function targetCheckout() {
+    const sum = total('target');
+    return `<h1>Checkout</h1>
+      <section id="t-contact"><h2>1. Your details</h2>
+        <label>Email address <input name="email" type="email" required></label>
+        <p><button type="button" id="t-guest">Continue as guest</button> or <a href="#">Sign in</a></p></section>
+      <section id="t-delivery" hidden><h2>2. Delivery</h2>
+        <label><input type="radio" name="method" value="home"> Home delivery</label>
+        <label><input type="radio" name="method" value="cc"> Click &amp; Collect</label>
+        <label>First name <input name="firstName" required></label>
+        <label>Last name <input name="lastName" required></label>
+        <label>Phone <input name="phone" type="tel" required></label>
+        <label>Street address <input name="address1" required></label>
+        <label>Suburb <input name="suburb" required></label>
+        <label>State <select name="state" required>${STATES}</select></label>
+        <label>Postcode <input name="postcode" required maxlength="4"></label>
+        <button type="button" id="t-to-payment">Continue to payment</button></section>
+      <section id="t-payment" hidden><h2>3. Payment</h2>
+        <label>Card number <input name="cardNumber" autocomplete="cc-number" inputmode="numeric"></label>
+        <label>Expiry date <input name="cardExpiry" autocomplete="cc-exp" placeholder="MM/YY"></label>
+        <label>Security code <input name="cardCvc" autocomplete="cc-csc" inputmode="numeric"></label>
+        <p>Subtotal $${sum.toFixed(2)} · Delivery $9.00</p><p class="order-total"><b>Order total $${(sum + 9).toFixed(2)}</b></p>
+        <button type="button" id="t-place">Place order</button></section>
+      <p id="t-error" class="err"></p>
+      <script>
+        const $ = (id) => document.getElementById(id);
+        const vals = (sec) => Object.fromEntries([...sec.querySelectorAll('input,select')].filter((i) => i.name && (i.type !== 'radio' || i.checked)).map((i) => [i.name, i.value]));
+        const post = (step, data) => fetch('/target/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step, data }) });
+        $('t-guest').addEventListener('click', () => {
+          if (!document.querySelector('[name=email]').value) { $('t-error').textContent = 'Enter your email address'; return; }
+          $('t-error').textContent = '';
+          post('contact', vals($('t-contact'))); $('t-guest').remove(); setTimeout(() => { $('t-delivery').hidden = false; }, 200);
+        });
+        $('t-to-payment').addEventListener('click', () => {
+          const d = vals($('t-delivery'));
+          const missing = ['method', 'firstName', 'lastName', 'phone', 'address1', 'suburb', 'state', 'postcode'].filter((k) => !d[k]);
+          if (missing.length) { $('t-error').textContent = 'Please complete: ' + missing.join(', '); return; }
+          $('t-error').textContent = '';
+          post('delivery', d); $('t-to-payment').remove(); setTimeout(() => { $('t-payment').hidden = false; }, 200);
+        });
+        const place = ${placeJs('target', 't-error')};
+        $('t-place').addEventListener('click', () => place(vals($('t-payment'))));
       </script>`;
   }
 
@@ -500,6 +599,11 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
 </body></html>`);
       return;
     }
+    if (u.pathname === '/acs/challenge') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<!doctype html><html><body style="font:14px system-ui"><h3>Verify it\'s you</h3><p>Enter the code we sent to your phone.</p><input name="otp" inputmode="numeric"><button type="button">Submit</button></body></html>');
+      return;
+    }
     if (u.pathname === '/card-frame') {
       const style = u.searchParams.get('style') || 'stripe';
       if (style === 'strict') {
@@ -579,7 +683,7 @@ for (const el of document.querySelectorAll('input')) {
     const redirect = (to) => { res.writeHead(302, { location: to }); res.end(); };
 
     // Product pictures (a coloured card with the product's name).
-    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai)\/([^/]+)\.svg$/);
+    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target)\/([^/]+)\.svg$/);
     if (img) {
       const prod = find(img[1], decodeURIComponent(img[2]));
       if (!prod) return html(404, 'Not found');
@@ -623,7 +727,7 @@ for (const el of document.querySelectorAll('input')) {
         <p>Fake shops for trying Mugibot end to end. Add these products to your Mugibot watchlist (the dashboard's <b>Add dummy-store test items</b> button does it for you), change their stock here, and watch the pings and ⚡ Buy work.</p>
         <table border="1" cellpadding="6" style="border-collapse:collapse;background:#fff;font-size:14px"><tr><th>Shop</th><th>Product</th><th>Listed</th><th>Stock</th><th>Price</th><th>Change</th></tr>${rows}</table>
         <p>${btn('', '', { blockNonBrowsers: state.blockNonBrowsers ? 'false' : 'true' }, state.blockNonBrowsers ? 'Stop refusing server checks' : 'Refuse server checks (like Kmart)')} Server checks are ${state.blockNonBrowsers ? '<b>refused</b> — only browsers get in' : 'allowed'}.</p>
-        <p>Orders placed (should stay 0 — Mugibot never presses the final button): <b>${orders}</b></p>`));
+        <p>Orders placed (stays 0 with ⚡ Buy — you press the final button; only an armed Auto-checkout places one): <b>${orders}</b></p>`));
     }
 
     const m = p.match(SHOP_RE);
@@ -649,6 +753,7 @@ for (const el of document.querySelectorAll('input')) {
     if (shop === 'thegamescube') sku = (sub.match(/^\/catalog\/[^/]+\/[^/]+\/(\d+)\/?$/) || [])[1];
     if (shop === 'pokemoncenter') sku = (sub.match(/^\/product\/([0-9A-Za-z-]+)\/[^/]+$/) || [])[1];
     if (shop === 'pbandai') sku = (sub.match(/^\/item\/([A-Z]\d+)$/) || [])[1];
+    if (shop === 'target') sku = (sub.match(/^\/p\/[^/]+\/(\d+)$/) || [])[1];
     if (SHOPIFY.has(shop)) {
       const js = sub.match(/^\/products\/([^/]+)\.js$/);
       if (js) {
@@ -702,6 +807,7 @@ for (const el of document.querySelectorAll('input')) {
         aggs: {},
       });
     }
+    if (shop === 'target' && sub === '/search') return html(200, targetSearchPage(u.searchParams.get('text') || ''));
     if (sub === '/search' || sub === '/search/') {
       const q = u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('keyword') || '';
       // Like BIG W's real site: the page has no products in it until its own code fetches them.
@@ -845,6 +951,8 @@ for (const el of document.querySelectorAll('input')) {
     }
     if (sub === '/checkout/place' && req.method === 'POST') {
       const b = await parseBody(req);
+      if (S.decline) { S.declined = (S.declined || 0) + 1; return json(402, { ok: false, error: 'Your card was declined. Please try another card.' }); }
+      if (S.threeDS) { S.challenged = (S.challenged || 0) + 1; return json(200, { ok: false, challenge: `${cardOrigin}/acs/challenge` }); }
       S.orders.push({ cart: S.cart.slice(), data: { ...S.data }, form: b, ts: Date.now() });
       S.cart = [];
       return shop === 'ebgames' ? redirect('/ebgames/checkout/confirmation') : json(200, { ok: true });
@@ -853,6 +961,9 @@ for (const el of document.querySelectorAll('input')) {
 
     // ---------------- Kmart-style one-page checkout
     if (shop === 'kmart' && sub === '/checkout') return html(200, page(shop, 'Checkout', kmartCheckout()));
+    // ---------------- Target-style one-page checkout (/checkout opens it at /spc/order)
+    if (shop === 'target' && sub === '/checkout') return redirect('/target/spc/order');
+    if (shop === 'target' && sub === '/spc/order') return html(200, page(shop, 'Checkout', targetCheckout()));
     // ---------------- BIG W-style checkout
     if (shop === 'bigw' && sub === '/checkout') return html(200, page(shop, 'Checkout', bigwCheckout()));
 

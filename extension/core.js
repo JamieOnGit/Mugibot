@@ -8,7 +8,12 @@
      popup's Checkout button).
    Then fill.js fills checkout in and stops at the final button for you to press. Which
    buttons it presses comes from that store's flow (server/retailers/<store>.js); general
-   rules cover anything a flow doesn't say. It only runs when you press a Mugibot button. */
+   rules cover anything a flow doesn't say. It only runs when you press a Mugibot button —
+   or for an Auto-checkout run you armed (content.js), which presses the final button itself
+   once it has checked the order against your limits.
+
+   "Often bought together" and similar pop-ups that try to sell you more are closed with
+   their own close button (×), never accepted. */
 
 var MGBQuick = (function () {
   'use strict';
@@ -32,8 +37,15 @@ var MGBQuick = (function () {
   var DRAWER = '[role="dialog"], [aria-modal="true"], [class*="drawer" i], [class*="minicart" i], [class*="mini-cart" i], [class*="mini-bag" i], [class*="minibag" i], [class*="flyout" i], [class*="modal" i], [class*="side-cart" i], [class*="added-to" i], [class*="addedto" i]';
   var EXPRESS = /paypal|afterpay|zip ?pay|\bzip\b|klarna|humm|latitude|apple ?pay|google ?pay|shop ?pay|express|continue shopping/i;
   var ADD_RE = /\b(add to (bag|cart|basket|trolley)|pre-?order)\b/i;
-  // The final "buy" buttons are never pressed by Mugibot, whatever a flow says.
+  // The final "buy" buttons are never pressed while getting to checkout, whatever a flow says
+  // (only an armed Auto-checkout run presses one: content.js, at checkout).
   var FINAL = /check ?out securely|place (my |your )?order|pay now|pay securely|complete (my |your )?(order|purchase|payment)|submit (my )?(order|payment)|confirm (and|&) pay|pay \$|buy now/i;
+  // Pop-ups that try to sell you more ("Often Bought Together" at Target) — closed, never accepted —
+  // and newsletter sign-ups that cover the page.
+  var UPSELL_RE = /often bought together|frequently bought( together)?|bought together|you (may|might) also (like|need|want)|customers (also|who) (bought|viewed|liked)|complete (the|your) (look|set|collection)|recommended for you|goes (well )?with|pairs? (well )?with|don.?t forget|add (a |an )?(protection|warranty|care plan|gift ?wrap)|protect your purchase|before you go|special offer|upgrade your (order|purchase)/i;
+  var NEWSLETTER_RE = /newsletter|sign up (for|to) (our|the) (newsletter|emails?)|subscribe to (our|the)|get \d+% off your first/i;
+  var CLOSE_RE = /^(×|✕|✖|x|close|close (this )?(dialog|popup|pop-up|modal|window)|dismiss|no,? thanks?|not now|maybe later|skip|continue without( adding)?|no thank you)$/i;
+  var POPUP = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], [class*="modal" i], [class*="popup" i], [class*="pop-up" i], [class*="overlay" i], [class*="lightbox" i]';
 
   var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
   var toArray = function (list) { return Array.prototype.slice.call(list); };
@@ -74,6 +86,48 @@ var MGBQuick = (function () {
   function controls() {
     return toArray(document.querySelectorAll('button, a, [role="button"], input[type="submit"]'))
       .filter(function (el) { return !inAnyPanel(el) && isVisible(el) && !isDisabled(el); });
+  }
+
+  /**
+   * An upsell or newsletter pop-up over the page, and its close button (or null). A pop-up with a
+   * Checkout button in it (the store's "added to bag" one) is never closed. R: the store's flow
+   * (added.upsell: its own pop-up titles).
+   */
+  function findUpsellClose(R) {
+    var mine = part(R, 'added').upsell;
+    var pops = toArray(document.querySelectorAll(POPUP)).filter(function (el) { return !inAnyPanel(el) && isVisible(el); });
+    for (var i = 0; i < pops.length; i++) {
+      var pop = pops[i];
+      var text = (pop.innerText || '').slice(0, 600);
+      var upsell = (mine && mine.length && any(mine, text)) || UPSELL_RE.test(text);
+      var newsletter = !upsell && NEWSLETTER_RE.test(text) && !!pop.querySelector('input[type="email"], input[name*="email" i]');
+      if (!upsell && !newsletter) continue;
+      var buttons = toArray(pop.querySelectorAll('button, a, [role="button"], input[type="button"]')).filter(function (el) { return isVisible(el) && !isDisabled(el); });
+      if (buttons.some(function (el) { return isCheckoutLabel(R, textOf(el), 'popup'); })) continue;
+      var close = buttons.find(function (el) {
+        var label = [el.getAttribute('aria-label'), el.getAttribute('title')].filter(Boolean).join(' ').trim();
+        return CLOSE_RE.test(label) || /\bclose\b|\bdismiss\b/i.test(label) || CLOSE_RE.test(textOf(el).trim());
+      }) || buttons.find(function (el) { return /(^|[\s_-])close([\s_-]|$)|modal-close|close-?(button|btn|icon)/i.test(String(el.className || '')) && textOf(el).length <= 2; });
+      if (close) return { el: close, title: popupTitle(pop, text) };
+    }
+    return null;
+  }
+
+  /** A pop-up's title: its heading (or what it's labelled by), else its first line of words. */
+  function popupTitle(pop, text) {
+    var by = pop.getAttribute('aria-labelledby');
+    var el = (by && document.getElementById(by.split(/\s+/)[0])) || pop.querySelector('h1, h2, h3, h4, [class*="title" i]');
+    var t = el ? (el.innerText || '').trim() : '';
+    if (!t) t = text.split('\n').map(function (x) { return x.trim(); }).find(function (x) { return /[a-z]{3}/i.test(x); }) || 'pop-up';
+    return t.replace(/\s+/g, ' ').slice(0, 60);
+  }
+
+  /** Close an upsell or newsletter pop-up if one is showing. Returns its title, or null. */
+  function dismissUpsell(R) {
+    var hit = findUpsellClose(R);
+    if (!hit) return null;
+    hit.el.click();
+    return hit.title;
   }
 
   function otherPanelPresent() {
@@ -323,6 +377,7 @@ var MGBQuick = (function () {
    *   setStatus(text), report(type, message, product),
    *   waitForButtonMs: how long to wait for Add to bag to appear (slow-loading pages),
    *   probe(addButton): resolves to {ready, framework} — has the store's own code wired the button up yet?
+   *   why(reason): told why it stopped short of checkout ('sold_out', 'not_added', 'no_checkout', 'timeout')
    * }
    * Resolves to 'checkout' | 'navigating' (to checkout, on a new page) | 'error' | 'stopped' | 'timeout'.
    */
@@ -349,6 +404,17 @@ var MGBQuick = (function () {
     var report = opts.report || function () {};
     var product = opts.product || null;
     var C = part(R, 'checkout');
+    var why = opts.why || function () {};
+    var closed = 0;
+    function skipUpsell() {
+      if (closed >= 5) return false;
+      var title = dismissUpsell(R);
+      if (!title) return false;
+      closed += 1;
+      setStatus('Closed "' + title + '" — not adding anything else');
+      report('step', 'Closed the "' + title + '" pop-up', product);
+      return true;
+    }
 
     function goCheckout(el) {
       store.clear();
@@ -369,10 +435,12 @@ var MGBQuick = (function () {
     }
 
     async function checkoutFromBag() {
-      var checkout = await waitForEl(function () { return findCheckout(R, true) || findCheckout(R, false); }, 4000);
+      var checkout = await waitForEl(function () { skipUpsell(); return findCheckout(R, true) || findCheckout(R, false); }, 4000);
       if (!checkout) {
         store.clear();
-        setStatus(bagCount() === 0 ? 'Your bag is empty — the item wasn\'t added. Go back and press Add to bag yourself.' : "Couldn't find the Checkout button on this page.");
+        var empty = bagCount() === 0;
+        setStatus(empty ? 'Your bag is empty — the item wasn\'t added. Go back and press Add to bag yourself.' : "Couldn't find the Checkout button on this page.");
+        why(empty ? 'not_added' : 'no_checkout');
         return 'error';
       }
       return goCheckout(checkout);
@@ -396,10 +464,11 @@ var MGBQuick = (function () {
       }
       setStatus('Looking for the Add button…');
       var waitMs = opts.waitForButtonMs == null ? 1500 : opts.waitForButtonMs;
-      var add = await waitForEl(function () { return findAddToBag(R); }, waitMs);
+      var add = await waitForEl(function () { skipUpsell(); return findAddToBag(R); }, waitMs);
       if (!add) {
         setStatus("Add to bag isn't available — sold out, or the page is still loading.");
         report('error', 'Add button not available', product);
+        why('sold_out');
         return 'error';
       }
       add = await whenReady(R, add, opts.probe, setStatus);
@@ -414,11 +483,14 @@ var MGBQuick = (function () {
     while (Date.now() < deadline) {
       var flow = store.read();
       if (!flow) { setStatus('Stopped.'); return 'stopped'; }
+      // "Often bought together" and the like: closed, then carry on.
+      if (skipUpsell()) { await wait(250); continue; }
       if (!product) product = (opts.products || []).find(function (p) { return p.sku === flow.sku; }) || { sku: flow.sku, name: flow.name };
       if (Date.now() - flow.startedAt > FLOW_MAX_AGE) {
         store.clear();
         setStatus('Timed out. Check your bag and continue yourself.');
         report('error', 'Timed out before reaching checkout', product);
+        why('timeout');
         return 'timeout';
       }
       if (onCheckoutPage(R)) {
@@ -470,6 +542,7 @@ var MGBQuick = (function () {
             store.clear();
             setStatus("The store didn't add it to your bag. Press Add to bag yourself, then Checkout.");
             report('error', 'The store did not add it to the bag', product);
+            why('not_added');
             return 'error';
           }
           // The first press came before the page was ready: press once more.
@@ -489,6 +562,7 @@ var MGBQuick = (function () {
     store.clear();
     setStatus("Checkout button wasn't found in time. Open your bag and continue yourself.");
     report('error', 'Checkout button not found in time', product);
+    why('no_checkout');
     return 'timeout';
   }
 
@@ -678,7 +752,10 @@ var MGBQuick = (function () {
 
   return {
     PANEL_ID: PANEL_ID,
+    FINAL: FINAL,
     findAddToBag: findAddToBag,
+    findUpsellClose: findUpsellClose,
+    dismissUpsell: dismissUpsell,
     findCheckout: findCheckout,
     findBag: findBag,
     bagCount: bagCount,
