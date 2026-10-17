@@ -251,17 +251,29 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
    - The store is searched for those words only, every **4 seconds**.
    - What the watch found has its page read every **5 seconds**.
    - Otherwise its pages are read every 15 seconds.
-4. **🤖 Auto-checkout it for me, up to $…** (optional). What the watch finds
-   goes on your watchlist, armed for Auto-checkout up to that max price. Your
-   browser checks out the moment its page says it's in stock. Your Auto-checkout
-   settings and limits still apply (switch it on, keep Chrome open with the
-   extension). It's armed the first time it's found, once: after a purchase it
-   stays disarmed.
+4. **🤖 Auto-checkout it for me, up to $…** (optional). What **drops** goes on
+   your watchlist, armed for Auto-checkout up to that max price, and your browser
+   checks out the moment its page says it's in stock. What drops:
+   - a new listing: anything found after the watch's first search;
+   - something already listed whose page says it isn't on sale yet (coming
+     soon, sold out).
+
+   What was **already on sale** when you added the watch is never armed. A broad
+   watch like *pokemon* would otherwise buy everything that matches. The
+   Activity log says so, and you can ⚡ Buy it yourself.
+
+   Your Auto-checkout settings and limits still apply (switch it on, keep Chrome
+   open with the extension). Each product is armed once: after a purchase it stays
+   disarmed. Removing the watch disarms what it armed.
 
 What a keyword watch finds gets a monitor of its own, so its page is read
-straight away for its stock: 🆕 when it's found, 🟢 when its page says it's in
-stock. Removing a watch removes the monitors it made. The list shows what each
-watch found, with its stock.
+straight away for its stock.
+- 🆕 when it's found.
+- 🟢 when it goes from not on sale to on sale. The first time its stock is read
+  isn't an alert: that's how it was, not a change.
+
+Removing a watch removes the monitors it made. The list shows what each watch
+found, with its stock and whether it's armed.
 
 **Add the watch before the drop.** Its first search is the "before" picture
 (nothing alerts then); what shows up after that is the drop. A keyword watch

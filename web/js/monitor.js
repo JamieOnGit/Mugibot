@@ -517,7 +517,8 @@ export function setupMonitor({ showError }) {
         w.dropAt ? `drops ${new Date(w.dropAt).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}` : 'no drop time',
         w.maxPrice !== null ? `🤖 auto-checkout for ${w.acoUserName || 'you'} up to ${money(w.maxPrice)}` : '',
       ].filter(Boolean).join(' · ');
-      const found = w.found.length ? h('div', { class: 'meta' }, 'Found: ', ...w.found.map((p, i) => h('span', {}, i ? ', ' : '', h('a', { href: p.url || '#', target: '_blank', rel: 'noopener' }, p.name || p.id), ` (${STATUS[p.status] || p.status}${typeof p.price === 'number' ? `, ${money(p.price)}` : ''})`)))
+      const ARM = { armed: ' · 🤖 armed', pending: ' · checking whether it\'s on sale yet', skipped: ' · on sale before the watch: not armed' };
+      const found = w.found.length ? h('div', { class: 'meta' }, 'Found: ', ...w.found.map((p, i) => h('span', {}, i ? ', ' : '', h('a', { href: p.url || '#', target: '_blank', rel: 'noopener' }, p.name || p.id), ` (${STATUS[p.status] || p.status}${typeof p.price === 'number' ? `, ${money(p.price)}` : ''}${ARM[p.arm] || ''})`)))
         : h('div', { class: 'meta' }, w.url ? 'Reading the page…' : 'Nothing with those words yet — it alerts the moment something shows up.');
       list.append(h('li', {},
         h('div', { class: 'info' },
@@ -525,7 +526,7 @@ export function setupMonitor({ showError }) {
           h('div', { class: 'meta' }, w.label ? `${what} · ${bits}` : bits), found),
         h('div', { class: 'acts' }, h('button', {
           class: 'btn small danger', type: 'button',
-          onclick: async () => { if (!confirm(`Remove the VIP watch "${w.label || what}"?`)) return; renderVip(await api('DELETE', `/api/monitor/vip/${w.id}`)); },
+          onclick: async () => { if (!confirm(`Remove the VIP watch "${w.label || what}"?${w.maxPrice !== null ? ' What it armed for Auto-checkout is disarmed.' : ''}`)) return; renderVip(await api('DELETE', `/api/monitor/vip/${w.id}`)); },
         }, 'Remove'))));
     }
   }

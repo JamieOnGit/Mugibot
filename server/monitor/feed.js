@@ -100,6 +100,9 @@ export class Feed {
       prev = this.catalog.lastReadStatus(before.id);
       if (!prev) return;
     }
+    // Its stock read for the first time (a search that doesn't say it, like City Beach's): nothing
+    // to compare with, so no stock alert — it's how it was, not a change.
+    if (prev === STATUS.UNKNOWN) prev = fresh.status;
     if (isOrderable(fresh.status) && !isOrderable(prev)) {
       await this.alert(fresh, 'restock', { note: prev === STATUS.NOT_LISTED ? 'Just listed.' : '' });
     } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.NOT_FOUND, STATUS.UNKNOWN].includes(fresh.status)) {
