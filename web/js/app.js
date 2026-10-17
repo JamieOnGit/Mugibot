@@ -8,12 +8,12 @@ const STATUS = {
 };
 const FLOW = { verified: 'verified flow', beta: 'beta flow', draft: 'draft flow', none: 'alerts only' };
 
-const state = { me: null, items: [], retailers: [], profiles: null, editing: null, ext: null, feedOldest: null, alerts: null, logins: null };
+const state = { me: null, items: [], retailers: [], profiles: null, editing: null, ext: null, feedOldest: null, alerts: null, logins: null, aco: null };
 
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
-const TABS = ['watch', 'monitor', 'monitor-settings', 'monitor-log', 'checkout', 'discord', 'extension', 'membership', 'activity', 'account'];
+const TABS = ['watch', 'monitor', 'monitor-settings', 'monitor-log', 'checkout', 'aco', 'discord', 'extension', 'membership', 'activity', 'account'];
 // The Monitor's own pages (Settings and Check log are for admins): the sidebar's Monitor stays lit.
 const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
 const loaders = {};
@@ -351,7 +351,8 @@ function itemRow(it, i) {
   const isAdmin = state.me.user.role === 'admin';
   return h('li', { class: it.monitor ? '' : 'off', dataset: { id: it.id } },
     h('div', { class: 'info' },
-      h('div', { class: 'name' }, `${i + 1}. ${it.name}`, it.announce ? h('span', { class: 'pill info', title: 'Restocks are posted in the members\' Discord channel' }, '📣') : null),
+      h('div', { class: 'name' }, `${i + 1}. ${it.name}`, it.announce ? h('span', { class: 'pill info', title: 'Restocks are posted in the members\' Discord channel' }, '📣') : null,
+        it.aco ? h('a', { class: 'pill aco-pill', href: '#aco', title: 'Bought by itself when it drops (Auto-checkout)' }, '🤖 Armed') : null),
       h('div', { class: 'meta' }, meta, ' ', h('span', { class: `flow flow-${it.flowStatus}` }, FLOW[it.flowStatus] || '')),
       it.error ? h('div', { class: 'meta warn-text' }, it.error) : null,
       !it.url ? h('div', { class: 'meta' }, 'Waiting for the product page to be listed — it\'s found automatically from the SKU.') : null),
@@ -482,6 +483,7 @@ async function editItem(it) {
   $('#w-price').value = it && typeof it.price === 'number' ? it.price : '';
   $('#w-max').value = it && typeof it.maxPrice === 'number' ? it.maxPrice : '';
   $('#w-announce').checked = !!(it && it.announce);
+  $('#w-aco').checked = !!(it && it.aco);
   storeNote();
   setMsg($('#w-msg'), '');
   $('#w-url').focus();
@@ -494,7 +496,7 @@ $('#w-form').addEventListener('submit', (e) => {
   busy(e.target, async () => {
     const body = {
       url: $('#w-url').value, store: $('#w-store').value, sku: $('#w-sku').value, name: $('#w-name').value,
-      price: $('#w-price').value, maxPrice: $('#w-max').value, profileId: $('#w-profile').value,
+      price: $('#w-price').value, maxPrice: $('#w-max').value, profileId: $('#w-profile').value, aco: $('#w-aco').checked,
     };
     if (state.me.user.role === 'admin') body.announce = $('#w-announce').checked;
     try {
@@ -629,6 +631,212 @@ loaders.checkout = async () => {
   renderProfiles();
   await renderCard();
 };
+
+// ---------------------------------------------------------------------------
+// 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md)
+// ---------------------------------------------------------------------------
+const ACO_ICON = { placed: '✅', ready: '🛒', needs_you: '⚠️', failed: '❌', expired: '❌', skipped: '⏭️' };
+const ACO_TONE = { placed: 'ok', ready: 'info', needs_you: 'warn', failed: 'err', expired: 'err', skipped: '' };
+const ACO_STEP = {
+  queued: 'Dropped', sent: 'Sent to your browser', started: 'Store opened', checkout: 'At checkout', placing: 'Final button pressed',
+  placed: 'Order placed', ready: 'Filled in', needs_you: 'Needs you', failed: 'Failed', skipped: "Didn't start", expired: "Didn't start",
+};
+const ACO_FILTER = { placed: ['placed'], needs: ['needs_you', 'ready'], failed: ['failed', 'expired'], skipped: ['skipped'] };
+const TRIGGER = { sweep: 'seen by the live monitor', server: 'seen by the monitor', browser: 'seen by your browser', manual: 'reported by an admin' };
+const versionBelow = (a, b) => {
+  const pa = String(a || '0').split('.').map(Number);
+  const pb = String(b || '0').split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0);
+  return false;
+};
+
+async function loadAco() {
+  state.aco = await api('GET', '/api/aco');
+  return state.aco;
+}
+
+function renderAcoStats() {
+  const s = state.aco.stats;
+  const box = $('#aco-stats');
+  box.textContent = '';
+  const tile = (k, v, sub, tone = '') => h('div', { class: `aco-stat${tone ? ` ${tone}` : ''}` }, h('div', { class: 'k' }, k), h('div', { class: 'v' }, v), sub ? h('div', { class: 's' }, sub) : null);
+  box.append(
+    tile('Orders placed', String(s.placed), s.spent ? `${money(s.spent)} spent` : 'in the last 30 days', 'ok'),
+    tile('Attempts', String(s.attempts), `${s.drops} drop${s.drops === 1 ? '' : 's'} of armed items`),
+    tile('Needed you', String(s.needsYou), 'stopped for you to finish', s.needsYou ? 'warn' : ''),
+    tile('Failed or didn\'t start', String(s.failed + s.skipped), s.skipped ? `${s.skipped} didn't start` : 'last 30 days', s.failed ? 'err' : ''),
+  );
+}
+
+function renderAcoSettings() {
+  const s = state.aco.settings;
+  const sw = $('#aco-enabled');
+  sw.setAttribute('aria-checked', s.enabled ? 'true' : 'false');
+  $('#aco-state').className = `pill ${s.enabled ? 'ok' : ''}`;
+  $('#aco-state').textContent = s.enabled ? (s.mode === 'place' ? 'On — places orders' : 'On — stops at the final button') : 'Off';
+  $('#aco-enabled-label').textContent = s.enabled ? 'Auto-checkout is on' : 'Auto-checkout is off';
+  $('#aco-enabled-note').textContent = !s.enabled ? 'Nothing is bought by itself until you switch it on.'
+    : s.mode === 'place' ? `Armed items are bought by themselves when they drop: up to ${money(s.maxOrder)} an order, ${s.perDay} order${s.perDay === 1 ? '' : 's'} and ${money(s.spendPerDay)} a day.`
+      : 'Armed items are filled in at checkout by themselves when they drop; you press the final button.';
+  $('#aco-agree-wrap').hidden = !!s.agreedAt;
+  for (const r of $$('input[name="aco-mode"]')) r.checked = r.value === s.mode;
+  $('#aco-max').value = s.maxOrder;
+  $('#aco-perday').value = s.perDay;
+  $('#aco-spend').value = s.spendPerDay;
+  $('#aco-signedin').checked = !!s.signedInOnly;
+}
+
+/** A store's sign-in status (the store login monitor), for the armed items. */
+function signInPill(store) {
+  const l = state.logins && state.logins.stores.find((x) => x.id === store);
+  if (!l) return null;
+  if (l.status === 'in') return h('span', { class: 'pill ok', title: `Seen ${ago(l.at)}` }, 'Signed in');
+  if (l.status === 'out') return h('a', { class: 'pill warn', href: l.signInUrl, target: '_blank', rel: 'noopener', title: 'Sign in so checkout is faster' }, 'Signed out — sign in ↗');
+  return h('a', { class: 'pill', href: l.signInUrl, target: '_blank', rel: 'noopener', title: 'Open the store once in the browser with the extension' }, 'Sign-in not seen yet');
+}
+
+function renderAcoItems() {
+  const list = $('#aco-items');
+  list.textContent = '';
+  const items = state.items;
+  const armed = items.filter((it) => it.aco).length;
+  $('#aco-armed-count').textContent = `${armed} armed`;
+  if (!items.length) { list.append(h('li', { class: 'empty' }, 'Your watchlist is empty — add SKUs on the Watchlist tab, then arm them here.')); return; }
+  const lastRun = (id) => (state.aco.runs || []).find((r) => r.itemId === id);
+  for (const it of items) {
+    const can = it.acoCan;
+    const toggle = h('button', { type: 'button', class: 'sn-sw', role: 'switch', 'aria-checked': it.aco ? 'true' : 'false', 'aria-label': `Auto-checkout ${it.name}`, disabled: !can });
+    const max = h('input', { type: 'number', min: '0', step: '0.01', value: it.maxPrice ?? '', placeholder: 'Max $', 'aria-label': `Max price for ${it.name}`, class: 'aco-max' });
+    const save = async (patch) => {
+      try {
+        await api('PUT', `/api/items/${it.id}`, patch);
+        await Promise.all([loadItems(), loadAco()]);
+        renderAco();
+        if (patch.aco) askExtension('acoListen', {}, 4000);
+      } catch (e) {
+        toast("Couldn't change it", e.message, 'warn');
+        renderAcoItems();
+      }
+    };
+    toggle.addEventListener('click', () => save({ aco: !it.aco, maxPrice: max.value }));
+    max.addEventListener('change', () => save({ maxPrice: max.value }));
+    const run = lastRun(it.id);
+    list.append(h('li', { class: `aco-item${it.aco ? ' armed' : ''}`, dataset: { id: it.id } },
+      toggle,
+      h('div', { class: 'info' },
+        h('div', { class: 'name' }, it.name),
+        h('div', { class: 'meta' }, [it.storeName, `SKU ${it.sku}`, money(it.lastPrice ?? it.price)].filter(Boolean).join(' · '),
+          !can ? ' · no checkout for this store yet' : !it.acoPlaces ? ' · stops at the final button here (its payment form is another site\'s)' : ''),
+        run ? h('div', { class: `meta aco-last ${ACO_TONE[run.status] || ''}` }, `Last: ${ACO_ICON[run.status] || '⏳'} ${run.statusText}${run.reasonText ? ` — ${run.reasonText}` : ''} · ${ago(run.createdAt)}`) : null),
+      signInPill(it.store),
+      h('label', { class: 'aco-max-wrap' }, 'Max $ ', max)));
+  }
+}
+
+function renderAcoRuns() {
+  const list = $('#aco-runs');
+  list.textContent = '';
+  const want = ACO_FILTER[$('#aco-filter').value];
+  const runs = (state.aco.runs || []).filter((r) => !want || want.includes(r.status));
+  if (!runs.length) {
+    list.append(h('li', { class: 'empty' }, want ? 'Nothing here.' : 'Nothing yet. When an armed item drops, each attempt shows up here — what happened, and why.'));
+    return;
+  }
+  for (const r of runs) {
+    const icon = ACO_ICON[r.status] || '⏳';
+    const money2 = r.total != null ? `${money(r.total)} total` : r.price != null ? money(r.price) : '';
+    const steps = h('ol', { class: 'aco-steps' }, ...r.steps.map((x) => h('li', {},
+      h('time', { datetime: new Date(x.at).toISOString(), title: when(x.at) }, new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })),
+      h('b', {}, ACO_STEP[x.status] || x.status), x.message ? ` — ${x.message}` : '')));
+    list.append(h('li', { class: `aco-run st-${r.status}${r.active ? ' active' : ''}`, dataset: { id: r.id } },
+      h('div', { class: 'head' },
+        h('span', { class: 'ic', 'aria-hidden': 'true' }, icon),
+        h('div', { class: 'info' },
+          h('div', { class: 'name' }, r.name),
+          h('div', { class: 'meta' }, [state.retailers.find((x) => x.id === r.store)?.name || r.store, money2, TRIGGER[r.trigger] || '', r.mode === 'fill' ? 'stop at the final button' : ''].filter(Boolean).join(' · '))),
+        h('span', { class: `pill ${ACO_TONE[r.status] || ''}` }, r.statusText),
+        h('time', { class: 'muted small', datetime: new Date(r.createdAt).toISOString(), title: when(r.createdAt) }, ago(r.createdAt))),
+      r.reasonText || r.message ? h('div', { class: `why ${ACO_TONE[r.status] || ''}` }, r.reasonText && r.message && !r.message.startsWith(r.reasonText) ? `${r.reasonText}: ${r.message}` : (r.message || r.reasonText)) : null,
+      h('details', { class: 'aco-detail' }, h('summary', {}, `Steps (${r.steps.length})`), steps)));
+  }
+}
+
+async function renderAcoChecks() {
+  const list = $('#aco-checks');
+  const s = state.aco.settings;
+  const ext = await detectExtension();
+  state.ext = ext;
+  const mine = ext.installed && ext.paired && ext.userId === state.me.user.id;
+  const minV = state.aco.extensionVersion || '1.10.0';
+  const extOk = mine && !versionBelow(ext.version, minV);
+  const card = mine ? ((await askExtension('cardStatus')) || {}).card : null;
+  const profiles = await api('GET', '/api/profiles').catch(() => null);
+  const profile = profiles && profiles.profiles && profiles.profiles.find((p) => p.id === profiles.defaultId) || (profiles && profiles.profiles && profiles.profiles[0]);
+  const listening = extOk && s.enabled ? await askExtension('acoListen', {}, 4000) : null;
+  const rows = [
+    [state.me.entitlement.active, 'Membership active', 'Start your membership', '#membership'],
+    [extOk, extOk ? `Extension connected in this browser (v${ext.version})` : !ext.installed ? 'Install the extension in the browser you keep open' : !mine ? 'Connect the extension in this browser to your account' : `Update the extension to ${minV} or newer (this one is ${ext.version})`, 'Extension tab', '#extension'],
+    [!!(card && card.ready), card && card.saved ? `${card.brand} •••• ${card.last4} saved in the extension${card.ready ? '' : ' — open Card settings once to make it ready'}` : 'Save your card in the extension (it never leaves your browser)', 'Card settings', '#checkout'],
+    [!!(profile && profile.address1 && profile.email), profile && profile.address1 ? `Delivery details: ${profile.label} (${profile.suburb || profile.postcode})` : 'Save your delivery details', 'Checkout details', '#checkout'],
+    [!!state.me.user.discord, state.me.user.discord ? 'Discord connected: a DM for every attempt' : 'Connect Discord to get a DM for every attempt (optional)', 'Discord', '#discord'],
+  ];
+  if (s.enabled) rows.push([!!(listening && listening.listening), listening && listening.listening ? 'This browser is listening for your armed items to drop — keep Chrome open' : state.items.some((it) => it.aco) ? 'This browser isn\'t listening yet — reload this page, or check the extension is connected' : 'Arm an item below, and this browser starts listening for it', null, null]);
+  list.textContent = '';
+  for (const [ok, text, label, href] of rows) {
+    list.append(h('li', {}, h('span', { class: ok ? 'ok-mark' : 'no-mark', 'aria-hidden': 'true' }, ok ? '✓' : '✗'), h('span', {}, text, !ok && href ? [' — ', h('a', { href }, label)] : null)));
+  }
+}
+
+function renderAco() {
+  if (!state.aco) return;
+  renderAcoStats();
+  renderAcoSettings();
+  renderAcoItems();
+  renderAcoRuns();
+}
+
+loaders.aco = async () => {
+  await Promise.all([loadAco(), loadRetailers(), loadItems(), loadLogins().catch(() => null)]);
+  renderAco();
+  renderAcoChecks().catch(() => null);
+};
+
+$('#aco-enabled').addEventListener('click', async () => {
+  const s = state.aco.settings;
+  const next = !s.enabled;
+  const msg = $('#aco-msg');
+  if (next && !s.agreedAt && !$('#aco-agree').checked) {
+    $('#aco-agree-wrap').hidden = false;
+    $('#aco-agree').focus();
+    setMsg(msg, 'Tick the box to agree first, then switch it on.');
+    return;
+  }
+  try {
+    const r = await api('PUT', '/api/aco', { enabled: next, agree: next && !s.agreedAt ? true : undefined });
+    Object.assign(state.aco, r);
+    renderAcoSettings();
+    setMsg(msg, next ? 'On.' : 'Off — nothing is bought by itself.', true);
+    renderAcoChecks().catch(() => null);
+  } catch (e) {
+    setMsg(msg, e.message);
+  }
+});
+$('#aco-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  busy(e.target, async () => {
+    try {
+      const mode = ($$('input[name="aco-mode"]').find((r) => r.checked) || {}).value || 'place';
+      const r = await api('PUT', '/api/aco', { mode, maxOrder: $('#aco-max').value, perDay: $('#aco-perday').value, spendPerDay: $('#aco-spend').value, signedInOnly: $('#aco-signedin').checked });
+      Object.assign(state.aco, r);
+      renderAcoSettings();
+      setMsg($('#aco-msg'), 'Saved.', true);
+    } catch (err) {
+      setMsg($('#aco-msg'), err.message);
+    }
+  });
+});
+$('#aco-filter').addEventListener('change', () => renderAcoRuns());
+$('#aco-recheck').addEventListener('click', () => renderAcoChecks().catch(() => null));
 
 // ---------------------------------------------------------------------------
 // 💬 Discord
@@ -849,6 +1057,13 @@ function connectStream() {
     if ($('[data-panel="watch"]').hidden) return;
     clearTimeout(watchTimer);
     watchTimer = setTimeout(() => loadItems().catch(() => null), 300);
+  });
+  // Auto-checkout: a run started, moved on or ended (and the item it was for, disarmed).
+  let acoTimer = null;
+  es.addEventListener('aco', () => {
+    if ($('[data-panel="aco"]').hidden) return;
+    clearTimeout(acoTimer);
+    acoTimer = setTimeout(() => Promise.all([loadAco(), loadItems()]).then(renderAco).catch(() => null), 250);
   });
   es.addEventListener('monitor-feed', (e) => monitorUI.onFeed(JSON.parse(e.data)));
   es.addEventListener('monitor-product', (e) => monitorUI.onProduct(JSON.parse(e.data)));

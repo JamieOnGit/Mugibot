@@ -16,7 +16,7 @@ import { decryptJSON, encryptJSON, hashPassword, humanCode, newUserKey, normaliz
 import { extensionFiles, extensionManifest, writeExtension } from '../server/extension.js';
 import { RateLimiter, parseCookies } from '../server/http.js';
 import { RETAILER_DEFS, Retailers, serialize } from '../server/retailers/index.js';
-import { alerts, item, profile, profiles, username } from '../server/schema.js';
+import { DEFAULT_ACO, acoSettings, alerts, item, profile, profiles, username } from '../server/schema.js';
 import { makeZip } from '../server/zip.js';
 import { loadConfig } from '../server/config.js';
 import { entitlement } from '../server/entitlement.js';
@@ -147,6 +147,24 @@ test('input checks: usernames, SKUs by link or by store, delivery details, alert
   assert.throws(() => alerts({ discordWebhook: 'https://discord.com.evil.example/api/webhooks/1/x' }));
   assert.equal(alerts({ discordMention: '@everyone hi' }).discordMention, 'everyone hi', 'no mass mentions');
   assert.equal(alerts({}).browserChecks, true);
+});
+
+test('Auto-checkout: switched on only once agreed, limits within bounds; an armed item needs a max price and a store with a checkout', () => {
+  assert.equal(acoSettings({}, DEFAULT_ACO).enabled, false, 'off until switched on');
+  assert.throws(() => acoSettings({ enabled: true }, DEFAULT_ACO), /agree/i);
+  const on = acoSettings({ enabled: true, agree: true, mode: 'fill', maxOrder: 'lots', perDay: 0, spendPerDay: 1e9 }, DEFAULT_ACO, 1000);
+  assert.deepEqual(on, { enabled: true, agreedAt: 1000, mode: 'fill', maxOrder: 400, perDay: 1, spendPerDay: 20000, signedInOnly: false });
+  assert.equal(acoSettings({ enabled: true }, { ...on, enabled: false }, 2000).agreedAt, 1000, 'agreed once is enough');
+  assert.equal(acoSettings({ mode: 'buy everything', agreedAt: 5 }, on).mode, 'place', 'only place or fill');
+  assert.equal(acoSettings({ agreedAt: 5 }, DEFAULT_ACO).agreedAt, null, "the agreement isn't taken from the request");
+  const url = 'https://www.kmart.com.au/product/x-43000001/';
+  assert.equal(item({ url }, { retailers }).aco, false);
+  assert.throws(() => item({ url, aco: true }, { retailers }), /max price/i);
+  assert.deepEqual([item({ url, aco: true, maxPrice: '99' }, { retailers }).aco, item({ url, aco: true, maxPrice: '99' }, { retailers }).maxPrice], [true, 99]);
+  assert.throws(() => item({ url: 'https://shop.example.com/products/op-18-box', aco: true, maxPrice: 5 }, { retailers }), /checkout for/i);
+  const armed = item({ url, aco: true, maxPrice: 99 }, { retailers });
+  assert.equal(item({ name: 'Renamed' }, { retailers, existing: armed }).aco, true, 'an edit keeps it armed');
+  assert.throws(() => item({ maxPrice: null }, { retailers, existing: armed }), /max price/i, "an armed item's max can't be cleared");
 });
 
 test('membership labels', () => {

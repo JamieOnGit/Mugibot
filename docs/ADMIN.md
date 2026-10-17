@@ -66,6 +66,21 @@ but haven't connected their account.
 
 **Audit log.** Who changed what, including monitors added, paused, resumed and removed, and blacklist entries added and removed.
 
+## Members' Auto-checkout
+
+Auto-checkout is each member's own, and you can't switch it on for anyone.
+Each member:
+
+- switches it on themselves, and agrees, on their dashboard's **🤖 Auto-checkout** tab;
+- arms their own items;
+- sees every attempt there, with each step and why it ended.
+
+When a member asks why a run didn't buy, ask them for the reason shown in that
+tab's Activity list. [AUTO-CHECKOUT.md](AUTO-CHECKOUT.md) explains each one.
+
+A store's flow that changes on the real site breaks ⚡ Buy and Auto-checkout
+alike. Fixing the flow ([RETAILER-FLOWS.md](RETAILER-FLOWS.md)) fixes both.
+
 ## The Monitor feed
 
 The dashboard's **Monitor** tab has three pages for admins (members see only

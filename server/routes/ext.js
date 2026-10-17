@@ -4,7 +4,8 @@
 
 import { entitlement } from '../entitlement.js';
 import { EXTENSION_VERSION, appOrigins, storeUrl } from '../extension.js';
-import { DEFAULT_ALERTS, HttpError, bad, str } from '../schema.js';
+import { REASONS } from '../aco.js';
+import { DEFAULT_ALERTS, HttpError, bad, num, str } from '../schema.js';
 
 const EVENT_TYPES = { add: 'info', basket: 'info', step: 'info', checkout: 'success', ready: 'success', error: 'warn' };
 
@@ -65,11 +66,14 @@ export function register(router, ctx) {
     return {
       items: repo.listItems(req.user.id).map((it) => ({
         id: it.id, store: it.store, storeName: retailers.name(it.store), sku: it.sku, name: it.name, url: it.url, price: it.price, profileId: it.profileId, status: it.status,
+        aco: it.aco, maxPrice: it.maxPrice,
       })),
       flows: retailers.forExtension(),
       active: entitlement(req.user, repo.now()).active,
       browserChecks: settings.browserChecks,
       browserIntervalSeconds: cfg.monitor.browserIntervalSeconds,
+      // Auto-checkout: switched on, with items armed — this browser listens for runs.
+      aco: { enabled: ctx.aco.settings(req.user.id).enabled, armed: ctx.aco.armedCount(req.user.id) },
     };
   }, { auth: 'device' });
 
@@ -78,7 +82,9 @@ export function register(router, ctx) {
     if (!limiter.hit(`claim:${req.device.id}`, 60, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     const row = repo.claimGoCode(req.user.id, str(req.body.code, 100));
     if (!row) throw new HttpError(404, 'That ⚡ Buy link has expired — press ⚡ Buy again');
-    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, host: row.host, profileId: row.profile_id };
+    // An Auto-checkout run's code: what this checkout may do by itself (null: an ordinary ⚡ Buy).
+    const aco = row.run_id ? ctx.aco.claimed(req.user.id, row.run_id, req.device) : null;
+    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, host: row.host, profileId: row.profile_id, aco };
   }, { auth: 'device', entitled: true });
 
   // Delivery details for checkout autofill (the chosen set, else the default).
@@ -139,6 +145,30 @@ export function register(router, ctx) {
     const logins = repo.setDeviceLogins(req.user.id, req.device.id, out);
     if (logins && Object.keys(out).length) ctx.hub.publish(req.user.id, 'devices', {});
     return { ok: true };
+  }, { auth: 'device' });
+
+  // Auto-checkout (server/aco.js): runs for this browser to start. It asks again as soon as it has an
+  // answer; with nothing to start, the answer waits up to `wait` seconds for an armed item to drop.
+  router.get('/api/ext/aco/next', async (req, res) => {
+    if (!limiter.hit(`aco-next:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const waitMs = num(req.query.get('wait'), { min: 0, max: 25, def: 0 }) * 1000;
+    let gone = false;
+    res.on('close', () => { gone = true; });
+    const runs = await ctx.aco.next(req.user, req.device, { waitMs, alive: () => !gone && !res.writableEnded });
+    const s = ctx.aco.settings(req.user.id);
+    return { runs, enabled: s.enabled, armed: ctx.aco.armedCount(req.user.id) };
+  }, { auth: 'device', entitled: true });
+
+  // …and how each run is going: 'checkout' | 'placing' | 'placed' | 'ready' | 'needs_you' | 'failed' (with why).
+  router.post('/api/ext/aco/:id', async (req) => {
+    if (!limiter.hit(`aco-report:${req.device.id}`, 120, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const reason = str(req.body.reason, 30);
+    const run = await ctx.aco.report(req.user.id, str(req.params.id, 40), {
+      status: str(req.body.status, 20), reason: !reason || REASONS[reason] ? reason : 'error', message: str(req.body.message, 300),
+      total: num(req.body.total, { min: 0, max: 100000, def: null }),
+    });
+    if (!run) throw new HttpError(404, 'That Auto-checkout run was not found');
+    return { ok: true, run };
   }, { auth: 'device' });
 
   // Live sweeps from an admin's browser (docs/MONITORING.md): the next search at each store

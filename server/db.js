@@ -375,6 +375,37 @@ const MIGRATIONS = [
   ALTER TABLE devices ADD COLUMN logins TEXT NOT NULL DEFAULT '{}';
   ALTER TABLE devices ADD COLUMN logins_at INTEGER;
   `,
+  // 8 — Auto-checkout (docs/AUTO-CHECKOUT.md): an item armed to be bought by itself when it drops
+  //     (one purchase, then it waits to be armed again), the ⚡ Buy code a run opens the store
+  //     with, and every run: what triggered it, each step, and how it ended (with why).
+  `
+  ALTER TABLE items ADD COLUMN aco INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE items ADD COLUMN aco_at INTEGER;
+  ALTER TABLE go_codes ADD COLUMN run_id TEXT;
+  CREATE TABLE aco_runs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    item_id TEXT,
+    store TEXT NOT NULL,
+    sku TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
+    price REAL,                      -- what the monitor saw when it triggered
+    total REAL,                      -- the order total read at checkout
+    max_price REAL,                  -- the item's limit at the time
+    mode TEXT NOT NULL,              -- 'place' (press the final button) | 'fill' (stop there for you)
+    trigger TEXT NOT NULL DEFAULT '',-- what saw it drop: 'sweep' | 'server' | 'browser' | 'manual'
+    status TEXT NOT NULL,            -- queued, sent, started, checkout, ready, placing, placed, needs_you, failed, skipped, expired
+    reason TEXT NOT NULL DEFAULT '', -- why it stopped: sold_out, over_limit, card_declined, bank_check, …
+    message TEXT NOT NULL DEFAULT '',
+    steps TEXT NOT NULL DEFAULT '[]',-- [{ at, status, message }]
+    device_id TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX aco_runs_user ON aco_runs (user_id, created_at);
+  CREATE INDEX aco_runs_status ON aco_runs (status, created_at);
+  `,
 ];
 
 export class Db {

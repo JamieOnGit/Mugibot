@@ -2,6 +2,7 @@
 // monitor and the background jobs (Discord roles, Whop re-checks).
 
 import http from 'node:http';
+import { Aco } from './aco.js';
 import { Catalog } from './catalog.js';
 import { loadConfig } from './config.js';
 import { Db } from './db.js';
@@ -55,6 +56,10 @@ export async function createApp(options = {}) {
   const sweeper = new Sweeper({ cfg, repo, catalog, feed, monitor, retailers, hub, fetchImpl: storeFetchImpl, now });
   const limiter = new RateLimiter(now);
   const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, limiter, pageCache: new Map() };
+  // Auto-checkout: started by the monitor when an armed item drops.
+  const aco = new Aco({ ...ctx, now });
+  ctx.aco = aco;
+  monitor.aco = aco;
 
   const router = new Router();
   auth.register(router, ctx);
@@ -205,6 +210,7 @@ export async function createApp(options = {}) {
     hub,
     monitor,
     sweeper,
+    aco,
     catalog,
     feed,
     discord,
@@ -223,12 +229,14 @@ export async function createApp(options = {}) {
       if (cfg.baseUrlAuto) cfg.baseUrl = app.url;
       monitor.start();
       sweeper.start();
+      aco.start();
       startJobs();
       return app.url;
     },
     async close() {
       monitor.stop();
       sweeper.stop();
+      aco.stop();
       timers.forEach(clearInterval);
       hub.close();
       await new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections?.(); });

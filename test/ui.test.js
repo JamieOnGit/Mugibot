@@ -46,7 +46,8 @@ test('landing page: pitch, membership price, honest guardrails', async () => {
   const text = await page.textContent('body');
   assert.match(text, /Pinged on restock\. At checkout in one press\./);
   assert.match(text, /A\$19\.99 \/ month/);
-  assert.match(text, /You press the final buy button/);
+  assert.match(text, /You choose who presses the final buy button/);
+  assert.match(text, /Auto-checkout \(optional\)/);
   assert.match(text, /members-only Discord server/);
   assert.match(text, /Not affiliated with any retailer/);
   // The logo (the straw-hat robot) in the header, and the browser tab's icon.
@@ -635,6 +636,84 @@ test('admin console: members and memberships, not personal details; SKU totals a
   if (shots) await page.screenshot({ path: path.join(shots, 'admin.png'), fullPage: true });
 });
 
+test('Auto-checkout tab: switched on only with the agreement; limits; arming needs a max price; every attempt shows up with why', async () => {
+  const owner = env.app.repo.userByUsername('owner');
+  await page.goto(`${env.url}/app#aco`);
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-items li.aco-item');
+  assert.match(await page.textContent('#aco-state'), /^Off$/);
+  assert.match(await page.textContent('#aco-runs'), /Nothing yet/);
+  // The switch asks for the agreement first.
+  await page.click('#aco-enabled');
+  await page.waitForFunction(() => /agree first/.test(document.querySelector('#aco-msg').textContent));
+  assert.equal(env.app.aco.settings(owner.id).enabled, false);
+  await page.check('#aco-agree');
+  await page.click('#aco-enabled');
+  await page.waitForFunction(() => document.querySelector('#aco-enabled').getAttribute('aria-checked') === 'true');
+  assert.match(await page.textContent('#aco-state'), /On — places orders/);
+  assert.equal(await page.isVisible('#aco-agree-wrap'), false, 'agreed once');
+  assert.equal(typeof env.app.aco.settings(owner.id).agreedAt, 'number');
+  // The limits.
+  await page.check('input[name="aco-mode"][value="fill"]');
+  await page.fill('#aco-max', '250');
+  await page.fill('#aco-perday', '3');
+  await page.click('#aco-form button[type=submit]');
+  await page.waitForFunction(() => document.querySelector('#aco-msg').textContent === 'Saved.');
+  const s = env.app.aco.settings(owner.id);
+  assert.deepEqual([s.mode, s.maxOrder, s.perDay], ['fill', 250, 3]);
+  assert.match(await page.textContent('#aco-state'), /stops at the final button/);
+  // Ready to check out? No extension in this browser.
+  await page.waitForFunction(() => /Install the extension/.test(document.querySelector('#aco-checks').textContent));
+
+  // Arming: not without a max price.
+  const day = page.locator('#aco-items li.aco-item', { hasText: 'Day UPC' });
+  await day.locator('.sn-sw').click();
+  await page.waitForFunction(() => /Set a max price/.test(document.querySelector('#toasts')?.textContent || ''));
+  const dayItem = env.app.db.get("SELECT * FROM items WHERE user_id = :u AND name = 'Day UPC'", { u: owner.id });
+  assert.equal(dayItem.aco, 0);
+  await day.locator('input.aco-max').fill('380');
+  await day.locator('.sn-sw').click();
+  await page.waitForSelector('#aco-items li.aco-item.armed');
+  assert.match(await page.textContent('#aco-armed-count'), /1 armed/);
+  assert.equal(env.app.db.get('SELECT aco, max_price FROM items WHERE id = :id', { id: dayItem.id }).max_price, 380);
+
+  // It drops at $360, over the $250 an order limit: kept as "didn't start", with why — live.
+  await env.app.monitor.alertRestock(env.app.db.get('SELECT * FROM items WHERE id = :id', { id: dayItem.id }), { status: 'in_stock', price: 360, source: 'sweep' });
+  await page.waitForSelector('#aco-runs li.aco-run.st-skipped');
+  assert.match(await page.textContent('#aco-runs li.aco-run.st-skipped'), /Day UPC.*Kmart · \$360\.00 · seen by the live monitor.*Skipped.*\$360\.00 is over your limit of \$250\.00 an order/s);
+  // An order placed for another item (as the extension reports it).
+  const etb = env.app.repo.getItem(owner.id, env.app.db.get("SELECT id FROM items WHERE user_id = :u AND name = 'Elite Trainer Box'", { u: owner.id }).id);
+  const run = env.app.aco.create({ userId: owner.id, item: etb, price: 100, mode: 'place', trigger: 'sweep' }, 'queued', '', 'Dropped at Kmart for $100.00');
+  env.app.db.run("UPDATE aco_runs SET status = 'started' WHERE id = :id", { id: run.id });
+  await env.app.aco.report(owner.id, run.id, { status: 'placing', total: 110, message: 'Pressing "Checkout securely" — total $110.00' });
+  await env.app.aco.report(owner.id, run.id, { status: 'placed', message: 'Order confirmed at Kmart' });
+  await page.waitForSelector('#aco-runs li.aco-run.st-placed');
+  assert.match(await page.textContent('#aco-runs li.aco-run.st-placed'), /Elite Trainer Box.*\$110\.00 total.*Order placed.*Order confirmed at Kmart/s);
+  await page.click('#aco-runs li.aco-run.st-placed summary');
+  assert.match(await page.textContent('#aco-runs li.aco-run.st-placed .aco-steps'), /Final button pressed — Pressing "Checkout securely".*Order placed — Order confirmed at Kmart/s);
+  assert.match(await page.textContent('#aco-stats'), /Orders placed\s*1\s*\$110\.00 spent/);
+  // The filter.
+  await page.selectOption('#aco-filter', 'placed');
+  assert.equal(await page.locator('#aco-runs li.aco-run').count(), 1);
+  await page.selectOption('#aco-filter', 'skipped');
+  assert.match(await page.textContent('#aco-runs'), /Day UPC/);
+  assert.doesNotMatch(await page.textContent('#aco-runs'), /Elite Trainer Box/);
+  await page.selectOption('#aco-filter', 'failed');
+  assert.match(await page.textContent('#aco-runs'), /Nothing here/);
+  await page.selectOption('#aco-filter', '');
+  // On the watchlist, an armed item says so.
+  await page.click('a[data-tab="watch"]');
+  await page.waitForSelector('#w-list li[data-id]');
+  assert.match(await page.textContent(`#w-list li[data-id="${dayItem.id}"]`), /Armed/);
+  if (shots) {
+    await page.goto(`${env.url}/app#aco`);
+    await page.waitForSelector('#aco-runs li.aco-run');
+    await page.screenshot({ path: path.join(shots, 'auto-checkout.png'), fullPage: true });
+  }
+  // Off again, for the rest of the tests.
+  await env.app.aco.disarm(owner.id, dayItem.id);
+  env.app.repo.setData(owner.id, 'aco', { ...env.app.aco.settings(owner.id), enabled: false });
+});
+
 test('phone-sized screens: no sideways scrolling', async () => {
   const phone = await browser.newPage({ viewport: { width: 375, height: 800 } });
   phone.on('pageerror', (e) => errors.push(e.message));
@@ -645,7 +724,7 @@ test('phone-sized screens: no sideways scrolling', async () => {
   }
   const c = await Client.signup(env.url, 'phoneuser');
   await phone.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
-  for (const tab of ['watch', 'monitor', 'checkout', 'discord', 'extension', 'membership', 'account']) {
+  for (const tab of ['watch', 'monitor', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account']) {
     await phone.goto(`${env.url}/app#${tab}`);
     await phone.waitForSelector(`[data-panel="${tab}"]:not([hidden])`);
     await phone.waitForTimeout(150);

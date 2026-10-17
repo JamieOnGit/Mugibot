@@ -50,6 +50,16 @@ export const DUMMY_PRODUCTS = {
     { sku: '10-10447-108', name: 'Pokémon TCG: 30th Celebration Pokémon Center Elite Trainer Box', price: 129.95, status: 'in_stock' },
     { sku: '10-10450-101', name: 'Pokémon TCG: Mega Evolution Booster Bundle', price: 49.95, status: 'out_of_stock' },
   ],
+  // Target: two trading-card products, and the clothes its "Often Bought Together" pop-up offers
+  // after Add to basket (Auto-checkout and ⚡ Buy close it, never add them).
+  target: [
+    { sku: '71234567', name: 'Pokémon TCG: Mega Evolution Elite Trainer Box', price: 79, status: 'out_of_stock' },
+    { sku: '71234568', name: 'Pokémon TCG: Prismatic Evolutions Booster Bundle', price: 49, status: 'in_stock' },
+    { sku: '70000001', name: 'Australian Cotton Blend Sleeveless Bubble Top', price: 25, status: 'in_stock', upsell: true },
+    { sku: '70000002', name: 'Lily Loves European Linen Culotte Pants', price: 50, status: 'in_stock', upsell: true },
+    { sku: '70000003', name: 'Lily Loves Australian Cotton Tie Detail T-Shirt', price: 25, status: 'in_stock', upsell: true },
+    { sku: '70000004', name: 'Lily Loves European Linen Blend Puff Sleeve Midi Dress', price: 65, status: 'in_stock', upsell: true },
+  ],
   pbandai: [
     { sku: 'N2903432001', name: 'ONE PIECE CARD GAME Premium Card Collection -29th Anniversary Edition-', price: 25, status: 'in_stock' },
     { sku: 'N2863373001', name: 'ONE PIECE CARD GAME Official Playmat Limited Edition vol.6', price: 51, status: 'out_of_stock' },
@@ -70,6 +80,7 @@ export function dummyProductPath(store, p) {
     case 'gamerholic': return `/gamerholic/products/${p.sku}`;
     case 'pokemoncenter': return `/pokemoncenter/product/${p.sku}/${slugify(p.name)}`;
     case 'pbandai': return `/pbandai/item/${p.sku}`;
+    case 'target': return `/target/p/${slugify(p.name)}/${p.sku}`;
     default: return null;
   }
 }

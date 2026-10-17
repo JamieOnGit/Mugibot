@@ -52,7 +52,7 @@ export class Notifier {
 
   /**
    * ev: { type, level ('info'|'success'|'warn'|'urgent'), message, title?, name?, sku?, url?, buttons?: [{label, url}],
-   *       channel?: 'restock' | 'listed' | 'checkout' — also DM / webhook / email per the member's settings;
+   *       channel?: 'restock' | 'listed' | 'checkout' | 'aco' — also DM / webhook / email per the member's settings;
    *                 'account' — membership news, DM'd if Discord is connected }
    * Returns { event, sent: ['discord-dm', 'webhook', 'email'] }.
    */
@@ -67,12 +67,13 @@ export class Notifier {
     if (!user) return { event: saved, sent };
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(userId, 'alerts', {}) || {}) };
     const jobs = [];
-    const wantsDm = { restock: settings.discordDm, listed: settings.discordDmListed, checkout: settings.discordDmCheckout, account: true }[ev.channel];
+    // 'aco': Auto-checkout (it spends their money): always DM'd.
+    const wantsDm = { restock: settings.discordDm, listed: settings.discordDmListed, checkout: settings.discordDmCheckout, aco: true, account: true }[ev.channel];
     if (wantsDm && user.discord_id && this.discord.botReady) {
       jobs.push(this.discord.dm(user, this.message(ev)).then((ok) => ok && sent.push('discord-dm')));
     }
     if (settings.discordWebhook && ev.channel !== 'account') jobs.push(this.webhook(settings, ev).then((ok) => ok && sent.push('webhook')));
-    const wantsEmail = { checkout: settings.emailOnCheckout, restock: settings.emailOnRestock, listed: settings.emailOnRestock, account: true }[ev.channel];
+    const wantsEmail = { checkout: settings.emailOnCheckout, aco: settings.emailOnCheckout, restock: settings.emailOnRestock, listed: settings.emailOnRestock, account: true }[ev.channel];
     if (wantsEmail && user.email) {
       const links = (ev.buttons || []).map((b) => `${b.label}: ${b.url}`).join('\n');
       jobs.push(this.mailer.send({

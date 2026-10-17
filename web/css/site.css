@@ -50,7 +50,7 @@ code, kbd { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; backg
 .btn:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
 label { display: block; font-weight: 600; font-size: 13px; margin: 12px 0 4px; }
 input, select, textarea { font: inherit; width: 100%; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
-input[type="checkbox"] { width: auto; margin: 0 6px 0 0; }
+input[type="checkbox"], input[type="radio"] { width: auto; margin: 0 6px 0 0; padding: 0; flex: none; }
 .check { display: flex; align-items: flex-start; gap: 6px; font-weight: 400; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
 .grid3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 0 12px; }
@@ -646,4 +646,53 @@ details.menu[open] > summary { background: var(--surface-2); }
   .sn-ev .m { flex-basis: calc(100% - 50px); }
   .sn-bd { flex-direction: column; }
   .sn-ov-img { width: 88px; height: 88px; }
+}
+
+/* ---------------------------------------------------------------------------
+   🤖 Auto-checkout: the switch and limits, what's ready, armed items, and every run.
+   --------------------------------------------------------------------------- */
+.aco-lead { max-width: 80ch; margin: 0 0 16px; }
+.aco-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.aco-stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px 12px; box-shadow: var(--shadow); min-width: 0; }
+.aco-stat .k { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.aco-stat .v { font-size: 28px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.aco-stat .s { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.aco-stat.ok .v { color: var(--ok); } .aco-stat.warn .v { color: var(--warn); } .aco-stat.err .v { color: var(--err); }
+.aco-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; margin-bottom: 16px; }
+.aco-grid > .card + .card { margin-top: 0; }
+.aco-switch-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.aco-agree { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); font-weight: 500; font-size: 14px; }
+.aco-checks li { align-items: baseline; }
+.aco-items, .aco-runs { list-style: none; margin: 8px 0 0; padding: 0; }
+.aco-item { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.aco-item:first-child { border-top: 0; }
+.aco-item .info { flex: 1 1 260px; min-width: 0; }
+.aco-item .name { font-weight: 600; }
+.aco-item .meta { color: var(--muted); font-size: 13px; }
+.aco-item.armed .name::after { content: ' · armed'; color: var(--ok); font-weight: 600; font-size: 12.5px; }
+.aco-last.ok { color: var(--ok); } .aco-last.warn { color: var(--warn); } .aco-last.err { color: var(--err); }
+.aco-max-wrap { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+.aco-max { width: 96px; padding: 6px 8px; }
+.aco-run { border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--surface); }
+.aco-run.st-placed { border-left-color: var(--ok); }
+.aco-run.st-needs_you, .aco-run.st-ready { border-left-color: var(--warn); }
+.aco-run.st-failed, .aco-run.st-expired { border-left-color: var(--err); }
+.aco-run.active { border-left-color: var(--info); }
+.aco-run .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.aco-run .ic { font-size: 18px; width: 24px; text-align: center; flex: none; }
+.aco-run .info { flex: 1 1 240px; min-width: 0; }
+.aco-run .name { font-weight: 600; }
+.aco-run .meta { color: var(--muted); font-size: 13px; }
+.aco-run .why { margin: 6px 0 0 34px; font-size: 13.5px; }
+.aco-run .why.warn { color: var(--warn); } .aco-run .why.err { color: var(--err); } .aco-run .why.ok { color: var(--ok); }
+.aco-detail { margin: 6px 0 0 34px; }
+.aco-detail > summary { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.aco-steps { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.aco-steps li { margin: 2px 0; }
+.aco-steps time { font-variant-numeric: tabular-nums; margin-right: 8px; }
+.aco-steps b { color: var(--fg); font-weight: 600; }
+.aco-pill { text-decoration: none; margin-left: 6px; background: var(--ok-bg); color: var(--ok); }
+@media (max-width: 900px) {
+  .aco-grid { grid-template-columns: minmax(0, 1fr); }
+  .aco-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

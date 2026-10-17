@@ -6,7 +6,7 @@ import { discordBotConfigured, discordOAuthConfigured } from '../config.js';
 import { entitlement } from '../entitlement.js';
 import { EXTENSION_VERSION, storeUrl } from '../extension.js';
 import { DUMMY_PRODUCTS, STARTER_ITEMS, dummyProductPath } from '../presets.js';
-import { DEFAULT_ALERTS, HttpError, alerts as checkAlerts, bad, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
+import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
 import { publicUser } from './auth.js';
 
 const notFound = (what) => new HttpError(404, `${what} not found`);
@@ -17,7 +17,9 @@ export function register(router, ctx) {
   const withStore = (it) => {
     if (!it) return it;
     const r = retailers.get(it.store);
-    return { ...it, storeName: r ? r.name : it.store, flowStatus: r ? r.flowStatus : 'none' };
+    // acoPlaces: Auto-checkout can press this store's final button (a checkout in another site's frame: it stops there).
+    const C = r && r.flow && r.flow.checkout;
+    return { ...it, storeName: r ? r.name : it.store, flowStatus: r ? r.flowStatus : 'none', acoCan: !!(r && r.flow), acoPlaces: !!(C && !C.inFrame) };
   };
   const isAdmin = (req) => req.user.role === 'admin';
 
@@ -153,6 +155,28 @@ export function register(router, ctx) {
     return { $handled: true };
   });
 
+  // --- Auto-checkout (server/aco.js, docs/AUTO-CHECKOUT.md) ---------------------
+  // The member's switch and limits, and every run: what triggered it, each step, how it ended and why.
+  router.get('/api/aco', async (req) => ({
+    settings: ctx.aco.settings(req.user.id),
+    today: ctx.aco.today(req.user.id),
+    stats: ctx.aco.stats(req.user.id, 30),
+    armed: ctx.aco.armedCount(req.user.id),
+    extensionVersion: EXTENSION_VERSION,
+    runs: ctx.aco.list(req.user.id, num(req.query.get('limit'), { min: 1, max: 200, def: 50, int: true })),
+  }));
+
+  router.put('/api/aco', async (req) => {
+    const current = ctx.aco.settings(req.user.id);
+    const next = acoSettings(req.body, current, repo.now());
+    repo.setData(req.user.id, 'aco', next);
+    if (next.enabled !== current.enabled) {
+      repo.addEvent(req.user.id, { type: 'aco', level: next.enabled ? 'warn' : 'info', message: next.enabled ? `Auto-checkout switched on (${next.mode === 'place' ? 'places orders' : 'stops at the final button'}, up to $${next.maxOrder} an order)` : 'Auto-checkout switched off' });
+    }
+    ctx.hub.publish(req.user.id, 'aco', { settings: true });
+    return { settings: next, today: ctx.aco.today(req.user.id), armed: ctx.aco.armedCount(req.user.id) };
+  });
+
   // --- Connected browsers (the extension) -----------------------------------
   router.get('/api/devices', async (req) => ({ devices: repo.listDevices(req.user.id) }));
 
@@ -190,10 +214,11 @@ export function register(router, ctx) {
  * opens the store and the extension takes over. Shopify stores whose product option Mugibot
  * knows: the store's own cart link, which opens checkout with the product already in the cart.
  */
-export function startBuy(ctx, user, it) {
+export function startBuy(ctx, user, it, { runId = null } = {}) {
   if (!it.url) throw new HttpError(409, `The product page for SKU ${it.sku} hasn't been found yet — paste its link into the item, or wait for it to be listed`);
   const profile = ctx.repo.profileFor(user.id, it.profileId);
-  const code = ctx.repo.createGoCode(user.id, it, 1, profile ? profile.id : null);
+  // runId: an Auto-checkout run (server/aco.js) — the code says so when the extension claims it.
+  const code = ctx.repo.createGoCode(user.id, it, 1, profile ? profile.id : null, runId);
   const r = ctx.retailers.get(it.store);
   const known = r && r.cartPath && r.cartPath.includes('{variant}') && ctx.catalog ? ctx.catalog.productFor(it.store, it.sku) : null;
   const cart = known && known.variant_id ? ctx.retailers.cartUrl(it.store, { sku: it.sku, variantId: known.variant_id, qty: 1 }) : null;

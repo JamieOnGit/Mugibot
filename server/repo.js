@@ -9,6 +9,8 @@ import { EMPTY_PROFILE, HttpError } from './schema.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const GO_CODE_TTL = 2 * 60 * 1000;
+// An Auto-checkout run's code waits for a browser to pick the run up (it asks every 20 seconds or so).
+const ACO_CODE_TTL = 5 * 60 * 1000;
 const PAIR_CODE_TTL = 10 * 60 * 1000;
 const RESET_TTL = 60 * 60 * 1000;
 const OAUTH_TTL = 10 * 60 * 1000;
@@ -26,6 +28,8 @@ const toItem = (r) => r && ({
   profileId: r.profile_id, monitor: !!r.monitor, announce: !!r.announce, position: r.position,
   status: r.status, statusSource: r.status_source, statusAt: r.status_at, checkedAt: r.checked_at, title: r.title || '',
   lastPrice: r.last_price, error: r.error || '', lastAlertAt: r.last_alert_at, createdAt: r.created_at,
+  // Auto-checkout: armed to be bought by itself when it drops (once; then armed again by you).
+  aco: !!r.aco, acoAt: r.aco_at || null,
 });
 const parseLogins = (v) => { try { const o = JSON.parse(v || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
 const toDevice = (r) => r && ({
@@ -250,9 +254,9 @@ export class Repo {
     const t = this.now();
     const pos = this.db.get('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM items WHERE user_id = :u', { u: userId }).n;
     try {
-      this.db.run(`INSERT INTO items (id, user_id, position, store, sku, name, url, price, max_price, quantity, profile_id, monitor, announce, created_at, updated_at)
-        VALUES (:id, :u, :pos, :store, :sku, :name, :url, :price, :max, :qty, :pf, :mon, :ann, :t, :t)`,
-      { id, u: userId, pos, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, t });
+      this.db.run(`INSERT INTO items (id, user_id, position, store, sku, name, url, price, max_price, quantity, profile_id, monitor, announce, aco, aco_at, created_at, updated_at)
+        VALUES (:id, :u, :pos, :store, :sku, :name, :url, :price, :max, :qty, :pf, :mon, :ann, :aco, :acoAt, :t, :t)`,
+      { id, u: userId, pos, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, acoAt: it.aco ? t : null, t });
     } catch (e) {
       if (isUniqueError(e)) throw new HttpError(409, `SKU ${it.sku} is already on your watchlist`);
       throw e;
@@ -268,10 +272,10 @@ export class Repo {
     const moved = before.url !== (it.url || '') || before.store !== it.store || before.sku !== it.sku;
     try {
       this.db.run(`UPDATE items SET store = :store, sku = :sku, name = :name, url = :url, price = :price, max_price = :max, quantity = :qty,
-          profile_id = :pf, monitor = :mon, announce = :ann, updated_at = :t
+          profile_id = :pf, monitor = :mon, announce = :ann, aco = :aco, aco_at = CASE WHEN :aco = 1 AND aco = 0 THEN :t WHEN :aco = 0 THEN NULL ELSE aco_at END, updated_at = :t
           ${moved ? ", status = 'pending', status_source = NULL, status_at = NULL, checked_at = NULL, error = '', browser_next_at = 0, browser_fails = 0" : ''}
         WHERE user_id = :u AND id = :id`,
-      { id: before.id, u: userId, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, t: this.now() });
+      { id: before.id, u: userId, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, t: this.now() });
     } catch (e) {
       if (isUniqueError(e)) throw new HttpError(409, `SKU ${it.sku} is already on your watchlist`);
       throw e;
@@ -315,11 +319,12 @@ export class Repo {
   // ---------------------------------------------------------------------------
   // ⚡ Buy codes — single use, 2 minutes, and only for the account that made them
   // ---------------------------------------------------------------------------
-  createGoCode(userId, item, quantity, profileId = null) {
+  /** runId: an Auto-checkout run (the code opens the store for it, and says so when it's claimed). */
+  createGoCode(userId, item, quantity, profileId = null, runId = null) {
     const code = randomToken(18);
-    this.db.run(`INSERT INTO go_codes (code_hash, user_id, item_id, sku, name, quantity, host, profile_id, expires_at)
-      VALUES (:h, :u, :iid, :sku, :name, :qty, :host, :pf, :exp)`,
-    { h: sha256(code), u: userId, iid: item.id, sku: item.sku, name: item.name, qty: quantity, host: new URL(item.url).host, pf: profileId, exp: this.now() + GO_CODE_TTL });
+    this.db.run(`INSERT INTO go_codes (code_hash, user_id, item_id, sku, name, quantity, host, profile_id, expires_at, run_id)
+      VALUES (:h, :u, :iid, :sku, :name, :qty, :host, :pf, :exp, :run)`,
+    { h: sha256(code), u: userId, iid: item.id, sku: item.sku, name: item.name, qty: quantity, host: new URL(item.url).host, pf: profileId, exp: this.now() + (runId ? ACO_CODE_TTL : GO_CODE_TTL), run: runId });
     this.db.run('DELETE FROM go_codes WHERE expires_at < :t', { t: this.now() });
     return code;
   }

@@ -17,6 +17,11 @@
 // Live sweeps (admins only): for stores that refuse servers, an admin's
 // browser reads their search results at the pace the server sets, and sends
 // back what it found (docs/MONITORING.md). Members' browsers never do this.
+//
+// Auto-checkout (only once you've switched it on and armed an item, docs/AUTO-CHECKOUT.md): this
+// browser listens for your armed items dropping, and checks out by itself in a tab of its own —
+// within your limits, with your details and the card saved here. It never gets past a bot check
+// or your bank's check: it stops and tells you.
 
 import './config.js';
 import './vault.js';
@@ -106,7 +111,7 @@ function refreshState(auth) {
     refreshing = (async () => {
       const res = await api('GET', `/api/ext/items?src=${SOURCE}`);
       if (res.status !== 200 || !res.body) return null;
-      const st = { items: res.body.items, flows: res.body.flows, active: res.body.active, browserChecks: res.body.browserChecks };
+      const st = { items: res.body.items, flows: res.body.flows, active: res.body.active, browserChecks: res.body.browserChecks, aco: res.body.aco || null };
       await chrome.storage.local.set({ [`state:${auth.user.id}`]: { ...st, at: Date.now() } });
       return st;
     })().finally(() => { refreshing = null; });
@@ -119,7 +124,7 @@ async function getState() {
   if (!auth) return { items: [], flows: [], online: false, paired: false };
   const cacheKey = `state:${auth.user.id}`;
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
-  const pick = (st) => ({ items: st.items, flows: st.flows, active: st.active, browserChecks: st.browserChecks });
+  const pick = (st) => ({ items: st.items, flows: st.flows, active: st.active, browserChecks: st.browserChecks, aco: st.aco || null });
   if (cached && Date.now() - cached.at < STATE_FRESH_MS) {
     refreshState(auth).catch(() => null);
     return { ...pick(cached), online: true, paired: true, user: auth.user };
@@ -146,10 +151,20 @@ async function profileFor(chosen) {
 // --- checkout passes: which tab may receive your details, for how long -----
 const passKey = (tabId) => `fill:${tabId}`;
 
-async function savePass(tabId, host, userId, profileId = null) {
+/** aco: an Auto-checkout run this checkout is for (what it may do by itself), from the server. */
+async function savePass(tabId, host, userId, profileId = null, aco = null) {
   if (tabId == null || !host) return;
   await clearCardFrames(tabId); // a new checkout
-  await chrome.storage.session.set({ [passKey(tabId)]: { host, userId, profileId, expires: Date.now() + PASS_TTL } });
+  await chrome.storage.session.set({ [passKey(tabId)]: { host, userId, profileId, aco, expires: Date.now() + PASS_TTL } });
+}
+
+async function passFor(sender) {
+  const tabId = sender.tab && sender.tab.id;
+  if (tabId == null) return null;
+  const auth = await getAuth();
+  const pass = (await chrome.storage.session.get(passKey(tabId)))[passKey(tabId)];
+  if (!auth || !pass || Date.now() > pass.expires || pass.userId !== auth.user.id || tabHost(sender) !== pass.host) return null;
+  return pass;
 }
 
 /** The host of the page in the tab (the top page, even for a message from a payment frame). */
@@ -173,7 +188,7 @@ async function fillData(sender, part, profileId) {
   if (part === 'card') return { card, cardIssue };
   const profile = await profileFor(profileId || pass.profileId || '');
   if (!profile) return null;
-  return { profile, card, cardIssue };
+  return { profile, card, cardIssue, aco: pass.aco && !pass.aco.done ? pass.aco : null };
 }
 
 // What each payment frame in a tab found and filled (so the page can say when the card didn't go in).
@@ -591,6 +606,57 @@ async function sweepLoop() {
   }
 }
 
+// --- Auto-checkout ---------------------------------------------------------------
+// While you have it switched on with items armed, this browser asks your account for runs to start
+// (each answer waits up to 20 seconds for an armed item to drop, so a drop starts within a moment).
+// A run opens the store in a tab of its own, in front of you (payment forms need a page you can
+// see, and you can watch it go): the store page's script does the rest, with the run's limits.
+let acoLooping = false;
+
+async function acoLoop() {
+  if (acoLooping) return;
+  if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return;
+  const st = await getState();
+  if (!st.paired || !st.aco || !st.aco.enabled || !st.aco.armed) return;
+  acoLooping = true;
+  try {
+    for (let quiet = 0; quiet < 3;) {
+      // (An extension call between asks keeps this worker running while it waits.)
+      await chrome.storage.session.set({ acoBeat: Date.now() });
+      const started = Date.now();
+      const res = await api('GET', '/api/ext/aco/next?wait=20');
+      if (res.status !== 200 || !res.body) {
+        quiet += 1; // offline, or the account's membership ended: try again in a moment, then leave it to the alarm
+        await new Promise((r) => setTimeout(r, 3000));
+        continue;
+      }
+      quiet = 0;
+      for (const run of res.body.runs || []) await startRun(run).catch(() => null);
+      if (!res.body.enabled || !res.body.armed) break;
+      if (Date.now() - started < 1000) await new Promise((r) => setTimeout(r, 1000));
+    }
+  } finally {
+    acoLooping = false;
+  }
+}
+
+async function startRun(run) {
+  let tab = null;
+  const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+  if (win && win.id !== undefined && !(await isSweepWindow(win.id))) {
+    tab = await chrome.tabs.create({ windowId: win.id, url: run.url, active: true }).catch(() => null);
+    if (tab) await chrome.windows.update(win.id, { focused: true, state: win.state === 'minimized' ? 'normal' : undefined }).catch(() => null);
+  }
+  if (!tab) tab = ((await chrome.windows.create({ url: run.url, focused: true, type: 'normal' })).tabs || [])[0] || null;
+  const { acoRecent = [] } = await chrome.storage.local.get('acoRecent');
+  await chrome.storage.local.set({ acoRecent: [{ id: run.id, name: run.name, store: run.storeName, at: Date.now() }, ...acoRecent].slice(0, 10) });
+  return tab;
+}
+
+async function isSweepWindow(windowId) {
+  return (await sweepWindow()).windowId === windowId;
+}
+
 // --- the store login monitor -----------------------------------------------------
 // Whether you're signed in at each store (logins.js): seen on the store's pages as you open them,
 // and checked every 10 minutes for the stores whose pages say so. Your account shows it on the
@@ -645,10 +711,12 @@ chrome.runtime.onInstalled.addListener(ensureAlarm);
 chrome.runtime.onStartup.addListener(ensureAlarm);
 ensureAlarm();
 sweepLoop().catch(() => null);
+acoLoop().catch(() => null);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== CHECK_ALARM) return;
   runChecks().catch(() => null);
   sweepLoop().catch(() => null);
+  acoLoop().catch(() => null);
   checkLogins().catch(() => null);
   updateInfo().catch(() => null); // keeps the "NEW" badge on the toolbar icon up to date
 });
@@ -742,7 +810,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!auth || !sender.tab) return null;
         const res = await api('POST', '/api/ext/claim', { code: msg.code });
         if (res.status === 200 && res.body && res.body.ok) {
-          await savePass(sender.tab.id, res.body.host === tabHost(sender) ? res.body.host : tabHost(sender), auth.user.id, res.body.profileId);
+          // (An Auto-checkout run's code: the run's limits ride on this tab's pass, never on the page.)
+          await savePass(sender.tab.id, res.body.host === tabHost(sender) ? res.body.host : tabHost(sender), auth.user.id, res.body.profileId, res.body.aco || null);
           profileFor(res.body.profileId || '').catch(() => null); // for checkout, in a moment
           return res.body;
         }
@@ -766,6 +835,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true };
       }
       case 'fillData': return fillData(sender, msg.part, typeof msg.profileId === 'string' ? msg.profileId : null);
+      case 'acoReport': {
+        // How the Auto-checkout run in this tab is going (only the tab the run's code opened).
+        if (!sender.tab || sender.frameId !== 0) return null;
+        const pass = await passFor(sender);
+        if (!pass || !pass.aco || !pass.aco.runId) return null;
+        const status = String(msg.status || '');
+        const run = { ...pass.aco };
+        if (status === 'checkout') {
+          if (run.atCheckout) return { ok: true }; // (said once, however many pages the checkout has)
+          run.atCheckout = true;
+        }
+        // Kept on the tab's pass: the final button is pressed at most once, and a run that's over
+        // (stopped short, for you to finish) never presses anything again.
+        if (status === 'placing') run.placing = true;
+        if (['ready', 'needs_you', 'failed'].includes(status) && !run.placing) run.done = true;
+        await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: run } });
+        const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, {
+          status, reason: String(msg.reason || ''), message: String(msg.message || '').slice(0, 300),
+          total: typeof msg.total === 'number' ? msg.total : null,
+        });
+        return res.status === 200 ? { ok: true } : { ok: false, status: res.status };
+      }
+      case 'acoInfo': {
+        // The store page: is this tab running an Auto-checkout run (and how far has it got)?
+        if (!sender.tab || sender.frameId !== 0) return null;
+        const pass = await passFor(sender);
+        return pass && pass.aco && !pass.aco.done ? pass.aco : null;
+      }
       case 'cardFrame': {
         // A payment frame: how many card boxes it found, and how many it filled.
         if (!sender.tab || !sender.frameId) return null;
@@ -808,7 +905,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'checkNow':
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
         sweepLoop().catch(() => null);
+        acoLoop().catch(() => null);
         return runChecks();
+      case 'acoListen': {
+        // The dashboard: Auto-checkout was switched on or an item armed — start listening now (not at the next alarm).
+        if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
+        const auth = await getAuth();
+        if (auth) await refreshState(auth);
+        acoLoop().catch(() => null);
+        const st = await getState();
+        return { ok: true, listening: acoLooping, aco: st.aco || null, version: VERSION };
+      }
 
       // From the popup / settings page only
       case 'status':
@@ -859,3 +966,4 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // For tests and the "Check now" button.
 globalThis.mugibotRunChecks = runChecks;
 globalThis.mugibotSweepLoop = sweepLoop;
+globalThis.mugibotAcoLoop = acoLoop;

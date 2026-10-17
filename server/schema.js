@@ -105,8 +105,14 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
     profileId: str(src.profileId ?? src.profile_id, 40) || null,
     monitor: bool(src.monitor, true),
     announce: isAdmin ? bool(src.announce, false) : !!(existing && existing.announce),
+    // Auto-checkout (docs/AUTO-CHECKOUT.md): bought by itself when it drops, never above its max price.
+    aco: bool(src.aco, false),
   };
   if (out.price === null && input && input.price === undefined && existing) out.price = existing.price;
+  if (out.aco) {
+    if (!r || !r.flow) throw bad(`Auto-checkout works at stores Mugibot has a checkout for — not ${r ? r.name : 'this store'} yet`);
+    if (out.maxPrice === null) throw bad('Set a max price to auto-checkout this item: Mugibot never pays more than that');
+  }
   return out;
 }
 
@@ -151,6 +157,38 @@ export function profiles(input, limit = 5) {
   }
   const defaultId = out.some((p) => p.id === input.defaultId) ? input.defaultId : out[0].id;
   return { profiles: out, defaultId };
+}
+
+// --- Auto-checkout ---------------------------------------------------------------
+// The member's own switch and limits (docs/AUTO-CHECKOUT.md). Nothing is bought automatically
+// until they switch it on and agree; each item is armed on its own, with its own max price.
+export const DEFAULT_ACO = {
+  enabled: false,
+  agreedAt: null, // when they agreed that Mugibot may place orders with their saved card
+  mode: 'place', // 'place': press the final button; 'fill': fill checkout in and stop there for them
+  maxOrder: 400, // the most one order may cost, delivery included
+  perDay: 2, // orders a day (24 hours)
+  spendPerDay: 600, // dollars a day
+  signedInOnly: false, // only at stores this browser is signed in to
+};
+
+export function acoSettings(input, existing = DEFAULT_ACO, now = Date.now()) {
+  const src = input || {};
+  const a = { ...DEFAULT_ACO, ...existing, ...src };
+  const out = {
+    enabled: bool(a.enabled, false),
+    agreedAt: (existing && existing.agreedAt) || null,
+    mode: a.mode === 'fill' ? 'fill' : 'place',
+    maxOrder: num(a.maxOrder, { min: 1, max: 10000, def: DEFAULT_ACO.maxOrder }),
+    perDay: num(a.perDay, { min: 1, max: 10, def: DEFAULT_ACO.perDay, int: true }),
+    spendPerDay: num(a.spendPerDay, { min: 1, max: 20000, def: DEFAULT_ACO.spendPerDay }),
+    signedInOnly: bool(a.signedInOnly, false),
+  };
+  if (out.enabled && !out.agreedAt) {
+    if (src.agree !== true) throw bad('Tick the box to agree that Mugibot may check out by itself with your saved card, within your limits');
+    out.agreedAt = now;
+  }
+  return out;
 }
 
 // --- Alerts --------------------------------------------------------------------
