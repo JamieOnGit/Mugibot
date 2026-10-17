@@ -73,7 +73,8 @@ export function register(router, ctx) {
       browserChecks: settings.browserChecks,
       browserIntervalSeconds: cfg.monitor.browserIntervalSeconds,
       // Auto-checkout: switched on, with items armed — this browser listens for runs.
-      aco: { enabled: ctx.aco.settings(req.user.id).enabled, armed: ctx.aco.armedCount(req.user.id) },
+      // (pending: runs waiting to start — a Trigger ACO test, for one, whose item needn't be armed.)
+      aco: { enabled: ctx.aco.settings(req.user.id).enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id) },
     };
   }, { auth: 'device' });
 
@@ -156,7 +157,7 @@ export function register(router, ctx) {
     res.on('close', () => { gone = true; });
     const runs = await ctx.aco.next(req.user, req.device, { waitMs, alive: () => !gone && !res.writableEnded });
     const s = ctx.aco.settings(req.user.id);
-    return { runs, enabled: s.enabled, armed: ctx.aco.armedCount(req.user.id) };
+    return { runs, enabled: s.enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id) };
   }, { auth: 'device', entitled: true });
 
   // …and how each run is going: 'checkout' | 'placing' | 'placed' | 'ready' | 'needs_you' | 'failed' (with why).

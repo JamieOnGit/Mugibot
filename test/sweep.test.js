@@ -290,7 +290,7 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   assert.equal(mode('jbhifi'), 'server');
   assert.equal(mode('trainertown'), 'server', 'Trainer Town answers servers');
   assert.equal(mode('kmart'), 'server', "Kmart: from the server, through its search provider");
-  assert.equal(mode('amazon'), 'server');
+  assert.equal(mode('amazon'), 'browser', "Amazon turns servers away (HTTP 503): from an admin's browser");
   assert.equal(mode('bigw'), 'browser', 'stores that refuse servers: from an admin\'s browser');
   assert.equal(mode('demo-kmart'), 'off');
   assert.equal((await boss.put('/api/monitor/sweep', { keywords: '' })).status, 400, 'at least one keyword');
@@ -720,6 +720,8 @@ test("where each store is searched: Kmart moved to the server (a saved 'browser'
     // Settings saved before this update: every store's mode, Kmart's old default among them.
     env.app.repo.setSetting('sweep', { ...saved, modesVersion: undefined, stores: { ...saved.stores, kmart: 'browser' } });
     assert.equal(sw.modeFor(R('kmart')), 'server', 'the old default, saved with the rest, gives way to the new one');
+    env.app.repo.setSetting('sweep', { ...saved, modesVersion: undefined, stores: { ...saved.stores, amazon: 'server' } });
+    assert.equal(sw.modeFor(R('amazon')), 'browser', "Amazon's old default (the server, which it refuses) gives way too");
     // A store's own default isn't saved, so a better default later reaches everyone.
     const r = await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'server', bigw: 'browser' } });
     assert.equal(r.status, 200, r.text);
@@ -752,6 +754,21 @@ test("where each store is searched: Kmart moved to the server (a saved 'browser'
     assert.equal(eb.pageUrl, `${store.url}/ebgames/search?q=${q}`);
     assert.equal(t.storeBase, `${store.url}/bigw`);
     assert.equal(sw.paceFor(R('demo-bigw'), true), 20000);
+    assert.equal(eb.expect, 'json');
+  } finally {
+    await boss.put('/api/monitor/sweep', { stores: saved.stores });
+  }
+  // Amazon: its search page (HTML, not JSON) asked for from inside an Amazon page — from extension 1.11.0.
+  await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, 'demo-amazon': 'browser' } });
+  try {
+    assert.equal(sw.browserDue(env.app.repo.userByUsername('boss'), { version: '1.10.0' }).terms.some((x) => x.store === 'demo-amazon'), false, 'not for an older extension');
+    sw.stat('demo-amazon').browserNext = 0;
+    const amz = sw.browserDue(env.app.repo.userByUsername('boss'), { version: '1.11.0' }).terms.find((x) => x.store === 'demo-amazon');
+    assert.equal(amz.inPage, true);
+    assert.equal(amz.expect, 'html');
+    assert.equal(amz.parser, 'amazon');
+    assert.equal(amz.pageUrl, `${store.url}/amazon`, "Amazon's front page");
+    assert.equal(amz.url, `${store.url}/amazon/s?k=${encodeURIComponent(amz.keyword)}%20tcg&s=date-desc-rank`);
   } finally {
     await boss.put('/api/monitor/sweep', { stores: saved.stores });
   }

@@ -131,6 +131,11 @@ export class Aco {
     return this.db.get('SELECT COUNT(*) AS n FROM items WHERE user_id = :u AND aco = 1', { u: userId }).n;
   }
 
+  /** Runs waiting for a browser to start them (a test run, for one: the item needn't be armed). */
+  pendingCount(userId) {
+    return this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE user_id = :u AND status = 'queued'", { u: userId }).n;
+  }
+
   /** The latest any of this member's browsers saw: 'in' | 'out' | null, for a store. */
   loginStatus(userId, store) {
     let best = null;
@@ -151,20 +156,24 @@ export class Aco {
   // ---------------------------------------------------------------------------
   // A drop: an armed item came in stock (monitor/index.js → alertRestock)
   // ---------------------------------------------------------------------------
-  /** row: the item's database row. info: { price, status, source, manual }. Returns the run, or null. */
+  /**
+   * row: the item's database row. info: { price, status, source, manual, test }. Returns the run, or null.
+   * test: Trigger ACO on the Auto-checkout page — a run now, as if it had dropped, armed or not (the
+   * same limits and checks; its failures don't count towards the 3 a day).
+   */
   async trigger(row, info = {}) {
-    if (!row || !row.aco) return null;
+    if (!row || (!row.aco && !info.test)) return null;
     const userId = row.user_id;
     const s = this.settings(userId);
     if (!s.enabled) return null;
     const item = this.repo.getItem(userId, row.id);
-    if (!item || !item.aco) return null;
+    if (!item || (!item.aco && !info.test)) return null;
     const now = this.now();
     // One run at a time for an item.
     const running = this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id });
     if (running) return null;
     const price = typeof info.price === 'number' ? info.price : null;
-    const base = { userId, item, price, mode: s.mode, trigger: info.manual ? 'manual' : info.source || '' };
+    const base = { userId, item, price, mode: s.mode, trigger: info.test ? 'test' : info.manual ? 'manual' : info.source || '' };
     const skip = (reason, message) => this.skip(base, reason, message);
 
     const user = this.repo.userById(userId);
@@ -176,8 +185,8 @@ export class Aco {
     if (item.maxPrice === null || item.maxPrice === undefined) return skip('no_max');
     if (price !== null && price > item.maxPrice) return skip('over_max', `${money(price)} is over your max of ${money(item.maxPrice)}.`);
     if (price !== null && price > s.maxOrder) return skip('over_limit', `${money(price)} is over your limit of ${money(s.maxOrder)} an order.`);
-    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND created_at > :since", { i: item.id, since: now - DAY }).n;
-    if (fails >= MAX_FAILS) {
+    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND trigger != 'test' AND created_at > :since", { i: item.id, since: now - DAY }).n;
+    if (fails >= MAX_FAILS && !info.test) {
       this.disarm(userId, item.id);
       return skip('too_many_failures', 'Arm it again to keep trying.');
     }
@@ -186,17 +195,35 @@ export class Aco {
     if (s.mode === 'place' && day.orders >= s.perDay) return skip('daily_orders', `${day.orders} of ${s.perDay} today.`);
     if (s.mode === 'place' && day.spent + (price ?? item.maxPrice) > s.spendPerDay) return skip('daily_spend', `${money(day.spent)} of ${money(s.spendPerDay)} spent today.`);
     if (s.signedInOnly && this.loginStatus(userId, item.store) !== 'in') return skip('signed_out', `Sign in at ${r.name} in the browser with the extension.`);
+    // Stores that only check out signed in (Amazon, Premium Bandai): not while you're seen signed out there.
+    if (r.account && r.account.required && this.loginStatus(userId, item.store) === 'out') return skip('signed_out', `${r.name} only checks out signed in — sign in there in the browser with the extension.`);
     if (!this.repo.listDevices(userId).length) return skip('no_browser', 'Connect the extension in the browser you keep open.');
 
     const run = this.create(base, 'queued', '', `Dropped at ${r.name}${price !== null ? ` for ${money(price)}` : ''} — waiting for your browser to check out.`);
     this.wake(userId); // first: every second counts in a drop
     await this.notifier.notify(userId, {
       type: 'aco', level: 'urgent', channel: 'aco',
-      title: `🤖 Auto-checkout started: ${item.name}`,
+      title: `🤖 Auto-checkout ${info.test ? 'test ' : ''}started: ${item.name}`,
       message: `${r.name}${price !== null ? ` · ${money(price)}` : ''}\n${s.mode === 'place' ? 'Your browser is checking out now, and will place the order.' : 'Your browser is filling in checkout now, and will stop at the final button for you.'}`,
       name: item.name, sku: item.sku, url: item.url, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
     });
     return toRun(run);
+  }
+
+  /** Trigger ACO: a test run for one of the member's items, now. { run } — or { error } saying why not. */
+  async test(userId, itemId) {
+    const row = this.db.get('SELECT * FROM items WHERE id = :id AND user_id = :u', { id: String(itemId || ''), u: userId });
+    if (!row) return { error: 'not_found' };
+    const item = this.repo.getItem(userId, row.id);
+    const r = this.retailers.get(item.store);
+    if (!r || !r.flow) return { error: `Auto-checkout works at stores Mugibot has a checkout for — not ${r ? r.name : 'this one'} yet` };
+    if (!this.settings(userId).enabled) return { error: 'Switch Auto-checkout on first (above)' };
+    if (item.maxPrice === null || item.maxPrice === undefined) return { error: 'Set a max price for it first: Mugibot never pays more than that' };
+    if (!item.url) return { error: "Its product page isn't known yet — paste its link into the item" };
+    if (this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return { error: 'It\'s already checking out — wait for that run to finish' };
+    const price = typeof item.lastPrice === 'number' ? item.lastPrice : typeof item.price === 'number' ? item.price : null;
+    const run = await this.trigger(row, { price, test: true });
+    return run ? { run } : { error: "Auto-checkout didn't start" };
   }
 
   create(base, status, reason, message) {
@@ -272,7 +299,7 @@ export class Aco {
     for (const row of rows) {
       if (!alive()) break;
       const item = row.item_id ? this.repo.getItem(user.id, row.item_id) : null;
-      if (!item || !item.aco || !item.url) {
+      if (!item || (!item.aco && row.trigger !== 'test') || !item.url) {
         // Switched off (or removed) before a browser picked it up: it didn't start, and isn't a failure.
         this.finish(user.id, row, 'expired', 'disarmed', '').catch(() => null);
         continue;

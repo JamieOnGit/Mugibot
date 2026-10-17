@@ -270,7 +270,7 @@ export function parsePBandai(text, { base, storeBase } = {}) {
 // in two parts (the brand, then the rest: "Pokémon" + "TCG: 30th Celebration Elite Trainer Box").
 const AMAZON_BLOCK_RE = /api-services-support@amazon\.com|\/errors\/validateCaptcha|Type the characters you see in this image/i;
 
-export function parseAmazon(html, { base } = {}) {
+export function parseAmazon(html, { base, storeBase } = {}) {
   const s = String(html || '');
   if (AMAZON_BLOCK_RE.test(s)) return { products: [], problem: 'blocked' };
   const problem = pageProblem(s);
@@ -279,8 +279,9 @@ export function parseAmazon(html, { base } = {}) {
   const cls = (n) => String((n.attrs && n.attrs.class) || '');
   const results = findAll(doc, (n) => n.attrs && n.attrs['data-component-type'] === 's-search-result' && /^[A-Z0-9]{10}$/.test(n.attrs['data-asin'] || ''));
   if (!results.length) return { products: [], problem: /s-main-slot|s-search-results/.test(s) ? 'empty' : 'layout' };
+  // Product links on the store's own address (the dummy store keeps Amazon's copy under /amazon).
   let origin = 'https://www.amazon.com.au';
-  try { origin = new URL(base).origin; } catch { /* default */ }
+  try { origin = storeBase ? String(storeBase).replace(/\/+$/, '') : new URL(base).origin; } catch { /* default */ }
   const products = [];
   for (const t of results) {
     const asin = t.attrs['data-asin'];

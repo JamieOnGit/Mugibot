@@ -663,16 +663,44 @@ details.menu[open] > summary { background: var(--surface-2); }
 .aco-switch-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
 .aco-agree { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); font-weight: 500; font-size: 14px; }
 .aco-checks li { align-items: baseline; }
-.aco-items, .aco-runs { list-style: none; margin: 8px 0 0; padding: 0; }
-.aco-item { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-top: 1px solid var(--line); flex-wrap: wrap; }
-.aco-item:first-child { border-top: 0; }
-.aco-item .info { flex: 1 1 260px; min-width: 0; }
+.aco-runs { list-style: none; margin: 8px 0 0; padding: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* Armed items: a table, 10 to a page */
+.aco-items-tools { display: flex; align-items: center; gap: 10px; }
+.aco-items-tools select { width: auto; padding: 6px 10px; font-size: 14px; }
+.aco-table { margin-top: 8px; }
+.aco-table th, .aco-table td { vertical-align: middle; }
+.aco-table td.sw { width: 56px; }
+.aco-table td.info { min-width: 220px; }
+.aco-table td.signin, .aco-table td.act { white-space: nowrap; }
+.aco-table td.max { width: 120px; }
+.aco-table td.act { text-align: right; }
+.aco-table tr.empty td { color: var(--muted); padding: 14px 10px; }
 .aco-item .name { font-weight: 600; }
 .aco-item .meta { color: var(--muted); font-size: 13px; }
 .aco-item.armed .name::after { content: ' · armed'; color: var(--ok); font-weight: 600; font-size: 12.5px; }
 .aco-last.ok { color: var(--ok); } .aco-last.warn { color: var(--warn); } .aco-last.err { color: var(--err); }
 .aco-max-wrap { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; font-weight: 600; color: var(--muted); }
 .aco-max { width: 96px; padding: 6px 8px; }
+.aco-test { white-space: nowrap; }
+.pager { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.pager .pg { min-width: 34px; }
+.pager .pg.on { background: var(--brand); border-color: var(--brand); color: var(--brand-fg); }
+.pager .pg-sum { margin-left: auto; }
+@media (max-width: 640px) {
+  /* Each item in two lines: switch, name and Trigger ACO; then sign-in and max price. */
+  .aco-table thead { display: none; }
+  .aco-table, .aco-table tbody { display: block; }
+  .aco-table tr.aco-item { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 8px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .aco-table tr.aco-item td { border: 0; padding: 0; width: auto; }
+  .aco-table td.sw { grid-column: 1; grid-row: 1; align-self: start; }
+  .aco-table td.info { grid-column: 2; grid-row: 1; min-width: 0; }
+  .aco-table td.act { grid-column: 3; grid-row: 1; align-self: start; }
+  .aco-table td.signin { grid-column: 2; grid-row: 2; }
+  .aco-table td.max { grid-column: 3; grid-row: 2; }
+  .aco-table tr.empty, .aco-table tr.empty td { display: block; }
+  .pager .pg-sum { margin-left: 0; width: 100%; }
+}
 .aco-run { border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--surface); }
 .aco-run.st-placed { border-left-color: var(--ok); }
 .aco-run.st-needs_you, .aco-run.st-ready { border-left-color: var(--warn); }

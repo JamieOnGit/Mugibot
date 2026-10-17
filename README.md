@@ -46,12 +46,12 @@ community. Built on TCGCopBot's working Kmart flow.
   drop**, a 🟢 **restock** or a 📉 **price drop**: in the dashboard, in your
   Discord channels (image, store, price, stock and a ⚡ Buy button) and to
   every member watching that SKU. Target, JB Hi-Fi, Toys"R"Us, Trainer Town
-  (each game's whole collection), Kmart (through its search provider), Amazon
-  AU, The Games Cube and Gamerholic (its newest products) are searched from the
-  server; BIG W and Pokémon Center and Premium Bandai (their pages opened and
-  read once they have built their product lists), and EB Games (its own search
-  data, asked for from inside its page) from an admin's browser with the
-  extension. Admins can also monitor single products. Each channel
+  (each game's whole collection), Kmart (through its search provider), The Games
+  Cube and Gamerholic (its newest products) are searched from the server; BIG W
+  and Pokémon Center and Premium Bandai (their pages opened and read once they
+  have built their product lists), and EB Games and Amazon AU (asked for from
+  inside one of their pages; both turn servers away) from an admin's browser
+  with the extension. Admins can also monitor single products. Each channel
   gets what its rule asks for (by category, store, kind or keyword), and one
   button sets up a channel per store and game (`kmart-pokemon`,
   `bigw-one-piece`…, `premium-bandai`, `pokemon-center`, and `misc-retailers`
@@ -237,7 +237,13 @@ npm test
   - the day's limits, and the "stop at the final button" mode;
   - runs that stall, and other members' browsers kept out;
   - at the dummy Kmart and Target: Target's upsell pop-up closed, the total
-    over the limit, another item in the bag, a declined card and a bank's check.
+    over the limit, another item in the bag, a declined card and a bank's check;
+  - an add the store didn't take (the empty bag noticed, Add pressed once more,
+    then it says why);
+  - Trigger ACO (a test run now, from the dashboard), and stores that only sell
+    signed in (Amazon).
+- **Amazon sweeps from an admin's browser:** its search page asked for from inside
+  an Amazon page (the dummy Amazon gives servers HTTP 503, like the real one).
 - **Website in a browser:** every dashboard and admin tab, including the
   Monitor tab (live alerts, live sweeps' health and settings, product page with
   price chart, alert rules, light and dark themes), phone-sized screens, no

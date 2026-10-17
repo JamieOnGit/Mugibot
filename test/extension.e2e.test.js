@@ -319,6 +319,26 @@ test("when the store won't add it, Mugibot says so and doesn't open an empty bag
   await dash.close();
 });
 
+test("Kmart showing nothing after Add, and not taking the first press: checkout sends the empty bag back, so Add is pressed again, then on to checkout", async () => {
+  // What happened at kmart.com.au: no count on the bag link and no "Added" message — the page only
+  // looked busy — and the add hadn't gone through, so Kmart's checkout opened the bag, empty.
+  const S = store.shop('kmart');
+  S.quiet = true;
+  S.refuseAdds = 1;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 60000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['43818587', 1]], 'in the bag, once');
+  assert.deepEqual(S.bagViews, [0], 'the empty bag Kmart showed, once — then back to the product');
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /the bag was empty — pressing Add again/.test(e.message)));
+  assert.equal(ordersPlaced(), 0);
+  await shop.close();
+  await dash.close();
+});
+
 test('Kmart with the card in a payment-provider frame (Adyen-style)', async () => {
   store.state.cardInIframe = true;
   await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
@@ -759,6 +779,41 @@ test("EB Games: its search JSON, asked for from inside an EB Games page in the s
   }
 });
 
+test("Amazon: its search page, asked for from inside an Amazon page in the sweep window (Amazon turns servers away with HTTP 503)", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-amazon': 'browser' } }, null);
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    // What Mugibot's server gets from Amazon's search.
+    const server = await fetch(`${store.url}/amazon/s?k=pokemon`, { headers: { 'user-agent': 'Mugibot/1.0' } });
+    assert.equal(server.status, 503);
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => env.app.catalog.productFor('demo-amazon', 'B0MGBTEST1'), { timeout: 30000, message: 'Amazon products from its search page, read in the browser' });
+    const bundle = env.app.catalog.productFor('demo-amazon', 'B0MGBTEST1');
+    assert.equal(bundle.status, 'in_stock');
+    assert.equal(bundle.price, 59);
+    assert.match(bundle.url, /\/amazon\/dp\/B0MGBTEST1$/);
+    await waitFor(() => env.app.catalog.productFor('demo-amazon', 'B0MGBTEST2'), { message: 'the unavailable one too' });
+    assert.equal(env.app.catalog.productFor('demo-amazon', 'B0MGBTEST2').status, 'out_of_stock');
+    const searches = () => store.state.requests.filter((x) => x.path === '/amazon/s' && /Chrome|Mozilla/.test(x.ua));
+    const asked = searches();
+    assert.ok(asked.length >= 1, "asked by the browser, from Amazon's page");
+    assert.equal(sweeper.health().find((s) => s.store === 'demo-amazon').terms[0].source, 'browser');
+    // A search page (not JSON) isn't mistaken for a bot check: the next search asks again from the same page.
+    const fronts = () => store.state.requests.filter((x) => /^\/amazon\/?$/.test(x.path)).length;
+    const before = fronts();
+    const n = asked.length;
+    sweeper.sweepNow();
+    await waitFor(() => searches().length > n, { timeout: 30000, message: 'the next search' });
+    assert.equal(fronts(), before, "Amazon's page stays open — no reload for each search");
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: off }, null);
+  }
+});
+
 test("BIG W: products the page downloaded but hasn't drawn (a page in a hidden window) still count", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;
@@ -1071,6 +1126,26 @@ test("🤖 Auto-checkout when the card is declined, or your bank wants you to co
   await closeStorePages('kmart');
 });
 
+test("🤖 Auto-checkout at a Kmart that won't add it: no blind trip to checkout — it tries Add twice, then says so (with what the page said) and buys nothing", async () => {
+  const S = store.shop('kmart');
+  S.quiet = true;
+  S.refuseAdds = true;
+  const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB');
+  await browserApi('PUT', `/api/items/${it.id}`, { aco: true });
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => ['failed', 'needs_you', 'placed'].includes((await lastRun()).status), { timeout: 60000, message: 'the run over' });
+  const run = await lastRun();
+  assert.equal(run.status, 'failed');
+  assert.equal(run.reason, 'not_added');
+  assert.match(run.message, /Something went wrong/, "what Kmart's page said");
+  assert.equal(S.orders.length, 0);
+  assert.equal(S.cart.length, 0);
+  assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB').aco, true, 'never got to the final button: still armed');
+  await closeStorePages('kmart');
+  await browserApi('PUT', `/api/items/${it.id}`, { aco: false });
+});
+
 test('🤖 Auto-checkout at Target: the "Often Bought Together" pop-up is closed with its ✕ (nothing else added), then the order is placed', async () => {
   await useItems([{ url: store.productUrl('target', '71234567'), name: 'ACO Target ETB', aco: true, maxPrice: 90 }]);
   await acoListen();
@@ -1100,6 +1175,29 @@ test('🤖 Auto-checkout set to stop at the final button: fills checkout in and 
   assert.match(await panel(page).textContent(), /review everything and press "Checkout securely" yourself/);
   assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO fill').aco, false, 'filled in once: armed again only by you');
   await closeStorePages('kmart');
+  await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
+  await useItems([]);
+});
+
+test("🤖 Trigger ACO on the Auto-checkout page: a test run now, for an item that isn't armed — this browser opens the store and checks out (here, stopping at the final button)", async () => {
+  await browserApi('PUT', '/api/aco', { enabled: true, mode: 'fill' });
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO test run', maxPrice: 120 }]);
+  const dash = await ctx.newPage();
+  await dash.goto(`${env.url}/app#aco`);
+  const row = dash.locator('#aco-items tr.aco-item', { hasText: 'ACO test run' });
+  await row.waitFor();
+  dash.once('dialog', (d) => d.accept());
+  await row.locator('.aco-test').click();
+  await waitFor(async () => (await lastRun()).status === 'ready', { timeout: 45000, message: 'the test run filled in, waiting for you' });
+  const run = await lastRun();
+  assert.equal(run.trigger, 'test');
+  assert.deepEqual(run.steps.map((x) => x.status), ['queued', 'sent', 'started', 'checkout', 'ready']);
+  assert.equal(store.shop('kmart').orders.length, 0, 'not pressed (stop at the final button)');
+  assert.ok(ctx.pages().some((pg) => /\/kmart\/checkout$/.test(pg.url())), 'the checkout left open');
+  assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO test run').aco, false, 'still not armed');
+  await dash.waitForFunction(() => /test run \(Trigger ACO\)/.test(document.querySelector('#aco-runs').textContent));
+  await closeStorePages('kmart');
+  await dash.close();
   await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
   await useItems([]);
 });

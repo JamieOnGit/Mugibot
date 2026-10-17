@@ -31,10 +31,10 @@ same products, the same alerts, the same ⚡ Buy.
 | Toys"R"Us | Mugibot's server | Same as JB Hi-Fi (also a Shopify store) |
 | Trainer Town | Mugibot's server | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi). At most one read every 15 seconds: reading the whole collection every 5 seconds made Shopify answer **HTTP 429** (too many requests) |
 | Kmart | Mugibot's server | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online |
-| Amazon AU | Mugibot's server | Amazon's search, newest first (2 pages of 48), with "tcg" added to each keyword. At most one search every 20 seconds |
 | The Games Cube | Mugibot's server | Its search pages (CrystalCommerce, made on the server): a tile per product with each option's stock and price, up to 4 pages of 25–30. Pre-orders are the ones in its "… Pre-Orders" categories. The cards it buys from customers (its buylist) are left out |
 | Gamerholic | Mugibot's server | Its **newest 100 products** (Shopify's product list, newest first, every option's stock), for every keyword: Gamerholic lists hundreds of products a day, so a new drop shows up there the moment it's listed. At most one read every 15 seconds |
 | BIG W | **An admin's browser** (the extension) | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list — or, if the page has downloaded its products but not drawn them (pages in a minimised window may not), the product data it downloaded |
+| Amazon AU | **An admin's browser** (the extension, 1.11.0 or later) | Amazon's search page, newest first (2 pages of 48), with "tcg" added to each keyword — asked for from inside an Amazon page in the extension's window. Amazon turns Mugibot's server away (**HTTP 503**, "An error occurred"), so nothing came through from the server. At most one search every 20 seconds |
 | EB Games | **An admin's browser** (the extension) | EB Games' own search data (the JSON its search page asks for: every product's code, price, picture, stock, pre-order and release date), newest first, 2 pages — asked for from inside an EB Games page in the extension's window |
 | Zing | Off | zingpopculture.com.au now sends every visitor to EB Games, so EB Games' sweeps cover it. An admin can switch it back on if Zing's own site returns |
 | Pokémon Center (Australia) | **An admin's browser** (the extension, 1.8.1 or later) | Its search page (`/en-au/search/<keyword>`, 32 a page), opened in the extension's window and read once it has built its product list, like BIG W's. Its bot check (Imperva) may reload the page first: the extension waits for it. At most one search every 30 seconds |
@@ -76,7 +76,9 @@ block). Now:
   tab, reused for every search; closing it is fine, the next search opens it
   again), waits until the products are on the page, and reads them. The
   Mugibot panel doesn't appear in that window.
-- **Amazon AU** wasn't swept at all before. Amazon's search results don't say
+- **Amazon AU** is searched from an admin's browser (since extension 1.11.0):
+  Amazon answers Mugibot's server with **HTTP 503** ("An error occurred"), so
+  searching it from the server found nothing. Amazon's search results don't say
   who sells each product, so marketplace sellers (often at high prices) are
   included there: put any you don't want on the **blacklist** (below).
 
@@ -311,7 +313,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | You see | Do this |
 |---|---|
 | **The store refused the search (HTTP 429)** — "it asked to wait 60 s" | The store is asking Mugibot to slow down. It waits what the store asked, then tries again. Trainer Town now reads its collections at most every 15 s, which should stop it; if it keeps happening, press **↻ Reset** on the store (it restarts gently, at a third of the pace for 10 minutes). |
-| **HTTP 503** at Amazon AU (or another store), again and again | **↻ Reset** the store. If it's still refused after that, open its details and press **Search it from an admin's browser** (or set it in Settings → Stores), and keep an admin's browser with the extension open. Don't make the searches more frequent: that makes it worse. |
+| **HTTP 503** at a store, again and again (Amazon AU did this to the server, so it's now searched from an admin's browser) | **↻ Reset** the store. If it's still refused after that, open its details and press **Search it from an admin's browser** (or set it in Settings → Stores), and keep an admin's browser with the extension open. Don't make the searches more frequent: that makes it worse. |
 | A store's status says **refused** (server) | The store is refusing Mugibot's server. Try **↻ Reset** first; if that doesn't help, set it to **Admin's browser** in Monitor → Settings → Stores, and keep an admin's browser with the extension open. |
 | **Waiting for an admin's browser** (BIG W, EB Games: nothing coming through) | No admin's browser is sweeping. Open Chrome with the extension (1.7.0 or later — Extension tab → Download, or the Chrome Web Store copy) connected to an **admin** account, and leave it open. The popup should show **Live sweeps from this browser** within 30 seconds, and a small minimised window appears with a BIG W and an EB Games tab: leave it be. |
 | **refused the admin's browser** | Open that store's website in the admin's browser once (so it gets the store's cookies), then wait. It tries again on its own, waiting longer each time. |

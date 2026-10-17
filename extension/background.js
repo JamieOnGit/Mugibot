@@ -478,8 +478,10 @@ async function askFromStorePage(t) {
   const ask = () => inPage(tab.id, askInPage, [[t.url], t.headers || null]).catch(() => null);
   let [res] = (await ask()) || [];
   // The store's bot check (a refusal, or its page where the JSON should be): a real visit to the
-  // store's page passes it, then ask again.
-  if (!res || res.status === 403 || res.status === 503 || (res.status === 200 && !/^\s*[[{]/.test(res.text || ''))) {
+  // store's page passes it, then ask again. (A store that answers with a page — Amazon's search — is
+  // judged by its reader instead.)
+  const wrongKind = t.expect !== 'html' && res && res.status === 200 && !/^\s*[[{]/.test(res.text || '');
+  if (!res || res.status === 403 || res.status === 503 || wrongKind) {
     await openIn(tab.id, t.pageUrl || origin);
     [res] = (await ask()) || [];
   }
@@ -607,7 +609,7 @@ async function sweepLoop() {
 }
 
 // --- Auto-checkout ---------------------------------------------------------------
-// While you have it switched on with items armed, this browser asks your account for runs to start
+// While you have it switched on with items armed (or a Trigger ACO test waiting), this browser asks your account for runs to start
 // (each answer waits up to 20 seconds for an armed item to drop, so a drop starts within a moment).
 // A run opens the store in a tab of its own, in front of you (payment forms need a page you can
 // see, and you can watch it go): the store page's script does the rest, with the run's limits.
@@ -617,7 +619,7 @@ async function acoLoop() {
   if (acoLooping) return;
   if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return;
   const st = await getState();
-  if (!st.paired || !st.aco || !st.aco.enabled || !st.aco.armed) return;
+  if (!st.paired || !st.aco || !st.aco.enabled || (!st.aco.armed && !st.aco.pending)) return;
   acoLooping = true;
   try {
     for (let quiet = 0; quiet < 3;) {
@@ -632,7 +634,7 @@ async function acoLoop() {
       }
       quiet = 0;
       for (const run of res.body.runs || []) await startRun(run).catch(() => null);
-      if (!res.body.enabled || !res.body.armed) break;
+      if (!res.body.enabled || (!res.body.armed && !res.body.pending)) break;
       if (Date.now() - started < 1000) await new Promise((r) => setTimeout(r, 1000));
     }
   } finally {
@@ -908,7 +910,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         acoLoop().catch(() => null);
         return runChecks();
       case 'acoListen': {
-        // The dashboard: Auto-checkout was switched on or an item armed — start listening now (not at the next alarm).
+        // The dashboard: Auto-checkout was switched on, an item armed or a test run started — listen now (not at the next alarm).
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
         const auth = await getAuth();
         if (auth) await refreshState(auth);

@@ -90,7 +90,7 @@ test('arming an item needs a max price, at a store Mugibot can check out at', as
   // The extension hears it's armed (and starts listening).
   ashBrowser = await Device.pair(env.url, ash, 'Ash laptop');
   const ext = (await ashBrowser.call('GET', '/api/ext/items')).body;
-  assert.deepEqual(ext.aco, { enabled: true, armed: 1 });
+  assert.deepEqual(ext.aco, { enabled: true, armed: 1, pending: 0 });
   assert.equal(ext.items.find((x) => x.id === it.id).aco, true);
 });
 
@@ -317,4 +317,66 @@ test("another member's browser can't see, pick up or report your runs", async ()
   assert.equal(lastRun(item.id).status, 'started');
   await report(run.id, { status: 'failed', reason: 'stopped' });
   assert.equal(lastRun(item.id).status, 'failed');
+});
+
+test('Trigger ACO: a test run now, armed or not — the same limits, its failures not counted, and never two at once', async () => {
+  await ash.put('/api/aco', { enabled: true, mode: 'place', perDay: 10, spendPerDay: 5000, maxOrder: 400, signedInOnly: false });
+  const item = ashItems[6]; // Elite Trainer Box, $100
+  await ash.put(`/api/items/${item.id}`, { aco: false, maxPrice: null });
+  // Not without a max price, nor at another member's item.
+  let r = await ash.post(`/api/aco/test/${item.id}`);
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /max price/);
+  const theirs = (await misty.get('/api/items')).body.items[0];
+  assert.equal((await ash.post(`/api/aco/test/${theirs.id}`)).status, 404);
+  await ash.put(`/api/items/${item.id}`, { maxPrice: 110 });
+  r = await ash.post(`/api/aco/test/${item.id}`);
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.run.status, 'queued');
+  assert.equal(r.body.run.trigger, 'test');
+  assert.equal(r.body.run.price, 100, 'at its last known price');
+  assert.equal(itemRow(item.id).aco, 0, "a test doesn't arm it");
+  assert.ok((await events(ash)).some((e) => /Auto-checkout test started: Elite Trainer Box/.test(e.message)));
+  // The browser listens while it waits (nothing need be armed), and picks it up.
+  assert.equal((await ashBrowser.call('GET', '/api/ext/items')).body.aco.pending, 1);
+  assert.equal((await ash.post(`/api/aco/test/${item.id}`)).body.error, "It's already checking out — wait for that run to finish");
+  const { run, claim } = await pickUp();
+  assert.equal(run.id, r.body.run.id, 'picked up although the item isn\'t armed');
+  assert.equal(claim.aco.maxTotal, 150);
+  // Its failures don't count towards the 3 a day.
+  await report(run.id, { status: 'failed', reason: 'sold_out' });
+  for (let i = 0; i < 3; i += 1) {
+    const t = (await ash.post(`/api/aco/test/${item.id}`)).body.run;
+    assert.equal(t.status, 'queued', `test ${i + 2} starts`);
+    const picked = await pickUp();
+    await report(picked.run.id, { status: 'failed', reason: 'not_added' });
+  }
+  await ash.put(`/api/items/${item.id}`, { aco: true });
+  await drop(item.id, 100);
+  assert.equal(lastRun(item.id).status, 'queued', 'a real drop still starts: test failures are not counted');
+  await report(lastRun(item.id).id, { status: 'failed', reason: 'stopped' }).catch(() => null);
+  env.app.db.run("UPDATE aco_runs SET status = 'expired' WHERE item_id = :i AND status IN ('queued', 'sent', 'started')", { i: item.id });
+  // The same limits: over the max, or Auto-checkout off.
+  await ash.put(`/api/items/${item.id}`, { aco: false, maxPrice: 50 });
+  r = await ash.post(`/api/aco/test/${item.id}`);
+  assert.equal(r.body.run.status, 'skipped');
+  assert.equal(r.body.run.reason, 'over_max');
+  await ash.put('/api/aco', { enabled: false });
+  r = await ash.post(`/api/aco/test/${item.id}`);
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /Switch Auto-checkout on/);
+  await ash.put('/api/aco', { enabled: true });
+});
+
+test('stores that only check out signed in (Amazon): not while the browser says you are signed out there', async () => {
+  const amazon = (await ash.post('/api/items', { url: 'https://www.amazon.com.au/dp/B0ABCDEF12', name: 'Amazon ETB', maxPrice: 120, aco: true, price: 90 })).body;
+  assert.equal(amazon.aco, true, amazon.error);
+  const deviceId = (await ash.get('/api/devices')).body.devices[0].id;
+  env.app.repo.setDeviceLogins(ash.user.id, deviceId, { amazon: { status: 'out', at: Date.now(), how: 'check' } });
+  await drop(amazon.id, 90);
+  assert.equal(lastRun(amazon.id).reason, 'signed_out');
+  assert.match(lastRun(amazon.id).message, /Amazon AU only checks out signed in/);
+  env.app.repo.setDeviceLogins(ash.user.id, deviceId, { amazon: { status: 'in', at: Date.now(), how: 'check' } });
+  await drop(amazon.id, 90);
+  assert.equal(lastRun(amazon.id).status, 'queued');
 });
