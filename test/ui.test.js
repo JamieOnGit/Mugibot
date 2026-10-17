@@ -63,13 +63,18 @@ test('landing page: pitch, membership price, honest guardrails', async () => {
   await page.waitForURL(/\/signup$/);
 });
 
-test('sign up with a username and land on the watchlist', async () => {
+test('sign up with a username and land on the Monitor page, with your watchlist a tab away', async () => {
   await page.fill('#su-username', 'Owner');
   await page.fill('#su-password', PASSWORD);
   await page.check('#su-terms');
   await page.click('#signup button[type=submit]');
   await page.waitForURL(/\/app\?welcome=1/);
+  await page.waitForSelector('[data-panel="monitor"]:not([hidden]) #pp-tracked:not([hidden])');
+  assert.equal(await page.isVisible('a[data-tab="watch"]'), false, 'no Watchlist tab of its own');
+  assert.match(await page.textContent('#pt-watch'), /My watchlist\s*7/);
+  await page.click('#pt-watch');
   await page.waitForSelector('#w-list li[data-id]');
+  assert.equal(await page.evaluate(() => location.hash), '#watch', 'the address follows (a reload comes back here)');
   assert.equal(await page.locator('#w-list li[data-id]').count(), 7);
   assert.match(await page.textContent('#w-list li:first-child'), /Day UPC.*Kmart · SKU 43818648 · \$360\.00.*verified flow/s);
   assert.match(await page.textContent('#ext-status'), /isn't in this browser/);
@@ -161,8 +166,9 @@ test('Checkout details: several addresses, a default, validated; the card stays 
   await page.waitForFunction(() => document.querySelector('#p-1-address1') && document.querySelector('#p-1-address1').value === '9 Pitt St');
   assert.match(await page.textContent('[data-panel="checkout"]'), /never sent to our servers/);
   assert.match(await page.textContent('#card-state'), /Install the extension/);
-  // Items can deliver to a chosen address.
-  await page.click('a[data-tab="watch"]');
+  // Items can deliver to a chosen address (your watchlist: on the Monitor page).
+  await page.click('a[data-tab="monitor"]');
+  await page.click('#pt-watch');
   await page.locator('#w-list li', { hasText: 'Day UPC' }).getByRole('button', { name: 'Edit' }).click();
   await page.waitForFunction(() => document.querySelectorAll('#w-profile option').length === 3);
   await page.selectOption('#w-profile', saved.profiles[0].id);
@@ -199,6 +205,9 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   await page.click('a[data-tab="monitor"]');
   await page.waitForSelector('#m-stats .sn-stat');
   assert.match(await page.textContent('#m-stats'), /Available now\s*0\s*of 0 tracked/);
+  // (The page remembers the list you were on: your watchlist, from the tests before.)
+  assert.equal(await page.getAttribute('#pt-watch', 'aria-selected'), 'true');
+  await page.click('#pt-tracked');
   await page.click('#m-add-toggle');
   await page.fill('#ma-url', 'https://www.kmart.com.au/product/pokemon-tcg-30th-celebration-ultra-premium-collection-43818648/');
   await page.selectOption('#ma-category', 'pokemon');
@@ -327,6 +336,7 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await sw.ingest(target, term, { products: [found('70000001', 'Pokemon TCG: Test Booster Bundle', false, 50), found('70000002', 'Pokemon Plush Pikachu', true, 20)] }, { source: 'server', url, ms: 400 });
   await page.goto(`${env.url}/app#monitor`);
   await page.reload();
+  await page.click('#pt-tracked');
   // The live page: each store with its state and what it's doing; a click shows the details.
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"]');
   assert.match(await page.textContent('#mon-sub'), /Searching \d+ stores every few seconds for pokemon and one piece/);
@@ -574,10 +584,30 @@ test('the ⚡ Buy page from a Discord channel post: adds the SKU and goes', asyn
   assert.ok(env.app.repo.listItems(owner.id).some((x) => x.sku === '312999' && x.name === 'Channel ETB'));
 });
 
-test('Activity and Account tabs', async () => {
+test('Activity (on the Monitor page, in pages) and Account tabs', async () => {
+  const owner = env.app.repo.userByUsername('owner');
+  for (let i = 1; i <= 25; i++) env.app.repo.addEvent(owner.id, { type: 'info', message: `Something that happened (${i})` });
+  // #activity (the old tab's address) opens your activity on the Monitor page.
   await page.goto(`${env.url}/app#activity`);
+  await page.waitForSelector('[data-panel="monitor"]:not([hidden]) #pp-activity:not([hidden]) #feed li');
+  assert.equal(await page.getAttribute('#pt-activity', 'aria-selected'), 'true');
+  assert.equal(await page.isVisible('a[data-tab="activity"]'), false, 'no Activity tab of its own');
+  // 20 to a page, newest first — no endless list: the first thing that happened is on the last page.
+  assert.match(await page.textContent('#feed li:first-child'), /Something that happened \(25\)/);
+  const total = env.app.repo.countEvents(owner.id);
+  assert.ok(total > 20, `enough activity for pages (${total})`);
+  assert.equal(await page.locator('#feed li').count(), 20);
+  assert.match(await page.textContent('#feed-pager'), new RegExp(`1–20 of ${total}`));
+  const pages = Math.ceil(total / 20);
+  await page.click(`#feed-pager button[aria-label="Activity page ${pages}"]`);
   await page.waitForFunction(() => /Welcome to Mugibot/.test(document.querySelector('#feed').textContent));
-  assert.match(await page.textContent('#feed'), /Discord connected/);
+  assert.match(await page.textContent('#feed-pager'), new RegExp(`${(pages - 1) * 20 + 1}–${total} of ${total}`));
+  await page.click('#feed-pager button[aria-label="Activity page 1"]');
+  await page.waitForFunction(() => !/Welcome to Mugibot/.test(document.querySelector('#feed').textContent));
+  assert.equal(await page.locator('#feed li').count(), 20);
+  // A reload stays on the same list.
+  await page.reload();
+  await page.waitForSelector('#pp-activity:not([hidden]) #feed li');
   await page.click('a[data-tab="account"]');
   assert.equal(await page.inputValue('#acct-username'), 'owner');
   await page.fill('#acct-email', 'owner@example.com');
@@ -675,8 +705,8 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   await page.click('#aco-pager button[aria-label="Next page"]');
   assert.equal(await page.locator('#aco-items tr.aco-item').count(), total - 10);
   assert.match(await page.textContent('#aco-items'), /Extra box 6/);
-  await page.click('#aco-pager button[aria-label="Page 1"]');
-  assert.equal(await page.getAttribute('#aco-pager button[aria-label="Page 1"]', 'aria-current'), 'page');
+  await page.click('#aco-pager button[aria-label="Armed items page 1"]');
+  assert.equal(await page.getAttribute('#aco-pager button[aria-label="Armed items page 1"]', 'aria-current'), 'page');
   // Trigger ACO needs Auto-checkout switched on.
   assert.equal(await page.isDisabled('#aco-items tr.aco-item >> nth=0 >> .aco-test'), true);
   assert.match(await page.textContent('#aco-state'), /^Off$/);
@@ -768,8 +798,9 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   await ko.locator('.aco-test').click();
   await page.waitForFunction(() => /already checking out/.test(document.querySelector('#toasts')?.textContent || ''));
   env.app.repo.deleteDevice(owner.id, device.id);
-  // On the watchlist, an armed item says so.
-  await page.click('a[data-tab="watch"]');
+  // On the watchlist (the Monitor page), an armed item says so.
+  await page.click('a[data-tab="monitor"]');
+  await page.click('#pt-watch');
   await page.waitForSelector('#w-list li[data-id]');
   assert.match(await page.textContent(`#w-list li[data-id="${dayItem.id}"]`), /Armed/);
   if (shots) {
@@ -782,6 +813,95 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   env.app.repo.setData(owner.id, 'aco', { ...env.app.aco.settings(owner.id), enabled: false });
 });
 
+test("Monitor page for a member: each store's switch (hidden just for them), ☆ Watch on a tracked product, and never where the searches come from", async () => {
+  const c = await Client.signup(env.url, 'storefan');
+  env.app.repo.updateUser(c.user.id, { plan: 'comped' });
+  for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  const kp = env.app.catalog.upsertProduct({ store: 'kmart', sku: '43899001', url: 'https://www.kmart.com.au/product/switch-test-43899001/', name: 'Pokémon TCG Switch Test Tin' });
+  env.app.catalog.updateProduct(kp.id, { status: 'in_stock', price: 25, sweep_seen_at: Date.now(), sweep_first_at: Date.now(), status_source: 'sweep' });
+  const tp = env.app.catalog.upsertProduct({ store: 'target', sku: '71899002', url: 'https://www.target.com.au/p/switch-test/71899002', name: 'Pokémon TCG Switch Test Box' });
+  env.app.catalog.updateProduct(tp.id, { status: 'in_stock', price: 59, sweep_seen_at: Date.now(), sweep_first_at: Date.now(), status_source: 'sweep' });
+  const fan = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  fan.on('pageerror', (e) => errors.push(e.message));
+  await fan.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
+  await fan.goto(`${env.url}/app#monitor`);
+  await fan.waitForSelector('#sn-channels .sn-chan[data-store="kmart"]');
+  // Where each store is searched from (server, an admin's browser) is for admins: not in the page at all.
+  assert.doesNotMatch(await fan.textContent('#sn-channels'), /admin's browser|server/i);
+  await fan.click('#sn-channels .sn-chan[data-store="kmart"] .st-toggle');
+  assert.doesNotMatch(await fan.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /\bfrom\b/);
+  // Members start at Tracked products: both test products, each with ☆ Watch.
+  await fan.waitForFunction(() => /Switch Test Tin/.test(document.querySelector('#m-products').textContent) && /Switch Test Box/.test(document.querySelector('#m-products').textContent));
+  assert.equal(await fan.getAttribute('#pt-tracked', 'aria-selected'), 'true');
+  // ☆ Watch: on your watchlist (its own checks, DMs and Auto-checkout) — then a ★.
+  await fan.locator('#m-products li.product', { hasText: 'Switch Test Box' }).getByRole('button', { name: 'Watch Pokémon TCG Switch Test Box' }).click();
+  await waitFor(() => env.app.repo.listItems(c.user.id).some((x) => x.store === 'target' && x.sku === '71899002'), { message: 'on the watchlist' });
+  await fan.waitForSelector('#m-products li.product:has-text("Switch Test Box") a.watching');
+  assert.match(await fan.textContent('#pt-watch'), /My watchlist\s*1/);
+  // Kmart off for this member: its switch, its products, and a toast — the monitor carries on for everyone.
+  const sw = fan.locator('#sn-channels .sn-chan[data-store="kmart"] .st-sw');
+  assert.equal(await sw.getAttribute('aria-checked'), 'true');
+  await sw.click();
+  await fan.waitForFunction(() => document.querySelector('#sn-channels .sn-chan[data-store="kmart"] .st-sw').getAttribute('aria-checked') === 'false');
+  assert.match(await fan.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /Off for you/);
+  await fan.waitForFunction(() => !/Switch Test Tin/.test(document.querySelector('#m-products').textContent));
+  assert.match(await fan.textContent('#m-products'), /Switch Test Box/);
+  assert.deepEqual(env.app.repo.getData(c.user.id, 'monitorPrefs').hiddenStores, ['kmart']);
+  // Picking the store in the filter still shows it.
+  await fan.selectOption('#m-store', 'kmart');
+  await fan.waitForFunction(() => /Switch Test Tin/.test(document.querySelector('#m-products').textContent));
+  await fan.selectOption('#m-store', '');
+  // Kept: after a reload it's still off for them; then back on.
+  await fan.reload();
+  await fan.waitForSelector('#sn-channels .sn-chan[data-store="kmart"] .st-sw[aria-checked="false"]');
+  await fan.click('#sn-channels .sn-chan[data-store="kmart"] .st-sw');
+  await fan.waitForSelector('#sn-channels .sn-chan[data-store="kmart"] .st-sw[aria-checked="true"]');
+  await fan.waitForFunction(() => /Switch Test Tin/.test(document.querySelector('#m-products').textContent));
+  assert.deepEqual(env.app.repo.getData(c.user.id, 'monitorPrefs').hiddenStores, []);
+  await fan.close();
+  // An admin's switch: the store's monitoring off for everyone (asked first), and on again.
+  await page.goto(`${env.url}/app#monitor`);
+  await page.waitForSelector('#sn-channels .sn-chan[data-store="target"] .st-sw[aria-checked="true"]');
+  page.once('dialog', (d) => d.accept());
+  await page.click('#sn-channels .sn-chan[data-store="target"] .st-sw');
+  await waitFor(() => env.app.sweeper.modeFor(env.app.retailers.get('target')) === 'off', { message: 'Target off for everyone' });
+  await page.waitForSelector('#sn-channels .sn-chan[data-store="target"] .st-sw[aria-checked="false"]', { timeout: 10000 });
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"]'), /Switched off: not searched/);
+  await page.click('#sn-channels .sn-chan[data-store="target"] .st-sw');
+  await waitFor(() => env.app.sweeper.modeFor(env.app.retailers.get('target')) === 'server', { message: 'Target back on, from where it was' });
+  await page.waitForSelector('#sn-channels .sn-chan[data-store="target"] .st-sw[aria-checked="true"]', { timeout: 10000 });
+});
+
+test('Auto-checkout run history in pages; the card backup on Checkout details', async () => {
+  const owner = env.app.repo.userByUsername('owner');
+  const it = env.app.repo.listItems(owner.id)[0];
+  const t = Date.now();
+  for (let i = 1; i <= 13; i++) {
+    env.app.db.run(`INSERT INTO aco_runs (id, user_id, item_id, store, sku, name, url, price, max_price, mode, trigger, status, reason, message, steps, created_at, updated_at)
+      VALUES (:id, :u, :i, 'kmart', :sku, :name, '', 10, 20, 'place', 'test', 'skipped', 'over_max', '', '[]', :t, :t)`, { id: `acr_page${i}`, u: owner.id, i: it.id, sku: it.sku, name: `Paged run ${i}`, t: t - (13 - i) * 1000 });
+  }
+  await page.goto(`${env.url}/app#aco`);
+  await page.waitForSelector('#aco-runs li.aco-run');
+  const runs = env.app.db.get('SELECT COUNT(*) AS n FROM aco_runs WHERE user_id = :u', { u: owner.id }).n;
+  assert.equal(await page.locator('#aco-runs li.aco-run').count(), 10, '10 to a page, no endless list');
+  assert.match(await page.textContent('#aco-runs-pager'), new RegExp(`1–10 of ${runs}`));
+  assert.match(await page.textContent('#aco-runs li.aco-run:first-child'), /Paged run 13/);
+  await page.click('#aco-runs-pager button[aria-label="Next page"]');
+  assert.match(await page.textContent('#aco-runs-pager'), new RegExp(`11–${Math.min(20, runs)} of ${runs}`));
+  assert.doesNotMatch(await page.textContent('#aco-runs'), /Paged run 13/);
+  assert.match(await page.textContent('[data-panel="aco"]'), /Run history/);
+  // Checkout details: a card backed up in the account (locked in the extension) shows, and can be deleted.
+  env.app.repo.setData(owner.id, 'cardBackup', { v: 1, kdf: 'PBKDF2-SHA256', iterations: 600000, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iv: 'AAAAAAAAAAAAAAAA', ct: 'A'.repeat(48), last4: '4242', brand: 'Visa', expMonth: '12', expYear: '2031', hasCvc: true, savedAt: Date.now() });
+  await page.click('a[data-tab="checkout"]');
+  await page.waitForFunction(() => /Backed up/.test(document.querySelector('#card-backup').textContent));
+  assert.match(await page.textContent('#card-backup'), /Visa •••• 4242 · expires 12\/31 is backed up in your account, locked with your card passphrase/);
+  page.once('dialog', (d) => d.accept());
+  await page.click('#card-unbackup');
+  await page.waitForFunction(() => /Not backed up/.test(document.querySelector('#card-backup').textContent));
+  assert.equal(env.app.repo.getData(owner.id, 'cardBackup', null), null);
+  env.app.db.run("DELETE FROM aco_runs WHERE id LIKE 'acr_page%'");
+});
+
 test('phone-sized screens: no sideways scrolling', async () => {
   const phone = await browser.newPage({ viewport: { width: 375, height: 800 } });
   phone.on('pageerror', (e) => errors.push(e.message));
@@ -792,9 +912,10 @@ test('phone-sized screens: no sideways scrolling', async () => {
   }
   const c = await Client.signup(env.url, 'phoneuser');
   await phone.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
-  for (const tab of ['watch', 'monitor', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account']) {
+  for (const tab of ['watch', 'activity', 'monitor', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account']) {
     await phone.goto(`${env.url}/app#${tab}`);
-    await phone.waitForSelector(`[data-panel="${tab}"]:not([hidden])`);
+    // (#watch and #activity: lists on the Monitor page.)
+    await phone.waitForSelector(`[data-panel="${['watch', 'activity'].includes(tab) ? 'monitor' : tab}"]:not([hidden])`);
     await phone.waitForTimeout(150);
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(overflow <= 1, `#${tab} overflows by ${overflow}px`);

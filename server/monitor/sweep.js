@@ -262,6 +262,11 @@ export class Sweeper {
     if (!s.enabled || !r || !r.sweep || !this.retailers.enabled(r)) return 'off';
     const m = s.stores[r.id];
     if (MODES.includes(m)) return m;
+    return this.defaultMode(r);
+  }
+
+  /** Where a store is searched from unless an admin says otherwise (dummy-store copies: off). */
+  defaultMode(r) {
     return r.demo ? 'off' : r.sweep.from || 'server';
   }
 
@@ -478,7 +483,8 @@ export class Sweeper {
       counts.kept += 1;
       const ev = await this.track(r, p, { status, keyword: term.keyword, baseline, now, vip: !!watch });
       for (const k of ev) counts[k] += 1;
-      if (watch) this.vip.found(watch, [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean));
+      // (Found in the watch's first search: listed already, so armed only if it isn't on sale yet.)
+      if (watch) this.vip.found(watch, [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean), { baseline });
     }
     const out = this.record(r, term, { ok: true, url, source, ms, baseline, total: parsed.total ?? null, ...counts, error: parsed.problem === 'empty' ? 'No products on the page' : '' });
     out.gone = await this.markGone(r, term.keyword, now);
@@ -958,13 +964,15 @@ export class Sweeper {
   }
 
   /** Everything the live monitor shows when it opens: each store, the counters and the latest events. */
-  live() {
+  /** The live monitor's view. offToo: stores switched off as well (admins switch them back on there). */
+  live({ offToo = false } = {}) {
     const now = this.now();
-    const stores = this.stores().filter((x) => x.mode !== 'off').map(({ retailer: r, mode }) => {
+    const stores = this.stores().filter((x) => offToo || x.mode !== 'off').map(({ retailer: r, mode }) => {
       const st = this.stat(r.id);
       const lastOk = [...st.log].reverse().find((x) => x.ok && typeof x.ms === 'number');
       return {
-        id: r.id, name: r.name, realId: r.realId || r.id, mode, from: MODE_LABEL[mode], status: this.statusOf(mode, st, now, r),
+        id: r.id, name: r.name, realId: r.realId || r.id, mode, from: MODE_LABEL[mode], status: mode === 'off' ? 'off' : this.statusOf(mode, st, now, r),
+        defaultMode: this.defaultMode(r),
         searches: st.searches || 0, fails: st.fails, lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastMs: lastOk ? lastOk.ms : null, lastError: st.lastError,
         nextAt: st.nextAt, slowedUntil: st.slowUntil > now ? st.slowUntil : null,
         // The store asked to wait (Retry-After); when it was last reset; its last answer was a refusal.

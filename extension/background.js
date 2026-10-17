@@ -67,6 +67,22 @@ async function api(method, path, body, { token } = {}) {
   return { status: res.status, body: data };
 }
 
+// --- the card's locked backup in your account (vault.js) ------------------------
+async function backupCard(auth, passphrase) {
+  const locked = await Vault.lock(auth.user.id, passphrase);
+  const r = await api('PUT', '/api/ext/card-backup', locked);
+  if (r.status !== 200) throw new Error((r.body && r.body.error) || `Can't reach ${CONFIG.appName} to back up your card`);
+  return r.body.backup;
+}
+
+/** What's backed up in your account (brand, last 4, expiry), null for nothing, or undefined when the server can't be reached. */
+async function cardBackupInfo() {
+  const r = await api('GET', '/api/ext/card-backup');
+  if (r.status !== 200) return undefined;
+  const b = r.body && r.body.backup;
+  return b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, hasCvc: !!b.hasCvc, savedAt: b.savedAt } : null;
+}
+
 async function forget() {
   // The card stays saved (encrypted, under its account) for when that account connects again.
   await chrome.storage.local.remove('auth');
@@ -272,7 +288,7 @@ async function status() {
   const { lastChecks, lastSweeps } = await chrome.storage.local.get(['lastChecks', 'lastSweeps']);
   return {
     paired: true, server: SERVER, appName: CONFIG.appName, version: VERSION, user: still.user, update,
-    online: me.status === 200, entitlement: me.body && me.body.entitlement, card: await Vault.status(still.user.id), lastChecks: lastChecks || null,
+    online: me.status === 200, entitlement: me.body && me.body.entitlement, card: await Vault.status(still.user.id), cardBackup: me.status === 200 ? await cardBackupInfo() : undefined, lastChecks: lastChecks || null,
     lastSweeps: lastSweeps || null, sweeping,
   };
 }
@@ -945,10 +961,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const auth = await getAuth();
         if (!auth) return { error: 'Connect the extension to your account first' };
         try {
-          if (msg.action === 'save') return { status: await Vault.save(auth.user.id, msg.card) };
+          if (msg.action === 'save') {
+            const saved = await Vault.save(auth.user.id, msg.card);
+            // Backed up too (locked with the card passphrase): the backup in your account is the new card.
+            let backupError = null;
+            if (msg.passphrase) await backupCard(auth, msg.passphrase).catch((e) => { backupError = e.message; });
+            return { status: saved, backup: await cardBackupInfo(), backupError };
+          }
           if (msg.action === 'upgrade') return { status: await Vault.upgrade(auth.user.id, msg.passphrase) };
-          if (msg.action === 'remove') { await Vault.remove(auth.user.id); return { status: await Vault.status(auth.user.id) }; }
-          return { status: await Vault.status(auth.user.id) };
+          if (msg.action === 'remove') { await Vault.remove(auth.user.id); return { status: await Vault.status(auth.user.id), backup: await cardBackupInfo() }; }
+          if (msg.action === 'backup') { await backupCard(auth, msg.passphrase); return { status: await Vault.status(auth.user.id), backup: await cardBackupInfo() }; }
+          if (msg.action === 'restore') {
+            const r = await api('GET', '/api/ext/card-backup');
+            if (r.status !== 200) throw new Error((r.body && r.body.error) || `Can't reach ${CONFIG.appName}`);
+            const restored = await Vault.unlock(auth.user.id, r.body.backup, msg.passphrase);
+            return { status: restored, backup: await cardBackupInfo() };
+          }
+          if (msg.action === 'unbackup') {
+            const r = await api('DELETE', '/api/ext/card-backup');
+            if (r.status !== 200) throw new Error((r.body && r.body.error) || `Can't reach ${CONFIG.appName}`);
+            return { status: await Vault.status(auth.user.id), backup: null };
+          }
+          return { status: await Vault.status(auth.user.id), backup: await cardBackupInfo() };
         } catch (e) {
           return { error: e.message };
         }

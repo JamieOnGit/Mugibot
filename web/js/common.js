@@ -99,3 +99,36 @@ export function initThemeToggle(button) {
     show();
   });
 }
+
+/**
+ * Page buttons under a table or list: ‹ Prev, the page numbers (a window around this one when there
+ * are many), Next ›, and "11–20 of 48". Hidden when everything fits on one page.
+ * nav: the <nav class="pager">. onPage(p): show page p.
+ */
+export function renderPager(nav, { page, size, total, onPage, label = '' }) {
+  const pages = Math.max(1, Math.ceil(total / size));
+  nav.textContent = '';
+  nav.hidden = pages <= 1;
+  if (pages <= 1) return;
+  const at = Math.min(Math.max(1, page), pages);
+  const btn = (text, p, attrs = {}) => {
+    const b = h('button', { type: 'button', class: 'btn small', ...attrs }, text);
+    b.addEventListener('click', () => onPage(p));
+    return b;
+  };
+  const shown = new Set([1, pages, at - 2, at - 1, at, at + 1, at + 2].filter((p) => p >= 1 && p <= pages));
+  const nums = [];
+  let last = 0;
+  for (const p of [...shown].sort((a, b) => a - b)) {
+    if (p - last > 1) nums.push(h('span', { class: 'muted pg-gap', 'aria-hidden': 'true' }, '…'));
+    nums.push(btn(String(p), p, { class: `btn small pg${p === at ? ' on' : ''}`, 'aria-label': `${label ? `${label} page` : 'Page'} ${p}`, 'aria-current': p === at ? 'page' : null }));
+    last = p;
+  }
+  const from = (at - 1) * size + 1;
+  nav.append(
+    btn('‹ Prev', at - 1, { disabled: at <= 1, 'aria-label': 'Previous page' }),
+    ...nums,
+    btn('Next ›', at + 1, { disabled: at >= pages, 'aria-label': 'Next page' }),
+    h('span', { class: 'muted small pg-sum' }, `${from}–${Math.min(from + size - 1, total)} of ${total}`),
+  );
+}

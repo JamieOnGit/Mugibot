@@ -224,3 +224,34 @@ export function alerts(input, existing = DEFAULT_ALERTS) {
     browserChecks: bool(a.browserChecks, true),
   };
 }
+
+// --- The card's backup in the member's account ----------------------------------
+// Locked in the extension with a passphrase only the member knows (PBKDF2-SHA256 → AES-256-GCM):
+// Mugibot keeps the locked copy and can't open it. Only its shape is checked here, plus the parts
+// shown in the dashboard (the brand, the last 4 digits and the expiry).
+const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+export const CARD_BRANDS = ['Visa', 'Mastercard', 'Amex', 'Card'];
+export function cardBackup(input, now = Date.now()) {
+  const b = input || {};
+  const b64 = (v, min, max, label) => {
+    const s = String(v ?? '');
+    if (!B64.test(s) || s.length < min || s.length > max) throw bad(`The card backup's ${label} isn't right`);
+    return s;
+  };
+  // (Checked, not clamped: the data was locked with exactly this many.)
+  const iterations = Number(b.iterations);
+  if (!Number.isInteger(iterations) || iterations < 310000 || iterations > 5000000) throw bad("The card backup's lock isn't right");
+  if (b.kdf !== 'PBKDF2-SHA256') throw bad("The card backup's lock isn't right");
+  const last4 = String(b.last4 ?? '');
+  const expMonth = String(b.expMonth ?? '');
+  const expYear = String(b.expYear ?? '');
+  if (!/^\d{4}$/.test(last4) || !/^(0[1-9]|1[0-2])$/.test(expMonth) || !/^20\d{2}$/.test(expYear)) throw bad("The card backup's details aren't right");
+  return {
+    v: 1, kdf: 'PBKDF2-SHA256', iterations,
+    salt: b64(b.salt, 22, 88, 'salt'), iv: b64(b.iv, 16, 16, 'nonce'), ct: b64(b.ct, 24, 4096, 'data'),
+    last4, brand: CARD_BRANDS.includes(b.brand) ? b.brand : 'Card', expMonth, expYear, hasCvc: !!b.hasCvc, savedAt: now,
+  };
+}
+
+/** What the dashboard shows of a card backup (never the locked data). */
+export const cardBackupInfo = (b) => (b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, hasCvc: !!b.hasCvc, savedAt: b.savedAt } : null);

@@ -567,10 +567,10 @@ details.menu[open] > summary { background: var(--surface-2); }
 .sn-filters input { flex: 2 1 200px; }
 .sn-filters select { flex: 1 1 130px; }
 .sn-cat .product .state { text-align: left; }
-.sn-cat-head, .sn-cat .product { display: grid; grid-template-columns: 44px minmax(0, 1fr) 130px 92px 112px 72px 100px; gap: 12px; align-items: center; }
+.sn-cat-head, .sn-cat .product { display: grid; grid-template-columns: 44px minmax(0, 1fr) 130px 92px 112px 72px 136px; gap: 12px; align-items: center; }
 /* Narrower screens: the price change shows as the old price, struck through, under the new one. */
 @media (max-width: 1599px) {
-  .sn-cat-head, .sn-cat .product { grid-template-columns: 44px minmax(0, 1fr) 120px 92px 112px 100px; }
+  .sn-cat-head, .sn-cat .product { grid-template-columns: 44px minmax(0, 1fr) 104px 84px 104px 136px; }
   .sn-cat-head > span:nth-child(6), .sn-cat .product .delta { display: none; }
 }
 .sn-cat-head { padding: 8px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-2); }
@@ -729,3 +729,38 @@ details.menu[open] > summary { background: var(--surface-2); }
 .vip-card .vip-wide { grid-column: 1 / -1; }
 .vip-card .vip-aco { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; }
 .vip-card .vip-aco input[type=number] { max-width: 140px; }
+
+/* The Monitor page's lists: Tracked products · My watchlist · My activity */
+.mon-ptabs-hd { padding-bottom: 0; border-bottom: 1px solid var(--line); }
+.mon-ptabs { display: flex; gap: 2px; flex-wrap: wrap; margin-right: auto; }
+.mon-ptab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 650; padding: 6px 10px 10px; margin-bottom: -1px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.mon-ptab:hover { color: var(--fg); }
+.mon-ptab.on { color: var(--fg); border-bottom-color: var(--brand); }
+.mon-ptab:focus-visible { outline: 2px solid var(--info); outline-offset: -2px; border-radius: 6px; }
+.mon-ptab .mon-meta:empty { display: none; }
+.mon-card > .mon-ppanel { margin-left: 0; margin-right: 0; }
+.mon-ppanel { padding: 12px 16px 16px; }
+/* (Tracked products keep the card's own spacing: its filters and rows are padded themselves.) */
+.mon-ppanel[data-ppanel="tracked"] { padding: 0 0 12px; }
+.mon-ppanel[data-ppanel="tracked"] .pager { padding: 0 16px; }
+.mon-ppanel .w-form { margin: 0 0 12px; }
+.mon-ppanel .feed { margin: 0; }
+.sn-cat .acts .watching { color: var(--brand); }
+
+/* Stores: the switch on each, and a store that's off (for everyone, or just for you) */
+.sn-sw.small { width: 32px; height: 18px; }
+.sn-sw.small::after { top: 2px; left: 2px; width: 12px; height: 12px; }
+.sn-sw.small[aria-checked="true"]::after { left: 16px; }
+.st-sw { margin-left: 4px; }
+.sn-chan.st-dim .st-toggle .st-name, .sn-chan.st-dim .sn-swatch { opacity: .5; }
+.sn-state.off { color: var(--muted); }
+.sn-state.off::before { background: transparent; border: 1px solid currentColor; }
+
+/* No membership yet: the live parts are for members; your own lists stay */
+.mon-grid.locked { grid-template-columns: minmax(0, 1fr); }
+.mon-grid.locked .mon-side, .mon-grid.locked #m-stats, .mon-grid.locked .mon-feedcard { display: none; }
+[data-panel="monitor"].locked #m-live, [data-panel="monitor"].locked .mon-actions { display: none; }
+
+/* The card's backup in your account (Checkout details) */
+.card-backup { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+.pager .pg-gap { padding: 0 2px; }

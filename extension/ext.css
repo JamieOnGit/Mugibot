@@ -31,3 +31,7 @@ img.logo { width: 20px; height: 20px; }
 /* Store sign-ins in the popup: signed in in green; otherwise a link to sign in. */
 #logins-list li .ok { color: var(--ok, #16a34a); font-weight: 600; }
 #logins-list li a.muted { color: var(--muted); }
+/* The card page: "also back it up" and the backup's own box. */
+label.check { display: flex; gap: 6px; align-items: center; font-weight: 400; font-size: 13px; margin: 10px 0 4px; }
+label.check input { width: auto; }
+.backup { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; }

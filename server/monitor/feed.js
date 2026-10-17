@@ -15,6 +15,7 @@
 
 import { CATEGORIES, categoryFor, toAlert, toProduct } from '../catalog.js';
 import { entitlement } from '../entitlement.js';
+import { publicEvent, publicProduct } from './public.js';
 import { STATUS, STATUS_LABEL, isOrderable } from './status.js';
 
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
@@ -100,6 +101,9 @@ export class Feed {
       prev = this.catalog.lastReadStatus(before.id);
       if (!prev) return;
     }
+    // Its stock read for the first time (a search that doesn't say it, like City Beach's): nothing
+    // to compare with, so no stock alert — it's how it was, not a change.
+    if (prev === STATUS.UNKNOWN) prev = fresh.status;
     if (isOrderable(fresh.status) && !isOrderable(prev)) {
       await this.alert(fresh, 'restock', { note: prev === STATUS.NOT_LISTED ? 'Just listed.' : '' });
     } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.NOT_FOUND, STATUS.UNKNOWN].includes(fresh.status)) {
@@ -213,9 +217,13 @@ export class Feed {
 
   /** Live updates for every open dashboard of a member (or admin). */
   broadcast(type, data) {
+    // (A live search's event or a product, for members: never where it came from — monitor/public.js.)
+    const forMembers = type === 'sweep' ? publicEvent(data) : type === 'product' ? publicProduct(data) : data;
     for (const userId of this.hub.userIds()) {
       const u = this.repo.userById(userId);
-      if (u && !u.disabled && entitlement(u, this.now()).active) this.hub.publish(userId, `monitor-${type}`, data);
+      if (!u || u.disabled || !entitlement(u, this.now()).active) continue;
+      const out = u.role === 'admin' ? data : forMembers;
+      if (out) this.hub.publish(userId, `monitor-${type}`, out);
     }
   }
 }

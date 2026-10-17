@@ -1,11 +1,13 @@
 // API for the Mugibot browser extension. The extension signs in with a
 // device token (from pairing) and only ever sees the account it's paired to.
-// Card details are not part of this API: they stay in the extension.
+// Card details are not part of this API: they stay in the extension. (A member can keep a backup of
+// their card in their account, locked in the extension with a passphrase only they know: Mugibot
+// keeps the locked copy and can't open it — a new install restores it with that passphrase.)
 
 import { entitlement } from '../entitlement.js';
 import { EXTENSION_VERSION, appOrigins, storeUrl } from '../extension.js';
 import { REASONS } from '../aco.js';
-import { DEFAULT_ALERTS, HttpError, bad, num, str } from '../schema.js';
+import { DEFAULT_ALERTS, HttpError, bad, cardBackup, cardBackupInfo, num, str } from '../schema.js';
 
 const EVENT_TYPES = { add: 'info', basket: 'info', step: 'info', checkout: 'success', ready: 'success', error: 'warn' };
 
@@ -51,6 +53,22 @@ export function register(router, ctx) {
   router.get('/api/ext/app', async () => ({
     name: cfg.appName, url: cfg.baseUrl, origins: appOrigins(cfg), extensionVersion: EXTENSION_VERSION, chromeStoreUrl: storeUrl(cfg, repo) || null,
   }), { auth: 'none' });
+
+  // The card's locked backup in the member's account (see the top of this file).
+  router.get('/api/ext/card-backup', async (req) => ({ backup: repo.getData(req.user.id, 'cardBackup', null) }), { auth: 'device' });
+  router.put('/api/ext/card-backup', async (req) => {
+    if (!limiter.hit(`cardbackup:${req.user.id}`, 20, 60 * 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const fresh = !repo.getData(req.user.id, 'cardBackup', null);
+    const backup = repo.setData(req.user.id, 'cardBackup', cardBackup(req.body, repo.now()));
+    repo.addEvent(req.user.id, { type: 'card', level: 'info', message: `${fresh ? 'Card backed up' : 'Card backup updated'}: ${backup.brand} •••• ${backup.last4}, locked with your card passphrase` });
+    ctx.hub.publish(req.user.id, 'card', { backup: cardBackupInfo(backup) });
+    return { backup: cardBackupInfo(backup) };
+  }, { auth: 'device' });
+  router.delete('/api/ext/card-backup', async (req) => {
+    repo.deleteData(req.user.id, 'cardBackup');
+    ctx.hub.publish(req.user.id, 'card', { backup: null });
+    return { ok: true };
+  }, { auth: 'device' });
 
   router.post('/api/ext/unpair', async (req) => {
     repo.deleteDevice(req.user.id, req.device.id);

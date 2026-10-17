@@ -25,59 +25,17 @@
 
   <div class="app">
     <nav class="side" aria-label="Sections">
-      <a href="#watch" data-tab="watch">🔔 Watchlist</a>
       <a href="#monitor" data-tab="monitor">📡 Monitor</a>
       <a href="#checkout" data-tab="checkout">📦 Checkout details</a>
       <a href="#aco" data-tab="aco">🤖 Auto-checkout</a>
       <a href="#discord" data-tab="discord">💬 Discord</a>
       <a href="#extension" data-tab="extension">🧩 Extension</a>
       <a href="#membership" data-tab="membership">⭐ Membership</a>
-      <a href="#activity" data-tab="activity">📋 Activity</a>
       <a href="#account" data-tab="account">👤 Account</a>
     </nav>
 
     <main class="main">
       <div id="banner"></div>
-
-      <!-- 🔔 Watchlist -->
-      <section data-panel="watch" hidden>
-        <div class="tab-head"><h2>Watchlist</h2><button class="btn small primary" id="w-add-toggle" type="button">+ Add SKU</button></div>
-        <div class="notice" id="ext-status">Checking for the extension…</div>
-        <form class="card" id="w-form" hidden>
-          <h3 id="w-form-title">Add a SKU</h3>
-          <p class="muted small">Paste the product link — or pick the store and type the SKU (handy before it's listed: Mugibot finds the page when it goes up).</p>
-          <label for="w-url">Product link <span class="muted">(optional if you enter the SKU)</span></label>
-          <input id="w-url" name="url" type="url" placeholder="https://www.kmart.com.au/product/…-43818648/">
-          <div class="grid2">
-            <div><label for="w-store">Store</label><select id="w-store" name="store"></select></div>
-            <div><label for="w-sku">SKU / keycode</label><input id="w-sku" name="sku" placeholder="e.g. 43818648" autocomplete="off"></div>
-          </div>
-          <p class="muted small" id="w-store-note"></p>
-          <div class="grid3">
-            <div><label for="w-name">Name</label><input id="w-name" name="name" placeholder="Shown on your list"></div>
-            <div><label for="w-price">Price ($)</label><input id="w-price" name="price" type="number" min="0" step="0.01"></div>
-            <div><label for="w-max">Max price ($)</label><input id="w-max" name="maxPrice" type="number" min="0" step="0.01" placeholder="Any price" title="Pinged (and, if armed, bought) only at or below this price"></div>
-          </div>
-          <div class="grid2">
-            <div><label for="w-profile">Deliver to</label><select id="w-profile" name="profileId"></select></div>
-            <div id="w-announce-wrap" hidden><label class="check mt"><input type="checkbox" id="w-announce"> <span>📣 Announce restocks in the members' Discord channel</span></label></div>
-          </div>
-          <label class="check"><input type="checkbox" id="w-aco"> <span>🤖 Auto-checkout this item when it drops (once — then arm it again). Needs a max price. <a href="#aco">Auto-checkout settings</a></span></label>
-          <div class="form-actions">
-            <button class="btn primary" type="submit" id="w-save">Add SKU</button>
-            <button class="btn" type="button" id="w-cancel">Cancel</button>
-            <span class="msg" id="w-msg"></span>
-          </div>
-        </form>
-        <div class="card">
-          <p class="muted small">Each SKU is checked about every <span id="w-interval">60</span> seconds. When it goes from sold out to <b>in stock</b> (or pre-orders open) you get a Discord DM with a <b>⚡ Buy</b> button. Press ⚡ Buy here or there: a new tab opens the product and the extension adds it to your bag, goes to checkout and fills it in. You press the final button — or arm an item for <a href="#aco">🤖 Auto-checkout</a> and it's bought by itself when it drops, within your limits.</p>
-          <ul class="items" id="w-list"></ul>
-          <div class="form-actions">
-            <button class="btn small" type="button" id="w-starter">Add the Kmart starter list</button>
-            <button class="btn small" type="button" id="w-demo" hidden>Add dummy-store test items</button>
-          </div>
-        </div>
-      </section>
 
       <!-- 📡 Monitor: live (everyone) -->
       <section data-panel="monitor" hidden>
@@ -130,7 +88,7 @@
           <div class="mon-main">
             <div class="mon-stats" id="m-stats"></div>
 
-            <section class="mon-card">
+            <section class="mon-card mon-feedcard">
               <header class="mon-card-hd">
                 <h3>Live feed</h3><span class="sn-livedot">Live</span>
                 <label class="mon-show">Show <select id="m-kind"><option value="alerts">Drops &amp; restocks</option><option value="">Everything</option><option value="listed">New drops</option><option value="restock">Restocks</option><option value="price">Price changes</option><option value="searches">Searches</option><option value="problems">Problems</option></select></label>
@@ -139,16 +97,68 @@
               <div class="sn-more"><button class="btn small" id="m-more" type="button" hidden>Older alerts</button></div>
             </section>
 
-            <section class="mon-card">
-              <header class="mon-card-hd"><h3>Tracked products</h3><span class="mon-meta" id="m-count"></span></header>
-              <div class="filters sn-filters" role="search">
-                <input id="m-q" type="search" placeholder="Search name or SKU" aria-label="Search products">
-                <select id="m-category" aria-label="Category"><option value="">All categories</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select>
-                <select id="m-store" aria-label="Store"><option value="">All stores</option></select>
-                <select id="m-status" aria-label="Stock"><option value="">Any stock</option><option value="available">Available now</option><option value="unavailable">Not available</option><option value="new">New today</option><option value="problem">Having problems</option></select>
+            <!-- The lists: every product the monitor tracks, your own watchlist, and your activity -->
+            <section class="mon-card mon-lists" id="m-lists">
+              <header class="mon-card-hd mon-ptabs-hd">
+                <div class="mon-ptabs" role="tablist" aria-label="Lists">
+                  <button type="button" role="tab" class="mon-ptab" data-ptab="tracked" id="pt-tracked" aria-controls="pp-tracked">Tracked products <span class="mon-meta" id="m-count"></span></button>
+                  <button type="button" role="tab" class="mon-ptab" data-ptab="watch" id="pt-watch" aria-controls="pp-watch">My watchlist <span class="mon-meta" id="w-count"></span></button>
+                  <button type="button" role="tab" class="mon-ptab" data-ptab="activity" id="pt-activity" aria-controls="pp-activity">My activity</button>
+                </div>
+                <button class="btn small primary" id="w-add-toggle" type="button" hidden>+ Add SKU</button>
+              </header>
+              <div class="mon-ppanel" data-ppanel="tracked" id="pp-tracked" role="tabpanel" aria-labelledby="pt-tracked">
+                <div class="filters sn-filters" role="search">
+                  <input id="m-q" type="search" placeholder="Search name or SKU" aria-label="Search products">
+                  <select id="m-category" aria-label="Category"><option value="">All categories</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select>
+                  <select id="m-store" aria-label="Store"><option value="">All stores</option></select>
+                  <select id="m-status" aria-label="Stock"><option value="">Any stock</option><option value="available">Available now</option><option value="unavailable">Not available</option><option value="new">New today</option><option value="problem">Having problems</option></select>
+                </div>
+                <div class="sn-cat-head" aria-hidden="true"><span></span><span>Product</span><span>Store</span><span>Price</span><span>Stock</span><span>Change</span><span></span></div>
+                <ul class="sn-cat" id="m-products"></ul>
+                <nav class="pager" id="m-pager" aria-label="Tracked products pages"></nav>
               </div>
-              <div class="sn-cat-head" aria-hidden="true"><span></span><span>Product</span><span>Store</span><span>Price</span><span>Stock</span><span>Change</span><span></span></div>
-              <ul class="sn-cat" id="m-products"></ul>
+              <div class="mon-ppanel" data-ppanel="watch" id="pp-watch" role="tabpanel" aria-labelledby="pt-watch" hidden>
+                <div class="notice" id="ext-status">Checking for the extension…</div>
+                <form class="card w-form" id="w-form" hidden>
+                  <h3 id="w-form-title">Add a SKU</h3>
+                  <p class="muted small">Paste the product link — or pick the store and type the SKU (handy before it's listed: Mugibot finds the page when it goes up).</p>
+                  <label for="w-url">Product link <span class="muted">(optional if you enter the SKU)</span></label>
+                  <input id="w-url" name="url" type="url" placeholder="https://www.kmart.com.au/product/…-43818648/">
+                  <div class="grid2">
+                    <div><label for="w-store">Store</label><select id="w-store" name="store"></select></div>
+                    <div><label for="w-sku">SKU / keycode</label><input id="w-sku" name="sku" placeholder="e.g. 43818648" autocomplete="off"></div>
+                  </div>
+                  <p class="muted small" id="w-store-note"></p>
+                  <div class="grid3">
+                    <div><label for="w-name">Name</label><input id="w-name" name="name" placeholder="Shown on your list"></div>
+                    <div><label for="w-price">Price ($)</label><input id="w-price" name="price" type="number" min="0" step="0.01"></div>
+                    <div><label for="w-max">Max price ($)</label><input id="w-max" name="maxPrice" type="number" min="0" step="0.01" placeholder="Any price" title="Pinged (and, if armed, bought) only at or below this price"></div>
+                  </div>
+                  <div class="grid2">
+                    <div><label for="w-profile">Deliver to</label><select id="w-profile" name="profileId"></select></div>
+                    <div id="w-announce-wrap" hidden><label class="check mt"><input type="checkbox" id="w-announce"> <span>📣 Announce restocks in the members' Discord channel</span></label></div>
+                  </div>
+                  <label class="check"><input type="checkbox" id="w-aco"> <span>🤖 Auto-checkout this item when it drops (once — then arm it again). Needs a max price. <a href="#aco">Auto-checkout settings</a></span></label>
+                  <div class="form-actions">
+                    <button class="btn primary" type="submit" id="w-save">Add SKU</button>
+                    <button class="btn" type="button" id="w-cancel">Cancel</button>
+                    <span class="msg" id="w-msg"></span>
+                  </div>
+                </form>
+                <p class="muted small">Your own SKUs, checked about every <span id="w-interval">60</span> seconds. In stock (or pre-orders open): a Discord DM with <b>⚡ Buy</b>, which opens the product and fills in checkout for you. Armed for <a href="#aco">🤖 Auto-checkout</a>, it's bought by itself.</p>
+                <ul class="items" id="w-list"></ul>
+                <nav class="pager" id="w-pager" aria-label="Watchlist pages"></nav>
+                <div class="form-actions">
+                  <button class="btn small" type="button" id="w-starter">Add the Kmart starter list</button>
+                  <button class="btn small" type="button" id="w-demo" hidden>Add dummy-store test items</button>
+                </div>
+              </div>
+              <div class="mon-ppanel" data-ppanel="activity" id="pp-activity" role="tabpanel" aria-labelledby="pt-activity" hidden>
+                <p class="muted small">Everything about your account, newest first: your SKUs' restocks and pings, ⚡ Buy and Auto-checkout, your membership.</p>
+                <ul class="feed" id="feed"></ul>
+                <nav class="pager" id="feed-pager" aria-label="Activity pages"></nav>
+              </div>
             </section>
           </div>
         </div>
@@ -161,7 +171,7 @@
         <div class="mon-settings">
           <section class="mon-card vip-card" id="vip-card">
             <header class="mon-card-hd"><h3>⭐ VIP drops</h3><span class="mon-meta" id="vip-meta"></span></header>
-            <p class="mon-help">Drops you pick out, posted in <code>#vip-drop</code> (and not in the store channels) the moment they drop. Either a <b>store and the words in its name</b> (City Beach, <i>pokemon skate</i>): searched there along with the keywords, and anything with every word in its name counts, trading cards or not. Or a <b>product page</b>, at any shop. With a <b>drop time</b>, it's checked every few seconds from 15 minutes before until 3 hours after. <b>Auto-checkout it for me</b> puts what it finds on your watchlist, armed up to your max price, so your browser checks out the moment it's in stock (Auto-checkout must be on, with Chrome open).</p>
+            <p class="mon-help">Drops you pick out, posted in <code>#vip-drop</code> (and not in the store channels) the moment they drop. Either a <b>store and the words in its name</b> (City Beach, <i>pokemon skate</i>): searched there along with the keywords, and anything with every word in its name counts, trading cards or not. Or a <b>product page</b>, at any shop. With a <b>drop time</b>, it's checked every few seconds from 15 minutes before until 3 hours after. <b>Auto-checkout it for me</b> arms what <i>drops</i> — a new listing, or something listed but not on sale yet — up to your max price, so your browser checks out the moment it's in stock (Auto-checkout must be on, with Chrome open). What was already on sale when you added the watch is never armed.</p>
             <div class="mr-setup-row">
               <span class="small" id="vip-channel"></span>
               <input id="vip-role" inputmode="numeric" placeholder="Role to ping (optional ID)" aria-label="Role to ping in #vip-drop (optional)">
@@ -339,16 +349,17 @@
         </form>
         <div class="card mt">
           <h3>Payment card</h3>
-          <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close the browser. It's typed into the {{APP_NAME}} extension's own card page (not this website), saved in this browser only, encrypted and tied to your account. It's <b>never sent to our servers</b>.</p>
+          <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close the browser. It's typed into the {{APP_NAME}} extension's own card page (not this website), saved in this browser, encrypted and tied to your account. Your card is <b>never sent to our servers</b>. If you back it up to your account, only a copy locked with your card passphrase is kept, and we can't open it.</p>
           <p id="card-state" class="notice">Checking this browser…</p>
           <div class="form-actions"><button class="btn primary" type="button" id="card-open">Add your card</button></div>
+          <div id="card-backup" class="card-backup"></div>
         </div>
       </section>
 
       <!-- 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md) -->
       <section data-panel="aco" hidden>
         <div class="tab-head"><h2>Auto-checkout</h2><span class="pill" id="aco-state">Off</span></div>
-        <p class="muted aco-lead">When an item you've armed drops, your browser checks out by itself: it opens the store, adds it to your bag, closes any "add more" pop-ups, fills in checkout with your details and the card saved in the extension, and places the order — within your limits. <b>One purchase per arming:</b> to buy it again, arm it again.</p>
+        <p class="muted aco-lead">When an item you've armed drops, your browser checks out by itself, within your limits: the store, your bag, checkout with your details and card, the order. <b>One purchase per arming</b>. Your items, and what the monitor sees of them, are on the <a href="#watch">Monitor page</a>: this page is for what Auto-checkout does with them.</p>
 
         <div class="aco-stats" id="aco-stats"></div>
 
@@ -385,7 +396,7 @@
             <div class="aco-items-tools"><span class="muted small" id="aco-armed-count"></span>
               <select id="aco-show" aria-label="Show"><option value="">Every item</option><option value="armed">Armed only</option></select></div>
           </div>
-          <p class="muted small">Arm items from your watchlist. Each needs a max price: Mugibot never pays more than that. <b>Trigger ACO</b> runs one now, as if it had just dropped, to see Auto-checkout work.</p>
+          <p class="muted small">Your watchlist's items (add them on the <a href="#watch">Monitor page</a>). Arm one with its max price: Mugibot never pays more. <b>Trigger ACO</b> runs one now, as if it had just dropped.</p>
           <div class="table-wrap"><table class="aco-table">
             <thead><tr><th scope="col">Armed</th><th scope="col">Item</th><th scope="col">Sign-in</th><th scope="col">Max price</th><th scope="col"><span class="sr-only">Test</span></th></tr></thead>
             <tbody id="aco-items"></tbody>
@@ -394,11 +405,12 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h3>Activity</h3>
+          <div class="card-head"><h3>Run history</h3>
             <select id="aco-filter" aria-label="Show"><option value="">Everything</option><option value="placed">Orders placed</option><option value="needs">Needed you</option><option value="failed">Failed</option><option value="skipped">Didn't start</option></select>
           </div>
-          <p class="muted small">Every time an armed item dropped: whether Auto-checkout started, each step it took, and how it ended — with why.</p>
+          <p class="muted small">Each time an armed item dropped (or you pressed Trigger ACO): whether Auto-checkout started, each step, and how it ended — with why.</p>
           <ul class="aco-runs" id="aco-runs"></ul>
+          <nav class="pager" id="aco-runs-pager" aria-label="Run history pages"></nav>
         </div>
       </section>
 
@@ -499,7 +511,7 @@
         </div>
         <div class="card">
           <h3>3. Save your card (optional)</h3>
-          <p class="muted">Click the extension's icon → <b>Add your card</b> (or <a href="#checkout">Checkout details</a> → Add your card). Save it once and every ⚡ Buy fills it in, even after you restart the browser. It stays in that browser, encrypted, and is never sent to us.</p>
+          <p class="muted">Click the extension's icon → <b>Add your card</b> (or <a href="#checkout">Checkout details</a> → Add your card). Save it once and every ⚡ Buy fills it in, even after you restart the browser. It stays in that browser, encrypted. Tick <b>Back up</b> when you save it, and a new install restores it with your card passphrase.</p>
         </div>
         <div class="card" id="logins-card">
           <div class="card-head"><h3>4. Sign in at the stores</h3><button class="btn small" id="logins-check" type="button">Check now</button></div>
@@ -544,12 +556,6 @@
           <div class="status-row"><input id="m-claim-id" name="membership" placeholder="mem_… or license key" autocomplete="off"><button class="btn" type="submit">Link membership</button></div>
           <p class="msg" id="m-claim-msg"></p>
         </form>
-      </section>
-
-      <!-- 📋 Activity -->
-      <section data-panel="activity" hidden>
-        <div class="tab-head"><h2>Activity</h2></div>
-        <div class="card"><ul class="feed" id="feed"></ul><div class="form-actions"><button class="btn small" id="feed-more" type="button">Show more</button></div></div>
       </section>
 
       <!-- 👤 Account -->

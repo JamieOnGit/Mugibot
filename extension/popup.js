@@ -5,7 +5,9 @@ const CONFIG = globalThis.MGB_CONFIG;
 const dash = `${CONFIG.server}/app`;
 const STATUS = { in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', not_listed: 'Not listed', not_found: 'Gone', blocked: 'Blocked', error: 'Error', pending: '…' };
 
-function cardText(c) {
+function cardText(c, backup) {
+  // A new install: the card in the account's backup, one passphrase away.
+  if ((!c || !c.ready) && backup) return `${backup.brand} •••• ${backup.last4} is backed up in your account — restore it in Card settings`;
   if (!c || !c.saved) return 'Not saved yet: add it in Card settings';
   return `${c.brand} •••• ${c.last4} — ${c.ready ? 'ready for checkout' : c.needsPassphrase ? 'open Card settings once' : 'save it again'}`;
 }
@@ -73,8 +75,8 @@ async function render() {
   $('who').textContent = s.user.username;
   $('plan').textContent = s.online ? (s.entitlement ? s.entitlement.label : '') : 'Offline';
   $('plan').className = `pill ${s.entitlement && !s.entitlement.active ? 'warn' : ''}`;
-  $('card-status').textContent = cardText(s.card);
-  $('card-settings').textContent = s.card && s.card.saved ? 'Card settings' : 'Add your card';
+  $('card-status').textContent = cardText(s.card, s.cardBackup);
+  $('card-settings').textContent = s.card && s.card.ready ? 'Card settings' : s.cardBackup ? 'Restore your card' : s.card && s.card.saved ? 'Card settings' : 'Add your card';
   $('checks-status').textContent = checksText(s.lastChecks);
   const sweeps = Object.values(s.lastSweeps || {}).filter((x) => Date.now() - x.at < 30 * 60 * 1000);
   $('sweeps').hidden = !sweeps.length;

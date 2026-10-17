@@ -124,18 +124,27 @@ test('⭐ a keyword watch at City Beach: a new Pokémon skateboard is posted in 
   const view = (await boss.get('/api/monitor/vip')).body.watches[0];
   assert.deepEqual(view.found.map((p) => p.name), ['Pokémon Pikachu Complete Skateboard']);
 
-  // Its page says in stock: 🟢 in #vip-drop, and the admin's browser starts checking out.
+  // Its page says in stock: the admin's browser starts checking out. (Its stock read for the first
+  // time: the 🆕 already said it dropped — no second alert.)
+  const vipPosted = posts(vipChannel).length;
   await env.app.monitor.checkPage(board.url);
   assert.equal(product(BOARD).status, 'in_stock');
-  const [restock] = env.app.catalog.recentAlerts({ kind: 'restock', limit: 5 });
-  assert.equal(restock.sku, BOARD);
-  assert.equal(restock.vip, true);
-  assert.match(posts(vipChannel).at(-1).body.embeds[0].title, /⭐ VIP · 🟢 In stock: Pokémon Pikachu Complete Skateboard/);
+  assert.equal(posts(vipChannel).length, vipPosted);
   assert.equal(posts(MISC).length, 0);
   const runs = env.app.db.all('SELECT * FROM aco_runs WHERE item_id = :i', { i: item.id });
   assert.equal(runs.length, 1, 'Auto-checkout started');
   assert.equal(runs[0].status, 'queued');
   assert.equal(runs[0].price, 129.99);
+  // Sold out, then back: a restock — 🟢 in #vip-drop.
+  store.set('citybeach', BOARD, { status: 'out_of_stock' });
+  await env.app.monitor.checkPage(board.url);
+  store.set('citybeach', BOARD, { status: 'in_stock' });
+  await env.app.monitor.checkPage(board.url);
+  const [restock] = env.app.catalog.recentAlerts({ kind: 'restock', limit: 5 });
+  assert.equal(restock.sku, BOARD);
+  assert.equal(restock.vip, true);
+  assert.match(posts(vipChannel).at(-1).body.embeds[0].title, /⭐ VIP · 🟢 In stock: Pokémon Pikachu Complete Skateboard/);
+  assert.equal(posts(MISC).length, 0);
   // Found again by later searches: armed once only (bought → disarmed stays disarmed).
   env.app.aco.disarm(boss.user.id, item.id);
   await sw().sweepTerm(cb, sw().nextTerm(cb));
@@ -151,6 +160,46 @@ test('⭐ a keyword watch at City Beach: a new Pokémon skateboard is posted in 
   assert.equal(turns.filter((t) => t.vip).length, 1);
   assert.equal(env.app.monitor.pageInterval(board.url), 15000);
   clock.offset = 0;
+});
+
+test('⭐ a broad watch with Auto-checkout arms only what drops: what was already on sale when it was added is left alone (no alerts either); removing it disarms what it armed', async () => {
+  const add = (sku, name, status, price) => store.shop('citybeach').products.push({ sku, name, price, status, listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4400000 + Number(sku.slice(4, 8)) });
+  add('20481111-01', 'Pokémon Beach Towel', 'in_stock', 39.99);
+  add('20482222-01', 'Pokémon Beach Bag', 'coming_soon', 49.99);
+  const r = await boss.post('/api/monitor/vip', { store: 'demo-citybeach', words: 'pokemon beach', aco: true, maxPrice: 350 });
+  assert.equal(r.status, 200, r.text);
+  const w = r.body.watch;
+  const cb = R('demo-citybeach');
+  const vipPosted = posts(vipChannel).length;
+  // Its first search: both are listed already — neither is armed yet.
+  const s = await sw().sweepTerm(cb, { keyword: w.words, page: 1, vip: w.id });
+  assert.equal(s.baseline, true);
+  assert.equal(s.kept, 2);
+  const towel = product('20481111-01');
+  const bag = product('20482222-01');
+  assert.ok(!env.app.repo.itemBySku(boss.user.id, 'demo-citybeach', '20481111-01'), 'not armed before its page is read');
+  // Their pages: the towel is on sale already (left alone), the bag isn't yet (armed).
+  await env.app.monitor.checkPage(towel.url);
+  await env.app.monitor.checkPage(bag.url);
+  assert.equal(product('20481111-01').status, 'in_stock');
+  assert.equal(product('20482222-01').status, 'coming_soon');
+  assert.ok(!env.app.repo.itemBySku(boss.user.id, 'demo-citybeach', '20481111-01'), 'on sale before the watch: never bought');
+  const bagItem = env.app.repo.itemBySku(boss.user.id, 'demo-citybeach', '20482222-01');
+  assert.equal(bagItem.aco, true);
+  assert.equal(bagItem.maxPrice, 350);
+  assert.equal(posts(vipChannel).length, vipPosted, 'no alerts for what was there already');
+  const view = (await boss.get('/api/monitor/vip')).body.watches.find((x) => x.id === w.id);
+  assert.deepEqual(view.found.map((p) => [p.name, p.arm]), [['Pokémon Beach Towel', 'skipped'], ['Pokémon Beach Bag', 'armed']]);
+  assert.ok(env.app.repo.listEvents(boss.user.id).some((e) => /Pokémon Beach Towel was on sale already when the watch was added/.test(e.message)));
+  // The bag goes on sale: 🟢 in #vip-drop, and Auto-checkout starts.
+  store.set('citybeach', '20482222-01', { status: 'in_stock' });
+  await env.app.monitor.checkPage(bag.url);
+  assert.match(posts(vipChannel).at(-1).body.embeds[0].title, /⭐ VIP · 🟢 In stock: Pokémon Beach Bag/);
+  assert.equal(env.app.db.all('SELECT * FROM aco_runs WHERE item_id = :i', { i: bagItem.id }).length, 1);
+  // Removed: what it armed is disarmed.
+  assert.equal(env.app.repo.getItem(boss.user.id, bagItem.id).aco, true);
+  assert.equal((await boss.del(`/api/monitor/vip/${w.id}`)).status, 200);
+  assert.equal(env.app.repo.getItem(boss.user.id, bagItem.id).aco, false, 'disarmed with the watch');
 });
 
 test('⭐ a product page watch: a VIP monitor read every 5 s around its drop time; removing the watch removes its monitor', async () => {

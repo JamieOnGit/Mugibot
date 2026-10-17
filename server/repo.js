@@ -430,10 +430,14 @@ export class Repo {
     return { id, type, level, message, name, sku, url, createdAt: t };
   }
 
-  listEvents(userId, { limit = 100, beforeId = null } = {}) {
-    return this.db.all('SELECT * FROM events WHERE user_id = :u AND (:b IS NULL OR id < :b) ORDER BY id DESC LIMIT :limit',
-      { u: userId, b: beforeId, limit: Math.min(500, limit) })
+  listEvents(userId, { limit = 100, beforeId = null, offset = 0 } = {}) {
+    return this.db.all('SELECT * FROM events WHERE user_id = :u AND (:b IS NULL OR id < :b) ORDER BY id DESC LIMIT :limit OFFSET :off',
+      { u: userId, b: beforeId, limit: Math.min(500, limit), off: Math.max(0, offset) })
       .map((r) => ({ id: r.id, type: r.type, level: r.level, message: r.message, name: r.name, sku: r.sku, url: r.url, createdAt: r.created_at }));
+  }
+
+  countEvents(userId) {
+    return this.db.get('SELECT COUNT(*) AS n FROM events WHERE user_id = :u', { u: userId }).n;
   }
 
   // ---------------------------------------------------------------------------
@@ -566,7 +570,8 @@ export class Repo {
       watchlist: this.listItems(userId).map(({ id, store, sku, name, url, price, maxPrice, quantity, monitor }) => ({ id, store, sku, name, url, price, maxPrice, quantity, monitor })),
       devices: this.listDevices(userId),
       activity: this.listEvents(userId, { limit: 500 }),
-      note: 'Card details are never stored by Mugibot — they stay in your browser extension.',
+      cardBackup: (() => { const b = this.getData(userId, 'cardBackup', null); return b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, savedAt: new Date(b.savedAt).toISOString(), locked: true } : null; })(),
+      note: 'Your card stays in your browser extension. A backup, if you made one, is kept locked with your card passphrase: Mugibot can\'t open it.',
     };
   }
 }

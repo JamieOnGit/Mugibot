@@ -10,12 +10,21 @@
    it, and another account connected to this browser can't see or use it.
 
    Cards saved by version 1.2 or older were encrypted with a passphrase.
-   Entering it once (or saving the card again) moves the card over. */
+   Entering it once (or saving the card again) moves the card over.
+
+   A backup in your Mugibot account (optional, from 1.13): the card locked with
+   a card passphrase only you know (PBKDF2-SHA256, 600,000 rounds → AES-256-GCM),
+   made here. Mugibot keeps the locked copy and can't open it. A new install
+   of the extension — or another browser — restores the card with that
+   passphrase. Forget it, and the backup can't be opened by anyone: save the
+   card again. */
 
 globalThis.MGBVault = (function () {
   'use strict';
 
   var ITERATIONS = 310000; // the old passphrase cards (PBKDF2-SHA256)
+  var BACKUP_ITERATIONS = 600000; // the backup in your account
+  var MIN_PASSPHRASE = 10;
   var enc = new TextEncoder();
   var dec = new TextDecoder();
 
@@ -31,6 +40,7 @@ globalThis.MGBVault = (function () {
   var vaultKey = function (userId) { return 'vault:' + userId; };
   var oldOpenKey = function (userId) { return 'card:' + userId; }; // an old card, unlocked before the update
   var aad = function (userId) { return enc.encode('mugibot-card:' + userId); };
+  var backupAad = function (userId) { return enc.encode('mugibot-card-backup:' + userId); };
 
   // --- this browser's own key ------------------------------------------------
   function openDb() {
@@ -170,6 +180,44 @@ globalThis.MGBVault = (function () {
     return status(userId);
   }
 
+  // --- the locked backup in your account ---------------------------------------
+  async function passphraseKey(passphrase, salt, iterations, use) {
+    var base = await crypto.subtle.importKey('raw', enc.encode(String(passphrase || '').normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: iterations, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, [use]);
+  }
+
+  /** The saved card, locked with a card passphrase, for your account. Throws an Error with a friendly message. */
+  async function lock(userId, passphrase) {
+    if (String(passphrase || '').length < MIN_PASSPHRASE) throw new Error('Use a card passphrase of at least ' + MIN_PASSPHRASE + ' characters — a few words is easiest to remember');
+    var c = await card(userId);
+    var rec = await record(userId);
+    if (!c || !rec) throw new Error('Save your card in this browser first');
+    var salt = crypto.getRandomValues(new Uint8Array(16));
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var key = await passphraseKey(passphrase, salt, BACKUP_ITERATIONS, 'encrypt');
+    var ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: backupAad(userId) }, key, enc.encode(JSON.stringify(c)));
+    return {
+      v: 1, kdf: 'PBKDF2-SHA256', iterations: BACKUP_ITERATIONS, salt: b64(salt), iv: b64(iv), ct: b64(ct),
+      last4: rec.last4, brand: rec.brand, expMonth: rec.expMonth, expYear: rec.expYear, hasCvc: rec.hasCvc,
+    };
+  }
+
+  /** Your card from its locked backup, kept in this browser from now on. A wrong passphrase: an Error. */
+  async function unlock(userId, backup, passphrase) {
+    if (!userId) throw new Error('Connect the extension to your account first');
+    if (!backup || backup.kdf !== 'PBKDF2-SHA256') throw new Error('There is no card backup in your account');
+    var c;
+    try {
+      var key = await passphraseKey(passphrase, unb64(backup.salt), backup.iterations, 'decrypt');
+      var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(backup.iv), additionalData: backupAad(userId) }, key, unb64(backup.ct));
+      c = JSON.parse(dec.decode(pt));
+    } catch (e) {
+      throw new Error('That card passphrase isn\'t right');
+    }
+    await store(userId, normalizeCard({ number: c.number, name: c.name, expMonth: c.expMonth, expYear: c.expYear, cvc: c.cvc }));
+    return status(userId);
+  }
+
   async function remove(userId) {
     await chrome.storage.session.remove(oldOpenKey(userId));
     await chrome.storage.local.remove(vaultKey(userId));
@@ -198,5 +246,5 @@ globalThis.MGBVault = (function () {
     };
   }
 
-  return { save: save, upgrade: upgrade, remove: remove, card: card, status: status, normalizeCard: normalizeCard };
+  return { save: save, upgrade: upgrade, remove: remove, card: card, status: status, normalizeCard: normalizeCard, lock: lock, unlock: unlock };
 })();

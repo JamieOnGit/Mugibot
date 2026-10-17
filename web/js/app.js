@@ -1,5 +1,5 @@
 // The dashboard. Everything here is the signed-in member's own data.
-import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, money, setMsg, toast, when } from './common.js';
+import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, money, renderPager, setMsg, toast, when } from './common.js';
 import { setupMonitor } from './monitor.js';
 
 const STATUS = {
@@ -8,21 +8,27 @@ const STATUS = {
 };
 const FLOW = { verified: 'verified flow', beta: 'beta flow', draft: 'draft flow', none: 'alerts only' };
 
-const state = { me: null, items: [], retailers: [], profiles: null, editing: null, ext: null, feedOldest: null, alerts: null, logins: null, aco: null };
+const state = { me: null, items: [], retailers: [], profiles: null, editing: null, ext: null, alerts: null, logins: null, aco: null, wPage: 1, feedPage: 1, feedTotal: 0, runsPage: 1, cardBackup: null };
 
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
-const TABS = ['watch', 'monitor', 'monitor-settings', 'monitor-log', 'checkout', 'aco', 'discord', 'extension', 'membership', 'activity', 'account'];
+const TABS = ['monitor', 'monitor-settings', 'monitor-log', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account'];
 // The Monitor's own pages (Settings and Check log are for admins): the sidebar's Monitor stays lit.
 const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
+// The lists on the Monitor page (tracked products, your watchlist, your activity). #watch and
+// #activity — the old tabs, still in links and DMs — open the Monitor page at that list.
+const LISTS = ['tracked', 'watch', 'activity'];
+const LIST_HASH = { watch: 'watch', activity: 'activity' };
+const LIST_KEY = 'mgb-list';
 const loaders = {};
 
 function showTab() {
   const [hash, productId] = location.hash.slice(1).split('/');
   // #update (from the extension's Update button) is the Extension tab's update steps;
   // #monitor/<product> (from a Discord alert's Price history button) opens that product.
-  const tab = hash === 'update' ? 'extension' : TABS.includes(hash) ? hash : 'watch';
+  if (LIST_HASH[hash]) state.list = LIST_HASH[hash];
+  const tab = hash === 'update' ? 'extension' : LIST_HASH[hash] ? 'monitor' : TABS.includes(hash) ? hash : 'monitor';
   if (tab === 'monitor' && $$('.side a.active')[0]?.dataset.tab === 'monitor' && productId) {
     monitorUI.openProduct(productId);
     return;
@@ -40,8 +46,62 @@ function showTab() {
 }
 window.addEventListener('hashchange', showTab);
 
-const monitorUI = setupMonitor({ showError: (e) => showError(e) });
-loaders.monitor = () => monitorUI.load();
+const monitorUI = setupMonitor({
+  showError: (e) => showError(e),
+  // The tracked products know which are on your watchlist (☆ Watch adds one).
+  watching: (p) => state.items.find((it) => it.store === p.store && String(it.sku).toLowerCase() === String(p.sku).toLowerCase()) || null,
+  watch: (p) => watchProduct(p),
+});
+
+// --- The lists on the Monitor page --------------------------------------------
+function savedList() {
+  try { const v = localStorage.getItem(LIST_KEY); return LISTS.includes(v) ? v : null; } catch { return null; }
+}
+
+/** Show one of the Monitor page's lists. Members start at Tracked products; before a membership, your watchlist. */
+async function showList(name, { load = true } = {}) {
+  const member = state.me.entitlement.active;
+  // (No choice yet: what the monitor tracks — or, before a membership, your watchlist.)
+  let list = LISTS.includes(name) ? name : savedList() || (member ? 'tracked' : 'watch');
+  if (list === 'tracked' && !member) list = 'watch';
+  state.list = list;
+  for (const b of $$('.mon-ptab')) {
+    const on = b.dataset.ptab === list;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on ? 0 : -1;
+  }
+  for (const p of $$('.mon-ppanel')) p.hidden = p.dataset.ppanel !== list;
+  $('#w-add-toggle').hidden = list !== 'watch';
+  if (!load) return;
+  if (list === 'watch') await loadWatch();
+  else if (list === 'activity') await loadFeed(state.feedPage);
+}
+const listOpen = (name) => !$('[data-panel="monitor"]').hidden && state.list === name;
+for (const b of $$('.mon-ptab')) {
+  b.addEventListener('click', () => {
+    try { localStorage.setItem(LIST_KEY, b.dataset.ptab); } catch { /* private window */ }
+    // (The address follows, so a reload comes back here — without loading the page again.)
+    history.replaceState(null, '', b.dataset.ptab === 'tracked' ? '#monitor' : `#${b.dataset.ptab}`);
+    showList(b.dataset.ptab).catch(showError);
+  });
+}
+$('.mon-ptabs').addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+  const tabs = $$('.mon-ptab').filter((b) => !b.hidden);
+  const i = tabs.indexOf(document.activeElement);
+  if (i < 0) return;
+  const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+  next.focus();
+  next.click();
+});
+
+loaders.monitor = async () => {
+  // Your watchlist first: the tracked products show which ones are on it.
+  await Promise.all([loadItems(), loadRetailers()]);
+  $('#pt-tracked').hidden = !state.me.entitlement.active;
+  await Promise.all([monitorUI.load(), showList(state.list)]);
+};
 loaders['monitor-settings'] = () => monitorUI.loadSettings();
 loaders['monitor-log'] = () => monitorUI.loadChecks();
 initThemeToggle($('#theme-toggle'));
@@ -372,11 +432,17 @@ function itemRow(it, i) {
       }, '✕')));
 }
 
+// Your watchlist: 10 to a page (the page kept while things change).
+const W_PAGE_SIZE = 10;
 function renderItems() {
   const list = $('#w-list');
   list.textContent = '';
+  $('#w-count').textContent = state.items.length ? String(state.items.length) : '';
+  const pages = Math.max(1, Math.ceil(state.items.length / W_PAGE_SIZE));
+  state.wPage = Math.min(Math.max(1, state.wPage || 1), pages);
+  renderPager($('#w-pager'), { page: state.wPage, size: W_PAGE_SIZE, total: state.items.length, label: 'Watchlist', onPage: (p) => { state.wPage = p; renderItems(); } });
   if (state.itemsInactive) list.append(h('li', { class: 'notice warn' }, 'Monitoring is paused while your account has no active membership.'));
-  if (!state.items.length) list.append(h('li', { class: 'empty' }, 'Nothing on your watchlist yet — press "+ Add SKU".'));
+  if (!state.items.length) list.append(h('li', { class: 'empty' }, 'Nothing on your watchlist yet — press "+ Add SKU", or ☆ Watch a product in Tracked products.'));
   // Signed out at a store you're watching: ⚡ Buy is faster signed in.
   const out = state.logins ? state.logins.stores.filter((s) => s.status === 'out' && state.items.some((it) => it.store === s.id)) : [];
   if (out.length) {
@@ -384,7 +450,8 @@ function renderItems() {
       h('span', {}, h('b', {}, `You're signed out at ${out.map((s) => s.name).join(', ')}. `), 'Sign in so ⚡ Buy\'s checkout is faster (the store fills in your saved details).'),
       h('span', { class: 'acts' }, ...out.slice(0, 3).map((s) => h('a', { class: 'btn small', href: s.signInUrl, target: '_blank', rel: 'noopener' }, `${s.name} ↗`)))));
   }
-  state.items.forEach((it, i) => list.append(itemRow(it, i)));
+  const from = (state.wPage - 1) * W_PAGE_SIZE;
+  state.items.slice(from, from + W_PAGE_SIZE).forEach((it, i) => list.append(itemRow(it, from + i)));
 }
 
 async function loadItems() {
@@ -392,6 +459,19 @@ async function loadItems() {
   state.items = r.items;
   state.itemsInactive = !r.active;
   renderItems();
+  monitorUI.refreshWatched();
+}
+
+/** ☆ Watch on a tracked product: it goes on your watchlist (its own page checks and DMs). */
+async function watchProduct(p) {
+  try {
+    await api('POST', '/api/items', p.url ? { url: p.url, sku: p.sku, name: p.name || p.sku } : { store: p.store, sku: p.sku, name: p.name || p.sku });
+    await loadItems();
+    toast('On your watchlist', p.name || p.sku, 'success');
+  } catch (e) {
+    if (e.status === 402) { toast('Membership needed', e.message, 'warn'); return; }
+    toast("Couldn't add it", e.message, 'warn');
+  }
 }
 
 async function checkNow(it) {
@@ -524,10 +604,11 @@ $('#w-demo').addEventListener('click', async () => {
   toast(r.added ? `Added ${r.added} dummy-store item${r.added === 1 ? '' : 's'}` : 'You already have the dummy-store items', `Change their stock at ${state.me.app.demoStoreUrl}`);
 });
 
-loaders.watch = async () => {
-  await Promise.all([loadItems(), renderExtStatus(), loadRetailers(), loadLogins().catch(() => null)]);
+// Your watchlist, on the Monitor page.
+async function loadWatch() {
+  await Promise.all([renderExtStatus(), loadLogins().catch(() => null)]);
   renderItems();
-};
+}
 
 // ---------------------------------------------------------------------------
 // 📦 Checkout details (delivery profiles) and the card in the extension
@@ -602,6 +683,34 @@ $('#p-form').addEventListener('submit', (e) => {
   });
 });
 
+const cardLabel = (c) => `${c.brand} •••• ${c.last4} · expires ${c.expMonth}/${String(c.expYear).slice(-2)}`;
+
+// The card's backup in your account (locked in the extension with your card passphrase).
+function renderCardBackup() {
+  const box = $('#card-backup');
+  const b = state.cardBackup;
+  box.textContent = '';
+  if (b) {
+    box.append(h('p', {}, h('span', { class: 'pill ok' }, 'Backed up'), ' ', `${cardLabel(b)} is backed up in your account, locked with your card passphrase. A new install of the extension, or another browser, restores it with that passphrase (Card settings). Mugibot can't open it.`),
+      h('div', { class: 'form-actions' }, h('button', {
+        class: 'btn small danger', type: 'button', id: 'card-unbackup',
+        onclick: async () => {
+          if (!confirm('Delete the backup of your card from your account? The card stays in the extensions it\'s saved in.')) return;
+          await api('DELETE', '/api/card-backup');
+          state.cardBackup = null;
+          renderCardBackup();
+          renderCard().catch(() => null);
+        },
+      }, 'Delete the backup')));
+  } else {
+    box.append(h('p', { class: 'muted small' }, 'Not backed up. In Card settings you can back it up to your account, locked with a card passphrase only you know, so a new install of the extension doesn\'t need the card typed in again.'));
+  }
+}
+
+async function loadCardBackup() {
+  state.cardBackup = (await api('GET', '/api/card-backup')).backup;
+}
+
 async function renderCard() {
   const box = $('#card-state');
   const ext = state.ext || await detectExtension();
@@ -610,7 +719,13 @@ async function renderCard() {
   if (!ext.paired || ext.userId !== state.me.user.id) { box.className = 'notice warn'; box.textContent = 'Connect the extension to your account (Extension tab) first.'; return; }
   const r = await askExtension('cardStatus');
   const c = r && r.card;
-  $('#card-open').textContent = c && c.saved ? 'Card settings' : 'Add your card';
+  const b = state.cardBackup;
+  $('#card-open').textContent = c && c.ready ? 'Card settings' : b ? 'Restore your card' : c && c.saved ? 'Card settings' : 'Add your card';
+  if ((!c || !c.ready) && b) {
+    box.className = 'notice warn';
+    box.textContent = `${cardLabel(b)} is backed up in your account, but not in this browser yet. Press Restore your card and enter your card passphrase.`;
+    return;
+  }
   if (!c || !c.saved) { box.className = 'notice warn'; box.textContent = 'No card saved in this browser yet. Press Add your card: save it once and every ⚡ Buy fills it in.'; return; }
   const label = `${c.brand} •••• ${c.last4} · expires ${c.expMonth}/${String(c.expYear).slice(-2)}`;
   // Extensions from 1.3 keep the card ready ("ready"); older ones have to be unlocked after every browser restart.
@@ -627,8 +742,9 @@ $('#card-open').addEventListener('click', async () => {
 });
 
 loaders.checkout = async () => {
-  await loadProfiles();
+  await Promise.all([loadProfiles(), loadCardBackup().catch(() => null)]);
   renderProfiles();
+  renderCardBackup();
   await renderCard();
 };
 
@@ -651,7 +767,8 @@ const versionBelow = (a, b) => {
 };
 
 async function loadAco() {
-  state.aco = await api('GET', '/api/aco');
+  // (Every run of the last while: the run history is paged here.)
+  state.aco = await api('GET', '/api/aco?limit=200');
   return state.aco;
 }
 
@@ -706,11 +823,11 @@ function renderAcoItems() {
   const items = state.items.filter((it) => show !== 'armed' || it.aco);
   const pages = Math.max(1, Math.ceil(items.length / ACO_PAGE_SIZE));
   state.acoPage = Math.min(Math.max(1, state.acoPage || 1), pages);
-  renderAcoPager(pages, items.length);
+  renderPager($('#aco-pager'), { page: state.acoPage, size: ACO_PAGE_SIZE, total: items.length, label: 'Armed items', onPage: (p) => { state.acoPage = p; renderAcoItems(); } });
   if (!items.length) {
     body.append(h('tr', { class: 'empty' }, h('td', { colspan: '5' }, show === 'armed'
       ? 'Nothing armed yet — show every item and switch one on.'
-      : 'Your watchlist is empty — add SKUs on the Watchlist tab, then arm them here.')));
+      : ['Your watchlist is empty — add SKUs on the ', h('a', { href: '#watch' }, 'Monitor page (My watchlist)'), ', then arm them here.'])));
     return;
   }
   const lastRun = (id) => (state.aco.runs || []).find((r) => r.itemId === id);
@@ -752,26 +869,6 @@ function renderAcoItems() {
   }
 }
 
-function renderAcoPager(pages, total) {
-  const nav = $('#aco-pager');
-  nav.textContent = '';
-  nav.hidden = pages <= 1;
-  if (pages <= 1) return;
-  const go = (p) => { state.acoPage = p; renderAcoItems(); };
-  const from = (state.acoPage - 1) * ACO_PAGE_SIZE + 1;
-  const prev = h('button', { type: 'button', class: 'btn small', disabled: state.acoPage <= 1, 'aria-label': 'Previous page' }, '‹ Prev');
-  const next = h('button', { type: 'button', class: 'btn small', disabled: state.acoPage >= pages, 'aria-label': 'Next page' }, 'Next ›');
-  prev.addEventListener('click', () => go(state.acoPage - 1));
-  next.addEventListener('click', () => go(state.acoPage + 1));
-  const nums = [];
-  for (let p = 1; p <= pages; p++) {
-    const b = h('button', { type: 'button', class: `btn small pg${p === state.acoPage ? ' on' : ''}`, 'aria-label': `Page ${p}`, 'aria-current': p === state.acoPage ? 'page' : null }, String(p));
-    b.addEventListener('click', () => go(p));
-    nums.push(b);
-  }
-  nav.append(prev, ...nums, next, h('span', { class: 'muted small pg-sum' }, `${from}–${Math.min(from + ACO_PAGE_SIZE - 1, total)} of ${total}`));
-}
-
 /** Trigger ACO: a test run for one item, now (after saying what it will do). */
 async function triggerAco(it, maxInput, btn) {
   const s = state.aco.settings;
@@ -798,16 +895,22 @@ async function triggerAco(it, maxInput, btn) {
   }
 }
 
+// Run history: 10 to a page.
+const RUNS_PAGE_SIZE = 10;
 function renderAcoRuns() {
   const list = $('#aco-runs');
   list.textContent = '';
   const want = ACO_FILTER[$('#aco-filter').value];
   const runs = (state.aco.runs || []).filter((r) => !want || want.includes(r.status));
+  const pages = Math.max(1, Math.ceil(runs.length / RUNS_PAGE_SIZE));
+  state.runsPage = Math.min(Math.max(1, state.runsPage || 1), pages);
+  renderPager($('#aco-runs-pager'), { page: state.runsPage, size: RUNS_PAGE_SIZE, total: runs.length, label: 'Run history', onPage: (p) => { state.runsPage = p; renderAcoRuns(); } });
   if (!runs.length) {
     list.append(h('li', { class: 'empty' }, want ? 'Nothing here.' : 'Nothing yet. When an armed item drops, each attempt shows up here — what happened, and why.'));
     return;
   }
-  for (const r of runs) {
+  const from = (state.runsPage - 1) * RUNS_PAGE_SIZE;
+  for (const r of runs.slice(from, from + RUNS_PAGE_SIZE)) {
     const icon = ACO_ICON[r.status] || '⏳';
     const money2 = r.total != null ? `${money(r.total)} total` : r.price != null ? money(r.price) : '';
     const steps = h('ol', { class: 'aco-steps' }, ...r.steps.map((x) => h('li', {},
@@ -835,13 +938,16 @@ async function renderAcoChecks() {
   const minV = state.aco.extensionVersion || '1.10.0';
   const extOk = mine && !versionBelow(ext.version, minV);
   const card = mine ? ((await askExtension('cardStatus')) || {}).card : null;
+  const backup = card && card.ready ? null : (await api('GET', '/api/card-backup').catch(() => ({}))).backup;
   const profiles = await api('GET', '/api/profiles').catch(() => null);
   const profile = profiles && profiles.profiles && profiles.profiles.find((p) => p.id === profiles.defaultId) || (profiles && profiles.profiles && profiles.profiles[0]);
   const listening = extOk && s.enabled ? await askExtension('acoListen', {}, 4000) : null;
   const rows = [
     [state.me.entitlement.active, 'Membership active', 'Start your membership', '#membership'],
     [extOk, extOk ? `Extension connected in this browser (v${ext.version})` : !ext.installed ? 'Install the extension in the browser you keep open' : !mine ? 'Connect the extension in this browser to your account' : `Update the extension to ${minV} or newer (this one is ${ext.version})`, 'Extension tab', '#extension'],
-    [!!(card && card.ready), card && card.saved ? `${card.brand} •••• ${card.last4} saved in the extension${card.ready ? '' : ' — open Card settings once to make it ready'}` : 'Save your card in the extension (it never leaves your browser)', 'Card settings', '#checkout'],
+    [!!(card && card.ready), card && card.ready ? `${card.brand} •••• ${card.last4} saved in the extension`
+      : backup ? `${backup.brand} •••• ${backup.last4} is backed up in your account — restore it in this browser with your card passphrase`
+        : card && card.saved ? `${card.brand} •••• ${card.last4} saved in the extension — open Card settings once to make it ready` : 'Save your card in the extension (we never see it)', 'Card settings', '#checkout'],
     [!!(profile && profile.address1 && profile.email), profile && profile.address1 ? `Delivery details: ${profile.label} (${profile.suburb || profile.postcode})` : 'Save your delivery details', 'Checkout details', '#checkout'],
     [!!state.me.user.discord, state.me.user.discord ? 'Discord connected: a DM for every attempt' : 'Connect Discord to get a DM for every attempt (optional)', 'Discord', '#discord'],
   ];
@@ -900,7 +1006,7 @@ $('#aco-form').addEventListener('submit', (e) => {
     }
   });
 });
-$('#aco-filter').addEventListener('change', () => renderAcoRuns());
+$('#aco-filter').addEventListener('change', () => { state.runsPage = 1; renderAcoRuns(); });
 $('#aco-show').addEventListener('change', () => { state.acoPage = 1; renderAcoItems(); });
 $('#aco-recheck').addEventListener('click', () => renderAcoChecks().catch(() => null));
 
@@ -1049,18 +1155,23 @@ function feedItem(ev) {
     h('time', { datetime: new Date(ev.createdAt).toISOString() }, when(ev.createdAt)),
     h('span', {}, ev.message, /^https?:\/\//i.test(ev.url || '') ? [' ', h('a', { href: ev.url, target: '_blank', rel: 'noopener' }, '↗')] : null));
 }
-async function loadFeed(more = false) {
-  const before = more && state.feedOldest ? `&before=${state.feedOldest}` : '';
-  const { events } = await api('GET', `/api/events?limit=50${before}`);
+// Your activity, on the Monitor page: 20 to a page, newest first.
+const FEED_PAGE_SIZE = 20;
+async function loadFeed(page = 1) {
+  const r = await api('GET', `/api/events?limit=${FEED_PAGE_SIZE}&page=${page}`);
+  const pages = Math.max(1, Math.ceil(r.total / FEED_PAGE_SIZE));
+  if (page > pages && r.total) return loadFeed(pages);
+  state.feedPage = page;
+  state.feedTotal = r.total;
   const list = $('#feed');
-  if (!more) list.textContent = '';
-  if (!events.length && !more) list.append(h('li', { class: 'empty' }, 'Nothing yet.'));
-  events.forEach((ev) => list.append(feedItem(ev)));
-  if (events.length) state.feedOldest = events[events.length - 1].id;
-  $('#feed-more').hidden = events.length < 50;
+  list.textContent = '';
+  if (!r.events.length) list.append(h('li', { class: 'empty' }, 'Nothing yet.'));
+  r.events.forEach((ev) => list.append(feedItem(ev)));
+  renderFeedPager();
 }
-loaders.activity = () => loadFeed(false);
-$('#feed-more').addEventListener('click', () => loadFeed(true).catch(showError));
+function renderFeedPager() {
+  renderPager($('#feed-pager'), { page: state.feedPage, size: FEED_PAGE_SIZE, total: state.feedTotal, label: 'Activity', onPage: (p) => loadFeed(p).catch(showError) });
+}
 
 // ---------------------------------------------------------------------------
 // 👤 Account
@@ -1112,15 +1223,19 @@ function connectStream() {
   es.addEventListener('event', (e) => {
     const ev = JSON.parse(e.data);
     if (ev.level === 'urgent' || ev.level === 'success' || ev.level === 'warn') toast(ev.title || ev.message, ev.title ? ev.message : '', ev.level, ev.level === 'urgent' ? 15000 : 6000);
-    const list = $('#feed');
-    if (!$('[data-panel="activity"]').hidden) {
+    // On the first page of your activity: it shows up at the top (the pages move along on the next load).
+    if (listOpen('activity') && state.feedPage === 1) {
+      const list = $('#feed');
       $('.empty', list)?.remove();
       list.prepend(feedItem(ev));
+      while (list.children.length > FEED_PAGE_SIZE) list.lastElementChild.remove();
+      state.feedTotal = (state.feedTotal || 0) + 1;
+      renderFeedPager();
     }
     if (ev.type === 'billing' || ev.type === 'account') loadMe().catch(() => null);
   });
   es.addEventListener('watch', () => {
-    if ($('[data-panel="watch"]').hidden) return;
+    if ($('[data-panel="monitor"]').hidden && $('[data-panel="aco"]').hidden) return;
     clearTimeout(watchTimer);
     watchTimer = setTimeout(() => loadItems().catch(() => null), 300);
   });
@@ -1134,12 +1249,17 @@ function connectStream() {
   es.addEventListener('monitor-feed', (e) => monitorUI.onFeed(JSON.parse(e.data)));
   es.addEventListener('monitor-product', (e) => monitorUI.onProduct(JSON.parse(e.data)));
   es.addEventListener('monitor-sweep', (e) => monitorUI.onSweep(JSON.parse(e.data)));
+  // The card's backup changed (made, updated or deleted in an extension).
+  es.addEventListener('card', (e) => {
+    state.cardBackup = JSON.parse(e.data).backup;
+    if (!$('[data-panel="checkout"]').hidden) { renderCardBackup(); renderCard().catch(() => null); }
+  });
   es.addEventListener('devices', () => {
     if (!$('[data-panel="extension"]').hidden) {
       loadDevices().catch(() => null);
       loadLogins().then(renderLogins).catch(() => null);
     }
-    if (!$('[data-panel="watch"]').hidden) loadLogins().then(renderItems).catch(() => null);
+    if (listOpen('watch')) loadLogins().then(renderItems).catch(() => null);
     renderExtStatus().catch(() => null);
   });
 }

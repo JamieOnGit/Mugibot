@@ -219,6 +219,71 @@ test('a card saved with a passphrase by an older version: entering it once keeps
   assert.equal(local[`vault:${userId}`].v, 2, 'moved over to the new kind');
 });
 
+test("card backup: locked in the extension with a card passphrase and kept in your account; gone from this browser (like a new install), the passphrase brings it back — a wrong one doesn't", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const opts = await ctx.newPage();
+  await opts.goto(`chrome-extension://${extId}/options.html`);
+  await opts.waitForSelector('#backup-form:not([hidden])');
+  assert.equal(await opts.isHidden('#restore-form'), true, 'nothing to restore yet');
+  // A passphrase of at least 10 characters, typed twice.
+  await opts.fill('#backup-pass', 'short');
+  await opts.fill('#backup-pass2', 'short');
+  await opts.click('#backup-form button[type=submit]');
+  await opts.waitForFunction(() => /at least 10 characters/.test(document.querySelector('#backup-msg').textContent));
+  await opts.fill('#backup-pass', 'correct horse battery');
+  await opts.fill('#backup-pass2', 'correct horse batterz');
+  await opts.click('#backup-form button[type=submit]');
+  await opts.waitForFunction(() => /don't match/.test(document.querySelector('#backup-msg').textContent));
+  await opts.fill('#backup-pass', 'correct horse battery');
+  await opts.fill('#backup-pass2', 'correct horse battery');
+  await opts.click('#backup-form button[type=submit]');
+  await opts.waitForSelector('#backup-on:not([hidden])', { timeout: 20000 });
+  assert.match(await opts.textContent('#backup-msg'), /Backed up/);
+  // In the account: the locked copy, and nothing the server could read the card from.
+  const backup = env.app.repo.getData(userId, 'cardBackup');
+  assert.deepEqual([backup.brand, backup.last4, backup.iterations], ['Visa', '4242', 600000]);
+  assert.doesNotMatch(JSON.stringify(backup), /4242 ?4242 ?4242|Ash Ketchum|"123"/);
+  assert.doesNotMatch(JSON.stringify(env.app.db.all('SELECT * FROM user_data')) + JSON.stringify(env.app.db.all('SELECT * FROM events')), /4242 ?4242 ?4242|Ash Ketchum/);
+  // The dashboard says so.
+  const dash = await ctx.newPage();
+  await dash.goto(`${env.url}/app#checkout`);
+  // (The backup's line comes from the account; the card's from the extension, a moment later.)
+  await dash.waitForFunction(() => /Backed up/.test(document.querySelector('#card-backup').textContent));
+  await dash.waitForFunction(() => !/Checking this browser/.test(document.querySelector('#card-state').textContent), null, { timeout: 20000 });
+  assert.match(await dash.textContent('#card-state'), /Visa •••• 4242 · expires 07\/29 — ready/);
+  // Gone from this browser (what a new install of the extension, or another browser, starts with).
+  opts.once('dialog', (d) => d.accept());
+  await opts.click('#remove');
+  await opts.waitForSelector('#restore-form:not([hidden])');
+  assert.match(await opts.textContent('#restore-label'), /Visa •••• 4242 · expires 07\/29/);
+  const popup = await ctx.newPage();
+  await popup.goto(`chrome-extension://${extId}/popup.html`);
+  await popup.waitForFunction(() => /backed up in your account — restore it in Card settings/.test(document.querySelector('#card-status').textContent));
+  assert.equal(await popup.textContent('#card-settings'), 'Restore your card');
+  await popup.close();
+  await dash.reload();
+  await dash.waitForFunction(() => /backed up in your account, but not in this browser yet/.test(document.querySelector('#card-state').textContent));
+  assert.equal(await dash.textContent('#card-open'), 'Restore your card');
+  // A wrong passphrase opens nothing; the right one, and the card is ready in this browser again.
+  await opts.fill('#restore-pass', 'wrong horse battery');
+  await opts.click('#restore-form button[type=submit]');
+  await opts.waitForFunction(() => /isn't right/.test(document.querySelector('#restore-msg').textContent), null, { timeout: 20000 });
+  await opts.fill('#restore-pass', 'correct horse battery');
+  await opts.click('#restore-form button[type=submit]');
+  await opts.waitForSelector('#restore-form[hidden]', { state: 'attached', timeout: 20000 });
+  await opts.waitForSelector('#card-saved:not([hidden])');
+  assert.equal(await opts.textContent('#card-state'), 'Ready for checkout');
+  assert.match(await opts.textContent('#card-label'), /Visa •••• 4242 · expires 07\/29/);
+  assert.match(await opts.textContent('#saved-msg'), /Restored/);
+  assert.equal(await opts.isVisible('#backup-on'), true, 'and it says it is backed up');
+  const local = await sw.evaluate((id) => chrome.storage.local.get(`vault:${id}`), userId);
+  assert.equal(local[`vault:${userId}`].v, 2, 'kept in this browser like any saved card');
+  await dash.reload();
+  await dash.waitForFunction(() => /ready: ⚡ Buy fills it in/.test(document.querySelector('#card-state').textContent));
+  await dash.close();
+  await opts.close();
+});
+
 test('Kmart flow (verified): ⚡ Buy → added → straight to checkout → details → delivery → payment → stops at "Checkout securely"', async () => {
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
   const dash = await ctx.newPage();

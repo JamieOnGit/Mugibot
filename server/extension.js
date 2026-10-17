@@ -13,6 +13,9 @@ import { makeZip } from './zip.js';
 export const EXTENSION_SRC = path.join(ROOT, 'extension');
 const TEMPLATE = JSON.parse(fs.readFileSync(path.join(EXTENSION_SRC, 'manifest.json'), 'utf8'));
 export const EXTENSION_VERSION = TEMPLATE.version;
+// The oldest extension Auto-checkout is ready with at every store (City Beach's flow came in 1.12.0).
+// Raise it with a release that changes a checkout flow — not every release does (1.13.0 is card backup).
+export const ACO_EXTENSION_VERSION = '1.12.0';
 // The monitor's page reader, used by the extension's in-browser checks too.
 const SHARED = ['html.js', 'extract.js', 'status.js', 'listing.js'].map((f) => ({ name: `lib/${f}`, from: path.join(ROOT, 'server', 'monitor', f) }));
 

@@ -3,7 +3,7 @@
 // with filters, and a product page with its price history. Admins also run
 // the live sweeps, add and change monitors, set up the Discord alert
 // channels, and see health and the check log here.
-import { $, $$, ago, api, busy, h, money, setMsg, toast, when } from './common.js';
+import { $, $$, ago, api, busy, h, money, renderPager, setMsg, toast, when } from './common.js';
 import { setupLive, slotOf } from './live.js';
 
 const KINDS = {
@@ -22,8 +22,8 @@ const MODES = { server: 'Server', browser: "Admin's browser", off: 'Off' };
 const DAY = 86400000;
 const SVG = 'http://www.w3.org/2000/svg';
 
-export function setupMonitor({ showError }) {
-  const m = { admin: false, stores: [], alerts: [], products: [], current: null, loaded: false, timer: null, sweep: null };
+export function setupMonitor({ showError, watching = () => null, watch: addToWatchlist = null }) {
+  const m = { admin: false, stores: [], alerts: [], products: [], current: null, loaded: false, timer: null, sweep: null, page: 1, member: false };
   // The Monitor's pages: Live (everyone), Settings and Check log (admins).
   const panelOpen = () => !$('[data-panel="monitor"]').hidden;
   const settingsOpen = () => !$('[data-panel="monitor-settings"]').hidden;
@@ -37,6 +37,8 @@ export function setupMonitor({ showError }) {
     onSettings: (d) => { fillSweepForm(d); renderSweep(d); },
     resetStore: (id, button) => resetStore(id, button),
     setMode: (id, mode) => setMode(id, mode),
+    // A store switched off (for you, or for everyone): the products list follows.
+    onStores: () => { if (m.loaded) loadProducts().catch(() => null); },
   });
 
   // ---------------------------------------------------------------------------
@@ -51,12 +53,17 @@ export function setupMonitor({ showError }) {
       if (e.status !== 402) throw e;
       const box = $('#m-paywall');
       box.textContent = '';
-      box.append(h('div', { class: 'notice warn' }, h('b', {}, 'The live monitor is for members. '), h('a', { href: '#membership' }, 'Start your membership'), ' to see every store\'s searches, new drops and restocks as they happen.'));
-      $('#sn-shell').hidden = true;
+      box.append(h('div', { class: 'notice warn' }, h('b', {}, 'The live monitor is for members. '), h('a', { href: '#membership' }, 'Start your membership'), ' to see every store\'s searches, new drops and restocks as they happen. Your watchlist and activity are below.'));
+      // (Your own lists stay: only the live parts are for members.)
+      $('#sn-shell').classList.add('locked');
+      $('[data-panel="monitor"]').classList.add('locked');
+      m.member = false;
       return false;
     }
     $('#m-paywall').textContent = '';
-    $('#sn-shell').hidden = false;
+    $('#sn-shell').classList.remove('locked');
+    $('[data-panel="monitor"]').classList.remove('locked');
+    m.member = true;
     m.admin = data.admin;
     m.stores = data.stores;
     if (!m.loaded) fillChoices();
@@ -70,7 +77,9 @@ export function setupMonitor({ showError }) {
   // Live: the sonar, the stores, the feed and the products.
   async function load() {
     if (!(await base())) return;
-    await Promise.all([live.load(), loadProducts()]);
+    // (The stores you've switched off come with the live view: the products list leaves them out.)
+    await live.load();
+    await loadProducts();
   }
 
   // Settings (admins): the stores and where they're searched from, keywords, alerts, Discord channels.
@@ -87,23 +96,43 @@ export function setupMonitor({ showError }) {
     await Promise.all([loadHealth(), loadLog()]);
   }
 
+  // Tracked products: 25 to a page. Stores you've switched off are left out (unless you pick one).
+  const PRODUCTS_PAGE_SIZE = 25;
   async function loadProducts() {
-    const { products } = await api('GET', `/api/monitor/products?${qs(filters())}`);
+    const f = filters();
+    const { products: all } = await api('GET', `/api/monitor/products?${qs(f)}`);
+    const hidden = live.hiddenStores();
+    const products = f.store ? all : all.filter((p) => !hidden.has(p.store) && !hidden.has(String(p.store).replace(/^demo-/, '')));
     const seen = new Set(m.products.map((p) => p.id));
-    const fresh = m.products.length ? products.filter((p) => !seen.has(p.id)).map((p) => p.id) : [];
+    m.fresh = m.products.length ? new Set(products.filter((p) => !seen.has(p.id)).map((p) => p.id)) : new Set();
     m.products = products;
+    $('#m-count').textContent = `${products.length}`;
+    renderProducts();
+  }
+
+  function renderProducts() {
     const list = $('#m-products');
+    const products = m.products;
     list.textContent = '';
-    $('#m-count').textContent = `${products.length} tracked`;
+    const pages = Math.max(1, Math.ceil(products.length / PRODUCTS_PAGE_SIZE));
+    m.page = Math.min(Math.max(1, m.page || 1), pages);
+    renderPager($('#m-pager'), { page: m.page, size: PRODUCTS_PAGE_SIZE, total: products.length, label: 'Tracked products', onPage: (p) => { m.page = p; renderProducts(); $('#m-lists').scrollIntoView({ block: 'start', behavior: 'smooth' }); } });
     if (!products.length) {
-      list.append(h('li', { class: 'empty' }, filters().q || filters().category || filters().store || filters().status
+      const f = filters();
+      list.append(h('li', { class: 'empty' }, f.q || f.category || f.store || f.status
         ? 'Nothing matches those filters.' : m.admin ? 'Nothing tracked yet — the live sweeps fill this in within a minute (or press + Add monitor).' : 'No products are being tracked yet.'));
     }
-    for (const p of products) {
+    const from = (m.page - 1) * PRODUCTS_PAGE_SIZE;
+    for (const p of products.slice(from, from + PRODUCTS_PAGE_SIZE)) {
       const r = productRow(p);
-      if (fresh.includes(p.id)) r.classList.add('flash');
+      if (m.fresh && m.fresh.has(p.id)) r.classList.add('flash');
       list.append(r);
     }
+  }
+
+  /** Your watchlist changed: the ☆ Watch buttons follow. */
+  function refreshWatched() {
+    if (m.loaded && m.products.length) renderProducts();
   }
 
   function fillChoices() {
@@ -187,6 +216,15 @@ export function setupMonitor({ showError }) {
     const acts = [];
     if (p.status !== 'not_found') acts.push(h('a', { class: 'btn small primary', href: buyUrl(p), target: '_blank', rel: 'noopener', title: 'Adds it to your watchlist and runs your checkout with the extension' }, '⚡ Buy'));
     if (p.url) acts.push(h('a', { class: 'btn small', href: p.url, target: '_blank', rel: 'noopener', 'aria-label': `Open ${p.name || p.sku} at the store` }, '↗'));
+    // On your watchlist (its own checks and DMs, and Auto-checkout) — or one click away.
+    const mine = watching(p);
+    if (mine) {
+      acts.push(h('a', { class: 'btn small watching', href: '#watch', title: mine.aco ? 'On your watchlist, armed for Auto-checkout' : 'On your watchlist', 'aria-label': `${p.name || p.sku} is on your watchlist` }, mine.aco ? '★ 🤖' : '★'));
+    } else if (addToWatchlist && p.status !== 'not_found') {
+      const b = h('button', { class: 'btn small watch', type: 'button', title: 'Watch it: on your watchlist, with your own checks, a DM when it\'s in stock, and Auto-checkout', 'aria-label': `Watch ${p.name || p.sku}` }, '☆');
+      b.addEventListener('click', async () => { b.disabled = true; await addToWatchlist(p); });
+      acts.push(b);
+    }
     return h('li', { class: `product ${p.monitor && p.monitor.paused ? 'paused' : ''}`, dataset: { id: p.id } },
       thumb(p.image, p.name || p.sku),
       h('div', { class: 'info' },
@@ -517,7 +555,8 @@ export function setupMonitor({ showError }) {
         w.dropAt ? `drops ${new Date(w.dropAt).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}` : 'no drop time',
         w.maxPrice !== null ? `🤖 auto-checkout for ${w.acoUserName || 'you'} up to ${money(w.maxPrice)}` : '',
       ].filter(Boolean).join(' · ');
-      const found = w.found.length ? h('div', { class: 'meta' }, 'Found: ', ...w.found.map((p, i) => h('span', {}, i ? ', ' : '', h('a', { href: p.url || '#', target: '_blank', rel: 'noopener' }, p.name || p.id), ` (${STATUS[p.status] || p.status}${typeof p.price === 'number' ? `, ${money(p.price)}` : ''})`)))
+      const ARM = { armed: ' · 🤖 armed', pending: ' · checking whether it\'s on sale yet', skipped: ' · on sale before the watch: not armed' };
+      const found = w.found.length ? h('div', { class: 'meta' }, 'Found: ', ...w.found.map((p, i) => h('span', {}, i ? ', ' : '', h('a', { href: p.url || '#', target: '_blank', rel: 'noopener' }, p.name || p.id), ` (${STATUS[p.status] || p.status}${typeof p.price === 'number' ? `, ${money(p.price)}` : ''}${ARM[p.arm] || ''})`)))
         : h('div', { class: 'meta' }, w.url ? 'Reading the page…' : 'Nothing with those words yet — it alerts the moment something shows up.');
       list.append(h('li', {},
         h('div', { class: 'info' },
@@ -525,7 +564,7 @@ export function setupMonitor({ showError }) {
           h('div', { class: 'meta' }, w.label ? `${what} · ${bits}` : bits), found),
         h('div', { class: 'acts' }, h('button', {
           class: 'btn small danger', type: 'button',
-          onclick: async () => { if (!confirm(`Remove the VIP watch "${w.label || what}"?`)) return; renderVip(await api('DELETE', `/api/monitor/vip/${w.id}`)); },
+          onclick: async () => { if (!confirm(`Remove the VIP watch "${w.label || what}"?${w.maxPrice !== null ? ' What it armed for Auto-checkout is disarmed.' : ''}`)) return; renderVip(await api('DELETE', `/api/monitor/vip/${w.id}`)); },
         }, 'Remove'))));
     }
   }
@@ -600,7 +639,7 @@ export function setupMonitor({ showError }) {
   // Controls
   // ---------------------------------------------------------------------------
   let filterTimer = null;
-  const refilter = () => { clearTimeout(filterTimer); filterTimer = setTimeout(() => loadProducts().catch(showError), 200); };
+  const refilter = () => { clearTimeout(filterTimer); filterTimer = setTimeout(() => { m.page = 1; loadProducts().catch(showError); }, 200); };
   $('#m-q').addEventListener('input', refilter);
   for (const id of ['#m-category', '#m-store', '#m-status']) $(id).addEventListener('change', refilter);
   $('#m-kind').addEventListener('change', () => live.setFilter($('#m-kind').value));
@@ -793,10 +832,10 @@ export function setupMonitor({ showError }) {
     if (!panelOpen()) return;
     const row = p && $(`#m-products li[data-id="${CSS.escape(p.id)}"]`);
     const known = p && m.products.find((x) => x.id === p.id);
-    if (row && known) {
+    if (known) {
       const merged = { ...known, ...p, monitor: known.monitor };
       m.products[m.products.indexOf(known)] = merged;
-      row.replaceWith(productRow(merged));
+      if (row) row.replaceWith(productRow(merged));
       if (m.current && m.current.product.id === p.id) openProduct(p.id).catch(() => null);
       return;
     }
@@ -814,5 +853,5 @@ export function setupMonitor({ showError }) {
     }, 600);
   }
 
-  return { load, loadSettings, loadChecks, openProduct, onFeed, onProduct, onSweep };
+  return { load, loadSettings, loadChecks, openProduct, onFeed, onProduct, onSweep, refreshWatched };
 }

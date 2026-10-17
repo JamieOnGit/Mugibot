@@ -5,11 +5,12 @@
 
 import { CATEGORIES, toMonitor, toProduct } from '../catalog.js';
 import { MonitorAdmin } from '../monitor/manage.js';
+import { publicEvent, publicProduct, publicStore } from '../monitor/public.js';
 import { SWEEP_DEFAULTS } from '../monitor/sweep.js';
 import { HttpError, bad, str } from '../schema.js';
 
 export function register(router, ctx) {
-  const { cfg, catalog, retailers, monitor, sweeper, feed, limiter } = ctx;
+  const { cfg, repo, catalog, retailers, monitor, sweeper, feed, limiter } = ctx;
   const manage = new MonitorAdmin(ctx);
   ctx.monitorAdmin = manage;
   const member = { entitled: true };
@@ -37,8 +38,12 @@ export function register(router, ctx) {
   // The live monitor: each store's searches as they happen, the counters and the latest events.
   router.get('/api/monitor/live', async (req) => {
     const s = sweeper.settings;
+    // Members: each store's state and its searches, never where they come from (monitor/public.js).
+    const live = sweeper.live({ offToo: isAdmin(req) });
+    if (!isAdmin(req)) Object.assign(live, { stores: live.stores.map(publicStore), events: live.events.map(publicEvent).filter(Boolean) });
     return {
-      ...sweeper.live(),
+      ...live,
+      prefs: monitorPrefs(req.user.id),
       overview: overview(),
       alerts: catalog.recentAlerts({ limit: 40 }),
       settings: isAdmin(req) ? s : {
@@ -49,12 +54,28 @@ export function register(router, ctx) {
     };
   }, member);
 
+  // A member's own view of the monitor: the stores they've switched off (hidden from their live feed,
+  // products and dashboard alerts — the monitor itself carries on for everyone).
+  const monitorPrefs = (userId) => {
+    const p = repo.getData(userId, 'monitorPrefs', null) || {};
+    return { hiddenStores: Array.isArray(p.hiddenStores) ? p.hiddenStores : [] };
+  };
+  router.get('/api/monitor/prefs', async (req) => monitorPrefs(req.user.id), member);
+  router.put('/api/monitor/prefs', async (req) => {
+    const raw = req.body && req.body.hiddenStores;
+    if (!Array.isArray(raw)) throw bad('hiddenStores must be a list');
+    const known = new Set(sweeper.stores().map((x) => x.retailer.id));
+    const hiddenStores = [...new Set(raw.map((x) => str(x, 40)).filter((id) => known.has(id)))].slice(0, 100);
+    repo.setData(req.user.id, 'monitorPrefs', { hiddenStores });
+    return { hiddenStores };
+  }, member);
+
   router.get('/api/monitor/products', async (req) => {
     const q = req.query;
     const list = catalog.listProducts({
       q: str(q.get('q'), 80), category: str(q.get('category'), 20), store: str(q.get('store'), 40), status: str(q.get('status'), 20), admin: isAdmin(req),
     });
-    return { products: list.map((p) => (isAdmin(req) || !p.monitor ? p : { ...p, monitor: { id: p.monitor.id, paused: p.monitor.paused } })) };
+    return { products: isAdmin(req) ? list : list.map(publicProduct) };
   }, member);
 
   router.get('/api/monitor/products/:id', async (req) => {
@@ -62,7 +83,7 @@ export function register(router, ctx) {
     const m = p && catalog.monitorForProduct(p.id);
     if (!p || (!isAdmin(req) && !catalog.isListed(p))) throw new HttpError(404, 'Not found');
     return {
-      product: toProduct(p),
+      product: isAdmin(req) ? toProduct(p) : publicProduct(toProduct(p)),
       monitor: m ? (isAdmin(req) ? toMonitor(m) : { id: m.id, paused: !!m.paused }) : null,
       history: catalog.priceHistory(p.id, 180),
       alerts: catalog.recentAlerts({ productId: p.id, limit: 25 }),

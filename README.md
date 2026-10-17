@@ -82,7 +82,7 @@ community. Built on TCGCopBot's working Kmart flow.
 | Set up the Discord server, bot, roles and slash commands | [docs/DISCORD.md](docs/DISCORD.md) |
 | Set up the Whop product, A$19.99 plan, API key and webhook | [docs/WHOP.md](docs/WHOP.md) |
 | Send a retailer's checkout flow (BIG W, Target…) or change one | [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md) |
-| Understand Auto-checkout: arming, limits, what it checks, the Activity log | [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md) |
+| Understand Auto-checkout: arming, limits, what it checks, the run history, card backup | [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md) |
 | Run the community day to day (admin console) | [docs/ADMIN.md](docs/ADMIN.md) |
 | Set up the Monitor feed: products, alert channels, schedules | [docs/MONITORING.md](docs/MONITORING.md) |
 | Put the extension on the Chrome Web Store, so it updates itself | [docs/CHROME-WEB-STORE.md](docs/CHROME-WEB-STORE.md) |
@@ -125,7 +125,7 @@ or change it first with `open -e .env` (Mac) / `notepad .env` (Windows).
 3. **Checkout details** tab: fill in your name and address. Then press **Add your
    card** and save a test card, e.g. `4242 4242 4242 4242`, `12/30`, `123`. It
    stays ready for every ⚡ Buy, even after you restart the browser.
-4. **Watchlist** tab → **Add dummy-store test items**.
+4. **Monitor** → **My watchlist** → **Add dummy-store test items**.
 5. Open the dummy store's control panel (http://localhost:5055), press
    **in_stock** on a sold-out product, and watch your watchlist ping. Press
    **⚡ Buy** on any dummy item and watch the extension go all the way to the
@@ -160,7 +160,7 @@ Discord and Whop are optional for this. Add them later with the guides.
   Only **Auto-checkout** presses it, and only for a member who switched it on and
   agreed, for items they armed, within their limits, once per arming
   (docs/AUTO-CHECKOUT.md). It runs in the member's own browser, and the card
-  never leaves it.
+  is only ever readable there.
 - No CAPTCHA, queue or bot-protection bypassing, and no proxies.
 - Store purchase limits are respected: if a store allows 2, it adds 2 and says so.
 
@@ -173,18 +173,23 @@ Discord and Whop are optional for this. Add them later with the guides.
 | Delivery addresses | Server, **encrypted with a key unique to that member** | The member and their connected extension |
 | Alert settings, Discord tokens | Server, encrypted per member | The member |
 | Watchlist, activity, connected browsers | Server, tied to the member | The member (admins see totals only) |
-| **Payment card** | **Only in the member's browser extension**, encrypted with a key that only that browser's extension has | The member. It's never sent to the server. |
+| **Payment card** | **In the member's browser extension**, encrypted with a key that only that browser's extension has | The member. It's never sent to the server in readable form. |
+| Card backup (optional, the member turns it on) | Server: only a copy **locked in the browser** with the member's card passphrase (PBKDF2-SHA256 600,000 rounds → AES-256-GCM), plus brand, last 4 and expiry | Nobody but the member: the passphrase never leaves their browser, so the server can't open it |
 | Membership payments | Whop | The member; you, on Whop |
 
-Card numbers are deliberately not stored on the server. Keeping them there would
-make you responsible for PCI-DSS card security, and CVVs may never be stored
-that way. Each member's card stays in their own browser, encrypted and tied to
-their account, and is filled in at every store's checkout.
+Card numbers are deliberately not stored on the server in readable form.
+Keeping them there would make you responsible for PCI-DSS card security, and
+CVVs may never be stored that way. Each member's card stays in their own
+browser, encrypted and tied to their account, and is filled in at every store's
+checkout. The optional backup works like a password manager's vault: it's
+locked in the member's browser before it's sent and Mugibot never has the key,
+so the server holds nothing it can read (have your own adviser confirm how that
+sits with PCI-DSS where you trade).
 
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 116 tests in about two minutes:
+the 212 tests in about seven minutes:
 
 ```bash
 npm install
@@ -244,8 +249,14 @@ npm test
     signed in (Amazon).
 - **Amazon sweeps from an admin's browser:** its search page asked for from inside
   an Amazon page (the dummy Amazon gives servers HTTP 503, like the real one).
+- **Dashboard round:** the card backup (only a locked copy reaches the server,
+  which can't open it; restored in a fresh install with the passphrase; a wrong
+  passphrase refused; kept per account), activity, watchlist, products and run
+  history paged, members' own store switches, and members never told where a
+  store is searched from (API and live stream).
 - **Website in a browser:** every dashboard and admin tab, including the
-  Monitor tab (live alerts, live sweeps' health and settings, product page with
+  Monitor page (live alerts, live sweeps' health and settings, the Tracked
+  products / My watchlist / My activity tabs, store switches, product page with
   price chart, alert rules, light and dark themes), phone-sized screens, no
   JavaScript errors.
 
@@ -257,7 +268,8 @@ server/
   db.js             SQLite schema                    crypto.js   passwords, tokens, encryption, signed links
   retailers/        one file per store, with its checkout flow (kmart.js, bigw.js, …)
   monitor/          sweep.js (live sweeps), listing.js (search results), http.js (store requests),
-                    SKU page checks and in-browser check results, feed.js (alerts)
+                    SKU page checks and in-browser check results, feed.js (alerts),
+                    public.js (what members see of the sweeps)
   catalog.js        the Monitor's products, monitors, price history, check log, alert rules
   discord.js        Discord OAuth, server roles, DMs, channel posts
   whop.js           Whop checkout links, webhooks, membership sync

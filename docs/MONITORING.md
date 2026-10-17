@@ -251,17 +251,29 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
    - The store is searched for those words only, every **4 seconds**.
    - What the watch found has its page read every **5 seconds**.
    - Otherwise its pages are read every 15 seconds.
-4. **🤖 Auto-checkout it for me, up to $…** (optional). What the watch finds
-   goes on your watchlist, armed for Auto-checkout up to that max price. Your
-   browser checks out the moment its page says it's in stock. Your Auto-checkout
-   settings and limits still apply (switch it on, keep Chrome open with the
-   extension). It's armed the first time it's found, once: after a purchase it
-   stays disarmed.
+4. **🤖 Auto-checkout it for me, up to $…** (optional). What **drops** goes on
+   your watchlist, armed for Auto-checkout up to that max price, and your browser
+   checks out the moment its page says it's in stock. What drops:
+   - a new listing: anything found after the watch's first search;
+   - something already listed whose page says it isn't on sale yet (coming
+     soon, sold out).
+
+   What was **already on sale** when you added the watch is never armed. A broad
+   watch like *pokemon* would otherwise buy everything that matches. The
+   Activity log says so, and you can ⚡ Buy it yourself.
+
+   Your Auto-checkout settings and limits still apply (switch it on, keep Chrome
+   open with the extension). Each product is armed once: after a purchase it stays
+   disarmed. Removing the watch disarms what it armed.
 
 What a keyword watch finds gets a monitor of its own, so its page is read
-straight away for its stock: 🆕 when it's found, 🟢 when its page says it's in
-stock. Removing a watch removes the monitors it made. The list shows what each
-watch found, with its stock.
+straight away for its stock.
+- 🆕 when it's found.
+- 🟢 when it goes from not on sale to on sale. The first time its stock is read
+  isn't an alert: that's how it was, not a change.
+
+Removing a watch removes the monitors it made. The list shows what each watch
+found, with its stock and whether it's armed.
 
 **Add the watch before the drop.** Its first search is the "before" picture
 (nothing alerts then); what shows up after that is the drop. A keyword watch
@@ -274,9 +286,12 @@ Settings (environment variables): `VIP_FAST_SECONDS` (5), `VIP_SLOW_SECONDS`
 
 ## 4. Running it day to day: the live monitor
 
-Dashboard → **Monitor** has three pages. Members see **Live**; admins also get
+Dashboard → **Monitor** is the one page for everything the monitor does: the
+live sweeps, the stores, the feed, the products it tracks, your own watchlist
+and your activity. It has three pages. Members see **Live**; admins also get
 **Settings** and the **Check log** (the switch under the title). Everything on
-them is real: it comes from the sweeps as they happen.
+them is real: it comes from the sweeps as they happen. (Old `#watch` and
+`#activity` links open the Monitor page at that list.)
 
 **Live**
 
@@ -285,10 +300,34 @@ them is real: it comes from the sweeps as they happen.
 | **Title** | What's being searched for, where (e.g. "Searching 9 stores every few seconds for **pokemon** and **one piece**"). On the right: **🔔 Arm alerts**, **⚙** (this browser's alerts), and for admins **⟳ Sweep now** and **+ Add monitor**. |
 | **Needs attention** | Only when a store keeps failing: which ones, and (admins) **↻ Reset all**. |
 | **Live sonar** | A sweeping radar with a blip per store; a blip rings each time that store answers a search (red when a search fails). |
-| **Stores** | One line per store: its colour, name and state (searching / slowed / retrying / waiting for an admin's browser), and underneath what it's doing ("Answered in 412 ms · next in 3 s") or what's wrong ("The store refused the search (HTTP 429)"). Click a store for the details: searches, last answer, next search, where it's searched from, how long the store asked to wait. Admins: **↻** on each line resets that store. |
+| **Stores** | One line per store: its colour, name and state (searching / slowed / retrying / off; admins also see waiting for an admin's browser), and underneath what it's doing ("Answered in 412 ms · next in 3 s") or what's wrong ("The store refused the search (HTTP 429)"). Click a store for the details: searches, last answer, next search, how long the store asked to wait (admins: where it's searched from). Each line has an **on/off switch** (below). Admins: **↻** on each line resets that store. |
 | **The four numbers** | Drops today (new drops and restocks in 24 h), available now, alert speed (from a store's answer to your screen), searches per hour (and failures). |
 | **Live feed** | New drops and restocks as they're found, with the picture, price (and old price), **⚡ Buy** and a link to the store. **Show** switches to everything (each search, fault, setting change and product that drops out of the results), new drops, restocks, price changes, searches or problems. |
-| **Tracked products** | Every product the sweeps track: picture, name, store, price (and old price), stock, **⚡ Buy**. 🆕 marks products found in the last 24 hours. Click a name for its price history. |
+| **Tracked products · My watchlist · My activity** | One card with three tabs (the dashboard remembers the last one you opened; members without a membership see My watchlist and My activity). **Tracked products**: every product the sweeps track, 25 to a page: picture, name, store, price (and old price), stock, **⚡ Buy**, and **☆** to add it to your watchlist (**★** when it's on it, **★ 🤖** when it's armed for Auto-checkout). 🆕 marks products found in the last 24 hours. Click a name for its price history. **My watchlist**: your own SKUs, 10 to a page, with **+ Add SKU**, the alerts for each and the 🤖 arming. **My activity**: your restocks, alerts and sign-ins, 20 to a page. All three page with buttons underneath (no endless scrolling); new activity appears at the top of page 1 as it happens. |
+
+**Switching a store off.** The switch on each store's line does different things
+for members and admins:
+
+- **Members** switch a store off **for themselves**: its drops, restocks and
+  searches leave their live feed, its products leave their Tracked products
+  (unless they pick that store in the store filter) and their dashboard stops
+  popping up its alerts, with no sound or desktop notification. The line stays, dimmed, as **Off for you**; switch it
+  back on any time. It's saved with their account (`PUT /api/monitor/prefs`),
+  so it follows them to any browser. The monitor keeps searching that store for
+  everyone else, the Discord channels keep posting it, and the member's own
+  watchlist items at that store still ping them as before.
+- **Admins** switch a store's searches **off for everyone** (it asks first). The
+  store shows as **Switched off: not searched**, and switching it back on returns
+  it to where it was searched from before (Settings → Stores has the same
+  choice, with server or admin's browser). Members don't see a store that's off.
+
+**What members never see.** Where a store is searched from (Mugibot's server or
+an admin's browser), the address read and whose browser is searching are for
+admins only. Members get the same live view with that left out, in
+`/api/monitor/live`, on the live stream and in the product details; a problem
+that would say where a search comes from reads "Not searched at the moment —
+Mugibot tries again shortly" instead, and notes about admins' browsers aren't
+sent to them (`server/monitor/public.js`).
 
 **⚙** holds this browser's **Sound**, **Desktop notifications** and **Pop-up
 for drops and restocks**, and **⚡ Send a test alert** (runs the whole chain in
@@ -389,7 +428,8 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Catalogue, price history, alert history | `server/catalog.js`; `products`, `sweep_terms`, `price_history`, `feed_alerts` (`server/db.js`, migration 5) |
 | Admin API | `GET/PUT /api/monitor/sweep`, `POST /api/monitor/sweep/now`, `POST /api/monitor/sweep/reset` (`{store}`, or nothing for every store), `POST /api/monitor/routes/setup` (store channels) (`server/routes/monitor.js`) |
 | Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
-| Dashboard | `web/app.html` (Live, Settings and Check log pages), `web/js/live.js` (the live page: sonar, stores, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log) |
+| Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
+| What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |
 | The live event log | `emit()` and `live()` in `server/monitor/sweep.js`; `GET /api/monitor/live`; `monitor-sweep` events on the dashboard's stream |

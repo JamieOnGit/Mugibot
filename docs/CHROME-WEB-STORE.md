@@ -61,7 +61,7 @@ Description:
 > • Auto-checkout (optional, off until you switch it on and agree in your Mugibot dashboard): for items you arm, each with a max price, it checks out by itself when they drop and places the order within your limits — once per arming. It stops at your bank's or a store's check.
 > • Checks your own watchlist at stores that refuse checks from servers, from your browser, about once a minute (you can switch this off).
 >
-> Your card is saved only in this browser, encrypted, and is never sent to Mugibot's servers. It never solves CAPTCHAs, skips queues or hides who it is.
+> Your card is saved in this browser, encrypted, and is never sent to Mugibot's servers in a form they can read. If you choose to back it up to your account (so a new install doesn't need it typed in again), it's locked in your browser first with a card passphrase only you know. It never solves CAPTCHAs, skips queues or hides who it is.
 
 **Privacy practices**
 
@@ -75,7 +75,7 @@ Description:
 - **Remote code:** "No, I am not using remote code." (The store steps it downloads are data, not code.)
 - **Data usage:** tick
   - Personally identifiable information (name, email, phone, delivery address: filled in at checkout)
-  - Financial and payment information (the card: kept in the browser only)
+  - Financial and payment information (the card: kept in the browser; if the user turns on card backup, only a copy encrypted in the browser with the user's own passphrase is sent to the user's Mugibot account, which can't decrypt it)
   - Authentication information (the connection to the user's Mugibot account)
   - Website content (it reads the supported stores' pages to check stock and find checkout buttons)
 

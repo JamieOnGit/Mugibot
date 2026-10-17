@@ -26,8 +26,17 @@
     </div>
 
     <h2>Card for checkout</h2>
-    <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close and reopen the browser. Nothing to unlock. It's saved <b>only in this browser</b>, encrypted, and only for the account above. It is never sent to Mugibot's servers. You still press the store's final button yourself. On a shared computer, remove it when you're done: anyone using this browser profile could check out with it.</p>
+    <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close and reopen the browser. Nothing to unlock. It's saved in this browser, encrypted, and only for the account above. Mugibot's servers never get it in a form they can read: back it up below and they keep only a copy locked with your card passphrase. You still press the store's final button yourself. On a shared computer, remove it when you're done: anyone using this browser profile could check out with it.</p>
     <div class="card" id="card-none-acct" hidden><p class="muted">Connect your account first.</p></div>
+
+    <form class="card" id="restore-form" hidden>
+      <p><b>Your card is backed up in your account</b> <span id="restore-label" class="pill"></span></p>
+      <p class="muted">Enter your card passphrase to use it in this browser. It's opened here: Mugibot's servers only keep the locked copy.</p>
+      <label for="restore-pass">Card passphrase</label>
+      <input id="restore-pass" type="password" autocomplete="current-password">
+      <p><button class="primary" type="submit">Restore my card</button></p>
+      <div id="restore-msg" class="msg"></div>
+    </form>
 
     <div class="card" id="card-saved" hidden>
       <p><b id="card-label"></b> <span id="card-state" class="pill"></span></p>
@@ -39,6 +48,20 @@
       </form>
       <p class="row"><button id="remove">Remove card from this browser</button></p>
       <div id="saved-msg" class="msg"></div>
+      <div class="backup" id="backup-on" hidden>
+        <p><span class="pill ok">Backed up</span> <span class="muted">in your account, locked with your card passphrase. A new install or another browser restores it with that passphrase.</span></p>
+        <p class="row"><button id="unbackup">Delete the backup</button></p>
+      </div>
+      <form class="backup" id="backup-form" hidden>
+        <p><b>Back it up to your account</b> <span class="muted">— so a new install of the extension, or another browser, doesn't need the card typed in again. It's locked here with a card passphrase only you know: Mugibot keeps the locked copy and can't open it. Forget the passphrase and nobody can open it (save the card again).</span></p>
+        <p class="muted" id="backup-other"></p>
+        <label for="backup-pass">Card passphrase (at least 10 characters)</label>
+        <input id="backup-pass" type="password" autocomplete="new-password">
+        <label for="backup-pass2">The same again</label>
+        <input id="backup-pass2" type="password" autocomplete="new-password">
+        <p><button class="primary" type="submit">Back up my card</button></p>
+      </form>
+      <div id="backup-msg" class="msg"></div>
     </div>
 
     <form class="card" id="card-form" hidden>
@@ -52,6 +75,13 @@
         <div><label for="c-cvc">CVV</label><input id="c-cvc" inputmode="numeric" autocomplete="cc-csc" maxlength="4"></div>
       </div>
       <p class="muted" style="font-size:12px">With the CVV saved, checkout needs nothing typed. Leave it blank if you'd rather type it in yourself each time.</p>
+      <label class="check"><input type="checkbox" id="c-backup"> Also back it up to my account (locked with a card passphrase only I know)</label>
+      <div id="c-backup-fields" hidden>
+        <label for="c-pass">Card passphrase (at least 10 characters)</label>
+        <input id="c-pass" type="password" autocomplete="new-password">
+        <label for="c-pass2">The same again</label>
+        <input id="c-pass2" type="password" autocomplete="new-password">
+      </div>
       <p><button class="primary" type="submit">Save card</button></p>
       <div id="card-msg" class="msg"></div>
     </form>
