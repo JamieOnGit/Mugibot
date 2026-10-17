@@ -86,7 +86,9 @@ export class Monitor {
     // Members watching the same page still get it checked at the default interval.
     const members = this.db.get(`SELECT 1 AS y FROM items i, page_checks c WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 LIMIT 1`, { url });
     const s = members ? Math.min(m.s, this.cfg.monitor.urlIntervalSeconds) : m.s;
-    return Math.max(this.cfg.monitor.minIntervalSeconds, s) * 1000;
+    // A VIP drop's page (monitor/vip.js): every few seconds around its drop time.
+    const vip = this.vip ? this.vip.pageSeconds(url) : null;
+    return Math.min(vip ? vip * 1000 : Infinity, Math.max(this.cfg.monitor.minIntervalSeconds, s) * 1000);
   }
 
   get browserInterval() {
@@ -138,6 +140,8 @@ export class Monitor {
 
   /** Has a live sweep seen what's on this product page in the last few minutes (the shared product, or members' SKUs)? */
   sweptLately(url, now) {
+    // (A VIP drop's page is always read: its stock is what decides, and every second counts.)
+    if (this.vip && this.vip.pageSeconds(url, now)) return false;
     const since = now - SWEEP_FRESH_MS;
     const product = this.db.get("SELECT 1 AS y FROM products WHERE url = :url AND sweep_seen_at >= :since AND status_source = 'sweep' LIMIT 1", { url, since });
     if (product) return true;

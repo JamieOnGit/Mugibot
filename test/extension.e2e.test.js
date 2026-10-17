@@ -594,6 +594,29 @@ test('Target (draft): "Add to basket" → the "Often Bought Together" pop-up clo
   await dash.close();
 });
 
+// City Beach's checkout fields (Salesforce Commerce Cloud's names).
+const cbField = (S, n) => S.data.shipping[`dwfrm_shipping_shippingAddress_addressFields_${n}`];
+
+test('City Beach (draft): "Add To Bag" with its newsletter pop-up over the page → straight to checkout → email → "Continue as guest" → "Delivery" → delivery to my address → "Submit shipping" → card frame → stops at "Confirm & pay"', async () => {
+  await useItems([{ url: store.productUrl('citybeach', '20424049-01'), name: 'CB Ninja Spinner' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'CB Ninja Spinner');
+  await waitReady(shop, 'Confirm & pay');
+  const S = store.shop('citybeach');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['20424049-01', 1]]);
+  assert.deepEqual(S.steps.map((x) => x.step), ['customer', 'shipping']);
+  assert.equal(S.data.customer.dwfrm_coCustomer_email, PROFILE_A.email);
+  assert.equal(S.data.shipping.deliveryType, 'home', 'delivery to my address (not a PO box, not Click & Collect)');
+  assert.deepEqual(['firstName', 'lastName', 'phone', 'address1', 'address2', 'city', 'states_stateCode', 'postalCode'].map((n) => cbField(S, n)),
+    ['Ash', 'Ketchum', PROFILE_A.phone, PROFILE_A.address1, 'Unit 2', 'Sydney', 'NSW', '2000']);
+  assert.match(shop.url(), /\/citybeach\/checkout\?stage=payment/);
+  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=cardnumber]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
+  await shop.waitForTimeout(500);
+  assert.equal(ordersPlaced(), 0, '"Confirm & pay" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
 test("Premium Bandai (draft): Add pressed once its Vue page has wired it up → \"Go to Cart\" → \"Proceed to checkout\" → the whole checkout in a Global-e-style frame: your details and card go in there, and it's left for you to place", async () => {
   await useItems([{ url: store.productUrl('pbandai', 'N2903432001'), name: 'PB PCC' }]);
   const S = store.shop('pbandai');
@@ -1160,6 +1183,38 @@ test('🤖 Auto-checkout at Target: the "Often Bought Together" pop-up is closed
   await waitFor(async () => (await lastRun()).status === 'placed', { message: 'placed' });
   assert.equal((await lastRun()).total, 88, '$79 + $9 delivery');
   await closeStorePages('target');
+});
+
+test('🤖 Auto-checkout at City Beach: it drops → added (the newsletter pop-up over the page) → checkout → guest → delivery → card → the total checked → "Confirm & pay" — the order placed', async () => {
+  await useItems([{ url: store.productUrl('citybeach', '20424049-01'), name: 'ACO CB Ninja', aco: true, maxPrice: 30 }]);
+  await acoListen();
+  await drop('citybeach', '20424049-01');
+  await waitFor(() => store.shop('citybeach').orders.length === 1, { timeout: 45000, message: 'the order placed at the dummy City Beach' });
+  const order = store.shop('citybeach').orders[0];
+  assert.deepEqual(order.cart.map((c) => [c.sku, c.qty]), [['20424049-01', 1]], 'one of it');
+  assert.equal(cbField(store.shop('citybeach'), 'address1'), PROFILE_A.address1);
+  await waitFor(async () => (await lastRun()).status === 'placed', { message: 'the run says placed' });
+  const run = await lastRun();
+  assert.equal(run.total, 19.94, '$9.99 + $9.95 delivery, read from the checkout');
+  assert.deepEqual(run.steps.map((x) => x.status), ['queued', 'sent', 'started', 'checkout', 'placing', 'placed']);
+  await closeStorePages('citybeach');
+});
+
+test('🤖 Auto-checkout at City Beach with a last "place order" stage (?stage=placeOrder, its own "Confirm & pay"): pressed once there, and the order placed — the Pokémon skateboard drop', async () => {
+  store.set('citybeach', '20499999-01', { listed: true });
+  store.shop('citybeach').reviewStage = true;
+  await useItems([{ url: store.productUrl('citybeach', '20499999-01'), name: 'ACO CB Skateboard', aco: true, maxPrice: 150 }]);
+  await acoListen();
+  await drop('citybeach', '20499999-01');
+  await waitFor(() => store.shop('citybeach').orders.length === 1, { timeout: 45000, message: 'the order placed at the dummy City Beach' });
+  assert.deepEqual(store.shop('citybeach').orders[0].cart.map((c) => [c.sku, c.qty]), [['20499999-01', 1]]);
+  assert.deepEqual(store.shop('citybeach').steps.map((x) => x.step), ['customer', 'shipping', 'payment']);
+  await waitFor(async () => (await lastRun()).status === 'placed', { message: 'the run says placed' });
+  assert.equal((await lastRun()).total, 139.94);
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /pressed "Confirm & pay" on the last step/.test(e.message)), 'the place-order stage\'s button, pressed');
+  assert.equal(store.shop('citybeach').orders.length, 1, 'once');
+  await closeStorePages('citybeach');
 });
 
 test('🤖 Auto-checkout set to stop at the final button: fills checkout in and leaves the button to you', async () => {

@@ -329,10 +329,11 @@ export class Sweeper {
     return named.length && named[0].count <= max ? named[0].handle : null;
   }
 
-  urlFor(r, keyword, page = 1) {
-    const collection = this.collectionFor(r, keyword);
+  urlFor(r, keyword, page = 1, { vip = false } = {}) {
+    const collection = !vip && this.collectionFor(r, keyword);
     if (collection) return `${r.base}${r.sweep.collectionPath.replace('{collection}', encodeURIComponent(collection))}`;
-    let p = r.sweep.path.replace('{q}', encodeURIComponent(this.query(r, keyword)));
+    // (A VIP watch's words are searched as they are.)
+    let p = r.sweep.path.replace('{q}', encodeURIComponent(vip ? keyword : this.query(r, keyword)));
     if (page > 1 && r.sweep.pagePath) p += r.sweep.pagePath.replace('{page}', String(page));
     // (A store whose search is answered by its search provider: Kmart's, at Constructor.io. Or by
     // the site's own API, outside the region's pages: Premium Bandai's /api/search, not /au/….)
@@ -342,7 +343,10 @@ export class Sweeper {
   /** The time between two searches at a store: the set pace, or the store's own slowest (Amazon: 20 s). */
   paceFor(r, browser = false) {
     const s = this.settings;
-    return Math.max(browser ? s.browserEverySeconds : s.everySeconds, r.sweep.minSeconds || 0) * 1000;
+    const every = Math.max(browser ? s.browserEverySeconds : s.everySeconds, r.sweep.minSeconds || 0) * 1000;
+    // A VIP drop in its window (monitor/vip.js): its words, every few seconds.
+    if (!browser && this.vip && this.vip.fast(r.id, this.now())) return Math.min(every, this.vip.sweepSeconds * 1000);
+    return every;
   }
 
   /**
@@ -351,6 +355,17 @@ export class Sweeper {
    */
   nextTerm(r) {
     const st = this.stat(r.id);
+    // VIP watches at this store (monitor/vip.js): every other search, and in a drop window, only them.
+    const vip = this.vip ? this.vip.termsFor(r.id) : [];
+    if (vip.length) {
+      const fast = vip.filter((w) => this.vip.inWindow(w, this.now()));
+      st.vipTurn = !st.vipTurn;
+      if (fast.length || st.vipTurn) {
+        const list = fast.length ? fast : vip;
+        const w = list[(st.vipNext = (st.vipNext || 0) + 1) % list.length];
+        return { keyword: w.words, page: 1, vip: w.id };
+      }
+    }
     const kws = this.settings.keywords;
     const pages = Math.max(1, Math.min(10, r.sweep.pages || 1));
     const deep = [];
@@ -378,7 +393,7 @@ export class Sweeper {
   /** One search from the server: fetch, read, compare, alert. */
   async sweepTerm(r, term) {
     await this.refreshCollections(r);
-    const url = this.urlFor(r, term.keyword, term.page);
+    const url = this.urlFor(r, term.keyword, term.page, { vip: !!term.vip });
     const started = Date.now();
     let res;
     let text = '';
@@ -456,10 +471,14 @@ export class Sweeper {
         const known = this.catalog.productFor(r.id, p.sku);
         if (known && known.seller) p.marketplace = true;
       }
-      if (!counts_(p, term.keyword) || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
+      // A VIP watch's words in the name (monitor/vip.js): it counts, trading cards or not.
+      const watch = this.vip ? this.vip.matchFor(r.id, p.title || p.name, term.vip || null) : null;
+      const counted = term.vip ? !!watch && !(s.skipMarketplace && p.marketplace) : counts_(p, term.keyword) || (!!watch && !(s.skipMarketplace && p.marketplace));
+      if (!counted || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
       counts.kept += 1;
-      const ev = await this.track(r, p, { status, keyword: term.keyword, baseline, now });
+      const ev = await this.track(r, p, { status, keyword: term.keyword, baseline, now, vip: !!watch });
       for (const k of ev) counts[k] += 1;
+      if (watch) this.vip.found(watch, [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean));
     }
     const out = this.record(r, term, { ok: true, url, source, ms, baseline, total: parsed.total ?? null, ...counts, error: parsed.problem === 'empty' ? 'No products on the page' : '' });
     out.gone = await this.markGone(r, term.keyword, now);
@@ -498,7 +517,7 @@ export class Sweeper {
   }
 
   /** One product in the shared catalogue: update it, and alert what changed. Returns what it alerted. */
-  async track(r, p, { status, keyword, baseline, now }) {
+  async track(r, p, { status, keyword, baseline, now, vip = false }) {
     const s = this.settings;
     const found = [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
     const before = found ? { ...found } : null;
@@ -550,12 +569,12 @@ export class Sweeper {
       if (await this.sellerOf(r, fresh)) return sent;
     }
     if (isNew) {
-      if (!baseline && s.newAlerts && this.noteAlert(await this.feed.alert(fresh, 'listed', { sweep: true, detectedAt: now, note: `New in "${keyword}" at ${r.name}.` }))) sent.push('new');
+      if (!baseline && (s.newAlerts || vip) && this.noteAlert(await this.feed.alert(fresh, 'listed', { sweep: true, vip, detectedAt: now, note: `New in "${keyword}" at ${r.name}.` }))) sent.push('new');
     } else {
       if (s.restockAlerts && isOrderable(fresh.status) && ORDERABLE_FROM.has(before.status) && before.confirmed) {
         const today = sydneyDay.format(now);
         if (!s.restockOncePerDay || fresh.restock_day !== today) {
-          if (this.noteAlert(await this.feed.alert(fresh, 'restock', { sweep: true, detectedAt: now }))) {
+          if (this.noteAlert(await this.feed.alert(fresh, 'restock', { sweep: true, vip, detectedAt: now }))) {
             this.catalog.updateProduct(product.id, { restock_day: today });
             sent.push('restock');
           }
@@ -563,7 +582,7 @@ export class Sweeper {
       }
       if (s.priceAlerts && priceMoved && typeof prevPrice === 'number' && prevPrice > 0 && price < prevPrice) {
         const pct = ((price - prevPrice) / prevPrice) * 100;
-        if (-pct >= s.priceDropPercent && this.noteAlert(await this.feed.alert(fresh2(), 'price_drop', { sweep: true, detectedAt: now, pct }))) sent.push('price');
+        if (-pct >= s.priceDropPercent && this.noteAlert(await this.feed.alert(fresh2(), 'price_drop', { sweep: true, vip, detectedAt: now, pct }))) sent.push('price');
       }
     }
     // A monitor on this product also gets the alerts it asks for (sold out, price up…).

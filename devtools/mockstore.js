@@ -53,18 +53,24 @@ const SHOPS = {
   pbandai: { name: 'Premium Bandai (dummy)', color: '#1f2937' },
   target: { name: 'Target (dummy)', color: '#cc0000' },
   amazon: { name: 'Amazon AU (dummy)', color: '#232f3e' },
+  citybeach: { name: 'City Beach (dummy)', color: '#111111' },
 };
 // The Shopify-style shops: the same product, cart and checkout pages.
 const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic']);
-const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target|amazon)(\/.*|$)/;
+const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target|amazon|citybeach)(\/.*|$)/;
 const LD_AVAIL = { in_stock: 'InStock', preorder: 'PreOrder', out_of_stock: 'OutOfStock' };
+// City Beach's marketing pop-up (Emarsys), over the product page a moment after it opens.
+const CITYBEACH_POPUP = `<div id="wps_popup" class="wps-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:900;align-items:center;justify-content:center">
+  <div class="wps-popup" role="dialog" style="background:#fff;padding:24px;max-width:420px"><button type="button" class="wps-close" aria-label="Close" onclick="document.getElementById('wps_popup').remove()">×</button>
+  <h2>Get 10% off your first order</h2><p>Sign up to our newsletter for new arrivals and offers.</p><input type="email" name="wps_email" placeholder="Email address"> <button type="button">Subscribe</button></div></div>
+<script>setTimeout(() => { const w = document.getElementById('wps_popup'); if (w) w.style.display = 'flex'; }, 800);</script>`;
 const STATES = '<option value="">Select state</option><option value="NSW">New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option><option value="WA">Western Australia</option><option value="SA">South Australia</option><option value="TAS">Tasmania</option><option value="ACT">Australian Capital Territory</option><option value="NT">Northern Territory</option>';
 
 export function defaultShops() {
   const out = {};
   for (const [id, list] of Object.entries(DUMMY_PRODUCTS)) {
     out[id] = {
-      products: list.map((p, i) => ({ ...p, listed: true, maxQty: 0, qtyStyle: id === 'bigw' ? 'select' : 'input', lateMs: 0, id: 4400000 + i })),
+      products: list.map((p, i) => ({ ...p, listed: p.listed !== false, maxQty: 0, qtyStyle: id === 'bigw' ? 'select' : 'input', lateMs: 0, id: 4400000 + i })),
       cart: [], orders: [], steps: [], data: {},
       // Like a real store on a fresh page: "Add" does nothing until the page's code has
       // started (hydrateMs after load), and the add itself can be slow (addDelayMs).
@@ -214,6 +220,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       pbandai: { in_stock: 'Add to Cart', preorder: 'Add to Cart', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
       target: { in_stock: 'Add to basket', preorder: 'Pre-order', out_of_stock: 'Out of stock online', coming_soon: 'Coming soon' },
       amazon: { in_stock: 'Add to Cart', preorder: 'Pre-order now', out_of_stock: 'Currently unavailable', coming_soon: 'Currently unavailable' },
+      citybeach: { in_stock: 'Add To Bag', preorder: 'Pre-order', out_of_stock: 'Out of stock', coming_soon: 'Coming soon' },
       thegamescube: {},
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     const orderable = p.status === 'in_stock' || p.status === 'preorder';
@@ -231,6 +238,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       pokemoncenter: '<div class="drawer mini-cart" id="drawer" role="dialog" aria-label="Added to cart"><h3>Added to cart</h3><p id="drawer-msg"></p><a class="btn" href="/pokemoncenter/cart">View Cart</a> <a href="/pokemoncenter/">Continue Shopping</a></div>',
       pbandai: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Item added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/pbandai/cart">Go to Cart</a></div>',
       amazon: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to Cart"><h3>Added to Cart</h3><p id="drawer-msg"></p><a href="/amazon/cart">Go to Cart</a></div>',
+      // City Beach: the mini bag that opens after "Add To Bag" (its words: "Close", "View Your Bag").
+      citybeach: '<div class="drawer minicart-flyout" id="drawer"><button type="button" aria-label="Close" onclick="this.parentNode.classList.remove(\'open\')">Close</button><p id="drawer-msg"></p><a class="btn" href="/citybeach/cart">View Your Bag</a></div>',
       // Target: "Often Bought Together" — four more things to add, and a ✕ to close it.
       target: `<div class="drawer modal upsell-modal" id="drawer" role="dialog" aria-modal="true" aria-labelledby="obt-title">
         <button type="button" class="modal-close" aria-label="Close" id="obt-close" style="float:right;background:none;color:#000;font-size:22px">✕</button>
@@ -254,6 +263,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         ${other ? `<div class="tile"><a href="${pathFor(shop, other)}">${esc(other.name)}</a><button type="button" class="add-to-cart">${labels.in_stock}</button></div>` : ''}
       </section>
       ${drawer}
+      ${shop === 'citybeach' && !shopOf(shop).noPopup ? CITYBEACH_POPUP : ''}
       <script>
         ${p.lateMs ? `setTimeout(() => { document.getElementById('buybox').innerHTML = ${JSON.stringify(button)}; }, ${Number(p.lateMs)});` : ''}
         ${stepperJs(p)}
@@ -375,6 +385,24 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     return page('target', `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>`);
   }
 
+  // City Beach's search page (Salesforce Commerce Cloud): a tile per product with its code
+  // (data-pid) and its name, brand and price in data-gtmdata — the brand left out of the name, like
+  // the real one ("Ninja Spinner Booster Pack Trading Cards", brand "Pokémon"). No stock in the tiles.
+  function citybeachSearchPage(q) {
+    const hits = searchHits('citybeach', q);
+    const tile = (x) => {
+      const brand = /^Pokémon /.test(x.name) ? 'Pokémon' : '';
+      const gtm = { name: brand ? x.name.slice(brand.length + 1) : x.name, id: x.sku, brand, price: x.price.toFixed(2), category: 'Skate' };
+      return `<div class="col-6 col-sm-4"><div class="product" data-pid="${x.sku}" data-gtmdata="${esc(JSON.stringify(gtm))}"><div class="product-tile">
+        <div class="image-container"><a href="${pathFor('citybeach', x)}"><img class="tile-image lazyload" data-src="${imagePath('citybeach', x)}" alt="${esc(x.name)}"></a></div>
+        <div class="tile-body"><div class="pdp-link"><a class="link" href="${pathFor('citybeach', x)}">${esc(gtm.name)}</a></div>
+        <div class="price"><span class="sales"><span class="value" content="${x.price.toFixed(2)}">$${x.price.toFixed(2)}</span></span></div></div></div></div></div>`;
+    };
+    return page('citybeach', `Search: ${q}`, hits.length
+      ? `<h1>Search results for "${esc(q)}"</h1><div class="row product-grid">${hits.map(tile).join('')}</div>`
+      : `<div class="no-results"><p>Sorry, your search "${esc(q)}" did not return any results.</p></div>`);
+  }
+
   // A search page whose products are only filled in by its own code once it's open (BIG W's real one).
   function clientSearchPage(shop, q) {
     return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1><div id="results"><p>Loading…</p></div>
@@ -400,7 +428,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const go = {
       kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>',
       thegamescube: '<a class="utility-button checkout" href="/thegamescube/checkout/proceed_to_checkout">Checkout &rarr;</a>', pokemoncenter: '<a class="btn" href="/pokemoncenter/checkout">Checkout</a>', pbandai: '<a class="btn" href="/pbandai/checkout">Proceed to checkout</a>',
-      target: '<a class="btn" href="/target/checkout">Checkout</a>',
+      target: '<a class="btn" href="/target/checkout">Checkout</a>', citybeach: '<a class="btn checkout-btn" href="/citybeach/checkout">Checkout</a>',
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || `<li>Your ${shop === 'kmart' ? 'bag' : 'cart'} is empty</li>`}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
       <script>
@@ -489,6 +517,78 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         $('k-place').addEventListener('click', () => place(data($('k-payment'))));
         for (const el of document.querySelectorAll('input[name=cardNumber]')) el.addEventListener('input', () => { el.value = el.value.replace(/\\D/g, '').slice(0, 16).replace(/(\\d{4})(?=\\d)/g, '$1 '); });
         for (const el of document.querySelectorAll('input[name=cardExpiry]')) el.addEventListener('input', () => { const d = el.value.replace(/\\D/g, '').slice(0, 4); el.value = d.length > 2 ? d.slice(0, 2) + '/' + d.slice(2) : d; });
+      </script>`;
+  }
+
+  // City Beach's one-page checkout (Salesforce Commerce Cloud), in stages like the real one:
+  // ?stage=customer (email → "Continue as guest") → shipping ("Delivery" tab, "Delivery to my
+  // address", name, mobile, address → "Submit shipping") → payment (card boxes in a payment
+  // provider's frame, the total) → "Confirm & pay".
+  function citybeachCheckout() {
+    const sum = total('citybeach');
+    const ship = 9.95;
+    const f = (n) => `dwfrm_shipping_shippingAddress_addressFields_${n}`;
+    return `<h1>Checkout</h1>
+      <section id="cb-customer" class="customer-section"><h2>Customer</h2>
+        <label for="email-guest">Email</label> <input id="email-guest" name="dwfrm_coCustomer_email" type="email" autocomplete="email" required>
+        <p><button type="button" class="btn submit-customer" id="cb-guest">Continue as guest</button> <a href="/citybeach/login">Login</a></p></section>
+      <section id="cb-shipping" class="shipping-section" hidden><h2>Shipping</h2>
+        <div class="nav nav-tabs" role="tablist"><a class="nav-link" role="tab" href="#home-delivery" id="cb-tab-home">Delivery</a> <a class="nav-link" role="tab" href="#click-collect" id="cb-tab-cc">Click &amp; Collect</a></div>
+        <div id="cb-home" hidden>
+          <label><input type="radio" name="deliveryType" value="home"> Delivery to my address</label>
+          <label><input type="radio" name="deliveryType" value="po"> Delivery to a PO box</label>
+          <label>First name <input name="${f('firstName')}" autocomplete="given-name" required></label>
+          <label>Last name <input name="${f('lastName')}" autocomplete="family-name" required></label>
+          <label>Mobile <input name="${f('phone')}" type="tel" autocomplete="tel" required></label>
+          <label>Address line 1 <input name="${f('address1')}" autocomplete="address-line1" required></label>
+          <label>Address line 2 (optional) <input name="${f('address2')}" autocomplete="address-line2"></label>
+          <label>Suburb <input name="${f('city')}" autocomplete="address-level2" required></label>
+          <label>State <select name="${f('states_stateCode')}" autocomplete="address-level1" required>${STATES}</select></label>
+          <label>Postcode <input name="${f('postalCode')}" autocomplete="postal-code" required maxlength="4"></label>
+        </div>
+        <button type="button" class="btn submit-shipping" id="cb-ship" name="submit-shipping" value="submit-shipping">Submit shipping</button></section>
+      <section id="cb-payment" class="payment-section" hidden><h2>Payment</h2>
+        <p><b>Credit / debit card</b></p>${cardBoxes('stripe')}
+        <div class="order-totals"><p>Subtotal A$${sum.toFixed(2)}</p><p>Shipping A$${ship.toFixed(2)}</p>
+          <p class="order-total">Total <span class="grand-total-sum">A$${(sum + ship).toFixed(2)}</span></p></div>
+        <button type="button" class="btn submit-payment" id="cb-pay" name="submit-payment" value="submit-payment">Confirm &amp; pay</button></section>
+      <section id="cb-review" hidden><h2>Review your order</h2><p>Total A$${(sum + ship).toFixed(2)}</p>
+        <button type="button" class="btn place-order" id="cb-place" name="submit" value="place-order">Confirm &amp; pay</button></section>
+      <p id="cb-error" class="err"></p>
+      <script>
+        const $ = (id) => document.getElementById(id);
+        const data = (sec) => Object.fromEntries([...sec.querySelectorAll('input,select')].map((i) => [i.name, i.type === 'radio' ? (i.checked ? i.value : undefined) : i.value]).filter(([, x]) => x !== undefined));
+        const stage = (name, show) => { history.replaceState(null, '', '/citybeach/checkout?stage=' + name + '#' + name); show.hidden = false; };
+        const missing = (sec) => [...sec.querySelectorAll('[required]')].filter((i) => !i.hidden && i.offsetParent !== null && !i.value).map((i) => i.name);
+        const err = (t) => { $('cb-error').textContent = t; };
+        $('cb-guest').addEventListener('click', () => {
+          if (!/@/.test($('email-guest').value)) return err('Please enter a valid email address');
+          err('');
+          fetch('/citybeach/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step: 'customer', data: data($('cb-customer')) }) });
+          $('cb-guest').remove();
+          setTimeout(() => stage('shipping', $('cb-shipping')), 300);
+        });
+        $('cb-tab-home').addEventListener('click', (e) => { e.preventDefault(); $('cb-tab-home').classList.add('active'); $('cb-tab-home').setAttribute('aria-selected', 'true'); $('cb-home').hidden = false; });
+        $('cb-tab-cc').addEventListener('click', (e) => { e.preventDefault(); err('Choose a store to collect from'); });
+        $('cb-ship').addEventListener('click', () => {
+          if ($('cb-home').hidden) return err('Choose Delivery or Click & Collect');
+          if (!document.querySelector('input[name=deliveryType]:checked')) return err('Please select a delivery option');
+          const m = missing($('cb-shipping'));
+          if (m.length) return err('Please complete: ' + m.join(', '));
+          err('');
+          fetch('/citybeach/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step: 'shipping', data: data($('cb-shipping')) }) });
+          $('cb-ship').remove();
+          setTimeout(() => stage('payment', $('cb-payment')), 400);
+        });
+        const place = ${placeJs('citybeach', 'cb-error')};
+        // reviewStage: like Salesforce's own checkout, the payment button opens a last "place order" stage with its own button.
+        $('cb-pay').addEventListener('click', () => {
+          if (!${shopOf('citybeach').reviewStage ? 'true' : 'false'}) return place(data($('cb-payment')));
+          fetch('/citybeach/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step: 'payment', data: {} }) });
+          $('cb-payment').hidden = true;
+          setTimeout(() => stage('placeOrder', $('cb-review')), 500);
+        });
+        $('cb-place').addEventListener('click', () => place({}));
       </script>`;
   }
 
@@ -702,7 +802,7 @@ for (const el of document.querySelectorAll('input')) {
     const redirect = (to) => { res.writeHead(302, { location: to }); res.end(); };
 
     // Product pictures (a coloured card with the product's name).
-    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target|amazon)\/([^/]+)\.svg$/);
+    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target|amazon|citybeach)\/([^/]+)\.svg$/);
     if (img) {
       const prod = find(img[1], decodeURIComponent(img[2]));
       if (!prod) return html(404, 'Not found');
@@ -774,6 +874,7 @@ for (const el of document.querySelectorAll('input')) {
     if (shop === 'pbandai') sku = (sub.match(/^\/item\/([A-Z]\d+)$/) || [])[1];
     if (shop === 'target') sku = (sub.match(/^\/p\/[^/]+\/(\d+)$/) || [])[1];
     if (shop === 'amazon') sku = (sub.match(/^\/dp\/([A-Z0-9]{10})$/) || [])[1];
+    if (shop === 'citybeach') sku = (sub.match(/^\/[^/]+\/(\d{6,10}-\d{2})\.html$/) || [])[1];
     if (SHOPIFY.has(shop)) {
       const js = sub.match(/^\/products\/([^/]+)\.js$/);
       if (js) {
@@ -828,6 +929,7 @@ for (const el of document.querySelectorAll('input')) {
       });
     }
     if (shop === 'target' && sub === '/search') return html(200, targetSearchPage(u.searchParams.get('text') || ''));
+    if (shop === 'citybeach' && sub === '/search') return html(200, citybeachSearchPage(u.searchParams.get('q') || ''));
     if (sub === '/search' || sub === '/search/') {
       const q = u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('keyword') || '';
       // Like BIG W's real site: the page has no products in it until its own code fetches them.
@@ -996,6 +1098,12 @@ for (const el of document.querySelectorAll('input')) {
       // (Like kmart.com.au: checkout with an empty bag opens the bag instead.)
       if (!S.cart.length) return redirect('/kmart/cart');
       return html(200, page(shop, 'Checkout', kmartCheckout()));
+    }
+    // ---------------- City Beach-style checkout (its stages in ?stage=; an empty bag opens the bag)
+    if (shop === 'citybeach' && sub === '/checkout') {
+      if (!S.cart.length) return redirect('/citybeach/cart');
+      if (!u.searchParams.get('stage')) return redirect('/citybeach/checkout?stage=customer#customer');
+      return html(200, page(shop, 'Checkout', citybeachCheckout()));
     }
     // ---------------- Target-style one-page checkout (/checkout opens it at /spc/order)
     if (shop === 'target' && sub === '/checkout') return redirect('/target/spc/order');

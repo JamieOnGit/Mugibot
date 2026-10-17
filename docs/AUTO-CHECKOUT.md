@@ -34,7 +34,7 @@ is bought for an item until they **arm** it, and each arming buys **once**.
 5. **Keep Chrome open** with the extension connected. The "Ready to check out?"
    list shows what's missing:
    - an active membership;
-   - the newest extension in this browser (1.11.0 or newer);
+   - the newest extension in this browser (1.12.0 or newer for City Beach);
    - a card saved in the extension;
    - your delivery details;
    - Discord, for a DM on every attempt (optional);
@@ -147,6 +147,13 @@ These flows are tested end to end on the **dummy stores** only:
   - Trigger ACO.
 - Target: the "Often Bought Together" pop-up closed with its ✕, then the order
   placed.
+- City Beach:
+  - an order placed;
+  - a last "place order" stage, whose own "Confirm & pay" is pressed once.
+
+**VIP drops** (Monitor → Settings, admins) can arm Auto-checkout for you: what a
+VIP watch finds goes on your watchlist, armed up to the max price you gave it (see
+[MONITORING.md](MONITORING.md#-vip-drops)).
 
 **Before relying on it at a real store, do one real run in "Fill in checkout and
 stop at the final button" mode** and check every field. Then switch to "Place the

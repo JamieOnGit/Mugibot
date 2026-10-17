@@ -159,6 +159,29 @@
         <div class="mon-head"><div class="mon-titles"><div class="mon-title"><h2>Monitor settings</h2><span class="pill" id="ms-state"></span></div><p class="mon-sub">Where each store is searched from, what counts, and where alerts go. Admins only.</p></div></div>
         <nav class="mon-tabs" aria-label="Monitor pages" hidden><a href="#monitor" data-mtab="monitor">Live</a><a href="#monitor-settings" data-mtab="monitor-settings">Settings</a><a href="#monitor-log" data-mtab="monitor-log">Check log</a></nav>
         <div class="mon-settings">
+          <section class="mon-card vip-card" id="vip-card">
+            <header class="mon-card-hd"><h3>⭐ VIP drops</h3><span class="mon-meta" id="vip-meta"></span></header>
+            <p class="mon-help">Drops you pick out, posted in <code>#vip-drop</code> (and not in the store channels) the moment they drop. Either a <b>store and the words in its name</b> (City Beach, <i>pokemon skate</i>): searched there along with the keywords, and anything with every word in its name counts, trading cards or not. Or a <b>product page</b>, at any shop. With a <b>drop time</b>, it's checked every few seconds from 15 minutes before until 3 hours after. <b>Auto-checkout it for me</b> puts what it finds on your watchlist, armed up to your max price, so your browser checks out the moment it's in stock (Auto-checkout must be on, with Chrome open).</p>
+            <div class="mr-setup-row">
+              <span class="small" id="vip-channel"></span>
+              <input id="vip-role" inputmode="numeric" placeholder="Role to ping (optional ID)" aria-label="Role to ping in #vip-drop (optional)">
+              <button class="btn" id="vip-setup" type="button">Make the #vip-drop channel</button>
+            </div>
+            <p class="msg" id="vip-setup-msg"></p>
+            <form id="vip-form">
+              <div class="grid2">
+                <div><label for="vip-store">Store</label><select id="vip-store"><option value="">Choose a store</option></select></div>
+                <div><label for="vip-words">Words in its name</label><input id="vip-words" maxlength="60" placeholder="pokemon skate" autocomplete="off"></div>
+                <div class="vip-wide"><label for="vip-url">…or a product page link instead</label><input id="vip-url" type="url" placeholder="https://www.citybeach.com/au/…/20424049-01.html"></div>
+                <div><label for="vip-drop">Drops at (your time, optional)</label><input id="vip-drop" type="datetime-local"></div>
+                <div><label for="vip-label">Note (optional)</label><input id="vip-label" maxlength="80" placeholder="Pokémon skateboard"></div>
+              </div>
+              <div class="vip-aco"><label class="check inline"><input type="checkbox" id="vip-aco"> 🤖 Auto-checkout it for me, up to</label> <input id="vip-max" type="number" min="1" step="0.01" placeholder="Max price $" aria-label="Max price for Auto-checkout"></div>
+              <div class="form-actions"><button class="btn primary" type="submit">Add VIP watch</button><span class="msg" id="vip-msg"></span></div>
+            </form>
+            <ul class="rules" id="vip-list"></ul>
+          </section>
+
           <section class="mon-card" id="ms-card">
             <header class="mon-card-hd"><h3>Stores</h3><span class="mon-meta">Searched from, and how each is doing</span><button class="btn small" id="ms-reset-all" type="button" title="Start every store's searches again">↻ Reset all</button></header>
             <p class="mon-help">A store that keeps refusing gets <b>Reset</b>: its errors and backoff are cleared and it's searched again now, gently (at a third of the pace) for 10 minutes. A store the server can't reach can be searched from an admin's browser instead (keep Chrome open with the extension).</p>

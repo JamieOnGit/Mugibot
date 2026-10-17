@@ -113,6 +113,8 @@ export class MonitorAdmin {
       enabled: bool(src.enabled, true),
       // A catch-all (misc-retailers): only what no other rule took.
       fallback: bool(src.fallback, false),
+      // The VIP channel (#vip-drop): VIP drops only (monitor/vip.js), and they go nowhere else.
+      vip: bool(src.vip, false),
     };
   }
 
@@ -174,9 +176,47 @@ export class MonitorAdmin {
       keep.add(saved.id);
     }
     let removed = 0;
-    if (opts.replace) for (const r of routes) if (!keep.has(r.id) && this.catalog.deleteRoute(r.id)) removed += 1;
+    // (The VIP channel's rule stays: it isn't a store channel.)
+    if (opts.replace) for (const r of routes) if (!keep.has(r.id) && !r.vip && this.catalog.deleteRoute(r.id)) removed += 1;
     if (user) this.ctx.repo.audit(user.id, null, 'alert-channels-setup', `${out.length} channels (${made.length} made), ${added} rules added${removed ? `, ${removed} removed` : ''}`);
     return { channels: out.map((w) => ({ name: w.channelName, id: w.channelId, made: made.includes(w.channelName), rule: `#${w.channelName}` })), made: made.length, added, removed };
+  }
+
+  /**
+   * "Make the #vip-drop channel": the VIP section of the Discord server — a "VIP" category with
+   * #vip-drop in it (found by name, or made by the bot) — and its rule, which takes VIP drops only.
+   * opts.roleId: a role it pings (e.g. @VIP).
+   */
+  async setupVip(opts = {}, user = null) {
+    const { discord, cfg } = this.ctx;
+    if (!discord.botReady || !cfg.discord.guildId) throw new HttpError(503, "The Discord bot isn't set up yet (Admin → Setup check)");
+    const roleId = str(opts.roleId, 30);
+    if (roleId && !SNOWFLAKE.test(roleId)) throw bad('Role ID: Server Settings → Roles → right-click the role → Copy Role ID, or leave it empty');
+    const list = await discord.guildChannels();
+    if (list.status !== 200 || !Array.isArray(list.body)) throw new HttpError(502, `Couldn't read the server's channels (${discordProblem(list)})`);
+    const channels = list.body;
+    const make = async (body) => {
+      const r = await discord.createChannel(body);
+      if (r.status === 403) throw new HttpError(409, "The bot can't make channels: give its role the Manage Channels permission (Server Settings → Roles), or make #vip-drop yourself and press this again — it finds it by name");
+      if (r.status !== 200 && r.status !== 201) throw new HttpError(502, `Couldn't make #${body.name} (${discordProblem(r)})`);
+      return r.body;
+    };
+    let ch = channels.find((c) => c && (c.type === 0 || c.type === 5) && ['vip-drop', 'vip-drops'].includes(String(c.name || '').toLowerCase()));
+    let made = false;
+    if (!ch) {
+      let parent = channels.find((c) => c && c.type === 4 && /^vip( drops?)?$/i.test(c.name || ''));
+      if (!parent) parent = await make({ name: 'VIP', type: 4 });
+      ch = await make({ name: 'vip-drop', type: 0, parent_id: parent.id, topic: 'VIP drops picked by the admins, the moment they drop — from Mugibot.' });
+      made = true;
+    }
+    const existing = this.catalog.listRoutes().find((r) => r.channelId === String(ch.id));
+    if (!existing && this.catalog.listRoutes().length >= MAX_ROUTES) throw bad(`${MAX_ROUTES} alert rules is the most`);
+    const rule = this.catalog.saveRoute(existing ? existing.id : null, this.route({
+      name: `#${ch.name}`, channelId: String(ch.id), roleId: roleId || (existing ? existing.roleId : ''), categories: [], stores: [],
+      kinds: ['restock', 'listed', 'price_drop'], keywords: '', enabled: true, fallback: false, vip: true,
+    }));
+    if (user) this.ctx.repo.audit(user.id, null, 'vip-channel-setup', `#${ch.name}${made ? ' (made)' : ''}`);
+    return { channel: { name: ch.name, id: String(ch.id), made }, rule };
   }
 }
 

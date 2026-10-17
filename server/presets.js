@@ -60,6 +60,11 @@ export const DUMMY_PRODUCTS = {
     { sku: '70000003', name: 'Lily Loves Australian Cotton Tie Detail T-Shirt', price: 25, status: 'in_stock', upsell: true },
     { sku: '70000004', name: 'Lily Loves European Linen Blend Puff Sleeve Midi Dress', price: 65, status: 'in_stock', upsell: true },
   ],
+  // City Beach-style (Salesforce Commerce Cloud): the booster pack from the real store, and a skateboard that drops later.
+  citybeach: [
+    { sku: '20424049-01', name: 'Pokémon Ninja Spinner Booster Pack Trading Cards', price: 9.99, status: 'in_stock' },
+    { sku: '20499999-01', name: 'Pokémon Pikachu Complete Skateboard', price: 129.99, status: 'in_stock', listed: false },
+  ],
   // Amazon-style: ASINs, Amazon's search tiles (the live sweeps read those, from an admin's browser).
   amazon: [
     { sku: 'B0MGBTEST1', name: 'Pokémon TCG: Destined Rivals Booster Bundle', price: 59, status: 'in_stock' },
@@ -87,6 +92,7 @@ export function dummyProductPath(store, p) {
     case 'pbandai': return `/pbandai/item/${p.sku}`;
     case 'target': return `/target/p/${slugify(p.name)}/${p.sku}`;
     case 'amazon': return `/amazon/dp/${p.sku}`;
+    case 'citybeach': return `/citybeach/${slugify(p.name)}/${p.sku}.html`;
     default: return null;
   }
 }

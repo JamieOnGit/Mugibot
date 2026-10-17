@@ -127,6 +127,11 @@ export function loadConfig(overrides = {}, env = process.env) {
       // the cooldown before one product alerts the same kind again, the smallest price change
       // that counts, and how long the check log is kept.
       minIntervalSeconds: o.minIntervalSeconds ?? int(env.MONITOR_MIN_INTERVAL, 20),
+      // VIP drops (monitor/vip.js): a VIP page read this often in its drop window, and otherwise;
+      // a VIP keyword searched at its store this often in the window.
+      vipFastSeconds: o.vipFastSeconds ?? int(env.VIP_FAST_SECONDS, 5),
+      vipSlowSeconds: o.vipSlowSeconds ?? int(env.VIP_SLOW_SECONDS, 15),
+      vipSweepSeconds: o.vipSweepSeconds ?? int(env.VIP_SWEEP_SECONDS, 4),
       alertCooldownSeconds: o.alertCooldownSeconds ?? int(env.MONITOR_ALERT_COOLDOWN, 600),
       priceChangePercent: o.priceChangePercent ?? Number(env.MONITOR_PRICE_CHANGE_PERCENT || 1),
       logDays: o.logDays ?? int(env.MONITOR_LOG_DAYS, 7),

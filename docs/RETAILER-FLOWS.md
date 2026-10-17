@@ -40,6 +40,7 @@ checkout as fast as the store allows:
 | Pokémon Center | `pokemoncenter.js` | 🟨 draft | Australia only (`/en-au`). Its bot check turns servers away, so its checkout couldn't be seen: a best guess, tested on a dummy copy only. During big drops it may queue everyone first; ⚡ Buy waits like you do. |
 | Premium Bandai | `pbandai.js` | 🟨 draft | Australia only (`/au`). Members only (stay signed in to your Bandai Namco ID). Its checkout is in a Global-e frame (`checkout.inFrame`): your details and card are filled in there. A best guess, tested on a dummy copy only. |
 | Amazon AU | `amazon.js` | 🟨 draft | Adds to cart and opens checkout; Amazon fills your saved address and card. |
+| City Beach | `citybeach.js` | 🟨 draft | Australia only (`/au`). Salesforce Commerce Cloud. Built from its real pages up to the final button: "Add To Bag" → straight to `/au/checkout` → your email → "Continue as guest" → "Delivery" → delivery to your address → "Submit shipping" → card (in the payment provider's frame) → "Confirm & pay". If a last "place order" stage follows (`?stage=placeOrder`, `checkout.review`), Auto-checkout presses its button once. Its marketing pop-up doesn't get in the way. Tested on the City Beach-style dummy store (`/citybeach`), not end to end on citybeach.com yet. |
 
 - **verified**: tested on the real store.
 - **beta**: tested on that store's dummy copy (`npm run demo`) in the automated tests.

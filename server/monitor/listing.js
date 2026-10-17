@@ -309,6 +309,47 @@ export function parseAmazon(html, { base, storeBase } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// City Beach search results (Salesforce Commerce Cloud)
+// ---------------------------------------------------------------------------
+// Server-made pages: a tile per product (<div class="product" data-pid="20424049-01">) with its
+// name, brand and price in the tile's analytics data (data-gtmdata) and its link. Stock isn't
+// on the tiles (a sold-out tile says so); the product page's own data says it, which the
+// monitor reads.
+export function parseCityBeach(html, { base, storeBase } = {}) {
+  const s = String(html || '');
+  const problem = pageProblem(s);
+  if (problem) return { products: [], problem };
+  const doc = parseHTML(s);
+  const tiles = findAll(doc, (n) => n.tag === 'div' && /(^|\s)product(\s|$)/.test(String((n.attrs && n.attrs.class) || '')) && /^\d{6,10}-\d{2}$/.test((n.attrs && n.attrs['data-pid']) || ''));
+  if (!tiles.length) return { products: [], problem: /no-results|did not return any results|0 results/i.test(s) ? 'empty' : 'layout' };
+  const products = [];
+  const seen = new Set();
+  for (const t of tiles) {
+    const sku = t.attrs['data-pid'];
+    if (seen.has(sku)) continue;
+    seen.add(sku);
+    let gtm = {};
+    try { gtm = JSON.parse(String(t.attrs['data-gtmdata'] || '{}').replace(/&quot;/g, '"').replace(/&amp;/g, '&')) || {}; } catch { gtm = {}; }
+    const link = findFirst(t, (n) => n.tag === 'a' && /\/\d{6,10}-\d{2}\.html/.test((n.attrs && n.attrs.href) || ''));
+    const img = findFirst(t, (n) => n.tag === 'img' && ((n.attrs && (n.attrs['data-src'] || n.attrs.src)) || ''));
+    const text = tileText(t);
+    const name = clean(String(gtm.name || '').replace(/&eacute;/g, 'é').replace(/&amp;/g, '&') || (link ? textContent(link) : ''));
+    const brand = clean(gtm.brand || '', 60);
+    const title = brand && !norm(name).includes(norm(brand)) ? `${brand} ${name}` : name;
+    if (title.length < 4) continue;
+    products.push({
+      sku, aliases: [], title, price: money(gtm.price), wasPrice: null,
+      // (Stock is read from the product page: the tiles don't say it reliably.)
+      inStock: null,
+      preorder: /\bpre-?order\b/i.test(text),
+      url: link ? httpsUrl(link.attrs.href, storeBase || base) : '',
+      image: img ? httpsUrl(img.attrs['data-src'] || img.attrs.src, base) : '', marketplace: false,
+    });
+  }
+  return { products, total: null, problem: null };
+}
+
+// ---------------------------------------------------------------------------
 // CrystalCommerce search results (The Games Cube)
 // ---------------------------------------------------------------------------
 // Server-made pages: a tile per product (<li class="product">) with its link, name, picture and
@@ -579,7 +620,7 @@ export function parseGeneric(html, { base, productPath = null, skuFromPath = nul
   return { products: [...map.values()].slice(0, 300), problem: map.size ? null : 'empty' };
 }
 
-export const PARSERS = { target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, crystal: parseCrystal, pbandai: parsePBandai, generic: parseGeneric };
+export const PARSERS = { citybeach: parseCityBeach, target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, crystal: parseCrystal, pbandai: parsePBandai, generic: parseGeneric };
 
 export function parseListing(parser, text, opts) {
   return (PARSERS[parser] || parseGeneric)(text, opts);

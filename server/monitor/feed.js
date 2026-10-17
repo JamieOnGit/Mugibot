@@ -119,10 +119,11 @@ export class Feed {
    * Send an alert for a product: kind 'restock' | 'listed' | 'sold_out' | 'price_drop' | 'price_rise'.
    * opts: { manual (an admin reported it: skips the cooldown), announce (an admin's 📣 SKU: no monitor needed),
    *         sweep (a live sweep found it: no monitor needed, the sweep settings decide), note, pct,
-   *         detectedAt (when the store's answer came in: the alert says how long it took to reach dashboards) }
+   *         detectedAt (when the store's answer came in: the alert says how long it took to reach dashboards),
+   *         vip (a VIP watch found it: monitor/vip.js — a product with a VIP monitor is one too) }
    * Returns the saved alert, or null when a monitor isn't asking for it or the cooldown is running.
    */
-  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null } = {}) {
+  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null, vip = false } = {}) {
     // On the blacklist (Admin → Blacklist): never alerts. (An admin's own restock ping still goes out.)
     if (!manual && this.catalog.isBlocked(product.store, product.sku)) return null;
     const monitor = this.catalog.monitorForProduct(product.id);
@@ -139,7 +140,7 @@ export class Feed {
     const row = this.catalog.addAlert({
       product_id: product.id, kind, store: product.store, sku: product.sku, name: product.name || product.sku, url: product.url || '',
       image: product.image || '', category: product.category, status: product.status, price: product.price ?? null,
-      previous_price: product.previous_price ?? null, manual: manual ? 1 : 0, note: [note, pct !== null ? `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%` : ''].filter(Boolean).join(' '),
+      previous_price: product.previous_price ?? null, manual: manual ? 1 : 0, vip: vip || (monitor && monitor.vip_watch) ? 1 : 0, note: [note, pct !== null ? `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%` : ''].filter(Boolean).join(' '),
     });
     const alert = { ...toAlert(row), ttnMs: detectedAt ? Math.max(0, this.now() - detectedAt) : null };
     this.broadcast('feed', alert);
@@ -151,10 +152,14 @@ export class Feed {
   /**
    * The Discord alert rules that want this alert. A catch-all rule (fallback: misc-retailers) only
    * gets what no other rule took. With no rules, the restock channel gets restocks and listings.
-   * A rule for a store also takes its dummy-store copy's alerts.
+   * A rule for a store also takes its dummy-store copy's alerts. A VIP drop goes to the VIP rules
+   * (#vip-drop) only — to the others only while there's no VIP rule — and nothing else goes there.
    */
   routesFor(alert) {
-    let routes = this.catalog.listRoutes().filter((r) => r.enabled);
+    const enabled = this.catalog.listRoutes().filter((r) => r.enabled);
+    const vip = enabled.filter((r) => r.vip);
+    if (alert.vip && vip.length) return vip.filter((r) => r.kinds.includes(alert.kind));
+    let routes = enabled.filter((r) => !r.vip);
     if (!routes.length && this.cfg.discord.restockChannelId) {
       routes = [{ id: 'default', name: 'Restock channel', channelId: this.cfg.discord.restockChannelId, roleId: this.cfg.discord.restockRoleId || '', categories: [], stores: [], kinds: ['restock', 'listed'], keywords: '' }];
     }
@@ -200,7 +205,7 @@ export class Feed {
     ];
     return this.notifier.message({
       level: 'urgent', color: null,
-      title: `${k.emoji} ${k.label}: ${alert.name}`,
+      title: `${alert.vip ? '⭐ VIP · ' : ''}${k.emoji} ${k.label}: ${alert.name}`,
       message: [alert.note, alert.manual ? 'Reported by an admin.' : ''].filter(Boolean).join('\n'),
       url: alert.url, image: alert.image, fields, footer: `${this.cfg.appName} Monitor`, embedColor: k.color, buttons,
     }, { mention });
