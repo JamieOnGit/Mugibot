@@ -222,7 +222,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 279 tests in about ten minutes:
+the 283 tests in about ten minutes:
 
 ```bash
 npm install
@@ -259,6 +259,10 @@ npm test
   history, check log and health; pause, resume and intervals; Shopify cart
   links; blocked stores keep their last status; admins' browsers for stores
   that refuse servers; `/monitor` and `/restocks`.
+- **Card boxes in payment frames** (Chromium): a frame asking for the focus
+  before the page above is listening asks again and is focused at once (not
+  after the 1.5 s fallback), once, also two frames down and queued behind
+  another frame.
 - **The real extension in Chromium:** Kmart (verified; signed in and as a
   guest, whose cart turns an early add away), BIG W, EB Games (Click & Collect
   switched to Home Delivery, the address from its suggestions, "Credit / Debit

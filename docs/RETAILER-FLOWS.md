@@ -193,7 +193,11 @@ stores. Some rules always apply, whatever a flow says:
 - Card boxes are typed into one at a time, each focused through the page, and
   checked afterwards: a box that didn't keep what was typed is typed again (the
   expiry as digits alone the second time). If the browser window isn't in front,
-  the checkout's tab is brought forward once.
+  the checkout's tab is brought forward once. A payment frame can be ready before
+  the page above it is listening (Premium Bandai's Global-e checkout often is):
+  it asks for the focus again every 100 ms until it's answered, so the card goes
+  in at once — before 1.16.1 it waited out a 1.5 s fallback first, about half the
+  time. Only with nobody above to answer does it type after that 1.5 s.
 - Fields that already have a value (e.g. from a store account) are left alone.
 - Checkout (or the bag) is only opened once the store shows the item went in:
   the "added" popup, an "Added to bag" message, the number on the store's bag

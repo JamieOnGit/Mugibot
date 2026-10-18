@@ -17,7 +17,9 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // how checkouts are filled in — not every release does (1.13.0 was card backup). 1.14.0: Shopify's,
 // Target's (Paydock) and Global-e's checkouts, tile choices, address finders, Amazon's "Buy Now".
 // 1.16.0: checkpoints and virtual queues (waits at JB Hi-Fi's checkpoint and in EB Games' and
-// Pokémon Center's queues, never refreshing them, then carries on).
+// Pokémon Center's queues, never refreshing them, then carries on). (1.16.1 types the card into
+// payment frames sooner — a frame asking for the focus before the page is listening asks again —
+// and works the same either way, so this stays.)
 export const ACO_EXTENSION_VERSION = '1.16.0';
 // The oldest that listens all the time as your checkout browser, so Discord's ⚡ Buy (pressed on
 // your phone) starts at once. Older ones pick it up at their next check (within a minute or so).
