@@ -247,6 +247,11 @@ export class Discord {
     return this.api('GET', `/guilds/${this.d.guildId}/channels`);
   }
 
+  /** The server's roles (a drop watch's channel can ping one). { status, body: [role] } */
+  guildRoles() {
+    return this.api('GET', `/guilds/${this.d.guildId}/roles`);
+  }
+
   /** Make a channel in the server (needs the Manage Channels permission). { status, body: channel } */
   createChannel(body) {
     return this.api('POST', `/guilds/${this.d.guildId}/channels`, body);

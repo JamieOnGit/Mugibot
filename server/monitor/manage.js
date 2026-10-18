@@ -62,8 +62,9 @@ export class MonitorAdmin {
       note: str(input.note, 200),
       createdBy: user ? user.id : null,
     });
-    // (A drop watch's monitor goes with the watch: only one it made.)
-    if (created && input.dropWatch) this.ctx.db.run('UPDATE monitors SET drop_watch = :w WHERE id = :id', { w: input.dropWatch, id: monitor.id });
+    // (A drop watch's monitor: one it made goes with the watch; one that was there before is taken on —
+    // its alerts go where the watch's do — and left as it was when the watch goes. monitor/drops.js)
+    if (input.dropWatch && (created || !monitor.drop_watch)) this.ctx.db.run('UPDATE monitors SET drop_watch = :w WHERE id = :id', { w: input.dropWatch, id: monitor.id });
     this.checkNow(product);
     if (created) this.ctx.repo.audit(user ? user.id : null, null, 'monitor-add', `${parsed.store} ${parsed.sku}`);
     return { product: toProduct(this.catalog.productById(product.id)), monitor: toMonitor(monitor), created };

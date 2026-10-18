@@ -346,10 +346,18 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   assert.equal(await targetRow.locator('.sn-rows').isVisible(), false, 'details folded away');
   await targetRow.locator('.st-toggle').click();
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"].open .sn-rows:not([hidden])');
-  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"] .sn-rows'), /searches\s*1.*last answer\s*400 ms.*server · \/search\?sEngine=c&text=/s);
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"] .sn-rows'), /searches\s*1.*last answer\s*400 ms.*server first · \/search\?sEngine=c&text=/s);
   assert.equal(await page.getAttribute('#sn-channels .sn-chan[data-store="target"] .st-toggle', 'aria-expanded'), 'true');
-  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="bigw"]'), /BIG W\s*Waiting.*admin's browser/s);
-  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /Kmart\s*Starting.*server · ac\.cnstrc\.com\/search\//s);
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /Kmart\s*Starting.*server first · ac\.cnstrc\.com\/search\//s);
+  // Server first: BIG W's page draws its products once it's open, so the server reads none — an
+  // admin's browser stands in, and the server tries again in 5 minutes.
+  const bigw = env.app.retailers.get('bigw');
+  await sw.ingest(bigw, term, { products: [], total: 0, problem: 'empty' }, { source: 'server', url: sw.urlFor(bigw, 'pokemon'), ms: 350 });
+  await page.waitForFunction(() => /BIG W\s*Waiting/.test(document.querySelector('#sn-channels .sn-chan[data-store="bigw"]').textContent));
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="bigw"] .st-sub'), /Mugibot's server can't read it .* an admin's browser searches it meanwhile, and the server tries again within 5 min/);
+  await page.click('#sn-channels .sn-chan[data-store="bigw"] .st-toggle');
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="bigw"] .sn-rows'), /from\s*admin's browser, while the server's refused · \/search\?text=.*server\s*refused since \d\d:\d\d:\d\d · tries again at \d\d:\d\d:\d\d/s);
+  await page.click('#sn-channels .sn-chan[data-store="bigw"] .st-toggle');
   // The live feed shows drops and restocks; "Everything" adds each search.
   assert.equal(await page.inputValue('#m-kind'), 'alerts');
   assert.doesNotMatch(await page.textContent('#m-log'), /Target · "pokemon" — 2 products/);
@@ -394,8 +402,8 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   // A store that keeps failing: a banner above everything says so, with Reset all.
   const amazon = env.app.retailers.get('amazon');
   for (let i = 0; i < 3; i += 1) sw.record(amazon, term, { ok: false, blocked: true, error: 'The store refused the search (HTTP 503)', source: 'server', url: sw.urlFor(amazon, 'pokemon'), ms: 300 });
-  await page.waitForSelector('#sn-attention:not([hidden])');
-  assert.match(await page.textContent('#sn-attention'), /Amazon AU needs attention/);
+  // (BIG W too: waiting for an admin's browser to stand in.)
+  await page.waitForFunction(() => /BIG W and Amazon AU need attention/.test(document.querySelector('#sn-attention:not([hidden])')?.textContent || ''));
   assert.match(await page.textContent('#sn-channels .sn-chan[data-store="amazon"] .st-sub'), /HTTP 503/);
   await page.click('#sn-attention button');
   await page.waitForFunction(() => /Reset every store/.test(document.querySelector('#toasts')?.textContent || ''));
@@ -419,9 +427,13 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await page.waitForFunction(() => /Alerts armed/.test(document.querySelector('#toasts')?.textContent || ''));
 
   // Settings: where each store is searched from, keywords, alerts and what counts, the response times.
+  // (BIG W's server read again, after Reset all: the browser stands in once more.)
+  await sw.ingest(bigw, term, { products: [], total: 0, problem: 'empty' }, { source: 'server', url: sw.urlFor(bigw, 'pokemon'), ms: 350 });
   await page.click('[data-panel="monitor"] .mon-tabs a[data-mtab="monitor-settings"]');
   await page.waitForSelector('#ms-table tbody tr');
-  assert.equal(await page.inputValue('#ms-table select[data-store="target"]'), 'server');
+  assert.equal(await page.inputValue('#ms-table select[data-store="target"]'), 'auto');
+  assert.match(await page.textContent('#ms-table select[data-store="target"]'), /Server first \(default\).*Server only.*Admin's browser.*Off/s);
+  assert.match(await page.textContent('#ms-table tr[data-store="bigw"]'), /Admin's browser standing in · server tries again/);
   assert.match(await page.textContent('#ms-table tr[data-store="target"]'), /Gentle until/, 'reset a moment ago: searched gently for a while');
   assert.match(await page.textContent('#ms-state'), /Off \(MONITOR_ENABLED=0\)/, '(tests run with the loops off)');
   await page.waitForSelector('#sn-chart svg circle.end.s3');
@@ -908,7 +920,7 @@ test("Monitor page for a member: each store's switch (hidden just for them), ☆
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"] .st-sw[aria-checked="false"]', { timeout: 10000 });
   assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"]'), /Switched off: not searched/);
   await page.click('#sn-channels .sn-chan[data-store="target"] .st-sw');
-  await waitFor(() => env.app.sweeper.modeFor(env.app.retailers.get('target')) === 'server', { message: 'Target back on, from where it was' });
+  await waitFor(() => env.app.sweeper.modeFor(env.app.retailers.get('target')) === 'auto', { message: 'Target back on, server first (its default)' });
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"] .st-sw[aria-checked="true"]', { timeout: 10000 });
 });
 
@@ -940,6 +952,8 @@ test('🚦 a checkpoint or virtual queue going up shows on every dashboard strai
 
 test('🎯 Drop watches: one box for a link or words — the form shows where to look, Auto-checkout only where Mugibot checks out; for everyone (admins) or just for you', async () => {
   const XBOX = 'https://www.jbhifi.com.au/products/xbox-series-x25-limited-edition-console-1tb';
+  const PINGS = '800000000000000002';
+  discord.state.roles.push({ id: PINGS, name: 'Drop pings', position: 3, permissions: '0' });
   await page.goto(`${env.url}/app#drops`);
   await page.waitForSelector('#pp-drops:not([hidden]) #dw-form');
   assert.equal(await page.getAttribute('#pt-drops', 'aria-selected'), 'true');
@@ -963,9 +977,32 @@ test('🎯 Drop watches: one box for a link or words — the form shows where to
   assert.equal(await page.isVisible('#dw-aco-wrap'), true);
   assert.equal(await page.isChecked('#dw-share'), true, 'an admin\'s is for everyone unless they say');
   assert.equal(await page.inputValue('#dw-category'), 'nontcg');
+  // Where it posts (admins): a channel of the Discord server, and a role to ping — the usual to start with.
+  await page.waitForSelector('#dw-post-wrap:not([hidden]) #dw-post:not([disabled])');
+  assert.equal(await page.inputValue('#dw-post'), '');
+  const chans = await page.locator('#dw-post option').allTextContents();
+  assert.equal(chans[0], 'The usual — #non-tcg-alerts');
+  assert.ok(chans.includes('#general') && chans.includes('#non-tcg-alerts'), chans.join('|'));
+  assert.equal(await page.locator('#dw-post optgroup[label="Mugibot alerts"] option', { hasText: '#non-tcg-alerts' }).count(), 1, 'by category');
+  assert.deepEqual(await page.locator('#dw-ping option').allTextContents(), ['No one', '@Drop pings', '@Member'], "not @everyone, nor the bot's role");
+  const general = discord.state.channels.find((x) => x.name === 'general').id;
+  await page.selectOption('#dw-post', general);
+  await page.selectOption('#dw-ping', PINGS);
   await page.click('#dw-add');
   await page.waitForSelector('#dw-mine .dw-row.shared');
-  assert.match(await page.textContent('#dw-mine .dw-row.shared'), /Link · JB Hi-Fi · 📣 for everyone/);
+  assert.match(await page.textContent('#dw-mine .dw-row.shared'), /Link · JB Hi-Fi · 📣 for everyone in #general · pings @Drop pings/);
+  const linkWatch = env.app.drops.watches().find((x) => x.url === XBOX);
+  assert.deepEqual([linkWatch.channelId, linkWatch.roleId], [general, PINGS]);
+  assert.equal(await page.inputValue('#dw-post'), '', 'the pickers are ready for the next one');
+  // Changed on its row (✎): back to the usual channel, no one pinged.
+  await page.click('#dw-mine .dw-row.shared button[aria-label^="Where "]');
+  await page.waitForSelector('#dw-mine .dw-row.shared form.dw-edit');
+  assert.equal(await page.inputValue('#dw-mine .dw-row.shared form.dw-edit select[aria-label$="post in"]'), general);
+  await page.selectOption('#dw-mine .dw-row.shared form.dw-edit select[aria-label$="post in"]', '');
+  await page.selectOption('#dw-mine .dw-row.shared form.dw-edit select[aria-label$="ping"]', '');
+  await page.click('#dw-mine .dw-row.shared form.dw-edit button[type=submit]');
+  await page.waitForFunction(() => /Link · JB Hi-Fi · 📣 for everyone in #non-tcg-alerts/.test(document.querySelector('#dw-mine .dw-row.shared').textContent) && !document.querySelector('#dw-mine form.dw-edit'));
+  assert.deepEqual([env.app.drops.get(linkWatch.id).channelId, env.app.drops.get(linkWatch.id).roleId], ['', '']);
   assert.match(await page.textContent('#dw-msg'), /Watching — its page is being read now/);
   const p = env.app.catalog.productFor('jbhifi', 'xbox-series-x25-limited-edition-console-1tb');
   assert.equal(p.category, 'nontcg');
@@ -1012,6 +1049,8 @@ test('🎯 Drop watches: one box for a link or words — the form shows where to
   await fan.goto(`${env.url}/app#drops`);
   await fan.waitForSelector('#dw-shared-box:not([hidden]) .dw-row');
   assert.match(await fan.textContent('#dw-shared'), /Link · JB Hi-Fi · 📣 for everyone · by owner/);
+  assert.equal(await fan.isVisible('#dw-post-wrap'), false, 'where it posts is for admins');
+  assert.equal(await fan.locator('#dw-shared button[aria-label^="Where "]').count(), 0);
   assert.doesNotMatch(await fan.textContent('#pp-drops'), /nintendo switch 2/, 'an admin\'s own watch is theirs');
   assert.equal(await fan.locator('#dw-shared .dw-row button', { hasText: 'Remove' }).count(), 0, 'not theirs to remove');
   assert.equal(await fan.isVisible('#dw-share-wrap'), false, 'members\' watches are their own');

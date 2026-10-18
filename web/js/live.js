@@ -148,6 +148,13 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
   // ---------------------------------------------------------------------------
   const sortedStores = () => [...L.stores.values()].sort((a, b) => (slotOf(a.id) || 99) - (slotOf(b.id) || 99) || a.name.localeCompare(b.name));
 
+  // Where a store's searches come from (admins only): "server first", "server", "admin's browser"…
+  function fromText(s) {
+    if (s.mode === 'off') return 'off';
+    if (s.mode === 'auto') return s.source === 'browser' ? "admin's browser, while the server's refused" : 'server first';
+    return s.mode === 'browser' ? "admin's browser" : 'server';
+  }
+
   function nextText(s) {
     if (!s.nextAt) return '—';
     const left = s.nextAt - serverNow();
@@ -190,13 +197,16 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
         h('div', { class: 'r' }, h('span', {}, 'last answer'), h('b', {}, msText(s.lastMs))),
         h('div', { class: 'r' }, h('span', {}, 'next search'), h('b', { class: 'sn-next' }, nextText(s))),
         // (Where the searches come from: admins only — members aren't sent it.)
-        L.admin && s.mode ? h('div', { class: 'r' }, h('span', {}, 'from'), h('b', {}, `${s.mode === 'browser' ? "admin's browser" : s.mode === 'off' ? 'off' : 'server'} · ${s.endpoint}`)) : null,
+        L.admin && s.mode ? h('div', { class: 'r' }, h('span', {}, 'from'), h('b', {}, `${fromText(s)} · ${s.endpoint}`)) : null,
+        // Server first, the server refused: an admin's browser stands in until the server's let back in.
+        L.admin && s.backup ? h('div', { class: 'r' }, h('span', {}, 'server'), h('b', {}, `refused since ${clockOf(s.backup.since - L.skew)} · ${s.backup.retryAt ? `tries again at ${clockOf(s.backup.retryAt - L.skew)}` : 'trying again now'}`)) : null,
         s.retryAt ? h('div', { class: 'r' }, h('span', {}, 'store asked'), h('b', {}, `wait until ${clockOf(s.retryAt - L.skew)}`)) : null,
         s.fails || s.lastError ? h('div', { class: 'r' }, h('span', {}, s.fails ? 'problem' : 'note'), h('b', {}, s.lastError || `${s.fails} failed`)) : null,
         waiting && !/extension/i.test(s.lastError || '') ? h('div', { class: 'r' }, h('span', {}, ''), h('b', {}, 'Keep Chrome open with the extension connected to an admin account')) : null,
-        // A store that keeps refusing the server: an admin's browser may get through.
+        // A store that keeps refusing the server (set to the server only): server first lets an
+        // admin's browser stand in while it's refused.
         L.admin && s.refused && s.mode === 'server' ? h('div', { class: 'st-acts' }, h('span', {}, 'Still refused after a reset?'),
-          h('button', { class: 'btn small', type: 'button', onclick: () => setMode(s.id, 'browser') }, "Search it from an admin's browser")) : null);
+          h('button', { class: 'btn small', type: 'button', onclick: () => setMode(s.id, 'auto') }, "Server first: an admin's browser stands in")) : null);
       box.append(h('div', { class: `sn-chan st-${cls || 'idle'}${open ? ' open' : ''}${mine || s.status === 'off' ? ' st-dim' : ''}`, dataset: { store: s.id } },
         h('div', { class: 'hd' }, toggle,
           L.admin && s.status !== 'off' ? h('button', { class: 'btn small ghost st-reset', type: 'button', title: `Reset ${s.name}: search it again now, gently`, 'aria-label': `Reset ${s.name}`, onclick: (e) => resetStore(s.id, e.currentTarget) }, '↻') : null,
@@ -219,7 +229,7 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
       try {
         if (L.admin) {
           if (on && !confirm(`Switch ${s.name}'s monitoring off for everyone? Nobody gets its drops until it's switched back on.`)) return;
-          await setMode(s.id, on ? 'off' : s.defaultMode && s.defaultMode !== 'off' ? s.defaultMode : 'server');
+          await setMode(s.id, on ? 'off' : s.defaultMode && s.defaultMode !== 'off' ? s.defaultMode : 'auto');
           refreshSoon();
         } else {
           const next = new Set(L.hidden);
@@ -611,10 +621,11 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
         if (ev.baseline) bits.push('first look (no alerts)');
         if (ev.error) bits.push(ev.error);
         return row('hb', 'Search', ev.at, h('span', { class: 'm' }, ...store, `${ev.storeName} · "${ev.keyword}"${ev.page > 1 ? ` page ${ev.page}` : ''} — `, h('b', {}, plural(ev.found, 'product')), bits.length ? ` · ${bits.join(' · ')}` : '',
-          ev.source === 'browser' ? " · admin's browser" : ''), msText(ev.ms));
+          ev.source === 'browser' ? " · admin's browser" : ev.trial ? " · the server's try: it's back" : ''), msText(ev.ms));
       }
       case 'err':
-        return row('err', 'Fault', ev.at, h('span', { class: 'm' }, ...store, `${ev.storeName} · "${ev.keyword}" — ${ev.error || 'failed'}`), ev.ms ? msText(ev.ms) : '');
+        return row('err', 'Fault', ev.at, h('span', { class: 'm' }, ...store, `${ev.storeName} · "${ev.keyword}" — ${ev.error || 'failed'}`,
+          ev.trial ? " · the server's try (an admin's browser carries on)" : ''), ev.ms ? msText(ev.ms) : '');
       case 'out':
         return row('out', 'Gone', ev.at, [thumb(ev.product.image, ev.product.name),
           h('span', { class: 'm' }, ...store, `${ev.storeName} · `, nameButton(ev.product), ' dropped out of the results — counted as sold out')], '');
@@ -831,7 +842,11 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
   // ---------------------------------------------------------------------------
   function onSweep(ev) {
     if (!ev || !L.data) return;
-    if (ev.type === 'hb' || ev.type === 'err') {
+    // The server's try at a store an admin's browser searches for it (server first): the store's
+    // state is the browser's — only whether the server's back changes it, and that's fetched.
+    if (ev.trial) {
+      refreshSoon();
+    } else if (ev.type === 'hb' || ev.type === 'err') {
       const s = L.stores.get(ev.store);
       if (s) {
         s.searches += 1;
@@ -848,7 +863,7 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
           s.status = 'retrying';
         }
         // When the next search comes: the set pace, slower after a refusal, doubling after each failure.
-        const every = ((s.mode === 'browser' ? L.settings.browserEverySeconds : L.settings.everySeconds) || 5) * 1000;
+        const every = ((ev.source === 'browser' || s.source === 'browser' ? L.settings.browserEverySeconds : L.settings.everySeconds) || 5) * 1000;
         const slow = s.slowedUntil && s.slowedUntil > serverNow() ? 3 : 1;
         s.nextAt = ev.at + (ev.type === 'hb' ? every * slow : Math.min(15 * 60 * 1000, every * 2 ** Math.min(s.fails, 10)));
         s.latency = [...(s.latency || []), { at: ev.at, ms: ev.ms, ok: ev.type === 'hb' }].filter((p) => p.at >= serverNow() - 2 * CHART_WINDOW).slice(-300);
@@ -860,7 +875,7 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
       if (ev.type === 'hb') t.streak += 1;
       else { t.errors += 1; t.streak = 0; }
       if (!hiddenStore(ev.store)) ping(ev.store, ev.type === 'err');
-    } else if (ev.type === 'sys' && /changed the sweeps|started|switched off|searching it|needs mugibot's extension/i.test(ev.message || '')) {
+    } else if (ev.type === 'sys' && /changed the sweeps|started|switched off|searching it|needs mugibot's extension|mugibot's server/i.test(ev.message || '')) {
       refreshSoon();
     }
     addLog({ at: ev.at, ev });

@@ -72,6 +72,7 @@ export async function createApp(options = {}) {
   Object.assign(drops, { monitor, sweeper });
   monitor.drops = drops;
   sweeper.drops = drops;
+  feed.drops = drops;
   const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, limiter, pageCache: new Map() };
   drops.ctx = ctx;
   // Auto-checkout: started by the monitor when an armed item drops.

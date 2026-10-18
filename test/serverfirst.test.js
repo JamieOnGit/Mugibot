@@ -1,0 +1,302 @@
+// Server first (docs/MONITORING.md): every store is searched from Mugibot's server, and an admin's
+// browser stands in only while the store refuses the server (3 searches in a row; 1 at a store known
+// to turn servers away) or the server can't read its products (BIG W's page draws them once it's
+// open). Meanwhile the server tries again after 5 minutes, twice as long each time it's still turned
+// away (30 at most), and takes back over the moment the store answers it — gently at first. What a
+// store asked for (Retry-After) is waited for. Members never see where searches come from.
+
+import { test, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { Client, makeMember, startApp, waitFor } from './helpers.js';
+import { startMockStore } from '../devtools/mockstore.js';
+import { parseListing } from '../server/monitor/listing.js';
+
+let env;
+let store;
+let boss;
+let ash;
+let sw;
+let clock;
+let admin;
+const MIN = 60 * 1000;
+
+before(async () => {
+  store = await startMockStore();
+  clock = { offset: 0 };
+  env = await startApp({ allowPrivateHosts: true, demoStoreUrl: store.url, adminUsernames: 'boss', hostGapSeconds: 0, now: () => Date.now() + clock.offset });
+  boss = await Client.signup(env.url, 'boss');
+  ash = await Client.signup(env.url, 'ash');
+  makeMember(env, ash);
+  sw = env.app.sweeper;
+  admin = env.app.repo.userByUsername('boss');
+  // The real stores off (tests never touch them); the dummy ones server first.
+  const off = Object.fromEntries(sw.stores().filter(({ retailer: r }) => !r.demo).map(({ retailer: r }) => [r.id, 'off']));
+  const r = await boss.put('/api/monitor/sweep', { stores: { ...off, 'demo-kmart': 'auto', 'demo-amazon': 'auto', 'demo-bigw': 'auto', 'demo-jbhifi': 'auto' } });
+  assert.equal(r.status, 200, r.text);
+});
+after(async () => {
+  sw.stop();
+  await env.close();
+  await store.close();
+});
+beforeEach(() => {
+  store.state.blockNonBrowsers = false;
+  store.state.tooMany = {};
+});
+
+const R = (id) => env.app.retailers.get(id);
+const sweep = (id, keyword = 'pokemon', page = 1) => sw.sweepTerm(R(id), { keyword, page });
+const card = (id) => sw.live().stores.find((s) => s.id === id);
+const due = (id) => sw.browserDue(admin, { version: '99.0.0' }).terms.find((t) => t.store === id);
+const sys = (re) => sw.events.some((e) => e.type === 'sys' && re.test(e.message));
+const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, fails: 0, slowUntil: 0, retryAt: 0, browserNext: 0, lastError: '' });
+
+/** What an admin's browser reads at a store (the dummy store lets browsers in): the same code the server uses. */
+async function browserRead(id, keyword = 'pokemon') {
+  sw.stat(id).turn = 0; // (the first keyword's first page)
+  const t = due(id);
+  assert.ok(t, `${id} given to the admin's browser`);
+  const r = R(id);
+  const text = await (await fetch(t.url, { headers: { 'user-agent': 'Mozilla/5.0 Chrome' } })).text();
+  const parsed = parseListing(r.sweep.parser, text, { base: t.url, storeBase: r.base, productPath: r.productPath, skuFromPath: r.skuFromPath, storeName: r.name });
+  return sw.browserResults(admin, [{ store: id, keyword: t.keyword || keyword, page: t.page, ok: true, status: 200, ms: 250, products: parsed.products }]);
+}
+
+test("every store is server first unless an admin says otherwise; the dummy stores' copies are off", () => {
+  for (const id of ['target', 'kmart', 'bigw', 'amazon', 'ebgames', 'pbandai', 'pokemoncenter', 'jbhifi']) assert.equal(sw.defaultMode(R(id)), 'auto', id);
+  assert.equal(sw.defaultMode(R('zing')), 'off');
+  assert.equal(sw.defaultMode(R('demo-kmart')), 'off');
+  assert.equal(sw.modeFor(R('demo-kmart')), 'auto');
+  assert.equal(sw.sourceOf(R('demo-kmart')), 'server');
+  assert.equal(due('demo-kmart'), undefined, "no admin's browser while the server's let in");
+});
+
+test("refused 3 times in a row: an admin's browser stands in, the server tries again in 5, 10, 20, then every 30 minutes, and takes back over once it's let in", async () => {
+  const id = 'demo-kmart';
+  fresh(id);
+  store.state.blockNonBrowsers = true;
+  for (let i = 1; i <= 2; i++) {
+    const r = await sweep(id);
+    assert.equal(r.ok, false);
+    assert.equal(sw.stat(id).backup, null, `still the server's after ${i}`);
+    assert.equal(due(id), undefined);
+  }
+  assert.ok(sys(/Kmart \(dummy store\) refused a search — searching it at a third of the pace/));
+  const at = sw.now();
+  await sweep(id);
+  const st = sw.stat(id);
+  assert.ok(st.backup, 'handed over at the third');
+  assert.equal(st.backup.tries, 1);
+  assert.ok(Math.abs(st.backup.retryAt - (at + 5 * MIN)) < 2000, 'the server tries again in 5 minutes');
+  assert.equal(st.fails, 0, "the browser starts afresh: the failures were the server's");
+  assert.equal(st.slowUntil, 0);
+  assert.ok(sys(/Kmart \(dummy store\): Mugibot's server is refused \(The store refused the search \(HTTP 403\)\) — an admin's browser searches it meanwhile, and the server tries again within 5 min/));
+  let c = card(id);
+  assert.deepEqual([c.mode, c.source, c.status], ['auto', 'browser', 'waiting'], "waiting for an admin's browser");
+  assert.equal(c.backup.tries, 1);
+  // (No admin's browser searching it yet: the server keeps trying at its usual backoff — 40 s here.)
+  assert.ok(Math.abs(c.backup.retryAt - (at + 40 * 1000)) < 2000, `${c.backup.retryAt - at} ms`);
+  // The admin's browser is given its searches, and what it reads counts.
+  const [res] = await browserRead(id);
+  assert.equal(res.ok, true, res.error);
+  assert.ok(res.found >= 1);
+  c = card(id);
+  assert.equal(c.status, 'ok');
+  assert.equal(c.source, 'browser');
+  assert.equal(c.backup.retryAt, st.backup.retryAt, 'the browser standing in: the server tries again in 5 minutes');
+  const h = sw.health().find((x) => x.store === id);
+  assert.deepEqual([h.mode, h.source, h.defaultMode], ['auto', 'browser', 'off']);
+
+  // The server's tries while it stands in: each one turned away waits twice as long (30 minutes at most);
+  // the store's state stays the browser's, and members never see a try.
+  const tries = [];
+  for (const wait of [10, 20, 30, 30]) {
+    const before = sw.now();
+    const r = await sweep(id);
+    assert.equal(r.ok, false);
+    assert.equal(sw.stat(id).fails, 0, "a try doesn't count against the browser");
+    assert.equal(card(id).status, 'ok');
+    tries.push(Math.round((sw.stat(id).backup.retryAt - before) / MIN));
+    assert.equal(wait, tries.at(-1));
+  }
+  const trial = sw.events.filter((e) => e.type === 'err' && e.store === id).at(-1);
+  assert.equal(trial.trial, true);
+  const live = (await ash.get('/api/monitor/live')).body;
+  assert.ok(!live.events.some((e) => e.trial || (e.type === 'err' && e.store === id && e.at >= trial.at)), "members don't see the server's tries");
+  assert.ok(!live.events.some((e) => e.type === 'sys' && /server|browser/i.test(e.message)), 'nor who searches what');
+  const mine = live.stores.find((x) => x.id === id);
+  assert.deepEqual([mine.source, mine.backup, mine.mode, mine.status], [undefined, undefined, undefined, 'ok']);
+
+  // Let back in: the server takes over at once, gently for 10 minutes, and the browser's left be.
+  store.state.blockNonBrowsers = false;
+  const back = await sweep(id);
+  assert.equal(back.ok, true, back.error);
+  assert.equal(sw.stat(id).backup, null);
+  assert.ok(sw.stat(id).slowUntil > sw.now(), 'gently at first');
+  assert.ok(sys(/Kmart \(dummy store\): Mugibot's server is searching it again — the store answered \(an admin's browser stood in for \d+ min\)/));
+  assert.equal(sw.events.filter((e) => e.type === 'hb' && e.store === id).at(-1).trial, true);
+  c = card(id);
+  assert.deepEqual([c.source, c.backup], ['server', null]);
+  assert.equal(due(id), undefined, 'no more searches for the browser');
+  // (A search it was given just before is still taken; later ones aren't the browser's to report.)
+  const products = [{ sku: '43818648', title: 'Pokemon TCG Scarlet Violet Elite Trainer Box', price: 60, inStock: true }];
+  assert.equal((await sw.browserResults(admin, [{ store: id, keyword: 'pokemon', page: 1, ok: true, products }])).length, 1);
+  clock.offset += 3 * MIN;
+  assert.deepEqual(await sw.browserResults(admin, [{ store: id, keyword: 'pokemon', page: 1, ok: true, products }]), []);
+});
+
+test('a store known to turn servers away (Amazon: HTTP 503) hands over at the first refusal', async () => {
+  const id = 'demo-amazon';
+  fresh(id);
+  assert.equal(R(id).sweep.from, 'browser');
+  const r = await sweep(id);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /HTTP 503/);
+  assert.ok(sw.stat(id).backup, 'straight away');
+  assert.ok(due(id), "an admin's browser searches it");
+  fresh(id);
+});
+
+test("BIG W's page draws its products once it's open: the server reading none hands over at once, and sets no scene (no flood of \"new\")", async () => {
+  const id = 'demo-bigw';
+  fresh(id);
+  const shop = store.shop('bigw');
+  shop.clientSearch = true; // like the real site: no products in the page until its own code fetches them
+  try {
+    const r = await sweep(id);
+    assert.equal(r.ok, false);
+    assert.match(r.error, /Mugibot's server can't read the products: they only show once the store's page has run/);
+    assert.ok(sw.stat(id).backup);
+    const row = env.app.db.get("SELECT * FROM sweep_terms WHERE store = :s AND keyword = 'pokemon' AND page = 1", { s: id });
+    assert.equal(row.baseline_at, null, "the server's empty read isn't the first look");
+    // The browser's first read is: everything already there is tracked, nothing alerts.
+    const alertsBefore = env.app.catalog.recentAlerts({ kind: 'listed', limit: 100 }).filter((a) => a.store === id).length;
+    shop.clientSearch = false; // (the dummy store's page, as the browser's drawn it)
+    const [res] = await browserRead(id);
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.baseline, true);
+    assert.ok(res.found >= 1);
+    assert.equal(env.app.catalog.recentAlerts({ kind: 'listed', limit: 100 }).filter((a) => a.store === id).length, alertsBefore);
+    // The server's next try still reads none: still the browser's.
+    shop.clientSearch = true;
+    assert.equal((await sweep(id)).ok, false);
+    assert.ok(sw.stat(id).backup);
+    assert.equal(sw.stat(id).backup.tries, 2);
+    // The store starts sending its products with the page: the server takes back over.
+    shop.clientSearch = false;
+    assert.equal((await sweep(id)).ok, true);
+    assert.equal(sw.stat(id).backup, null);
+  } finally {
+    shop.clientSearch = false;
+    fresh(id);
+  }
+});
+
+test("no products from the server where an admin's browser found some within the hour is a miss, not an empty search", async () => {
+  const id = 'demo-jbhifi';
+  const r = R(id);
+  fresh(id);
+  const url = sw.urlFor(r, 'pokemon');
+  const products = [{ sku: 'pokemon-tcg-x-etb', title: 'Pokemon TCG X Elite Trainer Box', price: 80, inStock: true, url: '' }];
+  env.app.db.run("DELETE FROM sweep_terms WHERE store = :s", { s: id });
+  await sw.ingest(r, { keyword: 'pokemon', page: 1 }, { products, total: null, problem: null }, { source: 'browser', url, ms: 300 });
+  const miss = await sw.ingest(r, { keyword: 'pokemon', page: 1 }, { products: [], total: 0, problem: 'empty' }, { source: 'server', url, ms: 80 });
+  assert.equal(miss.ok, false);
+  assert.match(miss.error, /Mugibot's server got no products, where an admin's browser finds some/);
+  assert.equal(sw.stat(id).serverMisses, 1);
+  assert.equal(sw.stat(id).backup, null, 'one miss: still the server');
+  // Another keyword with nothing found anywhere is just an empty search.
+  const empty = await sw.ingest(r, { keyword: 'one piece', page: 1 }, { products: [], total: 0, problem: 'empty' }, { source: 'server', url: sw.urlFor(r, 'one piece'), ms: 80 });
+  assert.equal(empty.ok, true);
+  assert.equal(sw.stat(id).serverMisses, 0);
+  fresh(id);
+});
+
+test('Retry-After while the browser stands in holds the server\'s next try (not the browser); Reset puts the server first again and keeps the wait', async () => {
+  const id = 'demo-kmart';
+  fresh(id);
+  store.state.blockNonBrowsers = true;
+  for (let i = 0; i < 3; i++) await sweep(id);
+  store.state.blockNonBrowsers = false;
+  const st = sw.stat(id);
+  assert.ok(st.backup);
+  store.state.tooMany = { kmart: 900 };
+  const r = await sweep(id);
+  assert.match(r.error, /HTTP 429\) — it asked to wait 900 s/);
+  assert.ok(st.backup.waitUntil - sw.now() > 14 * MIN, "the server's next try waits for it");
+  assert.equal(st.retryAt, 0, "the admin's browser isn't held by the server's wait");
+  assert.ok(due(id), "the admin's browser carries on");
+  assert.ok(card(id).backup.retryAt >= st.backup.waitUntil, 'shown as when the server tries again');
+  store.state.tooMany = {};
+  // Reset: server first again — what the store asked for still waited for.
+  const wait = st.backup.waitUntil;
+  sw.reset(id, admin);
+  assert.equal(st.backup, null);
+  assert.equal(st.serverMisses, 0);
+  assert.equal(st.retryAt, wait);
+  assert.equal(st.freshTab, true, "if the browser stands in again, its tab starts afresh");
+  assert.equal(due(id), undefined);
+  fresh(id);
+});
+
+test("pinned to the server only while the browser stood in: nothing stands in any more, and its failures count again", async () => {
+  const id = 'demo-kmart';
+  fresh(id);
+  store.state.blockNonBrowsers = true;
+  for (let i = 0; i < 3; i++) await sweep(id);
+  assert.ok(sw.stat(id).backup);
+  const stores = { ...sw.settings.stores };
+  try {
+    sw.save({ stores: { ...stores, [id]: 'server' } }, admin);
+    assert.equal(sw.stat(id).backup, null);
+    assert.equal(due(id), undefined);
+    const r = await sweep(id);
+    assert.equal(r.ok, false);
+    assert.equal(sw.stat(id).fails, 1, "the server's own failure");
+    assert.equal(card(id).status, 'retrying');
+  } finally {
+    store.state.blockNonBrowsers = false;
+    sw.save({ stores }, admin);
+    fresh(id);
+  }
+});
+
+test("the loop: while the browser stands in, the server only tries when it's time (Sweep now: straight away); let back in, it searches as before", async () => {
+  const id = 'demo-kmart';
+  const searches = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length;
+  const others = Object.fromEntries(['demo-amazon', 'demo-bigw', 'demo-jbhifi'].map((x) => [x, 'off']));
+  await boss.put('/api/monitor/sweep', { stores: { ...sw.settings.stores, ...others } });
+  fresh(id);
+  store.state.blockNonBrowsers = true;
+  for (let i = 0; i < 3; i++) await sweep(id);
+  assert.ok(sw.stat(id).backup);
+  sw.running = false;
+  sw.cfg.monitor.enabled = true;
+  sw.start();
+  try {
+    assert.ok(sys(/Live sweeps started — Kmart \(dummy store\) from Mugibot's server first/));
+    assert.ok(sw.loops.has(id), 'a server loop for a server-first store');
+    assert.equal((await boss.get('/api/monitor/sweep')).body.stores.find((s) => s.store === id).running, true);
+    const n = searches();
+    await new Promise((r) => setTimeout(r, 1200));
+    assert.equal(searches(), n, 'no try before its time');
+    // Its time comes: one try (still refused), then it waits again (10 minutes).
+    clock.offset += 5 * MIN + 1000;
+    sw.restart();
+    await waitFor(() => searches() === n + 1, { timeout: 5000, message: "the server's try" });
+    await waitFor(() => sw.stat(id).backup && sw.stat(id).backup.tries === 2, { timeout: 5000, message: 'the try counted' });
+    await new Promise((r) => setTimeout(r, 1200));
+    assert.equal(searches(), n + 1);
+    // Sweep now: the server tries straight away — and, let in, takes back over and carries on.
+    store.state.blockNonBrowsers = false;
+    sw.sweepNow();
+    await waitFor(() => !sw.stat(id).backup, { timeout: 5000, message: 'the server back' });
+    sw.stat(id).slowUntil = 0;
+    sw.restart();
+    await waitFor(() => searches() >= n + 3, { timeout: 15000, message: 'searching as before' });
+  } finally {
+    sw.stop();
+    sw.cfg.monitor.enabled = false;
+    fresh(id);
+  }
+});

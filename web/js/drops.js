@@ -1,7 +1,8 @@
 // 🎯 Drop watches (docs/MONITORING.md → Drop watches), on the Monitor page's lists: anything outside
 // the card keywords — by its link, or the words in its name and where to look (a store Mugibot
-// searches, or any other website). An admin's can be for everyone (#non-tcg-alerts and every
-// dashboard); anyone's own are theirs alone (their watchlist, their DMs).
+// searches, or any other website). An admin's can be for everyone (#non-tcg-alerts, or the Discord
+// channel they pick for it, pinging the role they pick, and every dashboard); anyone's own are
+// theirs alone (their watchlist, their DMs).
 import { $, ago, api, busy, h, money, setMsg, toast } from './common.js';
 
 const STATUS = {
@@ -12,7 +13,7 @@ const ARM = { armed: '🤖 armed', pending: '🤖 armed if it isn\'t on sale yet
 const OTHER = 'other';
 
 export function setupDrops({ isAdmin = () => false, watching = () => null, watch = null, buyUrl }) {
-  const d = { data: null, timer: null };
+  const d = { data: null, timer: null, dest: null, editing: null };
 
   // ---------------------------------------------------------------------------
   // The form: one box for a link or words; where to look appears for words
@@ -82,16 +83,70 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const admin = isAdmin();
     $('#dw-share-wrap').hidden = !admin;
     $('#dw-cat-wrap').hidden = !admin || !$('#dw-share').checked;
+    $('#dw-post-wrap').hidden = !admin || !$('#dw-share').checked;
+    const postNote = $('#dw-post-note');
+    postNote.hidden = $('#dw-post-wrap').hidden || !(d.dest && !d.dest.ready);
+    postNote.textContent = d.dest && !d.dest.ready ? d.dest.error : '';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Where an admin's watch for everyone posts: a channel of the Discord server, and a role it pings
+  // ---------------------------------------------------------------------------
+  async function loadDest() {
+    if (!isAdmin() || !d.data || !d.data.discord) return;
+    try { d.dest = await api('GET', '/api/drops/discord'); } catch (e) { d.dest = { ready: false, channels: [], roles: [], error: e.message }; }
+    fillDest($('#dw-post'), $('#dw-ping'), { channelId: $('#dw-post').value, roleId: $('#dw-ping').value, category: $('#dw-category').value });
+    shape();
+  }
+
+  // (The usual: #non-tcg-alerts — or, for a watch in a card category, that category's channels.)
+  const usualName = (category = 'nontcg') => (category === 'nontcg' ? (d.data && d.data.route ? d.data.route.name : '#non-tcg-alerts') : "its category's channels");
+  const usual = (category) => `The usual — ${usualName(category)}`;
+  const channelName = (id) => { const c = d.dest && d.dest.channels.find((x) => x.id === id); return c ? `#${c.name}` : `#${id}`; };
+  const roleName = (id) => { const r = d.dest && d.dest.roles.find((x) => x.id === id); return r ? `@${r.name}` : `@${id}`; };
+
+  /** The two pickers: the server's text channels (by category) and its roles, with what's chosen now. */
+  function fillDest(post, ping, { channelId = '', roleId = '', category = 'nontcg' } = {}) {
+    const dest = d.dest || { ready: false, channels: [], roles: [] };
+    post.textContent = '';
+    post.append(h('option', { value: '' }, usual(category)));
+    const groups = new Map();
+    for (const c of dest.channels) {
+      if (!groups.has(c.parent)) groups.set(c.parent, []);
+      groups.get(c.parent).push(c);
+    }
+    for (const [parent, list] of groups) {
+      const opts = list.map((c) => h('option', { value: c.id }, `#${c.name}`));
+      if (parent) post.append(h('optgroup', { label: parent }, ...opts)); else post.append(...opts);
+    }
+    // (One chosen before that the server no longer has: kept, so saving doesn't move it silently.)
+    if (channelId && !dest.channels.some((c) => c.id === channelId)) post.append(h('option', { value: channelId }, `#${channelId} (not found)`));
+    post.value = channelId;
+    ping.textContent = '';
+    ping.append(h('option', { value: '' }, 'No one'), ...dest.roles.map((r) => h('option', { value: r.id }, `@${r.name}`)));
+    if (roleId && !dest.roles.some((r) => r.id === roleId)) ping.append(h('option', { value: roleId }, `@${roleId} (not found)`));
+    ping.value = roleId;
+    post.disabled = !dest.ready;
+    ping.disabled = !dest.ready;
+  }
+
+  /** Where it posts, in a few words: "#xbox-drops · pings @Drops", or the usual channel. */
+  function postsIn(w) {
+    if (!w.channelId) return `in ${usualName(w.category)}`;
+    return `in ${channelName(w.channelId)}${w.roleId ? ` · pings ${roleName(w.roleId)}` : ''}`;
   }
 
   // ---------------------------------------------------------------------------
   // The lists: yours, and the admins' for everyone
   // ---------------------------------------------------------------------------
   async function load() {
+    const first = !d.data;
     d.data = await api('GET', '/api/drops');
     fillStores();
     shape();
     render();
+    // (The Discord server's channels and roles: once, for an admin — Discord's asked at most once a minute.)
+    if (first || !d.dest) loadDest().then(render).catch(() => null);
   }
 
   function refreshSoon() {
@@ -107,14 +162,14 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     $('#dw-count').textContent = watches.length ? String(watches.length) : '';
     $('#dw-used').textContent = `${used} of ${limit}`;
     $('#dw-scope').textContent = admin
-      ? 'Yours for everyone go in #non-tcg-alerts and on every member\'s dashboard; members ☆ Watch what they find to arm Auto-checkout.'
+      ? 'Yours for everyone go in #non-tcg-alerts (or the channel you pick for each) and on every member\'s dashboard; members ☆ Watch what they find to arm Auto-checkout.'
       : 'Yours are just for you: what they find goes on your watchlist, and you get the DM.';
     const chan = $('#dw-channel');
     chan.hidden = !admin;
     if (admin) {
       chan.className = `notice ${route ? 'ok' : 'warn'}`;
       chan.textContent = '';
-      if (route) chan.append(`📣 Drops for everyone are posted in ${route.name}${route.enabled ? '' : ' (its rule is off)'}.`);
+      if (route) chan.append(`📣 Drops for everyone are posted in ${route.name}${route.enabled ? '' : ' (its rule is off)'}, unless a watch has a channel of its own.`);
       else {
         const b = h('button', { class: 'btn small', type: 'button' }, 'Make #non-tcg-alerts');
         b.addEventListener('click', () => makeChannel(b));
@@ -146,15 +201,18 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
 
   function row(w) {
     const title = w.label || (w.kind === 'link' ? (w.found[0] && w.found[0].name) || w.url : `"${w.words}"`);
+    const admin = isAdmin();
     const meta = [
       whereText(w),
-      w.shared ? '📣 for everyone' : '🔒 just for you',
+      w.shared ? `📣 for everyone${admin && w.channelId !== undefined ? ` ${postsIn(w)}` : ''}` : '🔒 just for you',
       w.aco && w.maxPrice !== null ? `🤖 auto-checkout up to ${money(w.maxPrice)}` : '',
       w.by && !w.mine ? `by ${w.by}` : '',
     ].filter(Boolean).join(' · ');
     const state = stateText(w);
     const acts = [];
     if (w.canChange) {
+      // (An admin's watch for everyone: where it posts, and who it pings.)
+      if (admin && w.shared) acts.push(h('button', { class: 'btn small', type: 'button', title: 'Where it posts, and who it pings', 'aria-label': `Where ${title} posts`, 'aria-expanded': d.editing === w.id ? 'true' : 'false', onclick: () => { d.editing = d.editing === w.id ? null : w.id; render(); } }, '✎'));
       acts.push(h('button', { class: 'btn small', type: 'button', title: 'Look again now', 'aria-label': `Check ${title} now`, onclick: (e) => check(w, e.currentTarget) }, '↻'));
       acts.push(h('button', {
         class: 'btn small danger', type: 'button', 'aria-label': `Remove ${title}`,
@@ -170,7 +228,35 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
           h('div', { class: 'name' }, title),
           h('div', { class: 'meta' }, meta, state ? ' · ' : '', state)),
         h('div', { class: 'acts' }, ...acts)),
+      d.editing === w.id ? editor(w, title) : null,
       found);
+  }
+
+  /** An admin's watch for everyone: change where it posts, and who it pings. */
+  function editor(w, title) {
+    const post = h('select', { 'aria-label': `${title}: post in` });
+    const ping = h('select', { 'aria-label': `${title}: ping` });
+    fillDest(post, ping, { channelId: w.channelId, roleId: w.roleId, category: w.category });
+    const save = h('button', { class: 'btn small primary', type: 'submit' }, 'Save');
+    const form = h('form', { class: 'dw-edit' },
+      h('label', {}, 'Post its drops and restocks in', post), h('label', {}, 'Ping', ping),
+      h('div', { class: 'form-actions' }, save, h('button', { class: 'btn small ghost', type: 'button', onclick: () => { d.editing = null; render(); } }, 'Cancel')),
+      d.dest && !d.dest.ready ? h('p', { class: 'small muted' }, d.dest.error) : null);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      save.disabled = true;
+      try {
+        const r = await api('PUT', `/api/drops/${w.id}`, { channelId: post.value, roleId: ping.value });
+        d.data = { ...d.data, ...r };
+        d.editing = null;
+        render();
+        toast('Saved', `"${title}" posts its drops and restocks ${postsIn(r.watch)}.`, 'success');
+      } catch (err) {
+        save.disabled = false;
+        toast("Couldn't change that", err.message, 'warn');
+      }
+    });
+    return form;
   }
 
   function foundRow(w, p) {
@@ -238,6 +324,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
   $('#dw-input').addEventListener('input', shape);
   $('#dw-store').addEventListener('change', () => { shape(); if ($('#dw-store').value === OTHER) $('#dw-site').focus(); });
   $('#dw-share').addEventListener('change', shape);
+  $('#dw-category').addEventListener('change', () => { if (d.dest) $('#dw-post').options[0].textContent = usual($('#dw-category').value); });
   $('#dw-aco').addEventListener('change', () => { shape(); if ($('#dw-aco').checked) $('#dw-max').focus(); });
   $('#dw-form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -247,6 +334,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     else Object.assign(body, { words: raw, store: $('#dw-store').value, site: $('#dw-store').value === OTHER ? $('#dw-site').value.trim() : '' });
     if ($('#dw-aco').checked) Object.assign(body, { aco: true, maxPrice: $('#dw-max').value ? Number($('#dw-max').value) : null });
     if (isAdmin()) Object.assign(body, { shared: $('#dw-share').checked, category: $('#dw-category').value });
+    if (isAdmin() && $('#dw-share').checked) Object.assign(body, { channelId: $('#dw-post').value, roleId: $('#dw-ping').value });
     const form = e.target;
     busy(form, async () => {
       try {
@@ -258,6 +346,8 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
         $('#dw-site').value = '';
         $('#dw-aco').checked = false;
         $('#dw-max').value = '';
+        $('#dw-post').value = '';
+        $('#dw-ping').value = '';
         shape();
         setMsg($('#dw-msg'), r.watch.kind === 'link' ? 'Watching — its page is being read now.' : r.watch.store === OTHER ? 'Watching — the website is read in a few seconds.' : `Watching — searched at ${r.watch.storeName}'s next search.`, true);
         setTimeout(refreshSoon, 4000);

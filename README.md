@@ -73,13 +73,13 @@ community. Built on TCGCopBot's working Kmart flow.
   keywords (`pokemon`, `one piece`…) and alerts the moment it sees a 🆕 **new
   drop**, a 🟢 **restock** or a 📉 **price drop**: in the dashboard, in your
   Discord channels (image, store, price, stock and a ⚡ Buy button) and to
-  every member watching that SKU. Target, JB Hi-Fi, Toys"R"Us, Trainer Town
-  (each game's whole collection), Kmart (through its search provider), The Games
-  Cube and Gamerholic (its newest products) are searched from the server; BIG W
-  and Pokémon Center and Premium Bandai (their pages opened and read once they
-  have built their product lists), and EB Games and Amazon AU (asked for from
-  inside one of their pages; both turn servers away) from an admin's browser
-  with the extension. Admins can also monitor single products. Each channel
+  every member watching that SKU. Every store is searched **server first**:
+  from Mugibot's server, with an admin's browser (the extension) standing in
+  only while a store refuses the server or the server can't read it — BIG W,
+  Pokémon Center and Premium Bandai (their pages opened and read once they have
+  built their product lists), EB Games and Amazon AU (asked for from inside one
+  of their pages) often do — and the server taking back over as soon as it's
+  let in. Admins can also monitor single products. Each channel
   gets what its rule asks for (by category, store, kind or keyword), and one
   button sets up a channel per store and game (`kmart-pokemon`,
   `bigw-one-piece`…, `premium-bandai`, `pokemon-center`, and `misc-retailers`
@@ -222,7 +222,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 269 tests in about ten minutes:
+the 279 tests in about ten minutes:
 
 ```bash
 npm install
@@ -247,6 +247,12 @@ npm test
   to members watching the SKU; the filters; refused searches back off; new
   keywords set the scene again; admins' browsers sweep the stores that refuse
   servers (members' never do); the per-store loops; the store client.
+- **Server first** (dummy stores): every store searched from the server; an
+  admin's browser stands in after 3 refusals (1 at stores known to refuse
+  servers, or a page the server can't read, with no flood of "new"), the
+  server's tries after 5, 10, 20, 30 minutes (its usual backoff while no browser
+  is searching), Retry-After, Reset, Sweep now, its take-back, and members never
+  seeing any of it; with the real extension standing in and stopping again.
 - **Monitor feed** (dummy stores, fake Discord): name, image, price and stock
   from the first check without an alert; restock, price drop and rise alerts
   once per cooldown; alert rules by category, store, kind and keyword; price

@@ -278,7 +278,10 @@ channels** → **Set up store channels** makes them in one go:
 - `non-tcg-alerts` is made the same way, or on its own with **Make
   #non-tcg-alerts** on the Monitor page's 🎯 Drop watches tab. Made before it
   existed? Press either. Until there's one, drop watches' alerts go to
-  `misc-retailers`. A member's own drop watch is never posted anywhere: they get
+  `misc-retailers`. An admin can also pick, for each drop watch, the channel its
+  drops and restocks go to and the role they ping (the drop watch's **Post in**
+  and **Ping**, or **✎** on it): those go only there, instead of
+  `non-tcg-alerts`. A member's own drop watch is never posted anywhere: they get
   a DM.
 - `virtual-queue-detection` has no rule: no product alerts go there, only the
   checkpoints and queues. It pings the same role. Made before this channel

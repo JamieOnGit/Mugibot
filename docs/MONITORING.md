@@ -24,28 +24,65 @@ same products, the same alerts, the same ⚡ Buy.
 
 ## 1. Where each store is searched from
 
+**Server first** is every store's default: Mugibot's server searches it, and
+an admin's browser (the extension) only stands in while the server can't:
+
+- **Hand-over.** The store refuses the server, or its search fails, **3 times
+  in a row** — once, at a store known to turn servers away (BIG W, Amazon, EB
+  Games, Pokémon Center, Premium Bandai). Or the server's read has **no
+  products** where there are some: a page that only draws them once it's open
+  (BIG W's, Pokémon Center's), or a search an admin's browser found products
+  for in the last hour. That empty read sets no scene, so the browser's first
+  look doesn't turn everything into a "new drop". From then on the store's
+  searches go to admins' browsers, at the browser pace (15 s, or the store's own
+  slowest), and the console says **Waiting for an admin's browser** until one
+  takes them.
+- **The server tries again** after **5 minutes**, then 10, 20, and every 30
+  minutes after that (one search, the first page of a keyword the browser found
+  products for), never before a time the store asked for (Retry-After). A try
+  doesn't count against the browser, and members don't see it. Until an
+  admin's browser is actually searching the store (none open, say), the server
+  keeps trying at its usual backoff instead, at most 15 minutes apart — the
+  store's never left unsearched for longer than before.
+- **Take-back.** The moment the store answers the server, the server takes
+  back over, gently at first (a third of the pace for 10 minutes, as after a
+  Reset), and the browser stops searching it. A search the browser was given
+  just before still counts.
+- **↻ Reset** puts the server first again straight away. **Sweep now** makes the
+  server try now.
+
+The same goes for monitored products' page checks: admins' browsers check a
+store's monitors only while the server's being refused there.
+
+An admin can still pin a store (**Monitor → Settings → Stores**): **Server
+only** (never a browser), **Admin's browser** (never the server) or **Off**.
+Settings saved before server first: a store set to the server or a browser is
+server first now (only a store switched off stays off); choices made after it
+stick.
+
 | Store | Searched from | What's read |
 |---|---|---|
-| Target | Mugibot's server | Target's search page, newest first: every page with results (up to 4 pages of 48), with stock for every colour and size |
-| JB Hi-Fi | Mugibot's server | JB Hi-Fi's search suggestions (Shopify): 10 products a search, with stock. "tcg" is added to each keyword ("pokemon tcg"), because "pokemon" alone finds plushies and games |
-| Toys"R"Us | Mugibot's server | Same as JB Hi-Fi (also a Shopify store) |
-| Trainer Town | Mugibot's server | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi). At most one read every 15 seconds: reading the whole collection every 5 seconds made Shopify answer **HTTP 429** (too many requests) |
-| Kmart | Mugibot's server | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online |
-| The Games Cube | Mugibot's server | Its search pages (CrystalCommerce, made on the server): a tile per product with each option's stock and price, up to 4 pages of 25–30. Pre-orders are the ones in its "… Pre-Orders" categories. The cards it buys from customers (its buylist) are left out |
-| Gamerholic | Mugibot's server | Its **newest 100 products** (Shopify's product list, newest first, every option's stock), for every keyword: Gamerholic lists hundreds of products a day, so a new drop shows up there the moment it's listed. At most one read every 15 seconds |
-| BIG W | **An admin's browser** (the extension) | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list — or, if the page has downloaded its products but not drawn them (pages in a minimised window may not), the product data it downloaded |
-| Amazon AU | **An admin's browser** (the extension, 1.11.0 or later) | Amazon's search page, newest first (2 pages of 48), with "tcg" added to each keyword — asked for from inside an Amazon page in the extension's window. Amazon turns Mugibot's server away (**HTTP 503**, "An error occurred"), so nothing came through from the server. At most one search every 20 seconds |
-| EB Games | **An admin's browser** (the extension) | EB Games' own search data (the JSON its search page asks for: every product's code, price, picture, stock, pre-order and release date), newest first, 2 pages — asked for from inside an EB Games page in the extension's window |
+| Target | Server first | Target's search page, newest first: every page with results (up to 4 pages of 48), with stock for every colour and size |
+| JB Hi-Fi | Server first | JB Hi-Fi's search suggestions (Shopify): 10 products a search, with stock. "tcg" is added to each keyword ("pokemon tcg"), because "pokemon" alone finds plushies and games |
+| Toys"R"Us | Server first | Same as JB Hi-Fi (also a Shopify store) |
+| Trainer Town | Server first | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi). At most one read every 15 seconds: reading the whole collection every 5 seconds made Shopify answer **HTTP 429** (too many requests) |
+| Kmart | Server first | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online |
+| The Games Cube | Server first | Its search pages (CrystalCommerce, made on the server): a tile per product with each option's stock and price, up to 4 pages of 25–30. Pre-orders are the ones in its "… Pre-Orders" categories. The cards it buys from customers (its buylist) are left out |
+| Gamerholic | Server first | Its **newest 100 products** (Shopify's product list, newest first, every option's stock), for every keyword: Gamerholic lists hundreds of products a day, so a new drop shows up there the moment it's listed. At most one read every 15 seconds |
+| BIG W | Server first: **an admin's browser** (the extension) stands in, as the server can't draw its products | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list — or, if the page has downloaded its products but not drawn them (pages in a minimised window may not), the product data it downloaded |
+| Amazon AU | Server first: **an admin's browser** (the extension, 1.11.0 or later) stands in at the first refusal | Amazon's search page, newest first (2 pages of 48), with "tcg" added to each keyword — asked for from inside an Amazon page in the extension's window. Amazon turns Mugibot's server away (**HTTP 503**, "An error occurred"), so nothing came through from the server. At most one search every 20 seconds |
+| EB Games | Server first: **an admin's browser** (the extension) stands in at the first refusal | EB Games' own search data (the JSON its search page asks for: every product's code, price, picture, stock, pre-order and release date), newest first, 2 pages — asked for from inside an EB Games page in the extension's window |
 | Zing | Off | zingpopculture.com.au now sends every visitor to EB Games, so EB Games' sweeps cover it. An admin can switch it back on if Zing's own site returns |
-| City Beach | Mugibot's server | Its search page (Salesforce Commerce Cloud, made on the server): a tile per product with its code, name, brand and price (48 a search). Stock isn't in the tiles: it comes from the product page, which the monitor reads. At most one search every 10 seconds (every 4 in a VIP drop's window) |
-| Pokémon Center (Australia) | **An admin's browser** (the extension, 1.8.1 or later) | Its search page (`/en-au/search/<keyword>`, 32 a page), opened in the extension's window and read once it has built its product list, like BIG W's. Its bot check (Imperva) may reload the page first: the extension waits for it. At most one search every 30 seconds |
-| Premium Bandai (Australia) | **An admin's browser** (the extension, 1.8.1 or later) | The site's own search JSON (`/api/search?keyword=…`, newest arrivals first, up to 100), asked for from inside a Premium Bandai page in the extension's window with the region its own code sends (`x-g1-area-code: au`), like EB Games'. At most one search every 30 seconds |
+| City Beach | Server first | Its search page (Salesforce Commerce Cloud, made on the server): a tile per product with its code, name, brand and price (48 a search). Stock isn't in the tiles: it comes from the product page, which the monitor reads. At most one search every 10 seconds (every 4 in a VIP drop's window) |
+| Pokémon Center (Australia) | Server first: **an admin's browser** (the extension, 1.8.1 or later) stands in at the first refusal | Its search page (`/en-au/search/<keyword>`, 32 a page), opened in the extension's window and read once it has built its product list, like BIG W's. Its bot check (Imperva) may reload the page first: the extension waits for it. At most one search every 30 seconds |
+| Premium Bandai (Australia) | Server first: **an admin's browser** (the extension, 1.8.1 or later) stands in at the first refusal | The site's own search JSON (`/api/search?keyword=…`, newest arrivals first, up to 100), asked for from inside a Premium Bandai page in the extension's window with the region its own code sends (`x-g1-area-code: au`), like EB Games'. At most one search every 30 seconds |
 
-BIG W, EB Games, Pokémon Center and Premium Bandai refuse requests from
-servers (403 / Cloudflare's, Imperva's or their own bot checks), so the
-extension in an **admin's** browser searches them instead, every 15 seconds per
-store (BIG W every 20, Pokémon Center and Premium Bandai every 30). Members' browsers never do this: only
-Mugibot's server and admins can change what everyone sees.
+BIG W, EB Games, Pokémon Center and Premium Bandai have refused requests from
+servers (403 / Cloudflare's, Imperva's or their own bot checks), so while they
+do, the extension in an **admin's** browser searches them instead, every 15
+seconds per store (BIG W every 20, Pokémon Center and Premium Bandai every 30).
+Members' browsers never do this: only Mugibot's server and admins can change
+what everyone sees.
 
 **Why BIG W and EB Games showed nothing:** EB Games' search page has no
 products in it either (its page asks for them once it's open, and Cloudflare
@@ -83,8 +120,8 @@ block). Now:
   who sells each product, so marketplace sellers (often at high prices) are
   included there: put any you don't want on the **blacklist** (below).
 
-You can change where each store is searched from (server, admin's browser or
-off) in **Monitor → Settings → Stores**.
+You can change where each store is searched from (server first, server only,
+admin's browser or off) in **Monitor → Settings → Stores**.
 
 **Why the server can read Target and JB Hi-Fi now:** their CDNs refuse Node's
 built-in `fetch()` (403 and 429) but answer Node's own `https` client normally,
@@ -204,8 +241,11 @@ its own loop, so a slow store never holds up the others.
    channel should get. With no rules, restocks and new drops go to
    `DISCORD_RESTOCK_CHANNEL_ID`.
 4. **Monitor → Settings** (admins):
-   - **Stores**: where each store is searched from (changes straight away), how
-     it's doing, and **↻ Reset** for each store (or **Reset all**).
+   - **Stores**: where each store is searched from (**Server first**, the
+     default; **Server only**; **Admin's browser**; **Off** — changes straight
+     away), how it's doing ("Admin's browser standing in · server tries again
+     3:40 pm" while the server's refused), and **↻ Reset** for each store (or
+     **Reset all**).
    - **Keywords**: what to search for at every store (type + **Add**, × to remove).
    - **Seconds between searches at one store**: 5 to start with (3 at least).
    - **…from an admin's browser**: 15 to start with.
@@ -328,6 +368,16 @@ collectible, a product at any shop. One box takes either:
   not to the store's own channels. Until there's one, it goes to `#misc-retailers`.
 - Pick another category (Pokémon, One Piece) to send a watch's finds to the store
   channels instead.
+- **Where it posts, and who it pings** (admins only): **Post its drops and
+  restocks in** lists the Discord server's text channels (by category) — leave it
+  on **The usual** for `#non-tcg-alerts` — and **Ping** its roles (or no one).
+  Its 🆕 new listings and 🟢 restocks then go **only** to that channel, with
+  that role pinged, instead of `#non-tcg-alerts`; anything else about them
+  (a price drop) goes the usual way. A monitor an admin had already made on
+  something the watch finds is taken on (its drops and restocks go there too),
+  and is left as it was when the watch is removed. Change it any time with
+  **✎** on the watch. A VIP drop still goes to `#vip-drop`. Members never see
+  where a watch posts; their own watches are only ever a DM.
 
 **Anyone's own drop watch is theirs alone** (members' always are):
 - What it finds goes on **their watchlist** (marked 🎯), up to 10 products a
@@ -455,8 +505,8 @@ for members and admins:
   watchlist items at that store still ping them as before.
 - **Admins** switch a store's searches **off for everyone** (it asks first). The
   store shows as **Switched off: not searched**, and switching it back on returns
-  it to where it was searched from before (Settings → Stores has the same
-  choice, with server or admin's browser). Members don't see a store that's off.
+  it to where it was searched from before, or server first (Settings → Stores
+  has the same choice). Members don't see a store that's off.
 
 **What members never see.** Where a store is searched from (Mugibot's server or
 an admin's browser), the address read and whose browser is searching are for
@@ -504,13 +554,15 @@ backs off further after each failure, up to 15 minutes between tries. **Reset**
 - a store searched from the server gets fresh connections; a store searched
   from an admin's browser gets a fresh tab, opened at the store's front page
   first (like a visitor arriving), then the search;
+- a server-first store an admin's browser was standing in for is searched from
+  the server again (the browser stands in again only if it's still refused);
 - a wait the store asked for (`Retry-After`) is still respected.
 
 It's written to the event log ("boss reset Trainer Town: searching it again
 now, gently for 10 minutes") and the audit log. If a store the server
-searches is still refused after a reset, its details offer **Search it from an
-admin's browser**. Reset never gets around a bot check: it only stops Mugibot
-waiting and starts politely again.
+searches is still refused after a reset (set to **Server only**), its details
+offer **Server first: an admin's browser stands in**. Reset never gets around a
+bot check: it only stops Mugibot waiting and starts politely again.
 
 **Discord**: `/monitor list`, `/monitor status`, `/restocks` as before.
 
@@ -540,8 +592,8 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | You see | Do this |
 |---|---|
 | **The store refused the search (HTTP 429)** — "it asked to wait 60 s" | The store is asking Mugibot to slow down. It waits what the store asked, then tries again. Trainer Town now reads its collections at most every 15 s, which should stop it; if it keeps happening, press **↻ Reset** on the store (it restarts gently, at a third of the pace for 10 minutes). |
-| **HTTP 503** at a store, again and again (Amazon AU did this to the server, so it's now searched from an admin's browser) | **↻ Reset** the store. If it's still refused after that, open its details and press **Search it from an admin's browser** (or set it in Settings → Stores), and keep an admin's browser with the extension open. Don't make the searches more frequent: that makes it worse. |
-| A store's status says **refused** (server) | The store is refusing Mugibot's server. Try **↻ Reset** first; if that doesn't help, set it to **Admin's browser** in Monitor → Settings → Stores, and keep an admin's browser with the extension open. |
+| **HTTP 503** at a store, again and again (Amazon AU does this to the server) | Server first hands the store to an admin's browser by itself and has the server try again every few minutes: keep an admin's browser with the extension open. A store set to **Server only**: **↻ Reset** it; if it's still refused, set it back to **Server first** (its details offer it). Don't make the searches more frequent: that makes it worse. |
+| A store's status says **refused** (server), or **Admin's browser standing in** | The store is refusing Mugibot's server; an admin's browser searches it meanwhile, and the server takes back over as soon as it's let in. Nothing to do but keep an admin's browser open. **↻ Reset** has the server try again now. |
 | **Waiting for an admin's browser** (BIG W, EB Games: nothing coming through) | No admin's browser is sweeping. Open Chrome with the extension (1.7.0 or later — Extension tab → Download, or the Chrome Web Store copy) connected to an **admin** account, and leave it open. The popup should show **Live sweeps from this browser** within 30 seconds, and a small minimised window appears with a BIG W and an EB Games tab: leave it be. |
 | **refused the admin's browser** | Open that store's website in the admin's browser once (so it gets the store's cookies), then wait. It tries again on its own, waiting longer each time. |
 | **Needs Mugibot's extension 1.8.1 or newer** (Pokémon Center, Premium Bandai) | The admin's browser has an older copy of the extension: Chrome doesn't let it open stores added after it was made, and 1.8.0 couldn't read either store. Update it (Extension tab → Download, or wait for the Chrome Web Store copy to update itself). The store is searched again within 30 seconds of the updated browser asking. |
@@ -558,7 +610,9 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | `#virtual-queue-detection` got nothing | Press **Set up store channels** again (it makes the channel), and check the bot can post there. EB Games' and Pokémon Center's queues need an admin's browser with the extension (1.16.0 or later) open, or members' browsers landing in the queue. |
 | A drop watch at another website says **refused Mugibot (HTTP 403)** or **a bot check** | That site turns servers away. It's asked again later on its own (waiting longer each time); if it keeps refusing, watch the product's link at a store Mugibot knows instead, if it sells there. |
 | A drop watch at another website finds **nothing** though the site has it | Mugibot reads product links (`/products/…`, `/product/…`, `/p/…`) and the product data in the page. Give the site's own search page for those words (search there, copy the address), or watch the product's link. |
-| A drop watch's alerts went to `#misc-retailers` | There's no `#non-tcg-alerts` rule yet: press **Make #non-tcg-alerts** on the drop watches tab (or **Set up store channels**). |
+| A drop watch's alerts went to `#misc-retailers` | There's no `#non-tcg-alerts` rule yet: press **Make #non-tcg-alerts** on the drop watches tab (or **Set up store channels**). Or pick a channel for the watch (**✎** on it). |
+| **Post its drops and restocks in** is greyed out | The Discord bot isn't set up (Admin → Setup check), or Discord didn't answer: open the tab again in a minute. A channel made since shows up within a minute. |
+| A drop watch's channel post failed | The bot can't post there: give its role **View Channel**, **Send Messages** and **Embed Links** in that channel (or pick another with **✎**). |
 | A queue still shows **up** after it's gone | An admin's browser confirms it's down. Without one, it counts as down 30 minutes after anyone last saw it (3 hours at most). |
 | No sound | Press **🔔 Arm alerts** (browsers only play sound after a click on the page), and check **Sound** is on under **⚙**. |
 | No desktop notifications | Allow notifications for mugibot.com in the browser (the icon left of the address), then **Arm alerts** again. |
@@ -580,12 +634,12 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
 | Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
 | What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
-| 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find); `drop_watches`, `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11); `GET/POST /api/drops`, `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
+| 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find, where they post); `drop_watches` (with `channel_id`, `role_id`: migration 12), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11); `GET/POST /api/drops`, `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |
 | The live event log | `emit()` and `live()` in `server/monitor/sweep.js`; `GET /api/monitor/live`; `monitor-sweep` events on the dashboard's stream |
-| Tests | `test/sweep.test.js`, plus the Monitor tab in `test/ui.test.js` and the admin's-browser sweep in `test/extension.e2e.test.js` |
+| Tests | `test/sweep.test.js` and `test/serverfirst.test.js`, plus the Monitor tab in `test/ui.test.js` and the admin's-browser sweeps (server first's stand-in too) in `test/extension.e2e.test.js` |
 
 ### What changed from MugiWatch
 

@@ -36,7 +36,7 @@ export default {
   // extension keeps an Amazon page open in its own window and asks for each search page from
   // inside it, like the site's own pages do (expect: 'html' — a page, not JSON).
   sweep: {
-    from: 'browser', formerDefault: 'server', parser: 'amazon', inPage: true, openPath: '', expect: 'html',
+    from: 'browser', parser: 'amazon', inPage: true, openPath: '', expect: 'html',
     path: '/s?k={q}&s=date-desc-rank', pagePath: '&page={page}', pages: 2, addWord: 'tcg', minSeconds: 20,
     // Needs the extension that knows a search page isn't a bot check.
     extension: '1.11.0',

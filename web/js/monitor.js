@@ -18,7 +18,8 @@ const STATUS = {
   not_found: 'Page gone', blocked: 'Blocked by site', error: 'Check failed', unknown: 'Unknown', pending: 'Waiting for first check',
 };
 const CATEGORY = { pokemon: 'Pokémon', onepiece: 'One Piece', other: 'Other', nontcg: 'Non-TCG' };
-const MODES = { server: 'Server', browser: "Admin's browser", off: 'Off' };
+// Server first (every store's default): Mugibot's server searches it; an admin's browser stands in only while it's refused.
+const MODES = { auto: 'Server first', server: 'Server only', browser: "Admin's browser", off: 'Off' };
 const DAY = 86400000;
 const SVG = 'http://www.w3.org/2000/svg';
 
@@ -441,9 +442,10 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
       const rate = s.requests1h ? Math.round((s.ok1h / s.requests1h) * 100) : null;
       const status = s.mode === 'off' ? h('span', { class: 'muted' }, '—')
         : s.fails ? h('span', { class: `pill ${s.fails > 2 ? 'err' : 'warn'}`, title: s.lastError }, `${s.lastError || 'Failing'}${s.nextAt ? ` · ${retryIn(s.nextAt)}` : ''}`)
+          : s.backup ? h('span', { class: 'pill warn', title: `Mugibot's server: ${s.backup.why || 'refused'}` }, `Admin's browser standing in · server ${s.backup.retryAt ? `tries again ${new Date(s.backup.retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'trying again now'}`)
           : s.slowedUntil ? h('span', { class: 'pill warn', title: 'Searched at a third of the pace for a while (after a refusal, or a reset)' }, `Gentle until ${new Date(s.slowedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
             : s.lastOkAt ? h('span', { class: 'pill ok', title: s.lastError || '' }, s.lastError || 'OK')
-            : h('span', { class: 'pill' }, s.mode === 'browser' ? "Waiting for an admin's browser" : 'Starting');
+            : h('span', { class: 'pill' }, s.source === 'browser' ? "Waiting for an admin's browser" : 'Starting');
       const id = s.id || s.store;
       // Where it's searched from: changes straight away.
       const sel = h('select', { 'aria-label': `${s.name}: searched from`, dataset: { store: id } },
@@ -491,14 +493,15 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     }
   }
 
-  // Where a store is searched from (server, an admin's browser, or off): saved straight away.
+  // Where a store is searched from (server first, the server only, an admin's browser, or off): saved straight away.
   async function setMode(id, mode) {
     try {
       const current = m.sweep ? m.sweep.settings.stores : (await api('GET', '/api/monitor/sweep')).settings.stores;
       const d = await api('PUT', '/api/monitor/sweep', { stores: { ...current, [id]: mode } });
       renderSweep(d);
       live.setSettings(d.settings);
-      toast(`${storeName(id)}: ${MODES[mode].toLowerCase()}`, mode === 'browser' ? "Searched from an admin's browser with the extension from now on." : mode === 'off' ? 'No more searches there.' : "Searched from Mugibot's server from now on.", 'success');
+      toast(`${storeName(id)}: ${MODES[mode].toLowerCase()}`, mode === 'browser' ? "Searched from an admin's browser with the extension from now on." : mode === 'off' ? 'No more searches there.'
+        : mode === 'auto' ? "Searched from Mugibot's server; an admin's browser stands in only while the store refuses it." : "Searched from Mugibot's server only, from now on.", 'success');
     } catch (err) {
       toast("Couldn't change that", err.message, 'warn');
       if (m.sweep) renderSweep(m.sweep);

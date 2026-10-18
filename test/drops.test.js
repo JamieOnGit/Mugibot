@@ -175,6 +175,96 @@ test('🎯 an admin\'s words at a store: searched as typed in the sweeps\' turn;
   assert.equal(more.filter((t) => t.drop).length, 1);
 });
 
+test('🎯 an admin picks the channel a watch for everyone posts in, and the role it pings: its drops and restocks go there instead of #non-tcg-alerts', async () => {
+  const DROPS = '800000000000000001';
+  discord.state.roles.push({ id: DROPS, name: 'Drop pings', position: 3, permissions: '0' });
+  const general = channelId('general');
+  // The pickers: the Discord server's text channels (by category) and the roles a post can ping — admins only.
+  assert.equal((await ash.get('/api/drops/discord')).status, 404);
+  const dest = (await boss.get('/api/drops/discord?fresh=1')).body;
+  assert.equal(dest.ready, true);
+  assert.deepEqual(dest.channels.find((c) => c.id === general), { id: general, name: 'general', parent: '' });
+  assert.deepEqual(dest.channels.find((c) => c.id === ch.nontcg), { id: ch.nontcg, name: 'non-tcg-alerts', parent: 'Mugibot alerts' });
+  assert.ok(!dest.channels.some((c) => c.name === 'Mugibot alerts'), 'a category is not a channel');
+  assert.deepEqual(dest.roles.map((r) => r.name), ['Drop pings', 'Member'], "not @everyone, nor the bot's own role");
+  assert.equal((await boss.get('/api/drops')).body.discord.ready, true);
+  assert.equal((await ash.get('/api/drops')).body.discord, undefined);
+
+  // Checked against the server's own.
+  const words = { store: 'demo-jbhifi', words: 'meta quest 3', label: 'Quest 3' };
+  assert.match((await boss.post('/api/drops', { ...words, channelId: '123456789012345678' })).body.error, /isn't a text channel of the Discord server/);
+  assert.match((await boss.post('/api/drops', { ...words, channelId: general, roleId: '999999999999999999' })).body.error, /isn't in the Discord server/);
+  assert.match((await boss.post('/api/drops', { ...words, roleId: DROPS })).body.error, /Choose a channel for it to ping that role in/);
+  assert.equal((await boss.post('/api/drops', { ...words, channelId: 'general' })).status, 400);
+  // A monitor an admin made before on what it'll find: taken on (its alerts go where the watch's do).
+  const before = store.addProduct('jbhifi', { sku: 'meta-quest-3-512gb', name: 'Meta Quest 3 512GB', price: 799, status: 'out_of_stock' });
+  const m = await boss.post('/api/monitor/monitors', { url: before, note: 'Watching the Quest 3' });
+  assert.equal(m.status, 200, m.text);
+  const r = await boss.post('/api/drops', { ...words, channelId: general, roleId: DROPS });
+  assert.equal(r.status, 200, r.text);
+  const w = r.body.watch;
+  assert.deepEqual([w.channelId, w.roleId], [general, DROPS]);
+  assert.equal((await ash.get('/api/drops')).body.watches.find((x) => x.id === w.id).channelId, undefined, 'members never see where it posts');
+  const jb = R('demo-jbhifi');
+  let s = await sw().sweepTerm(jb, { keyword: 'meta quest 3', page: 1, drop: 'shared' });
+  assert.equal(s.ok, true, s.error);
+  const console_ = env.app.catalog.productFor('demo-jbhifi', 'meta-quest-3-512gb');
+  assert.equal(env.app.catalog.monitorForProduct(console_.id).drop_watch, w.id, 'taken on');
+
+  // A new one drops: in #general, pinging @Drop pings — not #non-tcg-alerts.
+  const count = () => ({ general: posts(general).length, nontcg: posts(ch.nontcg).length });
+  let was = count();
+  store.addProduct('jbhifi', { sku: 'meta-quest-3-asgards-wrath-bundle', name: 'Meta Quest 3 Asgard\'s Wrath Bundle', price: 849, status: 'in_stock' });
+  s = await sw().sweepTerm(jb, { keyword: 'meta quest 3', page: 1, drop: 'shared' });
+  assert.equal(s.new, 1, s.error);
+  assert.deepEqual(count(), { general: was.general + 1, nontcg: was.nontcg });
+  let post = posts(general).at(-1);
+  assert.match(post.body.embeds[0].title, /^🆕 New drop: Meta Quest 3 Asgard's Wrath Bundle/);
+  assert.ok(buttons(post).includes('⚡ Buy with Mugibot'));
+  assert.equal(post.body.content, `<@&${DROPS}>`);
+  assert.deepEqual(post.body.allowed_mentions.roles, [DROPS]);
+  // The console the admin monitored comes back in stock (its page read, a while after the search): there too.
+  was = count();
+  clock.offset += 3 * 60 * 1000 + 1000;
+  store.set('jbhifi', 'meta-quest-3-512gb', { status: 'in_stock' });
+  await env.app.monitor.checkPage(before);
+  assert.deepEqual(count(), { general: was.general + 1, nontcg: was.nontcg });
+  assert.match(posts(general).at(-1).body.embeds[0].title, /^🟢 In stock: Meta Quest 3 512GB/);
+
+  // Changed from the dashboard (admins only): back to the usual channel, and no one pinged.
+  assert.equal((await ash.put(`/api/drops/${w.id}`, { channelId: '' })).status, 404, "a member can't");
+  assert.match((await boss.put(`/api/drops/${w.id}`, { channelId: '123456789012345678' })).body.error, /isn't a text channel/);
+  const u = await boss.put(`/api/drops/${w.id}`, { channelId: '', roleId: '' });
+  assert.equal(u.status, 200, u.text);
+  assert.deepEqual([u.body.watch.channelId, u.body.watch.roleId], ['', '']);
+  assert.ok(env.app.repo.listAudit(20).some((a) => a.action === 'drop-change'));
+  was = count();
+  store.set('jbhifi', 'meta-quest-3-512gb', { status: 'out_of_stock' });
+  await env.app.monitor.checkPage(before);
+  clock.offset += 11 * 60 * 1000; // (past the alert cooldown)
+  store.set('jbhifi', 'meta-quest-3-512gb', { status: 'in_stock' });
+  await env.app.monitor.checkPage(before);
+  assert.deepEqual(count(), { general: was.general, nontcg: was.nontcg + 1 }, 'the usual: #non-tcg-alerts');
+  assert.equal(posts(ch.nontcg).at(-1).body.content, undefined);
+
+  // Someone's own watch tells them alone: no channel to pick.
+  const own = await ash.post('/api/drops', { store: 'demo-jbhifi', words: 'steam deck oled', channelId: general, roleId: DROPS });
+  assert.equal(own.status, 200, own.text);
+  assert.deepEqual(env.app.db.get('SELECT channel_id, role_id FROM drop_watches WHERE id = :id', { id: own.body.watch.id }), { channel_id: '', role_id: '' });
+  assert.match((await ash.put(`/api/drops/${own.body.watch.id}`, { channelId: general })).body.error, /Only an admin's drop watch for everyone posts in a channel/);
+  assert.equal((await ash.put(`/api/drops/${own.body.watch.id}`, { label: 'Deck' })).body.watch.label, 'Deck', 'its name, though');
+  assert.equal((await ash.del(`/api/drops/${own.body.watch.id}`)).status, 200);
+
+  // Removed: the monitor it made goes; the one the admin made before stays, as it was.
+  const bundle = env.app.catalog.productFor('demo-jbhifi', 'meta-quest-3-asgards-wrath-bundle');
+  assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
+  assert.equal(env.app.catalog.monitorForProduct(bundle.id), null);
+  const kept = env.app.catalog.monitorForProduct(console_.id);
+  assert.ok(kept, "the admin's own monitor stays");
+  assert.equal(kept.drop_watch, null);
+  assert.equal(kept.note, 'Watching the Quest 3');
+});
+
 test('🎯 a member\'s own words: what has them goes on their watchlist — theirs alone, DM\'d when it comes back or drops, with Auto-checkout — never posted for everyone', async () => {
   const before = { nontcg: posts(ch.nontcg).length, dms: dms('d-ash').length };
   store.addProduct('jbhifi', { sku: 'nintendo-switch-2-console', name: 'Nintendo Switch 2 Console', price: 699, status: 'out_of_stock' });

@@ -785,6 +785,10 @@ details.menu[open] > summary { background: var(--surface-2); }
 .dw-row .name { font-weight: 700; overflow-wrap: anywhere; }
 .dw-row .meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .dw-row .acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.dw-edit { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0 0 36px; padding: 8px 0 0; border-top: 1px solid var(--line); }
+.dw-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; flex: 1 1 180px; min-width: 0; }
+.dw-edit select { max-width: 100%; }
+.dw-edit .form-actions { margin: 0; }
 .dw-icon { font-size: 18px; width: 26px; text-align: center; flex: 0 0 auto; }
 .dw-none { margin: 6px 0 0 36px; }
 .dw-found { list-style: none; margin: 8px 0 0; padding: 0 0 0 36px; }

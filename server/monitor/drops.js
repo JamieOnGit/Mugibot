@@ -11,8 +11,9 @@
 //   Mugibot). Anything whose name has every word counts, trading cards or not.
 //
 // An admin's watch can be for everyone: what it finds is a monitored product in everyone's Tracked
-// products, posted in #non-tcg-alerts (category Non-TCG) — members ☆ Watch it for their own DM and
-// to arm Auto-checkout. Anyone's own watch is theirs alone: what it finds goes on their watchlist,
+// products, posted in #non-tcg-alerts (category Non-TCG) — or in the Discord channel the admin chose
+// for it, pinging the role they chose — and members ☆ Watch it for their own DM and to arm
+// Auto-checkout. Anyone's own watch is theirs alone: what it finds goes on their watchlist,
 // and only they are told (their DMs). Auto-checkout (stores Mugibot checks out at), up to a max
 // price: a link is armed like a watchlist item; words arm only what drops after the watch's first
 // look — a new listing, or something listed but not on sale yet (as VIP watches do: a broad watch
@@ -39,6 +40,10 @@ const MAX_BACKOFF_MS = 30 * 60 * 1000;
 // Statuses that say whether something's on sale (not a failed or empty read).
 const READ = new Set([STATUS.IN_STOCK, STATUS.PREORDER, STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.NOT_LISTED]);
 const NO_ACO = 'Auto-checkout works at stores Mugibot has a checkout for — at another website you get the alert, and buy it there yourself';
+// What an admin's watch for everyone posts in the channel chosen for it: its drops and restocks.
+export const DROP_ROUTE_KINDS = ['listed', 'restock'];
+const SNOWFLAKE = /^\d{5,25}$/;
+const DEST_MS = 60 * 1000;
 const json = (s, fallback) => { try { const v = JSON.parse(s); return v ?? fallback; } catch { return fallback; } };
 
 /** Words to look for: lower case, no accents or punctuation ("Xbox Series X!" → "xbox series x"). */
@@ -74,6 +79,7 @@ function toWatch(r) {
     aco: !!r.aco, maxPrice: r.max_price ?? null, found: json(r.found, []), how: r.how, seen: r.seen ?? 0,
     baselineAt: r.baseline_at ?? null, nextAt: r.next_at || 0, lastAt: r.last_at ?? null, lastOkAt: r.last_ok_at ?? null,
     fails: r.fails || 0, error: r.error || '', createdAt: r.created_at,
+    channelId: r.channel_id || '', roleId: r.role_id || '',
   };
 }
 
@@ -88,6 +94,7 @@ export class Drops {
     this.hostNext = new Map();
     this.timer = null;
     this.busy = false;
+    this.dest = null; // the Discord server's channels and roles, for the admins' pickers (a minute)
     // (Set by app.js: monitor, sweeper, ctx.)
   }
 
@@ -211,10 +218,7 @@ export class Drops {
    */
   async foundShared(w, product, { baseline = false, status = null } = {}) {
     if (!w || !product) return;
-    if (!this.catalog.monitorForProduct(product.id)) {
-      const { monitor } = this.catalog.addMonitor(product.id, { kinds: KINDS, note: DROP_NOTE, createdBy: w.userId });
-      this.db.run('UPDATE monitors SET drop_watch = :w WHERE id = :id', { w: w.id, id: monitor.id });
-    }
+    this.monitorFor(w, product);
     if (w.found.some((f) => f.productId === product.id) || w.found.length >= MAX_FOUND_SHARED) return;
     const arm = this.armOf(w, product.store, product.url, status, baseline);
     this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, at: this.now(), ...(arm ? { arm } : {}) }]);
@@ -226,6 +230,21 @@ export class Drops {
       if (item && !baseline && isOrderable(status)) await this.applyNow(item.id, { status, title: product.name, price: product.price });
     } else if (arm === 'skipped') this.onSale(w, product);
     this.hub.publish(w.userId, 'drop', { id: w.id });
+  }
+
+  /**
+   * A find's monitor (its page read for stock, its alerts posted): one the watch makes, or one an admin
+   * made before, which the watch takes on (its alerts go where the watch's do) — and leaves as it was
+   * when the watch goes. One another watch has already is left with that watch.
+   */
+  monitorFor(w, product) {
+    const m = this.catalog.monitorForProduct(product.id);
+    if (!m) {
+      const { monitor } = this.catalog.addMonitor(product.id, { kinds: KINDS, note: DROP_NOTE, createdBy: w.userId });
+      this.db.run('UPDATE monitors SET drop_watch = :w WHERE id = :id', { w: w.id, id: monitor.id });
+    } else if (!m.drop_watch) {
+      this.db.run('UPDATE monitors SET drop_watch = :w WHERE id = :id', { w: w.id, id: m.id });
+    }
   }
 
   /**
@@ -520,10 +539,7 @@ export class Drops {
     if (!sku || w.found.some((f) => f.sku === sku) || w.found.length >= MAX_FOUND_SHARED || this.catalog.isBlocked('other', sku)) return;
     const known = this.catalog.productFor('other', sku);
     const product = this.catalog.upsertProduct({ store: 'other', sku, url, name: p.title, image: p.image || '', category: known ? '' : w.category });
-    if (!this.catalog.monitorForProduct(product.id)) {
-      const { monitor } = this.catalog.addMonitor(product.id, { kinds: KINDS, note: DROP_NOTE, createdBy: w.userId });
-      this.db.run('UPDATE monitors SET drop_watch = :w WHERE id = :id', { w: w.id, id: monitor.id });
-    }
+    this.monitorFor(w, product);
     this.saveFound(w, [...w.found, { productId: product.id, sku, at: this.now() }]);
     this.repo.ensurePage(url, 'product', 'other', sku);
     if (!baseline && !known) {
@@ -567,6 +583,8 @@ export class Drops {
     const aco = bool(input.aco, false);
     const maxPrice = aco ? num(input.maxPrice, { min: 1, max: 100000, def: null }) : null;
     if (aco && maxPrice === null) throw bad('Set a max price to auto-checkout it: Mugibot never pays more than that');
+    // (Where it posts: for everyone only — someone's own watch tells them alone.)
+    const dest = shared ? await this.destination(input) : { channelId: '', roleId: '' };
     const url = httpUrl(input.url, 'Product link', { required: false });
     let store = '';
     let site = '';
@@ -596,9 +614,9 @@ export class Drops {
       if (mine.some((w) => w.words === words && w.store === store && w.site === site)) throw bad('You have that drop watch already');
     }
     const id = newId('drp');
-    this.db.run(`INSERT INTO drop_watches (id, user_id, shared, store, site, words, url, label, category, aco, max_price, created_at)
-      VALUES (:id, :u, :shared, :store, :site, :words, :url, :label, :category, :aco, :max, :t)`, {
-      id, u: user.id, shared: shared ? 1 : 0, store, site, words, url, label, category, aco: aco ? 1 : 0, max: maxPrice, t: this.now(),
+    this.db.run(`INSERT INTO drop_watches (id, user_id, shared, store, site, words, url, label, category, aco, max_price, channel_id, role_id, created_at)
+      VALUES (:id, :u, :shared, :store, :site, :words, :url, :label, :category, :aco, :max, :ch, :role, :t)`, {
+      id, u: user.id, shared: shared ? 1 : 0, store, site, words, url, label, category, aco: aco ? 1 : 0, max: maxPrice, ch: dest.channelId, role: dest.roleId, t: this.now(),
     });
     this.changed();
     try {
@@ -668,11 +686,12 @@ export class Drops {
     return true;
   }
 
-  /** Removed: the monitors it made go (one that was there before stays), and what it put on the watchlist. */
+  /** Removed: the monitors it made go (one that was there before stays, as it was), and what it put on the watchlist. */
   remove(id, user) {
     const w = this.get(String(id || ''));
     if (!this.canChange(w, user)) return false;
-    this.db.run('DELETE FROM monitors WHERE drop_watch = :id', { id: w.id });
+    this.db.run('DELETE FROM monitors WHERE drop_watch = :id AND note = :note', { id: w.id, note: DROP_NOTE });
+    this.db.run('UPDATE monitors SET drop_watch = NULL WHERE drop_watch = :id', { id: w.id });
     const items = this.db.all('SELECT id FROM items WHERE drop_watch = :id', { id: w.id });
     this.db.run('DELETE FROM items WHERE drop_watch = :id', { id: w.id });
     this.db.run('DELETE FROM drop_watches WHERE id = :id', { id: w.id });
@@ -680,6 +699,82 @@ export class Drops {
     for (const it of items) this.hub.publish(w.userId, 'watch', { id: it.id, removed: true });
     this.repo.audit(user.id, null, 'drop-remove', w.url || `${w.words} @ ${w.site || w.store}`);
     return true;
+  }
+
+  /**
+   * An admin's change to their watch for everyone (or another admin's): its name, and where it posts —
+   * channelId ('' = the usual rules: #non-tcg-alerts) and roleId (a role it pings, or '').
+   */
+  async update(id, input, user) {
+    const w = this.get(String(id || ''));
+    if (!w || !this.canChange(w, user)) return null;
+    const set = {};
+    if (input.label !== undefined) set.label = str(input.label, 80);
+    if (input.channelId !== undefined || input.roleId !== undefined) {
+      if (!w.shared || user.role !== 'admin') throw bad('Only an admin\'s drop watch for everyone posts in a channel — your own tell you by DM');
+      const dest = await this.destination({ channelId: input.channelId ?? w.channelId, roleId: input.roleId ?? w.roleId });
+      Object.assign(set, { channel_id: dest.channelId, role_id: dest.roleId });
+    }
+    const keys = Object.keys(set);
+    if (keys.length) {
+      this.db.run(`UPDATE drop_watches SET ${keys.map((k) => `${k} = :${k}`).join(', ')} WHERE id = :id`, { ...set, id: w.id });
+      this.changed();
+      this.repo.audit(user.id, null, 'drop-change', `${w.url || `${w.words} @ ${w.site || w.store}`}: ${keys.map((k) => `${k}=${set[k] || '(usual)'}`).join(' ')}`);
+    }
+    return this.view(this.get(w.id), user);
+  }
+
+  /**
+   * Where an admin's watch for everyone posts, from their form: a text channel of the Discord server
+   * and a role of it (each '' for none) — checked against the server's own, when the bot's set up.
+   */
+  async destination(input) {
+    const channelId = str(input.channelId, 30);
+    const roleId = str(input.roleId, 30);
+    if (channelId && !SNOWFLAKE.test(channelId)) throw bad('Choose the channel from the list (or "the usual channel")');
+    if (roleId && !SNOWFLAKE.test(roleId)) throw bad('Choose the role to ping from the list (or no one)');
+    if (!channelId && !roleId) return { channelId, roleId };
+    if (!channelId) throw bad('Choose a channel for it to ping that role in');
+    const d = await this.destinations();
+    if (!d.ready) throw bad(d.error || "The Discord bot isn't set up yet (Admin → Setup check)");
+    if (!d.channels.some((c) => c.id === channelId)) throw bad("That channel isn't a text channel of the Discord server (any more) — choose another");
+    if (roleId && !d.roles.some((r) => r.id === roleId)) throw bad("That role isn't in the Discord server (any more) — choose another");
+    return { channelId, roleId };
+  }
+
+  /** The Discord server's text channels (with their category) and the roles a post can ping, for the admins' pickers. */
+  async destinations({ fresh = false } = {}) {
+    const discord = this.ctx && this.ctx.discord;
+    if (!discord || !discord.botReady) return { ready: false, channels: [], roles: [], error: "The Discord bot isn't set up yet (Admin → Setup check)" };
+    const now = this.now();
+    if (!fresh && this.dest && now - this.dest.at < DEST_MS) return this.dest.data;
+    const [ch, ro] = await Promise.all([discord.guildChannels(), discord.guildRoles()]);
+    if (ch.status !== 200 || !Array.isArray(ch.body)) return { ready: false, channels: [], roles: [], error: "Couldn't read the Discord server's channels — try again in a minute" };
+    const all = ch.body.filter((c) => c && c.id);
+    const parent = (c) => { const p = all.find((x) => x.type === 4 && x.id === c.parent_id); return p ? String(p.name || '') : ''; };
+    const channels = all.filter((c) => c.type === 0 || c.type === 5)
+      .map((c) => ({ id: String(c.id), name: String(c.name || ''), parent: parent(c), position: c.position ?? 0 }))
+      .sort((a, b) => a.parent.localeCompare(b.parent) || a.position - b.position || a.name.localeCompare(b.name))
+      .map(({ position, ...c }) => c);
+    // (Not @everyone — its id is the server's — nor a bot's own role.)
+    const guildId = this.cfg.discord.guildId;
+    const roles = (ro.status === 200 && Array.isArray(ro.body) ? ro.body : [])
+      .filter((r) => r && r.id && String(r.id) !== String(guildId) && !r.managed)
+      .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))
+      .map((r) => ({ id: String(r.id), name: String(r.name || '') }));
+    const data = { ready: true, channels, roles, error: '' };
+    this.dest = { at: now, data };
+    return data;
+  }
+
+  /**
+   * Where an alert about a product a watch found goes (monitor/feed.js): the channel chosen for an
+   * admin's watch for everyone, pinging its role — or null (the usual rules).
+   */
+  routeFor(id) {
+    const w = id ? this.get(String(id)) : null;
+    if (!w || !w.shared || !w.channelId) return null;
+    return { id: `drop:${w.id}`, name: w.label || w.words || 'Drop watch', channelId: w.channelId, roleId: w.roleId, categories: [], stores: [], kinds: [...DROP_ROUTE_KINDS], keywords: '', drop: w.id };
   }
 
   // ---------------------------------------------------------------------------
@@ -705,6 +800,8 @@ export class Drops {
       sweepSeconds: Math.round(this.sweepMs / 1000),
       siteSeconds: Math.round(this.siteMs / 1000),
       route: route && { id: route.id, name: route.name, enabled: route.enabled },
+      // (Admins: whether there's a Discord server to pick a watch's channel and role from.)
+      ...(user.role === 'admin' ? { discord: { ready: !!(this.ctx && this.ctx.discord && this.ctx.discord.botReady) } } : {}),
     };
   }
 
@@ -718,6 +815,8 @@ export class Drops {
       lastAt: w.lastAt, lastOkAt: w.lastOkAt, fails: w.fails, error: admin ? w.error : publicError(w.error), seen: w.seen,
       looked: !!w.baselineAt, nextAt: w.store === 'other' ? w.nextAt : null, createdAt: w.createdAt,
       canChange: this.canChange(w, viewer),
+      // (Where it posts, for an admin's watch for everyone: admins only.)
+      ...(admin && w.shared ? { channelId: w.channelId, roleId: w.roleId } : {}),
       found: w.found.map((f) => this.foundView(w, f, mine)).filter(Boolean),
     };
   }

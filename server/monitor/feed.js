@@ -125,10 +125,11 @@ export class Feed {
    * opts: { manual (an admin reported it: skips the cooldown), announce (an admin's 📣 SKU: no monitor needed),
    *         sweep (a live sweep found it: no monitor needed, the sweep settings decide), note, pct,
    *         detectedAt (when the store's answer came in: the alert says how long it took to reach dashboards),
-   *         vip (a VIP watch found it: monitor/vip.js — a product with a VIP monitor is one too) }
+   *         vip (a VIP watch found it: monitor/vip.js — a product with a VIP monitor is one too),
+   *         dropWatch (an admin's drop watch found it: monitor/drops.js — a product with its monitor is one too) }
    * Returns the saved alert, or null when a monitor isn't asking for it or the cooldown is running.
    */
-  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null, vip = false } = {}) {
+  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null, vip = false, dropWatch = null } = {}) {
     // On the blacklist (Admin → Blacklist): never alerts. (An admin's own restock ping still goes out.)
     if (!manual && this.catalog.isBlocked(product.store, product.sku)) return null;
     const monitor = this.catalog.monitorForProduct(product.id);
@@ -149,7 +150,9 @@ export class Feed {
     });
     const alert = { ...toAlert(row), ttnMs: detectedAt ? Math.max(0, this.now() - detectedAt) : null };
     this.broadcast('feed', alert);
-    const posted = await this.post(alert, product);
+    // (Found by an admin's drop watch for everyone with a channel of its own: posted there.)
+    const drop = this.drops ? this.drops.routeFor(dropWatch || (monitor && monitor.drop_watch)) : null;
+    const posted = await this.post(alert, product, { drop });
     if (posted.length) this.catalog.setPosted(row.id, posted);
     return { ...alert, posted };
   }
@@ -161,11 +164,14 @@ export class Feed {
    * (#vip-drop) only — to the others only while there's no VIP rule — and nothing else goes there.
    * Something that isn't trading cards (category nontcg: the drop watches') goes to the rules that
    * ask for that category by name (#non-tcg-alerts) — not a store's channel — while there is one.
+   * drop: the channel an admin chose for the drop watch that found it (monitor/drops.js routeFor):
+   * its drops and restocks go there (pinging its role) instead; anything else, the usual way.
    */
-  routesFor(alert) {
+  routesFor(alert, { drop = null } = {}) {
     const enabled = this.catalog.listRoutes().filter((r) => r.enabled);
     const vip = enabled.filter((r) => r.vip);
     if (alert.vip && vip.length) return vip.filter((r) => r.kinds.includes(alert.kind));
+    if (drop && drop.channelId && drop.kinds.includes(alert.kind)) return [drop];
     let routes = enabled.filter((r) => !r.vip);
     const named = routes.filter((r) => r.categories.includes('nontcg'));
     if (alert.category === 'nontcg' && named.length) routes = named;
@@ -182,9 +188,9 @@ export class Feed {
     return taken.length ? taken : routes.filter((r) => r.fallback && wants(r));
   }
 
-  async post(alert, product) {
+  async post(alert, product, { drop = null } = {}) {
     if (!this.discord.botReady) return [];
-    const routes = this.routesFor(alert);
+    const routes = this.routesFor(alert, { drop });
     const posted = [];
     for (const r of routes) {
       const ok = await this.discord.post(r.channelId, this.message(alert, product, { mention: r.roleId ? `<@&${r.roleId}>` : '' }));

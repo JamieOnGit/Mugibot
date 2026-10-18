@@ -174,7 +174,12 @@
                   </div>
                   <div class="dw-aco" id="dw-aco-wrap" hidden><label class="check inline"><input type="checkbox" id="dw-aco"> 🤖 Auto-checkout it when it drops, up to</label> <input id="dw-max" type="number" min="1" step="0.01" placeholder="Max price $" aria-label="Max price for Auto-checkout"> <a class="small" href="#aco">Auto-checkout settings</a></div>
                   <p class="small muted" id="dw-aco-note" hidden></p>
-                  <label class="check" id="dw-share-wrap" hidden><input type="checkbox" id="dw-share" checked> <span>📣 For everyone — posted in <code>#non-tcg-alerts</code> and on every member's dashboard (off: just for you, by DM)</span></label>
+                  <label class="check" id="dw-share-wrap" hidden><input type="checkbox" id="dw-share" checked> <span>📣 For everyone — posted in Discord and on every member's dashboard (off: just for you, by DM)</span></label>
+                  <div class="grid2" id="dw-post-wrap" hidden>
+                    <div><label for="dw-post">Post its drops and restocks in</label><select id="dw-post"></select></div>
+                    <div><label for="dw-ping">Ping</label><select id="dw-ping"></select></div>
+                  </div>
+                  <p class="small muted" id="dw-post-note" hidden></p>
                   <div class="form-actions"><button class="btn primary" type="submit" id="dw-add">Add drop watch</button><span class="msg" id="dw-msg"></span></div>
                 </form>
                 <div class="notice" id="dw-channel" hidden></div>
@@ -222,7 +227,7 @@
 
           <section class="mon-card" id="ms-card">
             <header class="mon-card-hd"><h3>Stores</h3><span class="mon-meta">Searched from, and how each is doing</span><button class="btn small" id="ms-reset-all" type="button" title="Start every store's searches again">↻ Reset all</button></header>
-            <p class="mon-help">A store that keeps refusing gets <b>Reset</b>: its errors and backoff are cleared and it's searched again now, gently (at a third of the pace) for 10 minutes. A store the server can't reach can be searched from an admin's browser instead (keep Chrome open with the extension).</p>
+            <p class="mon-help">A store that keeps refusing gets <b>Reset</b>: its errors and backoff are cleared and it's searched again now, gently (at a third of the pace) for 10 minutes. <b>Server first</b> (every store's default): Mugibot's server searches it, and an admin's browser stands in only while the store refuses the server (3 searches in a row) or the server can't read its products — the server tries again every few minutes and takes back over as soon as it's let in. Keep Chrome open with the extension, signed in as an admin, so there's a browser to stand in.</p>
             <div class="table-wrap"><table class="table" id="ms-table"><thead><tr><th>Store</th><th>Searched from</th><th>Status</th><th>Last search</th><th>Products</th><th>Searches (1 h)</th><th></th></tr></thead><tbody></tbody></table></div>
             <details class="ms-terms"><summary class="small">Every search</summary><div class="table-wrap"><table class="table" id="ms-terms"><thead><tr><th>Store</th><th>Keyword</th><th>Page</th><th>Found</th><th>Kept</th><th>Last OK</th><th>Problem</th></tr></thead><tbody></tbody></table></div></details>
           </section>

@@ -19,5 +19,5 @@ export default {
   flowStatus: 'draft',
   flowNote: 'Uses the EB Games flow (same platform). Not tested yet.',
   productPath: /^\/product\/[^/]+\/\d+/,
-  sweep: { ...ebgames.sweep, from: 'off', formerDefault: 'browser' },
+  sweep: { ...ebgames.sweep, from: 'off' },
 };

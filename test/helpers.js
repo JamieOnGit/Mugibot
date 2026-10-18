@@ -59,7 +59,7 @@ export async function startFakeDiscord() {
     edits: [], // { app, token, body }: replies to buttons, changed as their run goes
     guild: { id: 'guild-1', name: 'Mugibot Members' },
     // Bot role: Create Invite, View Channels, Send Messages, Embed Links, Manage Roles.
-    roles: [{ id: 'guild-1', name: '@everyone', position: 0, permissions: '0' }, { id: 'role-member', name: 'Member', position: 1, permissions: '0' }, { id: 'role-bot', name: 'Mugibot', position: 5, permissions: String(1n | (1n << 10n) | (1n << 11n) | (1n << 14n) | (1n << 28n)) }],
+    roles: [{ id: 'guild-1', name: '@everyone', position: 0, permissions: '0' }, { id: 'role-member', name: 'Member', position: 1, permissions: '0' }, { id: 'role-bot', name: 'Mugibot', position: 5, managed: true, permissions: String(1n | (1n << 10n) | (1n << 11n) | (1n << 14n) | (1n << 28n)) }],
     botRoles: ['role-bot'],
     rateLimitNext: 0,
     // The server's channels (text 0, category 4); the bot may make more when it can Manage Channels.

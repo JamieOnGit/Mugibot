@@ -225,6 +225,16 @@ export function register(router, ctx) {
     const out = await manage.setupNonTcg({ roleId: req.body.roleId }, req.user);
     return { ...out, ...ctx.drops.viewFor(req.user) };
   }, admin);
+  // Where an admin's drop watch for everyone can post: the Discord server's text channels and roles.
+  router.get('/api/drops/discord', async (req) => {
+    const fresh = req.query.get('fresh') === '1' && limiter.hit(`dropdest:${req.user.id}`, 10, 10 * 60 * 1000);
+    return ctx.drops.destinations({ fresh });
+  }, admin);
+  router.put('/api/drops/:id', async (req) => {
+    const watch = await ctx.drops.update(req.params.id, req.body || {}, req.user);
+    if (!watch) throw new HttpError(404, 'That drop watch no longer exists');
+    return { watch, ...ctx.drops.viewFor(req.user) };
+  }, member);
   router.post('/api/drops/:id/check', async (req) => {
     if (!limiter.hit(`dropcheck:${req.user.id}`, 20, 10 * 60 * 1000)) throw new HttpError(429, 'You can ask for 20 checks every 10 minutes');
     if (!ctx.drops.checkNow(req.params.id, req.user)) throw new HttpError(404, 'That drop watch no longer exists');

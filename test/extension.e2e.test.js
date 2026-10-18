@@ -981,6 +981,46 @@ test("live sweeps from an admin's browser: a store that refuses the server is se
   }
 });
 
+test("server first: Mugibot's server searches the store; refused 3 times, this admin's browser stands in; let back in, the server takes over and the browser stops", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-kmart': 'auto' } }, null);
+  Object.assign(sweeper.stat('demo-kmart'), { backup: null, serverMisses: 0, fails: 0, slowUntil: 0, retryAt: 0, browserNext: 0 });
+  const R = env.app.retailers.get('demo-kmart');
+  const fromBrowser = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search') && /Chrome|Mozilla/.test(x.ua)).length;
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    // Let in: the server's. This admin's browser isn't given its searches.
+    assert.equal((await sweeper.sweepTerm(R, { keyword: 'pokemon', page: 1 })).ok, true);
+    const before = fromBrowser();
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal(fromBrowser(), before, "no searches from the admin's browser while the server's let in");
+    // Refused three times in a row: this browser stands in (the extension asks again within seconds).
+    store.state.blockNonBrowsers = true;
+    for (let i = 0; i < 3; i++) await sweeper.sweepTerm(R, { keyword: 'pokemon', page: 1 });
+    assert.ok(sweeper.stat('demo-kmart').backup);
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => fromBrowser() > before, { timeout: 30000, message: "the admin's browser standing in" });
+    await waitFor(() => sweeper.health().find((s) => s.store === 'demo-kmart').terms.some((t) => t.source === 'browser' && t.fails === 0), { timeout: 20000, message: "the browser's results taken" });
+    assert.equal(sweeper.live().stores.find((s) => s.id === 'demo-kmart').source, 'browser');
+    // Let back in: the server's try takes over, and the browser stops.
+    store.state.blockNonBrowsers = false;
+    assert.equal((await sweeper.sweepTerm(R, { keyword: 'pokemon', page: 1 })).ok, true);
+    assert.equal(sweeper.stat('demo-kmart').backup, null);
+    await new Promise((r) => setTimeout(r, 6000)); // (a search it was given just before may still come in)
+    const after = fromBrowser();
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await new Promise((r) => setTimeout(r, 6000));
+    assert.equal(fromBrowser(), after, 'the server searches it again; the browser is left be');
+  } finally {
+    store.state.blockNonBrowsers = false;
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: off }, null);
+  }
+});
+
 test("BIG W's search page builds its products once it's open: an admin's browser opens it in a window of its own, waits, and reads them; ↻ Reset opens it afresh", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;

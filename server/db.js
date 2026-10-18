@@ -474,6 +474,12 @@ const MIGRATIONS = [
   ALTER TABLE items ADD COLUMN drop_watch TEXT;     -- put on the watchlist by this drop watch
   ALTER TABLE monitors ADD COLUMN drop_watch TEXT;  -- made by this (shared) drop watch
   `,
+  // 12 — where an admin's drop watch for everyone posts (an admin picks): its drops and restocks go in
+  //      this Discord channel, pinging this role — instead of #non-tcg-alerts. '' = the usual rules.
+  `
+  ALTER TABLE drop_watches ADD COLUMN channel_id TEXT NOT NULL DEFAULT '';
+  ALTER TABLE drop_watches ADD COLUMN role_id TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 export class Db {
