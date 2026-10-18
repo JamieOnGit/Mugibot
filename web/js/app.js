@@ -1,5 +1,6 @@
 // The dashboard. Everything here is the signed-in member's own data.
 import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, money, renderPager, setMsg, toast, when } from './common.js';
+import { setupDrops } from './drops.js';
 import { setupMonitor } from './monitor.js';
 
 const STATUS = {
@@ -16,10 +17,10 @@ const state = { me: null, items: [], retailers: [], profiles: null, editing: nul
 const TABS = ['monitor', 'monitor-settings', 'monitor-log', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account'];
 // The Monitor's own pages (Settings and Check log are for admins): the sidebar's Monitor stays lit.
 const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
-// The lists on the Monitor page (tracked products, your watchlist, your activity). #watch and
-// #activity — the old tabs, still in links and DMs — open the Monitor page at that list.
-const LISTS = ['tracked', 'watch', 'activity'];
-const LIST_HASH = { watch: 'watch', activity: 'activity' };
+// The lists on the Monitor page (tracked products, your watchlist, your drop watches, your activity).
+// #watch and #activity — the old tabs, still in links and DMs — and #drops open the Monitor page at that list.
+const LISTS = ['tracked', 'watch', 'drops', 'activity'];
+const LIST_HASH = { watch: 'watch', drops: 'drops', activity: 'activity' };
 const LIST_KEY = 'mgb-list';
 const loaders = {};
 
@@ -46,11 +47,19 @@ function showTab() {
 }
 window.addEventListener('hashchange', showTab);
 
+// The tracked products (and the admins' drop watches' finds) know which are on your watchlist (☆ Watch adds one).
+const onWatchlist = (p) => state.items.find((it) => it.store === p.store && String(it.sku).toLowerCase() === String(p.sku).toLowerCase()) || null;
 const monitorUI = setupMonitor({
   showError: (e) => showError(e),
-  // The tracked products know which are on your watchlist (☆ Watch adds one).
-  watching: (p) => state.items.find((it) => it.store === p.store && String(it.sku).toLowerCase() === String(p.sku).toLowerCase()) || null,
+  watching: onWatchlist,
   watch: (p) => watchProduct(p),
+});
+// 🎯 Drop watches: anything outside the card keywords (drops.js).
+const dropsUI = setupDrops({
+  isAdmin: () => !!state.me && state.me.user.role === 'admin',
+  watching: onWatchlist,
+  watch: (p) => watchProduct(p),
+  buyUrl: (p) => `/buy?${new URLSearchParams(Object.entries({ store: p.store, sku: p.sku, url: p.url, name: p.name }).filter(([, v]) => v))}`,
 });
 
 // --- The lists on the Monitor page --------------------------------------------
@@ -63,7 +72,7 @@ async function showList(name, { load = true } = {}) {
   const member = state.me.entitlement.active;
   // (No choice yet: what the monitor tracks — or, before a membership, your watchlist.)
   let list = LISTS.includes(name) ? name : savedList() || (member ? 'tracked' : 'watch');
-  if (list === 'tracked' && !member) list = 'watch';
+  if ((list === 'tracked' || list === 'drops') && !member) list = 'watch';
   state.list = list;
   for (const b of $$('.mon-ptab')) {
     const on = b.dataset.ptab === list;
@@ -75,6 +84,7 @@ async function showList(name, { load = true } = {}) {
   $('#w-add-toggle').hidden = list !== 'watch';
   if (!load) return;
   if (list === 'watch') await loadWatch();
+  else if (list === 'drops') await dropsUI.load();
   else if (list === 'activity') await loadFeed(state.feedPage);
 }
 const listOpen = (name) => !$('[data-panel="monitor"]').hidden && state.list === name;
@@ -100,6 +110,7 @@ loaders.monitor = async () => {
   // Your watchlist first: the tracked products show which ones are on it.
   await Promise.all([loadItems(), loadRetailers()]);
   $('#pt-tracked').hidden = !state.me.entitlement.active;
+  $('#pt-drops').hidden = !state.me.entitlement.active;
   await Promise.all([monitorUI.load(), showList(state.list)]);
 };
 loaders['monitor-settings'] = () => monitorUI.loadSettings();
@@ -158,6 +169,27 @@ function renderBanner() {
   }
 }
 
+// Checkpoints and virtual queues up now (server/monitor/gates.js): what to do before the drop.
+async function loadGates() {
+  state.gates = (await api('GET', '/api/gates').catch(() => ({ gates: [] }))).gates || [];
+  renderGates();
+}
+
+function renderGates() {
+  const box = $('#gates-banner');
+  box.textContent = '';
+  for (const g of (state.gates || []).filter((x) => x.status === 'up')) {
+    const queue = g.kind === 'queue';
+    const wait = queue && typeof g.wait === 'number' ? ` — about ${g.wait} min` : '';
+    box.append(h('div', { class: 'notice warn gate-notice', 'data-store': g.store },
+      h('b', {}, queue ? `🚦 ${g.name}'s virtual queue is up${wait}. ` : `🛡️ ${g.name}'s checkpoint is up. `),
+      queue
+        ? 'Get in line in your browser and leave the queue page alone: it refreshes itself, and refreshing it yourself can lose your place. ⚡ Buy and Auto-checkout wait in line, then carry on. '
+        : 'Solve it once in your browser before the drop: ⚡ Buy and Auto-checkout stop there for you, then carry on to checkout. ',
+      h('a', { href: g.url, target: '_blank', rel: 'noopener', class: 'btn small' }, `Open ${g.name}`)));
+  }
+}
+
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/auth/logout').catch(() => null);
   location.href = '/';
@@ -185,7 +217,7 @@ async function detectExtension() {
   if (!version) return { installed: false };
   const hello = await askExtension('hello');
   return {
-    installed: true, version, paired: !!(hello && hello.paired), userId: hello && hello.userId, username: hello && hello.username,
+    installed: true, version, paired: !!(hello && hello.paired), userId: hello && hello.userId, username: hello && hello.username, deviceId: (hello && hello.deviceId) || null,
     fromStore: !!(hello && hello.fromStore),
     // A downloaded copy still installed next to the Chrome Web Store copy (it stays out of the way).
     oldCopy: document.documentElement.dataset.mugibotOldCopy || null,
@@ -392,10 +424,11 @@ function statusOf(it) {
 
 function itemRow(it, i) {
   const st = statusOf(it);
-  const buy = h('button', { class: 'btn primary small', type: 'button', disabled: !it.url, title: it.url ? '' : 'The product page hasn\'t been found yet' }, '⚡ Buy');
+  // (Another website: no ⚡ Buy — Mugibot checks out at the stores it knows. Its page is the way in.)
+  const buy = it.acoCan ? h('button', { class: 'btn primary small', type: 'button', disabled: !it.url, title: it.url ? '' : 'The product page hasn\'t been found yet' }, '⚡ Buy') : null;
   // The one-time ⚡ Buy code is asked for as the button goes down, so the store opens the moment it's clicked.
-  buy.addEventListener('pointerdown', () => primeBuy(it));
-  buy.addEventListener('click', () => goBuy(it));
+  buy?.addEventListener('pointerdown', () => primeBuy(it));
+  buy?.addEventListener('click', () => goBuy(it));
   const move = async (dir) => {
     const ids = state.items.map((x) => x.id);
     const j = i + dir;
@@ -407,12 +440,14 @@ function itemRow(it, i) {
   };
   const price = it.lastPrice ?? it.price;
   const checked = it.checkedAt ? `checked ${ago(it.checkedAt)}${it.statusSource === 'browser' ? ' by your browser' : ''}` : '';
-  const meta = [it.storeName, `SKU ${it.sku}`, money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', checked].filter(Boolean).join(' · ');
+  // (Another website's product goes by its address: its made-up code isn't one anyone uses.)
+  const meta = [it.storeName, it.acoCan ? `SKU ${it.sku}` : '', money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', checked].filter(Boolean).join(' · ');
   const isAdmin = state.me.user.role === 'admin';
   return h('li', { class: it.monitor ? '' : 'off', dataset: { id: it.id } },
     h('div', { class: 'info' },
       h('div', { class: 'name' }, `${i + 1}. ${it.name}`, it.announce ? h('span', { class: 'pill info', title: 'Restocks are posted in the members\' Discord channel' }, '📣') : null,
-        it.aco ? h('a', { class: 'pill aco-pill', href: '#aco', title: 'Bought by itself when it drops (Auto-checkout)' }, '🤖 Armed') : null),
+        it.aco ? h('a', { class: 'pill aco-pill', href: '#aco', title: 'Bought by itself when it drops (Auto-checkout)' }, '🤖 Armed') : null,
+        it.dropWatch ? h('a', { class: 'pill info', href: '#drops', title: 'Found by one of your drop watches (it goes when the watch does)' }, '🎯') : null),
       h('div', { class: 'meta' }, meta, ' ', h('span', { class: `flow flow-${it.flowStatus}` }, FLOW[it.flowStatus] || '')),
       it.error ? h('div', { class: 'meta warn-text' }, it.error) : null,
       !it.url ? h('div', { class: 'meta' }, 'Waiting for the product page to be listed — it\'s found automatically from the SKU.') : null),
@@ -762,14 +797,14 @@ loaders.checkout = async () => {
 // ---------------------------------------------------------------------------
 // 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md)
 // ---------------------------------------------------------------------------
-const ACO_ICON = { placed: '✅', ready: '🛒', needs_you: '⚠️', failed: '❌', expired: '❌', skipped: '⏭️' };
-const ACO_TONE = { placed: 'ok', ready: 'info', needs_you: 'warn', failed: 'err', expired: 'err', skipped: '' };
+const ACO_ICON = { placed: '✅', ready: '🛒', needs_you: '⚠️', failed: '❌', expired: '❌', skipped: '⏭️', waiting: '🚦' };
+const ACO_TONE = { placed: 'ok', ready: 'info', needs_you: 'warn', failed: 'err', expired: 'err', skipped: '', waiting: 'warn' };
 const ACO_STEP = {
-  queued: 'Dropped', sent: 'Sent to your browser', started: 'Store opened', checkout: 'At checkout', placing: 'Final button pressed',
+  queued: 'Dropped', sent: 'Sent to your browser', started: 'Store opened', waiting: 'Waiting (queue or checkpoint)', checkout: 'At checkout', placing: 'Final button pressed',
   placed: 'Order placed', ready: 'Filled in', needs_you: 'Needs you', failed: 'Failed', skipped: "Didn't start", expired: "Didn't start",
 };
 const ACO_FILTER = { placed: ['placed'], needs: ['needs_you', 'ready'], failed: ['failed', 'expired'], skipped: ['skipped'] };
-const TRIGGER = { sweep: 'seen by the live monitor', server: 'seen by the monitor', browser: 'seen by your browser', manual: 'reported by an admin', test: 'test run (Trigger ACO)' };
+const TRIGGER = { sweep: 'seen by the live monitor', server: 'seen by the monitor', browser: 'seen by your browser', manual: 'reported by an admin', test: 'test run (Trigger ACO)', remote: '⚡ Buy pressed in Discord' };
 const versionBelow = (a, b) => {
   const pa = String(a || '0').split('.').map(Number);
   const pb = String(b || '0').split('.').map(Number);
@@ -894,7 +929,7 @@ async function triggerAco(it, maxInput, btn) {
     if (String(maxInput.value) !== String(it.maxPrice ?? '')) await api('PUT', `/api/items/${it.id}`, { maxPrice: maxInput.value });
     const { run } = await api('POST', `/api/aco/test/${it.id}`);
     if (run.status === 'skipped') toast("Auto-checkout didn't start", run.message || run.reasonText, 'warn');
-    else toast('Auto-checkout test started', `Your browser is opening ${it.storeName} — follow it in the Activity list below.`, 'success');
+    else toast('Auto-checkout test started', `Your checkout browser is opening ${it.storeName} — follow it in the run history below.`, 'success');
     // This browser picks it up now (it listens while something waits for it).
     askExtension('acoListen', {}, 4000);
     await Promise.all([loadItems(), loadAco()]);
@@ -952,7 +987,11 @@ async function renderAcoChecks() {
   const backup = card && card.ready ? null : (await api('GET', '/api/card-backup').catch(() => ({}))).backup;
   const profiles = await api('GET', '/api/profiles').catch(() => null);
   const profile = profiles && profiles.profiles && profiles.profiles.find((p) => p.id === profiles.defaultId) || (profiles && profiles.profiles && profiles.profiles[0]);
-  const listening = extOk && s.enabled ? await askExtension('acoListen', {}, 4000) : null;
+  const listening = extOk && (s.enabled || s.remoteBuy) ? await askExtension('acoListen', {}, 4000) : null;
+  // Which browser checks out: this one, or another of yours (runs go to that one alone).
+  renderAcoRemote();
+  const checkout = (state.aco.browsers || []).find((b) => b.checkout);
+  const isHere = !!(checkout && mine && ext.deviceId && checkout.id === ext.deviceId);
   const rows = [
     [state.me.entitlement.active, 'Membership active', 'Start your membership', '#membership'],
     [extOk, extOk ? `Extension connected in this browser (v${ext.version})` : !ext.installed ? 'Install the extension in the browser you keep open' : !mine ? 'Connect the extension in this browser to your account' : `Update the extension to ${minV} or newer (this one is ${ext.version})`, 'Extension tab', '#extension'],
@@ -962,10 +1001,63 @@ async function renderAcoChecks() {
     [!!(profile && profile.address1 && profile.email), profile && profile.address1 ? `Delivery details: ${profile.label} (${profile.suburb || profile.postcode})` : 'Save your delivery details', 'Checkout details', '#checkout'],
     [!!state.me.user.discord, state.me.user.discord ? 'Discord connected: a DM for every attempt' : 'Connect Discord to get a DM for every attempt (optional)', 'Discord', '#discord'],
   ];
-  if (s.enabled) rows.push([!!(listening && listening.listening), listening && listening.listening ? 'This browser is listening for your armed items to drop — keep Chrome open' : state.items.some((it) => it.aco) ? 'This browser isn\'t listening yet — reload this page, or check the extension is connected' : 'Arm an item below, and this browser starts listening for it', null, null]);
+  if (checkout) {
+    rows.push([isHere || checkout.listening, isHere ? 'This is your checkout browser: Auto-checkout and Discord\'s ⚡ Buy check out here'
+      : `Your checkout browser is ${checkout.name}${checkout.listening ? ' (open now)' : ' — it isn\'t open right now'}: runs go there, not here (change it under "⚡ Buy from your phone")`, null, null]);
+  }
+  if (s.enabled || (s.remoteBuy && isHere)) {
+    rows.push([!!(listening && listening.listening), listening && listening.listening ? (isHere && s.remoteBuy ? 'This browser is listening for runs — your armed items\' drops and Discord\'s ⚡ Buy. Keep Chrome open' : 'This browser is listening for your armed items to drop — keep Chrome open')
+      : state.items.some((it) => it.aco) || isHere ? 'This browser isn\'t listening yet — reload this page, or check the extension is connected (and up to date)' : 'Arm an item below, and this browser starts listening for it', null, null]);
+  }
   list.textContent = '';
   for (const [ok, text, label, href] of rows) {
     list.append(h('li', {}, h('span', { class: ok ? 'ok-mark' : 'no-mark', 'aria-hidden': 'true' }, ok ? '✓' : '✗'), h('span', {}, text, !ok && href ? [' — ', h('a', { href }, label)] : null)));
+  }
+}
+
+/** ⚡ Buy from your phone: the switch, and the checkout browser (the one browser runs go to). */
+function renderAcoRemote() {
+  const s = state.aco.settings;
+  const browsers = state.aco.browsers || [];
+  const here = state.ext && state.ext.userId === state.me.user.id ? state.ext.deviceId : null;
+  const checkout = browsers.find((b) => b.checkout);
+  $('#aco-remote-on').setAttribute('aria-checked', s.remoteBuy ? 'true' : 'false');
+  $('#aco-remote-label').textContent = s.remoteBuy ? 'Discord\'s ⚡ Buy checks out on your computer' : 'Discord\'s ⚡ Buy is off for your computer';
+  const pill = $('#aco-remote-state');
+  pill.className = `pill ${!s.remoteBuy ? '' : checkout && checkout.listening ? 'ok' : 'warn'}`;
+  pill.textContent = !s.remoteBuy ? 'Off' : !checkout ? 'No browser connected' : checkout.listening ? 'Ready' : 'Checkout browser not open';
+  const sel = $('#aco-device');
+  sel.textContent = '';
+  for (const b of browsers) {
+    const bits = [b.listening ? 'open now' : `seen ${ago(b.lastSeenAt)}`, b.id === here ? 'this browser' : ''].filter(Boolean).join(' · ');
+    sel.append(h('option', { value: b.id, selected: b.checkout }, `${b.name} (${bits})`));
+  }
+  if (!browsers.length) sel.append(h('option', { value: '' }, 'No browser connected yet'));
+  sel.disabled = browsers.length < 2;
+  $('#aco-device-here').hidden = !here || !checkout || checkout.id === here || !browsers.some((b) => b.id === here);
+  const note = $('#aco-device-note');
+  note.textContent = '';
+  if (!browsers.length) {
+    note.append('Connect the extension in the browser on the computer you keep on (', h('a', { href: '#extension' }, 'Extension tab'), ').');
+    return;
+  }
+  const old = checkout && versionBelow(checkout.version, state.aco.remoteVersion);
+  note.append('Auto-checkout\'s runs and Discord\'s ⚡ Buy go to this one browser — never to all of them, so two of your browsers never race for the same order. Keep it open (minimised is fine).',
+    checkout && !checkout.listening ? ` ${checkout.name} isn't open right now: a ⚡ Buy waits 2 minutes for it.` : '',
+    old ? ` Update the extension there to ${state.aco.remoteVersion} so ⚡ Buy starts the moment you press it (it has ${checkout.version || 'an older one'}).` : '');
+}
+
+async function saveRemote(patch, done) {
+  try {
+    const r = await api('PUT', '/api/aco', patch);
+    Object.assign(state.aco, r);
+    renderAcoRemote();
+    // This browser hears now (if it's the checkout browser, it starts listening).
+    askExtension('acoListen', {}, 4000);
+    if (done) toast(done[0], done[1], 'success');
+  } catch (e) {
+    toast("Couldn't change it", e.message, 'warn');
+    renderAcoRemote();
   }
 }
 
@@ -973,6 +1065,7 @@ function renderAco() {
   if (!state.aco) return;
   renderAcoStats();
   renderAcoSettings();
+  renderAcoRemote();
   renderAcoItems();
   renderAcoRuns();
 }
@@ -1017,9 +1110,20 @@ $('#aco-form').addEventListener('submit', (e) => {
     }
   });
 });
+$('#aco-remote-on').addEventListener('click', () => saveRemote({ remoteBuy: !state.aco.settings.remoteBuy }));
+$('#aco-device').addEventListener('change', (e) => {
+  const b = (state.aco.browsers || []).find((x) => x.id === e.target.value);
+  saveRemote({ deviceId: e.target.value }, b ? ['Checkout browser changed', `${b.name} checks out from now on.`] : null);
+});
+$('#aco-device-here').addEventListener('click', () => saveRemote({ deviceId: state.ext.deviceId }, ['Checkout browser changed', 'This browser checks out from now on.']));
 $('#aco-filter').addEventListener('change', () => { state.runsPage = 1; renderAcoRuns(); });
 $('#aco-show').addEventListener('change', () => { state.acoPage = 1; renderAcoItems(); });
-$('#aco-recheck').addEventListener('click', () => renderAcoChecks().catch(() => null));
+$('#aco-recheck').addEventListener('click', async () => {
+  // (Which browsers are open now, too.)
+  await loadAco().catch(() => null);
+  renderAco();
+  renderAcoChecks().catch(() => null);
+});
 
 // ---------------------------------------------------------------------------
 // 💬 Discord
@@ -1245,7 +1349,10 @@ function connectStream() {
     }
     if (ev.type === 'billing' || ev.type === 'account') loadMe().catch(() => null);
   });
+  // A drop watch looked, or found something (drops.js).
+  es.addEventListener('drop', () => { if (listOpen('drops')) dropsUI.refreshSoon(); });
   es.addEventListener('watch', () => {
+    if (listOpen('drops')) dropsUI.refreshSoon();
     if ($('[data-panel="monitor"]').hidden && $('[data-panel="aco"]').hidden) return;
     clearTimeout(watchTimer);
     watchTimer = setTimeout(() => loadItems().catch(() => null), 300);
@@ -1257,9 +1364,15 @@ function connectStream() {
     clearTimeout(acoTimer);
     acoTimer = setTimeout(() => Promise.all([loadAco(), loadItems()]).then(renderAco).catch(() => null), 250);
   });
-  es.addEventListener('monitor-feed', (e) => monitorUI.onFeed(JSON.parse(e.data)));
-  es.addEventListener('monitor-product', (e) => monitorUI.onProduct(JSON.parse(e.data)));
+  es.addEventListener('monitor-feed', (e) => { monitorUI.onFeed(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });
+  es.addEventListener('monitor-product', (e) => { monitorUI.onProduct(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });
   es.addEventListener('monitor-sweep', (e) => monitorUI.onSweep(JSON.parse(e.data)));
+  // A checkpoint or virtual queue went up, or came down.
+  es.addEventListener('monitor-gate', (e) => {
+    const g = JSON.parse(e.data);
+    state.gates = [...(state.gates || []).filter((x) => x.store !== g.store), g];
+    renderGates();
+  });
   // The card's backup changed (made, updated or deleted in an extension).
   es.addEventListener('card', (e) => {
     state.cardBackup = JSON.parse(e.data).backup;
@@ -1279,4 +1392,5 @@ function connectStream() {
 await loadMe();
 showTab();
 connectStream();
+if (state.me.entitlement.active) loadGates();
 if (new URLSearchParams(location.search).get('welcome')) toast('Welcome!', 'Start with Membership, then the Extension tab and Discord.', 'success', 10000);

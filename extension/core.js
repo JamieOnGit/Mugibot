@@ -935,6 +935,8 @@ var MGBQuick = (function () {
         var top = Math.max(0, Math.min(window.innerHeight - 30, r.top + ev.clientY - startY));
         panel.style.left = left + 'px';
         panel.style.top = top + 'px';
+        panel.style.right = '';
+        panel.style.bottom = '';
       }
       function up() {
         document.removeEventListener('mousemove', move, true);
@@ -958,6 +960,8 @@ var MGBQuick = (function () {
       setStatus: function (t) { status.textContent = t; },
       setNote: setNote,
       setProducts: function (p) { products = p || []; renderProducts(); },
+      // Out of the way (bottom right), for a page you need yourself — a store's human check — without moving it for good.
+      moveAside: function () { Object.assign(panel.style, { left: 'auto', top: 'auto', right: '12px', bottom: '12px' }); },
     };
   }
 

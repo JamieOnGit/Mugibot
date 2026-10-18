@@ -170,6 +170,8 @@ export const DEFAULT_ACO = {
   perDay: 2, // orders a day (24 hours)
   spendPerDay: 600, // dollars a day
   signedInOnly: false, // only at stores this browser is signed in to
+  remoteBuy: true, // Discord's ⚡ Buy (pressed on your phone or anywhere) checks out in your checkout browser
+  deviceId: '', // the checkout browser: the one browser runs go to ('' = the newest one connected)
 };
 
 export function acoSettings(input, existing = DEFAULT_ACO, now = Date.now()) {
@@ -183,6 +185,8 @@ export function acoSettings(input, existing = DEFAULT_ACO, now = Date.now()) {
     perDay: num(a.perDay, { min: 1, max: 10, def: DEFAULT_ACO.perDay, int: true }),
     spendPerDay: num(a.spendPerDay, { min: 1, max: 20000, def: DEFAULT_ACO.spendPerDay }),
     signedInOnly: bool(a.signedInOnly, false),
+    remoteBuy: bool(a.remoteBuy, true),
+    deviceId: /^[\w-]{0,40}$/.test(String(a.deviceId || '')) ? String(a.deviceId || '') : '',
   };
   if (out.enabled && !out.agreedAt) {
     if (src.agree !== true) throw bad('Tick the box to agree that Mugibot may check out by itself with your saved card, within your limits');

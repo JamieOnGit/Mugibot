@@ -36,6 +36,8 @@
 
     <main class="main">
       <div id="banner"></div>
+      <!-- Checkpoints and virtual queues up now (JB Hi-Fi's, EB Games', Pokémon Center's) -->
+      <div id="gates-banner" aria-live="polite"></div>
 
       <!-- 📡 Monitor: live (everyone) -->
       <section data-panel="monitor" hidden>
@@ -63,7 +65,7 @@
             <div class="span2"><label for="ma-url">Product link</label><input id="ma-url" type="url" placeholder="https://www.kmart.com.au/product/…" autocomplete="off"></div>
             <div><label for="ma-store">…or store</label><select id="ma-store"><option value="">Choose…</option></select></div>
             <div><label for="ma-sku">and SKU</label><input id="ma-sku" autocomplete="off" placeholder="43818648"></div>
-            <div><label for="ma-category">Category</label><select id="ma-category"><option value="">Guess from the name</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select></div>
+            <div><label for="ma-category">Category</label><select id="ma-category"><option value="">Guess from the name</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option><option value="nontcg">Non-TCG</option></select></div>
             <div><label for="ma-interval">Check every (seconds)</label><input id="ma-interval" type="number" min="20" max="3600" placeholder="60 (default)"></div>
           </div>
           <fieldset class="kinds" id="ma-kinds"><legend>Alerts</legend></fieldset>
@@ -103,6 +105,7 @@
                 <div class="mon-ptabs" role="tablist" aria-label="Lists">
                   <button type="button" role="tab" class="mon-ptab" data-ptab="tracked" id="pt-tracked" aria-controls="pp-tracked">Tracked products <span class="mon-meta" id="m-count"></span></button>
                   <button type="button" role="tab" class="mon-ptab" data-ptab="watch" id="pt-watch" aria-controls="pp-watch">My watchlist <span class="mon-meta" id="w-count"></span></button>
+                  <button type="button" role="tab" class="mon-ptab" data-ptab="drops" id="pt-drops" aria-controls="pp-drops">🎯 Drop watches <span class="mon-meta" id="dw-count"></span></button>
                   <button type="button" role="tab" class="mon-ptab" data-ptab="activity" id="pt-activity" aria-controls="pp-activity">My activity</button>
                 </div>
                 <button class="btn small primary" id="w-add-toggle" type="button" hidden>+ Add SKU</button>
@@ -110,7 +113,7 @@
               <div class="mon-ppanel" data-ppanel="tracked" id="pp-tracked" role="tabpanel" aria-labelledby="pt-tracked">
                 <div class="filters sn-filters" role="search">
                   <input id="m-q" type="search" placeholder="Search name or SKU" aria-label="Search products">
-                  <select id="m-category" aria-label="Category"><option value="">All categories</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select>
+                  <select id="m-category" aria-label="Category"><option value="">All categories</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option><option value="nontcg">Non-TCG</option></select>
                   <select id="m-store" aria-label="Store"><option value="">All stores</option></select>
                   <select id="m-status" aria-label="Stock"><option value="">Any stock</option><option value="available">Available now</option><option value="unavailable">Not available</option><option value="new">New today</option><option value="problem">Having problems</option></select>
                 </div>
@@ -154,6 +157,36 @@
                   <button class="btn small" type="button" id="w-demo" hidden>Add dummy-store test items</button>
                 </div>
               </div>
+              <!-- 🎯 Drop watches: anything outside the card keywords, by link or words, at any store or website -->
+              <div class="mon-ppanel" data-ppanel="drops" id="pp-drops" role="tabpanel" aria-labelledby="pt-drops" hidden>
+                <p class="muted small dw-lead">Watch anything outside the card keywords — a console, a collectible, a product at any shop. Paste its link, or type the words in its name and choose where to look. <span id="dw-scope"></span></p>
+                <form class="card dw-form" id="dw-form" novalidate>
+                  <label for="dw-input">Product link, or words in its name</label>
+                  <input id="dw-input" autocomplete="off" maxlength="2000" placeholder="https://www.jbhifi.com.au/products/…   or   xbox series x">
+                  <p class="small dw-hint" id="dw-hint" aria-live="polite"></p>
+                  <div class="grid2" id="dw-where" hidden>
+                    <div><label for="dw-store">Where to look</label><select id="dw-store"></select></div>
+                    <div id="dw-site-wrap" hidden><label for="dw-site">The website (its address, or a page of it)</label><input id="dw-site" type="url" placeholder="https://shop.example.com" autocomplete="off"></div>
+                  </div>
+                  <div class="grid2">
+                    <div><label for="dw-label">Name it <span class="muted">(optional)</span></label><input id="dw-label" maxlength="80" placeholder="e.g. Xbox 25th Anniversary"></div>
+                    <div id="dw-cat-wrap" hidden><label for="dw-category">Category</label><select id="dw-category"><option value="nontcg">Non-TCG (#non-tcg-alerts)</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other cards</option></select></div>
+                  </div>
+                  <div class="dw-aco" id="dw-aco-wrap" hidden><label class="check inline"><input type="checkbox" id="dw-aco"> 🤖 Auto-checkout it when it drops, up to</label> <input id="dw-max" type="number" min="1" step="0.01" placeholder="Max price $" aria-label="Max price for Auto-checkout"> <a class="small" href="#aco">Auto-checkout settings</a></div>
+                  <p class="small muted" id="dw-aco-note" hidden></p>
+                  <label class="check" id="dw-share-wrap" hidden><input type="checkbox" id="dw-share" checked> <span>📣 For everyone — posted in Discord and on every member's dashboard (off: just for you, by DM)</span></label>
+                  <div class="grid2" id="dw-post-wrap" hidden>
+                    <div><label for="dw-post">Post its drops and restocks in</label><select id="dw-post"></select></div>
+                    <div><label for="dw-ping">Ping</label><select id="dw-ping"></select></div>
+                  </div>
+                  <p class="small muted" id="dw-post-note" hidden></p>
+                  <div class="form-actions"><button class="btn primary" type="submit" id="dw-add">Add drop watch</button><span class="msg" id="dw-msg"></span></div>
+                </form>
+                <div class="notice" id="dw-channel" hidden></div>
+                <h4 class="dw-h">Yours <span class="mon-meta" id="dw-used"></span></h4>
+                <ul class="dw-list" id="dw-mine"></ul>
+                <div id="dw-shared-box" hidden><h4 class="dw-h">From the admins — for everyone</h4><ul class="dw-list" id="dw-shared"></ul></div>
+              </div>
               <div class="mon-ppanel" data-ppanel="activity" id="pp-activity" role="tabpanel" aria-labelledby="pt-activity" hidden>
                 <p class="muted small">Everything about your account, newest first: your SKUs' restocks and pings, ⚡ Buy and Auto-checkout, your membership.</p>
                 <ul class="feed" id="feed"></ul>
@@ -194,7 +227,7 @@
 
           <section class="mon-card" id="ms-card">
             <header class="mon-card-hd"><h3>Stores</h3><span class="mon-meta">Searched from, and how each is doing</span><button class="btn small" id="ms-reset-all" type="button" title="Start every store's searches again">↻ Reset all</button></header>
-            <p class="mon-help">A store that keeps refusing gets <b>Reset</b>: its errors and backoff are cleared and it's searched again now, gently (at a third of the pace) for 10 minutes. A store the server can't reach can be searched from an admin's browser instead (keep Chrome open with the extension).</p>
+            <p class="mon-help">A store that keeps refusing gets <b>Reset</b>: its errors and backoff are cleared and it's searched again now, gently (at a third of the pace) for 10 minutes. <b>Server first</b> (every store's default): Mugibot's server searches it, and an admin's browser stands in only while the store refuses the server (3 searches in a row) or the server can't read its products — the server tries again every few minutes and takes back over as soon as it's let in. Keep Chrome open with the extension, signed in as an admin, so there's a browser to stand in.</p>
             <div class="table-wrap"><table class="table" id="ms-table"><thead><tr><th>Store</th><th>Searched from</th><th>Status</th><th>Last search</th><th>Products</th><th>Searches (1 h)</th><th></th></tr></thead><tbody></tbody></table></div>
             <details class="ms-terms"><summary class="small">Every search</summary><div class="table-wrap"><table class="table" id="ms-terms"><thead><tr><th>Store</th><th>Keyword</th><th>Page</th><th>Found</th><th>Kept</th><th>Last OK</th><th>Problem</th></tr></thead><tbody></tbody></table></div></details>
           </section>
@@ -245,7 +278,7 @@
             <div class="mr-setup">
               <div>
                 <b>Store channels in one go</b>
-                <p class="mon-help">A channel for each store and game — <code>kmart-pokemon</code>, <code>kmart-one-piece</code>, <code>bigw-pokemon</code>… for Kmart, BIG W, Target, JB Hi-Fi, EB Games, Zing and Toys"R"Us — plus <code>premium-bandai</code>, <code>pokemon-center</code>, and <code>misc-retailers</code> for everything else. The bot uses channels with those names that are already there, and makes the rest (it needs the Manage Channels permission).</p>
+                <p class="mon-help">A channel for each store and game — <code>kmart-pokemon</code>, <code>kmart-one-piece</code>, <code>bigw-pokemon</code>… for Kmart, BIG W, Target, JB Hi-Fi, EB Games, Zing and Toys"R"Us — plus <code>premium-bandai</code>, <code>pokemon-center</code>, <code>non-tcg-alerts</code> for what isn't trading cards (🎯 Drop watches), and <code>misc-retailers</code> for everything else. The bot uses channels with those names that are already there, and makes the rest (it needs the Manage Channels permission).</p>
                 <div class="mr-setup-row">
                   <input id="mr-setup-role" inputmode="numeric" placeholder="Role to ping (optional ID)" aria-label="Role to ping in every channel (optional)">
                   <label class="check small"><input type="checkbox" id="mr-setup-replace"> Remove my other rules</label>
@@ -320,7 +353,7 @@
             <h4>Monitor settings</h4>
             <div class="grid2">
               <div><label for="md-sname">Name</label><input id="md-sname" maxlength="120"></div>
-              <div><label for="md-category">Category</label><select id="md-category"><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select></div>
+              <div><label for="md-category">Category</label><select id="md-category"><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option><option value="nontcg">Non-TCG</option></select></div>
               <div><label for="md-interval">Check every (seconds)</label><input id="md-interval" type="number" min="20" max="3600" placeholder="60 (default)"></div>
               <div><label for="md-note">Note</label><input id="md-note" maxlength="200"></div>
             </div>
@@ -388,6 +421,20 @@
           <div class="card" id="aco-ready">
             <div class="card-head"><h3>Ready to check out?</h3><button class="btn small" type="button" id="aco-recheck">Check again</button></div>
             <ul class="checks aco-checks" id="aco-checks"></ul>
+          </div>
+        </div>
+
+        <div class="card" id="aco-remote">
+          <div class="card-head"><h3>⚡ Buy from your phone</h3><span class="pill" id="aco-remote-state"></span></div>
+          <div class="aco-switch-row">
+            <button type="button" class="sn-sw" id="aco-remote-on" role="switch" aria-checked="true" aria-label="Discord's ⚡ Buy checks out in your checkout browser"></button>
+            <div><b id="aco-remote-label">Discord's ⚡ Buy checks out on your computer</b>
+              <div class="muted small">Press ⚡ Buy on an alert or a DM in Discord — on your phone, anywhere — and your checkout browser opens the store and checks out. With Auto-checkout on it places the order within your limits (up to the price you were shown, or the item's max price); otherwise it fills checkout in and stops at the final button for you. Nothing to sign in to on your phone, and Discord's reply says how it's going.</div></div>
+          </div>
+          <div class="aco-device-row">
+            <label for="aco-device">Checkout browser</label>
+            <div class="aco-device-pick"><select id="aco-device"></select><button class="btn small" type="button" id="aco-device-here" hidden>Use this browser</button></div>
+            <p class="muted small" id="aco-device-note"></p>
           </div>
         </div>
 

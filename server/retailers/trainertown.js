@@ -12,6 +12,8 @@ import jbhifi from './jbhifi.js';
 
 export default {
   ...jbhifi,
+  // (Shopify's checkpoint page, as at JB Hi-Fi: seen on a page here too — only JB's is checked by the server.)
+  gate: { ...jbhifi.gate, probe: null },
   id: 'trainertown',
   name: 'Trainer Town',
   base: 'https://trainertown.com.au',

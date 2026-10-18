@@ -34,16 +34,26 @@ is bought for an item until they **arm** it, and each arming buys **once**.
    the price is over it. The live searches, the store switches and the watchlist
    all live on the Monitor page; this tab is only for what Auto-checkout does
    with your armed items.
+   - **Not trading cards too:** a console, a collectible — any product at a
+     store Mugibot checks out at is bought the same way. On the Monitor page's
+     **🎯 Drop watches** tab, paste its link (or the words in its name and the
+     store) and tick **🤖 Auto-checkout it when it drops, up to …**: what it
+     finds goes on your watchlist, armed. A link is bought as soon as it's on
+     sale; words buy only what drops after the watch has looked (never what was
+     on sale already). At other websites drop watches only alert you
+     (docs/MONITORING.md → Drop watches).
 5. **Keep Chrome open** with the extension connected. The "Ready to check out?"
    list shows what's missing:
    - an active membership;
    - the newest extension in this browser (1.14.0 or newer: Shopify's, Target's
-     and Global-e's checkouts, tile choices, address finders, Amazon's "Buy Now");
+     and Global-e's checkouts, tile choices, address finders, Amazon's "Buy Now";
+     1.15.0 for ⚡ Buy from your phone to start the moment you press it);
    - a card saved in the extension (or backed up in your account: after a new
      install, restore it with your card passphrase, see "Card backup" below);
    - your delivery details;
    - Discord, for a DM on every attempt (optional);
-   - whether this browser is listening.
+   - which browser is your **checkout browser** (below), and whether this one is
+     listening.
 
 ### Trigger ACO: try it now
 
@@ -59,6 +69,104 @@ work before a real drop.
 - The limits and checks are the same as for a real drop. A test run's failures
   don't count towards the 3 a day.
 - It shows up in the Run history as a "test run (Trigger ACO)".
+
+### ⚡ Buy from your phone (Discord)
+
+The **⚡ Buy** button on a Monitor alert in a channel, or on a restock DM, works
+from anywhere: a phone, with Discord open and nothing else. Press it and **your
+checkout browser** (the computer you keep on) opens the store and checks out.
+There's nothing to sign in to on the phone, and no browser needed there.
+
+- **Discord says who pressed it.** The button isn't a link. Discord tells
+  Mugibot it was pressed, and by which Discord account. The Discord account
+  must be connected to a Mugibot account (Discord tab), with an active
+  membership. Someone else pressing your DM's button gets "That SKU isn't on
+  your watchlist".
+- **What it does depends on your Auto-checkout settings:**
+  - **Auto-checkout on, "Place the order for me"**: it places the order within
+    your limits. The most it may cost is the item's max price, or else the
+    price the alert showed (plus up to $40 delivery, and never over your per-order
+    limit).
+  - **Otherwise**: it fills checkout in and stops at the final button for you.
+    That covers Auto-checkout off, set to stop at the final button, the price
+    over your max or a limit, today's orders or spending used up, or no price
+    to check against. The reply says which.
+- **The reply** (only you see it) says where it went ("Sent to Chrome on Home
+  PC") and is kept up to date for 15 minutes: adding to the bag, at checkout,
+  order placed, checkout ready, or what went wrong. You also get the usual DM.
+- **A channel alert for something you don't watch** adds it to your watchlist
+  first (as its link always did). It isn't armed by it.
+- **Your checkout browser isn't open?** The reply says so. The run waits 2
+  minutes for it, then shows as "didn't start".
+- **A store that only sells signed in** (Amazon): it doesn't start if your
+  checkout browser was last seen signed out there, and says to sign in first.
+- **Switch it off** under "⚡ Buy from your phone" on the Auto-checkout tab.
+  The button then says it's off.
+- In the Run history it's "⚡ Buy pressed in Discord". The day's limits count
+  its orders like any other.
+- Without Discord's interactions set up (docs/DISCORD.md, step 6), and in
+  emails and personal webhooks, ⚡ Buy is still the old link: it opens the store
+  in the browser you press it in.
+- **On the website**, the ⚡ Buy page has **Send to my computer**: the same thing,
+  for a phone signed in to Mugibot.
+
+### Your checkout browser
+
+Runs go to **one** browser: your checkout browser. Never to all of them, so two
+of your browsers never race for the same order. That covers armed items' drops,
+Trigger ACO and ⚡ Buy from your phone.
+
+- It's the newest browser you connected, unless you pick another under
+  "⚡ Buy from your phone" (or press **Use this browser** there).
+- The list shows each connected browser, and whether it's open now (it asks
+  for runs about every 20 seconds while open).
+- Disconnect it, and the newest one left takes over.
+- Your other browsers still do everything else: ⚡ Buy pressed in them,
+  in-browser checks, the store login monitor.
+
+### Checkpoints and virtual queues
+
+Before a big drop, JB Hi-Fi can switch on its **checkpoint** (an hCaptcha
+check before checkout). EB Games and Pokémon Center can put up a **virtual
+queue**. Mugibot posts each one in `#virtual-queue-detection` when it goes up
+and comes down (docs/MONITORING.md). Auto-checkout and ⚡ Buy go through them
+like you would.
+
+- **At JB Hi-Fi's checkpoint** the run stops there and waits for **you** to
+  solve the check. Mugibot never touches it. The run says "Waiting for you at
+  the checkpoint" and DMs you. The tab comes forward with the panel moved out of
+  the way. Once you've solved it, the store sends you on to checkout and the
+  run carries on: details, card, the total checked, the final button. It waits
+  up to 20 minutes.
+- **In a virtual queue** the run waits its turn. The queue page refreshes
+  itself; Mugibot **never refreshes it**, because refreshing it yourself can
+  lose your place. Your ⚡ Buy, checkout pass and Auto-checkout limits are kept
+  the whole time. The run shows "Waiting in line" (about how long, when the
+  page says) and DMs you once. When you're through, it carries on. If the
+  store let you in at its front page, it opens the product first. It waits up
+  to 2 hours, as long as your browser keeps saying it's still in line (every
+  few minutes).
+- **While your browser is in a store's queue**, nothing else of Mugibot's asks
+  that store for anything: no in-browser checks of your SKUs there, no sign-in
+  checks, no second tab. A drop at that store while you're in line **waits for
+  the tab in line** to get through, then opens the store from there with a
+  fresh link.
+- **Getting in line before the drop:**
+  - **By itself**: when a store's queue goes up and you have Auto-checkout on
+    with something armed there, your checkout browser opens the store in a tab
+    of its own, in the background, and waits in line. It does this once a
+    queue, unless it's in line or through already. Your DM says so.
+  - **From Discord**: **📥 Join the queue on my computer** on the
+    `#virtual-queue-detection` post does the same for anyone, armed or not.
+    Your checkout browser must be open, with "⚡ Buy from your phone" on.
+- **Only the wait is at a person's pace.** Everything else is as fast as
+  ever: before the queue or checkpoint, and from the moment you're through
+  (add, checkout, your details and card, the final button). A store page that
+  only mentions its queue (a launch banner) is the store, not the queue:
+  ⚡ Buy goes straight through it.
+- Needs **extension 1.16.0** or later (the Auto-checkout tab says when yours
+  is older). Older ones get no checks or searches at a store while its queue
+  is up, and their runs there don't wait in line.
 
 ### One purchase per arming
 
@@ -264,15 +372,23 @@ the monitor sees an armed item drop (live sweep, page check or a browser's check
   - Final button pressed with no outcome in 5 minutes: "needs you".
 - **Another member's browser** can't see, start or report your runs. A run's
   code only works for your account.
-- **The extension listens** with one long-poll at a time, while something is
-  armed or a test run is waiting. The server answers as soon as a run starts, or
-  after 20 seconds. An alarm every 30 seconds starts it again if Chrome has put
-  the extension to sleep.
+- **The extension listens** with one long-poll at a time: in your checkout
+  browser all the time (for ⚡ Buy from your phone, unless that's switched off),
+  and in any browser while something is armed or a test run is waiting. The
+  server answers as soon as a run starts, or after 20 seconds. Only the checkout
+  browser is given runs. An alarm every 30 seconds starts it again if Chrome has
+  put the extension to sleep.
+- **⚡ Buy from Discord**: `/api/discord/interactions` (Ed25519-signed by
+  Discord) → `routes/discord.js` `press()` → `aco.remote()` makes the run
+  (trigger `remote`) → the same as above. The button's reply is changed with
+  the interaction's token as the run goes (`PATCH /webhooks/<app>/<token>/messages/@original`).
 
 Files:
 
 - `server/aco.js`: runs, limits, reasons and notifications.
-- `server/routes/user.js`: `/api/aco`, and `/api/aco/test/:id` (Trigger ACO).
+- `server/routes/user.js`: `/api/aco` (settings, your browsers), `/api/aco/test/:id`
+  (Trigger ACO) and `/api/aco/remote/:id` (Send to my computer).
+- `server/routes/discord.js`: the ⚡ Buy button, pressed.
 - `server/routes/ext.js`: `/api/ext/aco/*` and the claim.
 - `extension/background.js`: listening and opening the tab.
 - `extension/content.js`: the checks, the final button and the outcome.
@@ -282,6 +398,7 @@ Files:
 Tests:
 
 - `test/aco.test.js`: server.
+- `test/remote.test.js`: ⚡ Buy from your phone and the checkout browser.
 - `test/extension.e2e.test.js`: the real extension on the dummy stores.
 - `test/ui.test.js`: the tab.
 
@@ -292,5 +409,6 @@ Tests:
 - It uses the member's own browser, signed in as them, at a person's pace. There
   are no proxies, no extra accounts and no hidden identity.
 - It never solves CAPTCHAs, skips queues or gets past bot protection or a bank's
-  check.
+  check. At a store's checkpoint it waits for you to solve it. In a virtual
+  queue it waits its turn and never refreshes the queue page.
 - Store purchase limits are respected. It buys one of each item.

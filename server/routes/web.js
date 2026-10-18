@@ -91,29 +91,39 @@ export async function handleWebRoute(ctx, req, res, url) {
  * watchlist, no product link yet…): the buy page then says why.
  */
 function buyFromAlert(ctx, user, params) {
-  const { cfg, repo, retailers } = ctx;
-  if (!entitlement(user, repo.now()).active || !ctx.limiter.hit(`go:${user.id}`, 60, 60 * 1000)) return null;
-  const store = str(params.get('store'), 40);
-  const sku = str(params.get('sku'), 60);
-  // The alert's product link, as a watchlist item (only if it's that store's page).
-  const fromLink = () => {
-    if (!params.get('url')) return null;
-    const c = checkItem({ url: params.get('url'), store, sku, name: params.get('name') || '' }, { retailers });
-    return c.store === store && c.url ? c : null;
-  };
+  if (!entitlement(user, ctx.repo.now()).active || !ctx.limiter.hit(`go:${user.id}`, 60, 60 * 1000)) return null;
   try {
-    let it = repo.itemBySku(user.id, store, sku);
-    if (!it) {
-      const add = repo.countItems(user.id) < cfg.limits.items ? fromLink() : null;
-      if (!add) return null;
-      it = repo.addItem(user.id, add);
-    } else if (!it.url) {
-      // On the watchlist before its page was found: the alert has it.
-      const found = fromLink();
-      if (found) it = { ...it, url: found.url };
-    }
-    return startBuy(ctx, user, it).url;
+    const it = alertItem(ctx, user, { store: params.get('store'), sku: params.get('sku'), url: params.get('url'), name: params.get('name') });
+    return it ? startBuy(ctx, user, it).url : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * A Monitor alert's product as this member's watchlist item: theirs if it's on their watchlist,
+ * else added (with the alert's product link). Null when it can't be (a full watchlist, no link).
+ * Also for Discord's ⚡ Buy button on an alert (routes/discord.js).
+ */
+export function alertItem(ctx, user, a) {
+  const { cfg, repo, retailers } = ctx;
+  const store = str(a.store, 40);
+  const sku = str(a.sku, 60);
+  // The alert's product link, as a watchlist item (only if it's that store's page).
+  const fromLink = () => {
+    if (!a.url) return null;
+    const c = checkItem({ url: str(a.url, 1000), store, sku, name: str(a.name, 120) }, { retailers });
+    return c.store === store && c.url ? c : null;
+  };
+  let it = repo.itemBySku(user.id, store, sku);
+  if (!it) {
+    const add = repo.countItems(user.id) < cfg.limits.items ? fromLink() : null;
+    if (!add) return null;
+    it = repo.addItem(user.id, add);
+  } else if (!it.url) {
+    // On the watchlist before its page was found: the alert has it (kept).
+    const found = fromLink();
+    if (found) it = repo.updateItem(user.id, it.id, { ...it, url: found.url }) || { ...it, url: found.url };
+  }
+  return it;
 }

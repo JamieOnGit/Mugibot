@@ -4,6 +4,7 @@
 
 import { ALERT_KINDS, CATEGORIES, DEFAULT_KINDS, toMonitor, toProduct } from '../catalog.js';
 import { HttpError, bad, bool, item as checkItem, num, str } from '../schema.js';
+import { GATE_CHANNEL, GATE_TOPIC } from './gates.js';
 
 const SNOWFLAKE = /^\d{5,25}$/;
 
@@ -17,7 +18,7 @@ function kindsFrom(v, { required = false } = {}) {
 function categoryFrom(v) {
   if (v === undefined || v === null || v === '') return undefined;
   const c = String(v).toLowerCase().replace(/[^a-z]/g, '');
-  const key = { pokemon: 'pokemon', onepiece: 'onepiece', other: 'other' }[c];
+  const key = { pokemon: 'pokemon', onepiece: 'onepiece', other: 'other', nontcg: 'nontcg' }[c];
   if (!key) throw bad(`Category must be one of: ${Object.values(CATEGORIES).join(', ')}`);
   return key;
 }
@@ -49,7 +50,7 @@ export class MonitorAdmin {
     this.ctx.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: product.id });
   }
 
-  /** input: { url } or { store, sku }, plus name, category, intervalSeconds, kinds, note. */
+  /** input: { url } or { store, sku }, plus name, category, intervalSeconds, kinds, note, dropWatch (monitor/drops.js). */
   add(input, user) {
     const parsed = checkItem({ url: input.url, store: input.store, sku: input.sku, name: input.name }, { retailers: this.ctx.retailers });
     if (this.catalog.isBlocked(parsed.store, parsed.sku)) throw bad('That product is on the blacklist (Admin → Blacklist). Take it off the blacklist first.');
@@ -61,6 +62,9 @@ export class MonitorAdmin {
       note: str(input.note, 200),
       createdBy: user ? user.id : null,
     });
+    // (A drop watch's monitor: one it made goes with the watch; one that was there before is taken on —
+    // its alerts go where the watch's do — and left as it was when the watch goes. monitor/drops.js)
+    if (input.dropWatch && (created || !monitor.drop_watch)) this.ctx.db.run('UPDATE monitors SET drop_watch = :w WHERE id = :id', { w: input.dropWatch, id: monitor.id });
     this.checkNow(product);
     if (created) this.ctx.repo.audit(user ? user.id : null, null, 'monitor-add', `${parsed.store} ${parsed.sku}`);
     return { product: toProduct(this.catalog.productById(product.id)), monitor: toMonitor(monitor), created };
@@ -127,9 +131,12 @@ export class MonitorAdmin {
 
   /**
    * "Set up store channels": a channel in the Discord server for each store and game (kmart-pokemon,
-   * kmart-one-piece, …), one each for Premium Bandai and Pokémon Center, and misc-retailers for
-   * everything else — found by name, or made by the bot (under "Mugibot alerts") — each with its
-   * alert rule. opts.roleId: a role every channel pings. opts.replace: remove the other rules.
+   * kmart-one-piece, …), one each for Premium Bandai and Pokémon Center, non-tcg-alerts for what
+   * isn't trading cards, and misc-retailers for everything else — found by name, or made by the bot
+   * (under "Mugibot alerts") — each with its
+   * alert rule. Then #virtual-queue-detection: the stores' checkpoints and virtual queues going up
+   * and coming down (monitor/gates.js). opts.roleId: a role every channel pings. opts.replace:
+   * remove the other rules.
    */
   async setupChannels(opts = {}, user = null) {
     const { discord, cfg } = this.ctx;
@@ -178,8 +185,23 @@ export class MonitorAdmin {
     let removed = 0;
     // (The VIP channel's rule stays: it isn't a store channel.)
     if (opts.replace) for (const r of routes) if (!keep.has(r.id) && !r.vip && this.catalog.deleteRoute(r.id)) removed += 1;
-    if (user) this.ctx.repo.audit(user.id, null, 'alert-channels-setup', `${out.length} channels (${made.length} made), ${added} rules added${removed ? `, ${removed} removed` : ''}`);
-    return { channels: out.map((w) => ({ name: w.channelName, id: w.channelId, made: made.includes(w.channelName), rule: `#${w.channelName}` })), made: made.length, added, removed };
+    // #virtual-queue-detection: not an alert rule (no products go there) — the gates' own channel.
+    let gate = byName([GATE_CHANNEL]);
+    if (!gate) {
+      if (!parent) parent = await make({ name: 'Mugibot alerts', type: 4 });
+      gate = await make({ name: GATE_CHANNEL, type: 0, parent_id: parent.id, topic: GATE_TOPIC });
+      made.push(gate.name);
+    }
+    const before = this.ctx.repo.getSetting('gateChannel') || {};
+    this.ctx.repo.setSetting('gateChannel', { channelId: String(gate.id), roleId: roleId || (before.channelId === String(gate.id) ? before.roleId || '' : '') });
+    if (user) this.ctx.repo.audit(user.id, null, 'alert-channels-setup', `${out.length + 1} channels (${made.length} made), ${added} rules added${removed ? `, ${removed} removed` : ''}`);
+    return {
+      channels: [
+        ...out.map((w) => ({ name: w.channelName, id: w.channelId, made: made.includes(w.channelName), rule: `#${w.channelName}` })),
+        { name: gate.name, id: String(gate.id), made: made.includes(gate.name), rule: 'Checkpoints and virtual queues' },
+      ],
+      made: made.length, added, removed,
+    };
   }
 
   /**
@@ -218,6 +240,42 @@ export class MonitorAdmin {
     if (user) this.ctx.repo.audit(user.id, null, 'vip-channel-setup', `#${ch.name}${made ? ' (made)' : ''}`);
     return { channel: { name: ch.name, id: String(ch.id), made }, rule };
   }
+
+  /**
+   * "Make #non-tcg-alerts" (the drop watches' card): just that channel of the store channels' set-up —
+   * found by name, or made by the bot under "Mugibot alerts" — and its rule. opts.roleId: a role it pings.
+   */
+  async setupNonTcg(opts = {}, user = null) {
+    const { discord, cfg } = this.ctx;
+    if (!discord.botReady || !cfg.discord.guildId) throw new HttpError(503, "The Discord bot isn't set up yet (Admin → Setup check)");
+    const roleId = str(opts.roleId, 30);
+    if (roleId && !SNOWFLAKE.test(roleId)) throw bad('Role ID: Server Settings → Roles → right-click the role → Copy Role ID, or leave it empty');
+    const list = await discord.guildChannels();
+    if (list.status !== 200 || !Array.isArray(list.body)) throw new HttpError(502, `Couldn't read the server's channels (${discordProblem(list)})`);
+    const channels = list.body;
+    let ch = channels.find((c) => c && (c.type === 0 || c.type === 5) && NON_TCG_PLAN.names.includes(String(c.name || '').toLowerCase()));
+    let made = false;
+    if (!ch) {
+      const make = async (body) => {
+        const r = await discord.createChannel(body);
+        if (r.status === 403) throw new HttpError(409, `The bot can't make channels: give its role the Manage Channels permission (Server Settings → Roles), or make #${NON_TCG_CHANNEL} yourself and press this again — it finds it by name`);
+        if (r.status !== 200 && r.status !== 201) throw new HttpError(502, `Couldn't make #${body.name} (${discordProblem(r)})`);
+        return r.body;
+      };
+      let parent = channels.find((c) => c && c.type === 4 && /^mugibot alerts$/i.test(c.name || ''));
+      if (!parent) parent = await make({ name: 'Mugibot alerts', type: 4 });
+      ch = await make({ name: NON_TCG_CHANNEL, type: 0, parent_id: parent.id, topic: NON_TCG_PLAN.topic });
+      made = true;
+    }
+    const existing = this.catalog.listRoutes().find((r) => r.channelId === String(ch.id));
+    if (!existing && this.catalog.listRoutes().length >= MAX_ROUTES) throw bad(`${MAX_ROUTES} alert rules is the most`);
+    const rule = this.catalog.saveRoute(existing ? existing.id : null, this.route({
+      name: `#${ch.name}`, channelId: String(ch.id), roleId: roleId || (existing ? existing.roleId : ''), categories: ['nontcg'], stores: [],
+      kinds: existing ? existing.kinds : ['restock', 'listed'], keywords: '', enabled: true, fallback: false,
+    }));
+    if (user) this.ctx.repo.audit(user.id, null, 'non-tcg-channel-setup', `#${ch.name}${made ? ' (made)' : ''}`);
+    return { channel: { name: ch.name, id: String(ch.id), made }, rule };
+  }
 }
 
 const MAX_ROUTES = 40;
@@ -236,9 +294,18 @@ export function channelPlan() {
   }
   plan.push({ names: ['premium-bandai'], stores: ['pbandai'], categories: [], fallback: false, topic: 'Drops and restocks at Premium Bandai, from Mugibot.' });
   plan.push({ names: ['pokemon-center'], stores: ['pokemoncenter'], categories: [], fallback: false, topic: 'Drops and restocks at Pokémon Center, from Mugibot.' });
+  plan.push(NON_TCG_PLAN);
   plan.push({ names: ['misc-retailers', 'misc-retailer'], stores: [], categories: [], fallback: true, topic: 'Every other store and game, from Mugibot.' });
   return plan;
 }
+
+// #non-tcg-alerts: what isn't trading cards (the admins' drop watches: monitor/drops.js), from every
+// store — and only there (Feed.routesFor), not in the store channels.
+export const NON_TCG_CHANNEL = 'non-tcg-alerts';
+const NON_TCG_PLAN = Object.freeze({
+  names: [NON_TCG_CHANNEL, 'non-tcg', 'non-tcg-alert'], stores: [], categories: ['nontcg'], fallback: false,
+  topic: 'Drops that aren\'t trading cards — consoles, collectibles, anything the admins watch — from every store, from Mugibot.',
+});
 
 function discordProblem(r) {
   return r.status === 0 ? "Discord didn't answer" : `HTTP ${r.status}${r.body && r.body.message ? `: ${r.body.message}` : ''}`;

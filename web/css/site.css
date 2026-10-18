@@ -661,6 +661,10 @@ details.menu[open] > summary { background: var(--surface-2); }
 .aco-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; margin-bottom: 16px; }
 .aco-grid > .card + .card { margin-top: 0; }
 .aco-switch-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+/* ⚡ Buy from your phone: the checkout browser picker. */
+#aco-remote .aco-device-row { margin-top: 12px; }
+#aco-remote .aco-device-pick { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#aco-remote .aco-device-pick select { flex: 1 1 260px; min-width: 0; }
 .aco-agree { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); font-weight: 500; font-size: 14px; }
 .aco-checks li { align-items: baseline; }
 .aco-runs { list-style: none; margin: 8px 0 0; padding: 0; }
@@ -764,3 +768,35 @@ details.menu[open] > summary { background: var(--surface-2); }
 /* The card's backup in your account (Checkout details) */
 .card-backup { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
 .pager .pg-gap { padding: 0 2px; }
+
+/* 🎯 Drop watches (the Monitor page's lists): a link or words, at any store or website */
+.dw-lead { margin: 0 0 10px; max-width: 80ch; }
+.dw-form { margin: 0 0 14px; }
+.dw-form > input { width: 100%; }
+.dw-hint { margin: 6px 0 2px; color: var(--muted); min-height: 1.2em; }
+.dw-aco { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; }
+.dw-aco input[type=number] { max-width: 140px; }
+.dw-h { margin: 16px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+.dw-list { list-style: none; margin: 0; padding: 0; }
+.dw-row { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 0 0 10px; background: var(--surface); }
+.dw-row.shared { border-left: 3px solid var(--brand); }
+.dw-row .dw-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.dw-row .dw-head .info { flex: 1 1 240px; min-width: 0; }
+.dw-row .name { font-weight: 700; overflow-wrap: anywhere; }
+.dw-row .meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.dw-row .acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.dw-edit { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0 0 36px; padding: 8px 0 0; border-top: 1px solid var(--line); }
+.dw-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; flex: 1 1 180px; min-width: 0; }
+.dw-edit select { max-width: 100%; }
+.dw-edit .form-actions { margin: 0; }
+.dw-icon { font-size: 18px; width: 26px; text-align: center; flex: 0 0 auto; }
+.dw-none { margin: 6px 0 0 36px; }
+.dw-found { list-style: none; margin: 8px 0 0; padding: 0 0 0 36px; }
+.dw-found > li { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.dw-found .thumb { width: 40px; height: 40px; }
+.dw-found .info { flex: 1 1 200px; min-width: 0; }
+.dw-found .name { font-weight: 600; font-size: 14px; }
+.dw-found .acts .watching { color: var(--brand); }
+@media (max-width: 560px) {
+  .dw-found, .dw-none { padding-left: 0; margin-left: 0; }
+}

@@ -247,9 +247,21 @@ export class Discord {
     return this.api('GET', `/guilds/${this.d.guildId}/channels`);
   }
 
+  /** The server's roles (a drop watch's channel can ping one). { status, body: [role] } */
+  guildRoles() {
+    return this.api('GET', `/guilds/${this.d.guildId}/roles`);
+  }
+
   /** Make a channel in the server (needs the Manage Channels permission). { status, body: channel } */
   createChannel(body) {
     return this.api('POST', `/guilds/${this.d.guildId}/channels`, body);
+  }
+
+  /** Change the reply to a button press or slash command (its interaction token lasts 15 minutes). */
+  async editReply(token, body) {
+    if (!this.d.clientId || !token) return false;
+    const r = await this.api('PATCH', `/webhooks/${this.d.clientId}/${encodeURIComponent(token)}/messages/@original`, body);
+    return r.status === 200;
   }
 
   async post(channelId, message) {

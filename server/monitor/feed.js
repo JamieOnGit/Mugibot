@@ -15,6 +15,7 @@
 
 import { CATEGORIES, categoryFor, toAlert, toProduct } from '../catalog.js';
 import { entitlement } from '../entitlement.js';
+import { buyAction } from '../notifier.js';
 import { publicEvent, publicProduct } from './public.js';
 import { STATUS, STATUS_LABEL, isOrderable } from './status.js';
 
@@ -124,10 +125,11 @@ export class Feed {
    * opts: { manual (an admin reported it: skips the cooldown), announce (an admin's 📣 SKU: no monitor needed),
    *         sweep (a live sweep found it: no monitor needed, the sweep settings decide), note, pct,
    *         detectedAt (when the store's answer came in: the alert says how long it took to reach dashboards),
-   *         vip (a VIP watch found it: monitor/vip.js — a product with a VIP monitor is one too) }
+   *         vip (a VIP watch found it: monitor/vip.js — a product with a VIP monitor is one too),
+   *         dropWatch (an admin's drop watch found it: monitor/drops.js — a product with its monitor is one too) }
    * Returns the saved alert, or null when a monitor isn't asking for it or the cooldown is running.
    */
-  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null, vip = false } = {}) {
+  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null, vip = false, dropWatch = null } = {}) {
     // On the blacklist (Admin → Blacklist): never alerts. (An admin's own restock ping still goes out.)
     if (!manual && this.catalog.isBlocked(product.store, product.sku)) return null;
     const monitor = this.catalog.monitorForProduct(product.id);
@@ -148,7 +150,9 @@ export class Feed {
     });
     const alert = { ...toAlert(row), ttnMs: detectedAt ? Math.max(0, this.now() - detectedAt) : null };
     this.broadcast('feed', alert);
-    const posted = await this.post(alert, product);
+    // (Found by an admin's drop watch for everyone with a channel of its own: posted there.)
+    const drop = this.drops ? this.drops.routeFor(dropWatch || (monitor && monitor.drop_watch)) : null;
+    const posted = await this.post(alert, product, { drop });
     if (posted.length) this.catalog.setPosted(row.id, posted);
     return { ...alert, posted };
   }
@@ -158,12 +162,19 @@ export class Feed {
    * gets what no other rule took. With no rules, the restock channel gets restocks and listings.
    * A rule for a store also takes its dummy-store copy's alerts. A VIP drop goes to the VIP rules
    * (#vip-drop) only — to the others only while there's no VIP rule — and nothing else goes there.
+   * Something that isn't trading cards (category nontcg: the drop watches') goes to the rules that
+   * ask for that category by name (#non-tcg-alerts) — not a store's channel — while there is one.
+   * drop: the channel an admin chose for the drop watch that found it (monitor/drops.js routeFor):
+   * its drops and restocks go there (pinging its role) instead; anything else, the usual way.
    */
-  routesFor(alert) {
+  routesFor(alert, { drop = null } = {}) {
     const enabled = this.catalog.listRoutes().filter((r) => r.enabled);
     const vip = enabled.filter((r) => r.vip);
     if (alert.vip && vip.length) return vip.filter((r) => r.kinds.includes(alert.kind));
+    if (drop && drop.channelId && drop.kinds.includes(alert.kind)) return [drop];
     let routes = enabled.filter((r) => !r.vip);
+    const named = routes.filter((r) => r.categories.includes('nontcg'));
+    if (alert.category === 'nontcg' && named.length) routes = named;
     if (!routes.length && this.cfg.discord.restockChannelId) {
       routes = [{ id: 'default', name: 'Restock channel', channelId: this.cfg.discord.restockChannelId, roleId: this.cfg.discord.restockRoleId || '', categories: [], stores: [], kinds: ['restock', 'listed'], keywords: '' }];
     }
@@ -177,9 +188,9 @@ export class Feed {
     return taken.length ? taken : routes.filter((r) => r.fallback && wants(r));
   }
 
-  async post(alert, product) {
+  async post(alert, product, { drop = null } = {}) {
     if (!this.discord.botReady) return [];
-    const routes = this.routesFor(alert);
+    const routes = this.routesFor(alert, { drop });
     const posted = [];
     for (const r of routes) {
       const ok = await this.discord.post(r.channelId, this.message(alert, product, { mention: r.roleId ? `<@&${r.roleId}>` : '' }));
@@ -191,10 +202,13 @@ export class Feed {
   /** The Discord embed: image, store, price, stock, SKU, category, time; ⚡ Buy and quick links. */
   message(alert, product = {}, { mention = '' } = {}) {
     const k = alert.kind === 'restock' && alert.status === STATUS.PREORDER ? KIND.preorder : KIND[alert.kind] || KIND.restock;
-    const storeName = this.retailers.name(alert.store);
+    const storeName = this.retailers.siteName(alert.store, alert.url);
     const buttons = [];
-    // One click to the store, with whoever presses it's own checkout (signed: see Notifier.alertBuyLink).
-    if (alert.kind !== 'sold_out') buttons.push({ label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(alert) });
+    // Whoever presses it checks out in their own checkout browser, wherever they pressed it — their
+    // phone included (routes/discord.js). As a link (no Discord interactions set up): one click to the
+    // store, with their own checkout (signed: see Notifier.alertBuyLink). Only where Mugibot has a
+    // checkout: another website's drop (monitor/drops.js) is "Open product".
+    if (alert.kind !== 'sold_out' && this.retailers.canBuy(alert.store)) buttons.push({ label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(alert), action: alert.id ? buyAction('a', alert.id) : null });
     if (alert.url) buttons.push({ label: 'Open product', url: alert.url });
     const cart = alert.kind !== 'sold_out' && this.retailers.cartUrl(alert.store, { sku: alert.sku, variantId: product.variant_id || product.variantId });
     if (cart) buttons.push({ label: 'Add to cart', url: cart });

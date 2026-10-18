@@ -5,7 +5,8 @@
 
 import { newId } from './crypto.js';
 
-export const CATEGORIES = { pokemon: 'Pokémon', onepiece: 'One Piece', other: 'Other' };
+// nontcg: not trading cards at all — what drop watches find (monitor/drops.js), in #non-tcg-alerts.
+export const CATEGORIES = { pokemon: 'Pokémon', onepiece: 'One Piece', other: 'Other', nontcg: 'Non-TCG' };
 export const ALERT_KINDS = ['restock', 'listed', 'sold_out', 'price_drop', 'price_rise'];
 export const DEFAULT_KINDS = ['restock', 'listed', 'price_drop'];
 
@@ -45,7 +46,7 @@ export function toBlacklisted(r) {
 
 export function toMonitor(r) {
   return r && {
-    id: r.id, productId: r.product_id, intervalSeconds: r.interval_seconds, paused: !!r.paused, vipWatch: r.vip_watch || null,
+    id: r.id, productId: r.product_id, intervalSeconds: r.interval_seconds, paused: !!r.paused, vipWatch: r.vip_watch || null, dropWatch: r.drop_watch || null,
     kinds: json(r.kinds, DEFAULT_KINDS), note: r.note, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -318,6 +319,11 @@ export class Catalog {
 
   setPosted(alertId, channels) {
     this.db.run('UPDATE feed_alerts SET posted = :p WHERE id = :id', { p: JSON.stringify(channels), id: alertId });
+  }
+
+  /** One alert (a Discord ⚡ Buy button says which). */
+  alertById(id) {
+    return toAlert(this.db.get('SELECT * FROM feed_alerts WHERE id = :id', { id: Number(id) || 0 }));
   }
 
   lastAlert(productId, kind) {

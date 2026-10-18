@@ -22,11 +22,19 @@
 // browser listens for your armed items dropping, and checks out by itself in a tab of its own —
 // within your limits, with your details and the card saved here. It never gets past a bot check
 // or your bank's check: it stops and tells you.
+//
+// Checkpoints and virtual queues (JB Hi-Fi's hCaptcha checkpoint, EB Games' and Pokémon Center's
+// queues): a tab in a store's queue is never refreshed or sent anywhere by Mugibot, and while this
+// browser is in line there (or hasn't got through), nothing else of Mugibot's asks that store for
+// anything — no checks, no searches, no sign-in checks — so nobody's place is put at risk. A run
+// for that store waits for the tab in line to get through, then opens the store from there.
+// Whether a queue is up at all is looked at as a new visitor (no cookies: nobody's place touched).
 
 import './config.js';
 import './vault.js';
 import './logins.js';
 import { extractProduct, extractProductLinks } from './lib/extract.js';
+import { classify, gateOnPage } from './lib/gate.js';
 import { parseListing } from './lib/listing.js';
 
 const CONFIG = globalThis.MGB_CONFIG;
@@ -129,6 +137,7 @@ function refreshState(auth) {
       if (res.status !== 200 || !res.body) return null;
       const st = { items: res.body.items, flows: res.body.flows, active: res.body.active, browserChecks: res.body.browserChecks, aco: res.body.aco || null };
       await chrome.storage.local.set({ [`state:${auth.user.id}`]: { ...st, at: Date.now() } });
+      if (Array.isArray(res.body.gates)) await noteGatesUp(res.body.gates);
       return st;
     })().finally(() => { refreshing = null; });
   }
@@ -252,6 +261,167 @@ async function clearCardFrames(tabId) {
   await chrome.storage.session.remove(Object.keys(all).filter((k) => k.startsWith(`cardframe:${tabId}:`)));
 }
 
+// --- checkpoints and virtual queues (server/monitor/gates.js) -------------------
+// Per store, this browser's own: the tabs in its queue now (their content script says, each time
+// the queue page refreshes itself), when one last was, when one got through, and runs held until it
+// does. Kept for the browser session.
+const GATES = 'gates';
+const GATES_UP = 'gatesUp';
+// Through a queue: good for this long (or until the store shows its queue again).
+const THROUGH_MS = 30 * 60 * 1000;
+// A queue seen in this browser lately counts as up, whatever the server knows yet.
+const SEEN_UP_MS = 10 * 60 * 1000;
+let gateLock = Promise.resolve();
+const lastGateReport = new Map();
+
+/** One change at a time (messages from several tabs at once). */
+function withGates(fn) {
+  const run = gateLock.then(async () => {
+    const g = (await chrome.storage.session.get(GATES))[GATES] || {};
+    const out = await fn(g);
+    await chrome.storage.session.set({ [GATES]: g });
+    return out;
+  });
+  gateLock = run.catch(() => null);
+  return run;
+}
+
+async function gatesNow() {
+  return (await chrome.storage.session.get(GATES))[GATES] || {};
+}
+
+/** What the server says is up now: [{ store, kind, since, wait }]. */
+async function noteGatesUp(list) {
+  await chrome.storage.session.set({ [GATES_UP]: { at: Date.now(), list: list.filter((x) => x && typeof x.store === 'string').slice(0, 30) } });
+}
+
+const inLine = (s) => !!s && Object.keys(s.line || {}).length > 0;
+// Through: since it was last seen in line here — and since the queue went up this time (since: when, from your account).
+const isThrough = (s, since = 0) => !!s && !!s.throughAt && Date.now() - s.throughAt < THROUGH_MS && !inLine(s) && s.throughAt >= (s.upAt || 0) && s.throughAt >= (since || 0);
+
+async function serverGates() {
+  return (await chrome.storage.session.get(GATES_UP))[GATES_UP] || { at: 0, list: [] };
+}
+const sinceOf = (server, id) => ((server.list.find((x) => x.store === id) || {}).since || 0);
+
+/** Stores whose queue this browser has got through (it may ask them for things again). */
+async function throughStores() {
+  const g = await gatesNow();
+  const server = await serverGates();
+  return Object.keys(g).filter((id) => g[id].kind === 'queue' && isThrough(g[id], sinceOf(server, id)));
+}
+
+/** Stores whose queue is up and this browser isn't through: it asks them for nothing. */
+async function heldStores() {
+  const g = await gatesNow();
+  const server = await serverGates();
+  const up = new Set(server.list.filter((x) => x.kind === 'queue').map((x) => x.store));
+  const out = new Set();
+  for (const id of up) if (!isThrough(g[id], sinceOf(server, id))) out.add(id);
+  for (const [id, s] of Object.entries(g)) {
+    // Seen here lately — unless your account has said since that it's down (a tab in line still counts).
+    const seen = s.upAt && Date.now() - s.upAt < SEEN_UP_MS && !(server.at > s.upAt && !up.has(id));
+    if (s.kind === 'queue' && (inLine(s) || seen) && !isThrough(s, sinceOf(server, id))) out.add(id);
+  }
+  return out;
+}
+
+/** Tell your account what this browser saw (a queue's or a checkpoint's page): at most once a minute a store, unless the wait changed. */
+async function reportGate(store, seen) {
+  const last = lastGateReport.get(store);
+  if (last && Date.now() - last.at < 60 * 1000 && last.wait === seen.wait && last.status === seen.status) return;
+  lastGateReport.set(store, { at: Date.now(), wait: seen.wait, status: seen.status });
+  await api('POST', '/api/ext/gates', { seen: [{ store, ...seen }] }).catch(() => null);
+}
+
+/**
+ * A store page in a tab: is it the store's queue (or checkpoint)? A tab that was in line and isn't
+ * any more got through: runs held for it go now.
+ */
+function noteGate(tabId, store, on, info) {
+  return withGates(async (g) => {
+    const s = g[store] || (g[store] = { line: {}, runs: [] });
+    s.line = s.line || {};
+    s.runs = s.runs || [];
+    if (info.kind) s.kind = info.kind;
+    const was = !!s.line[tabId];
+    let release = false;
+    if (on) {
+      s.line[tabId] = Date.now();
+      s.upAt = Date.now();
+      if (info.wait !== null && info.wait !== undefined) s.wait = info.wait;
+    } else if (was) {
+      delete s.line[tabId];
+      if (!inLine(s)) { s.throughAt = Date.now(); release = s.runs.length > 0; }
+    }
+    if (on) {
+      reportGate(store, { status: 'up', how: 'page', wait: info.wait ?? null }).catch(() => null);
+      // Runs waiting for this tab to get through: still waiting (said every few minutes).
+      if (s.runs.length && (!s.runsBeat || Date.now() - s.runsBeat > 150 * 1000)) {
+        s.runsBeat = Date.now();
+        for (const run of s.runs) {
+          api('POST', `/api/ext/aco/${encodeURIComponent(run.id)}`, { status: 'waiting', reason: 'queue', message: `In ${run.storeName}'s virtual queue in this browser${s.wait != null ? ` — about ${s.wait} min` : ''}` }).catch(() => null);
+        }
+      }
+    }
+    if (release) setTimeout(() => releaseRuns(store).catch(() => null), 0);
+    return { ok: true, through: was && !on };
+  });
+}
+
+/** Through the queue: the runs that waited for it open the store now, each with a fresh link. */
+async function releaseRuns(store) {
+  const runs = await withGates((g) => { const s = g[store]; const out = (s && s.runs) || []; if (s) s.runs = []; return out; });
+  for (const run of runs) {
+    const r = await api('POST', `/api/ext/aco/${encodeURIComponent(run.id)}/link`, {});
+    if (r.status === 200 && r.body && r.body.url) await startRun({ ...run, url: r.body.url }).catch(() => null);
+  }
+}
+
+/**
+ * A queue to get in line at (your armed items' store, or Discord's "Join the queue on my computer"):
+ * one tab of its own at the store, in the background, waiting its turn — unless this browser is in
+ * line there already, or through.
+ */
+async function joinLobby(l) {
+  if (!l || typeof l.store !== 'string' || typeof l.url !== 'string') return null;
+  const g = await gatesNow();
+  const s = g[l.store];
+  // (Through it already — since this queue went up: nothing to join.)
+  if (inLine(s) || isThrough(s, l.since || 0)) return null;
+  if (s && s.lobbyTab !== undefined) {
+    try { await chrome.tabs.get(s.lobbyTab); return null; } catch { /* closed: open another */ }
+  }
+  const tab = await openStoreTab(l.url, { active: false });
+  if (tab) await withGates((all) => { const x = all[l.store] || (all[l.store] = { line: {}, runs: [], kind: 'queue' }); x.lobbyTab = tab.id; x.lobbyAt = Date.now(); });
+  return tab;
+}
+
+/** Runs in a page: what it shows (for reading whether it's a store's queue — nothing on it is touched). */
+function readGatePage() {
+  return { url: location.href, text: String((document.body && document.body.innerText) || '').slice(0, 20000), html: document.documentElement.outerHTML.slice(0, 600000) };
+}
+
+/**
+ * The admins' looks at a store's queue, as a new visitor (server/monitor/gates.js): its front page
+ * asked for with no cookies at all — this browser's place in any line is never touched — and what
+ * it was: the queue, or the store.
+ */
+async function probeGate(p) {
+  let res;
+  let html = '';
+  try {
+    res = await fetch(p.url, { credentials: 'omit', cache: 'no-store', redirect: 'follow' });
+    html = (await res.text()).slice(0, 3000000);
+  } catch {
+    return { store: p.store, status: 'unknown', how: 'probe' };
+  }
+  const gate = { kind: p.kind, page: p.page };
+  const reading = classify(gate, { status: res.status, url: res.url || p.url, html });
+  const seen = reading === 'up' ? gateOnPage(gate, { url: res.url || p.url, html }) : null;
+  return { store: p.store, status: reading || 'unknown', how: 'probe', wait: seen ? seen.wait : null };
+}
+
 // --- updates -----------------------------------------------------------------
 /** "1.0.10" > "1.0.9" */
 function newer(a, b) {
@@ -340,12 +510,19 @@ function hasSku(url, sku) {
   return false;
 }
 
-async function checkOne(c) {
+async function checkOne(c, gate) {
   let res;
   try {
     res = await fetch(c.url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
   } catch {
     return { id: c.id, status: 'error', error: "Your browser couldn't reach the store" };
+  }
+  if (gate && res.status === 200) {
+    // The store's queue where its page should be (your time through it ran out): nothing more asked
+    // there until you're through again — and nothing read as the product's stock.
+    const html = await res.clone().text().catch(() => '');
+    const seen = gateOnPage(gate, { url: res.url || c.url, html });
+    if (seen && seen.kind === 'queue') return { id: c.id, gate: seen };
   }
   if (res.status === 404 || res.status === 410) return { id: c.id, status: c.kind === 'search' ? 'not_listed' : 'not_found' };
   if (res.status === 403 || res.status === 429 || res.status === 503) return { id: c.id, status: 'blocked', error: `The store refused your browser's check (HTTP ${res.status}) — backing off` };
@@ -373,16 +550,28 @@ async function runChecks() {
   if (!auth) return { paired: false };
   checking = true;
   try {
-    const due = await api('GET', '/api/ext/checks');
+    // (Stores whose queue this browser got through: it may check them; the others' queues are left alone.)
+    const due = await api('GET', `/api/ext/checks?through=${encodeURIComponent((await throughStores()).join(','))}`);
     if (due.status !== 200 || !due.body) return { status: due.status };
     const results = [];
     const lastByHost = new Map();
+    const flows = (await getState()).flows || [];
+    const held = await heldStores();
     for (const c of due.body.checks || []) {
+      if (held.has(c.store)) continue; // its queue is up here (the server may not know yet)
       const host = new URL(c.url).host;
       const gap = Date.now() - (lastByHost.get(host) || 0);
       if (gap < 4000) await new Promise((r) => setTimeout(r, 4000 - gap)); // gentle on each store
       lastByHost.set(host, Date.now());
-      results.push(await checkOne(c));
+      const r = flows.find((x) => x.id === c.store);
+      const out = await checkOne(c, r && r.gate);
+      if (out.gate) {
+        held.add(c.store);
+        await withGates((g) => { const s = g[c.store] || (g[c.store] = { line: {}, runs: [] }); s.kind = 'queue'; s.upAt = Date.now(); });
+        reportGate(c.store, { status: 'up', how: 'page', wait: out.gate.wait }).catch(() => null);
+        continue;
+      }
+      results.push(out);
     }
     if (results.length) await api('POST', '/api/ext/checks', { results });
     const summary = { at: Date.now(), checked: results.length, blocked: results.filter((r) => r.status === 'blocked').length };
@@ -443,10 +632,24 @@ function tabLoaded(tabId, timeoutMs) {
   });
 }
 
-async function openIn(tabId, url) {
+/** A tab showing the store's queue (or its checkpoint): never navigated, never reloaded. */
+class GateHeld extends Error {
+  constructor(seen) { super("It's in the store's queue"); this.gate = seen; }
+}
+
+async function openIn(tabId, url, gate = null) {
+  const queued = async () => {
+    const now = gate ? await inPage(tabId, readGatePage, []).catch(() => null) : null;
+    return now && gateOnPage(gate, now);
+  };
+  let seen = await queued();
+  if (seen) throw new GateHeld(seen);
   const loaded = tabLoaded(tabId, 25000);
   await chrome.tabs.update(tabId, { url });
   await loaded;
+  // The store's queue came up instead (it went up just now): this tab's in line — nothing more asked from it.
+  seen = await queued();
+  if (seen) throw new GateHeld(seen);
 }
 
 /** Runs in the store's page: how many product links it has so far, the page, and the data it downloaded. */
@@ -484,7 +687,7 @@ const inPage = (tabId, func, args) => chrome.scripting.executeScript({ target: {
 
 async function renderedPage(t) {
   const { id: tabId } = await sweepTab(t.store);
-  await openIn(tabId, t.url);
+  await openIn(tabId, t.url, t.gate);
   const path = t.productPath ? [t.productPath.re, t.productPath.f || ''] : null;
   // (Longer than the page needs: a store's bot check may hold it up for a few seconds first.)
   const until = Date.now() + 15000;
@@ -508,6 +711,9 @@ async function renderedPage(t) {
     await new Promise((r) => setTimeout(r, seen ? 600 : 800));
   }
   if (!page) { if (failed) throw failed; return null; }
+  // The store's queue instead of its search: this tab's in line now — left exactly as it is.
+  const queued = t.gate && gateOnPage(t.gate, { url: page.url, html: page.html });
+  if (queued) throw new GateHeld(queued);
   // The product data the page downloaded, asked for again from inside it: JSON only.
   if (page.data.length) {
     const got = (await inPage(tabId, askInPage, [page.data]).catch(() => null)) || [];
@@ -522,16 +728,20 @@ async function askFromStorePage(t) {
   const tab = await sweepTab(t.store);
   const origin = new URL(t.url).origin;
   const onStore = () => chrome.tabs.get(tab.id).then((x) => String(x.url || '').startsWith(origin)).catch(() => false);
-  if (!(await onStore())) await openIn(tab.id, t.pageUrl || origin);
+  if (!(await onStore())) await openIn(tab.id, t.pageUrl || origin, t.gate);
   const ask = () => inPage(tab.id, askInPage, [[t.url], t.headers || null]).catch(() => null);
   let [res] = (await ask()) || [];
+  // The store's queue where the JSON should be: it's up — the search waits, and the tab isn't touched.
+  const queued = (x) => !!(t.gate && x && x.status === 200 && gateOnPage(t.gate, { url: x.url, html: x.text || '' }));
+  if (queued(res)) throw new GateHeld(gateOnPage(t.gate, { url: res.url, html: res.text || '' }));
   // The store's bot check (a refusal, or its page where the JSON should be): a real visit to the
   // store's page passes it, then ask again. (A store that answers with a page — Amazon's search — is
   // judged by its reader instead.)
   const wrongKind = t.expect !== 'html' && res && res.status === 200 && !/^\s*[[{]/.test(res.text || '');
   if (!res || res.status === 403 || res.status === 503 || wrongKind) {
-    await openIn(tab.id, t.pageUrl || origin);
+    await openIn(tab.id, t.pageUrl || origin, t.gate);
     [res] = (await ask()) || [];
+    if (queued(res)) throw new GateHeld(gateOnPage(t.gate, { url: res.url, html: res.text || '' }));
   }
   return res || null;
 }
@@ -575,11 +785,14 @@ async function sweepOne(t) {
     if (!allowed) return { ...base, ok: false, error: `This copy of Mugibot's extension (v${VERSION}) can't open ${u.hostname} — update the extension`, ms: 0 };
   }
   if (t.fresh) await freshStart(t).catch(() => null);
+  // (The store's queue: the search waits — no failure, and the tab's left as it is.)
+  const held = (e) => ({ ...base, ok: false, gate: { kind: e.gate.kind, wait: e.gate.wait }, ms: Date.now() - started });
   if (t.render) {
     let page;
     try {
       page = await renderedPage(t);
     } catch (e) {
+      if (e instanceof GateHeld) return held(e);
       return { ...base, ok: false, error: `This browser couldn't open the store's page${why(e)}`, ms: Date.now() - started };
     }
     if (!page) return { ...base, ok: false, error: "This browser couldn't read the store's page", ms: Date.now() - started };
@@ -591,6 +804,7 @@ async function sweepOne(t) {
     try {
       res = await askFromStorePage(t);
     } catch (e) {
+      if (e instanceof GateHeld) return held(e);
       return { ...base, ok: false, error: `This browser couldn't open the store's page${why(e)}`, ms: Date.now() - started };
     }
     if (!res || !res.status) return { ...base, ok: false, error: "This browser couldn't reach the store", ms: Date.now() - started };
@@ -608,6 +822,36 @@ async function sweepOne(t) {
   const text = (await res.text()).slice(0, 6_000_000);
   const parsed = parseListing(t.parser, text, opts(res.url));
   return { ...base, ok: true, status: res.status, ms: Date.now() - started, problem: parsed.problem, products: parsed.products.slice(0, 300) };
+}
+
+/** A search ran into the store's queue: if its tab in the sweep window shows the queue, that tab's in line now. */
+async function sweepTabInLine(t) {
+  const tabId = (await sweepWindow()).tabs[t.store];
+  const now = tabId !== undefined ? await inPage(tabId, readGatePage, []).catch(() => null) : null;
+  const seen = now && t.gate && gateOnPage(t.gate, now);
+  await withGates((g) => {
+    const s = g[t.store] || (g[t.store] = { line: {}, runs: [] });
+    s.line = s.line || {};
+    s.kind = (t.gate && t.gate.kind) || 'queue';
+    s.upAt = Date.now();
+    if (seen) s.line[tabId] = Date.now();
+  });
+}
+
+/** Sweep tabs waiting in a store's queue: looked at (never touched) — once one's through, the store's searched again. */
+async function watchSweepTabsInLine() {
+  const g = await gatesNow();
+  const saved = await sweepWindow();
+  const flows = (await getState()).flows || [];
+  for (const [store, s] of Object.entries(g)) {
+    const tabId = saved.tabs[store];
+    if (tabId === undefined || !(s.line || {})[tabId]) continue;
+    const r = flows.find((x) => x.id === store);
+    const now = await inPage(tabId, readGatePage, []).catch(() => null);
+    if (!now || !r || !r.gate) continue; // (between pages: next time)
+    const seen = gateOnPage(r.gate, now);
+    await noteGate(tabId, store, !!seen, { kind: r.gate.kind, wait: seen ? seen.wait : null });
+  }
 }
 
 let sweeping = false;
@@ -628,14 +872,25 @@ async function sweepLoop() {
   try {
     for (;;) {
       sweepAgain = false;
-      // (With this copy's version: stores added since an older one are kept for browsers that can open them.)
-      const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}`);
+      // (With this copy's version: stores added since an older one are kept for browsers that can open them.
+      //  And the stores whose queue it's through: the others' are left alone while they're up.)
+      const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}&through=${encodeURIComponent((await throughStores()).join(','))}`);
       if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) {
         if (sweepAgain) continue;
         break;
       }
+      if (Array.isArray(due.body.gates)) await noteGatesUp(due.body.gates);
+      // Is a store's queue up (or down again)? Looked at as a new visitor, with no cookies.
+      const looks = [];
+      for (const p of due.body.probes || []) looks.push(await probeGate(p));
+      if (looks.length) await api('POST', '/api/ext/gates', { seen: looks });
+      await watchSweepTabsInLine().catch(() => null);
+      const held = await heldStores();
       for (const t of due.body.terms || []) {
+        if (held.has(t.store)) continue; // its queue is up in this browser: nothing asked there
         const result = await sweepOne(t);
+        // (Its queue: nothing more asked there — this round's other searches included.)
+        if (result.gate) { held.add(t.store); await sweepTabInLine(t).catch(() => null); }
         await api('POST', '/api/ext/sweeps', { results: [result] });
         const { lastSweeps } = await chrome.storage.local.get('lastSweeps');
         await chrome.storage.local.set({ lastSweeps: { ...(lastSweeps || {}), [t.store]: { at: Date.now(), name: t.storeName, ok: result.ok, found: (result.products || []).length, status: result.status || 0 } } });
@@ -659,15 +914,19 @@ async function sweepLoop() {
 // --- Auto-checkout ---------------------------------------------------------------
 // While you have it switched on with items armed (or a Trigger ACO test waiting), this browser asks your account for runs to start
 // (each answer waits up to 20 seconds for an armed item to drop, so a drop starts within a moment).
+// Your checkout browser (the one runs go to) asks all the time, armed or not: Discord's ⚡ Buy,
+// pressed on your phone, starts a run here (aco.listen).
 // A run opens the store in a tab of its own, in front of you (payment forms need a page you can
 // see, and you can watch it go): the store page's script does the rest, with the run's limits.
 let acoLooping = false;
+
+const acoWanted = (a) => !!a && (a.listen || (a.enabled && (a.armed || a.pending)));
 
 async function acoLoop() {
   if (acoLooping) return;
   if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return;
   const st = await getState();
-  if (!st.paired || !st.aco || !st.aco.enabled || (!st.aco.armed && !st.aco.pending)) return;
+  if (!st.paired || !acoWanted(st.aco)) return;
   acoLooping = true;
   try {
     for (let quiet = 0; quiet < 3;) {
@@ -681,8 +940,14 @@ async function acoLoop() {
         continue;
       }
       quiet = 0;
+      // Runs first: every moment counts in a drop.
       for (const run of res.body.runs || []) await startRun(run).catch(() => null);
-      if (!res.body.enabled || (!res.body.armed && !res.body.pending)) break;
+      if (Array.isArray(res.body.gates)) await noteGatesUp(res.body.gates);
+      // A store's queue went up where you have something armed (or you pressed "Join the queue"): get in line —
+      // unless a run just opened that store (its tab gets in line itself: never two tabs into one queue).
+      const opened = new Set((res.body.runs || []).map((r) => r.store));
+      for (const l of res.body.lobbies || []) if (!opened.has(l.store)) await joinLobby(l).catch(() => null);
+      if (!acoWanted(res.body)) break;
       if (Date.now() - started < 1000) await new Promise((r) => setTimeout(r, 1000));
     }
   } finally {
@@ -690,14 +955,29 @@ async function acoLoop() {
   }
 }
 
-async function startRun(run) {
+/** A tab at a store in your window (not the sweep window): in front of you, or (a queue's lobby) behind. */
+async function openStoreTab(url, { active = true } = {}) {
   let tab = null;
   const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
   if (win && win.id !== undefined && !(await isSweepWindow(win.id))) {
-    tab = await chrome.tabs.create({ windowId: win.id, url: run.url, active: true }).catch(() => null);
-    if (tab) await chrome.windows.update(win.id, { focused: true, state: win.state === 'minimized' ? 'normal' : undefined }).catch(() => null);
+    tab = await chrome.tabs.create({ windowId: win.id, url, active }).catch(() => null);
+    if (tab && active) await chrome.windows.update(win.id, { focused: true, state: win.state === 'minimized' ? 'normal' : undefined }).catch(() => null);
   }
-  if (!tab) tab = ((await chrome.windows.create({ url: run.url, focused: true, type: 'normal' })).tabs || [])[0] || null;
+  if (!tab) tab = ((await chrome.windows.create({ url, focused: active, type: 'normal' })).tabs || [])[0] || null;
+  return tab;
+}
+
+async function startRun(run) {
+  // This browser is in that store's queue (a tab of yours waiting its turn): the run waits for it to
+  // get through, rather than ask the store again (which could cost the place in line).
+  const g = await gatesNow();
+  if (g[run.store] && g[run.store].kind === 'queue' && inLine(g[run.store])) {
+    const wait = g[run.store].wait;
+    await withGates((all) => { const s = all[run.store]; s.runs = [...(s.runs || []).filter((x) => x.id !== run.id), { id: run.id, store: run.store, storeName: run.storeName, name: run.name, sku: run.sku }]; });
+    await api('POST', `/api/ext/aco/${encodeURIComponent(run.id)}`, { status: 'waiting', reason: 'queue', message: `In ${run.storeName}'s virtual queue in this browser${wait != null ? ` — about ${wait} min` : ''} — it checks out once it's through` });
+    return null;
+  }
+  const tab = await openStoreTab(run.url, { active: true });
   const { acoRecent = [] } = await chrome.storage.local.get('acoRecent');
   await chrome.storage.local.set({ acoRecent: [{ id: run.id, name: run.name, store: run.storeName, at: Date.now() }, ...acoRecent].slice(0, 10) });
   return tab;
@@ -737,10 +1017,12 @@ async function checkLogins({ force = false } = {}) {
   if (!force && Date.now() - loginsCheckedAt < LOGIN_CHECK_MS) return 0;
   await chrome.storage.local.set({ loginsCheckedAt: Date.now() });
   const st = await getState();
+  // (Not at a store whose queue is up here: a request there could cost your place in line.)
+  const held = await heldStores();
   let n = 0;
   for (const r of st.flows || []) {
     const check = r.account && r.account.check;
-    if (!check || !r.base) continue;
+    if (!check || !r.base || held.has(r.id)) continue;
     try {
       const res = await fetch(`${r.base}${check.path || ''}`, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
       const status = globalThis.MGBLogins.fromHtml((await res.text()).slice(0, 3000000), res.url, check);
@@ -885,6 +1167,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true };
       }
       case 'fillData': return fillData(sender, msg.part, typeof msg.profileId === 'string' ? msg.profileId : null);
+      case 'gate': {
+        // A store page: is it the store's queue (or checkpoint)? Tracked per tab — see noteGate.
+        if (!sender.tab || sender.frameId !== 0 || typeof msg.store !== 'string') return null;
+        if (await isSweepTab(sender.tab.id)) return null;
+        const r = await storeForTab(sender);
+        if (!r || r.id !== msg.store || !r.gate) return null;
+        const wait = Number.isFinite(msg.wait) ? Math.max(0, Math.min(1440, Math.round(msg.wait))) : null;
+        return noteGate(sender.tab.id, r.id, !!msg.on, { kind: r.gate.kind, wait });
+      }
+      case 'gateWait': {
+        // Waiting in the store's queue (or at its checkpoint) with a checkout going: its pass stays good meanwhile.
+        if (!sender.tab) return null;
+        const pass = await passFor(sender);
+        if (!pass) return { ok: false };
+        await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, expires: Date.now() + PASS_TTL } });
+        return { ok: true };
+      }
       case 'acoReport': {
         // How the Auto-checkout run in this tab is going (only the tab the run's code opened: its page,
         // or the store's checkout running in a frame on it).
@@ -967,7 +1266,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'appHello': {
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
         const auth = await getAuth();
-        return { version: VERSION, server: SERVER, fromStore: FROM_STORE, paired: !!auth, userId: auth ? auth.user.id : null, username: auth ? auth.user.username : null };
+        // deviceId: which of your connected browsers this is (the dashboard's checkout browser picker).
+        return { version: VERSION, server: SERVER, fromStore: FROM_STORE, paired: !!auth, userId: auth ? auth.user.id : null, username: auth ? auth.user.username : null, deviceId: auth && auth.device ? auth.device.id : null };
       }
       case 'pair':
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
@@ -1058,9 +1358,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.storage.session.remove(passKey(tabId));
   clearCardFrames(tabId).catch(() => null);
+  // (A tab closed while in a queue: out of line — not through. Runs that were waiting for it go their own way:
+  // each opens the store, and waits in line itself.)
+  withGates((g) => {
+    const orphaned = [];
+    for (const [store, s] of Object.entries(g)) {
+      if (!s.line || !s.line[tabId]) continue;
+      delete s.line[tabId];
+      if (!inLine(s) && (s.runs || []).length) orphaned.push(store);
+    }
+    return orphaned;
+  }).then((stores) => { for (const store of stores || []) releaseRuns(store).catch(() => null); }).catch(() => null);
 });
 
 // For tests and the "Check now" button.
+globalThis.mugibotGates = async () => ({ gates: await gatesNow(), held: [...(await heldStores())], through: await throughStores() });
 globalThis.mugibotRunChecks = runChecks;
 globalThis.mugibotSweepLoop = sweepLoop;
 globalThis.mugibotAcoLoop = acoLoop;

@@ -286,12 +286,10 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.settings.keywords, ['pokemon', 'one piece']);
   const mode = (id) => r.body.stores.find((s) => s.store === id).mode;
-  assert.equal(mode('target'), 'server');
-  assert.equal(mode('jbhifi'), 'server');
-  assert.equal(mode('trainertown'), 'server', 'Trainer Town answers servers');
-  assert.equal(mode('kmart'), 'server', "Kmart: from the server, through its search provider");
-  assert.equal(mode('amazon'), 'browser', "Amazon turns servers away (HTTP 503): from an admin's browser");
-  assert.equal(mode('bigw'), 'browser', 'stores that refuse servers: from an admin\'s browser');
+  // Server first, every store: Mugibot's server searches it, and an admin's browser stands in only
+  // while the store refuses the server (Amazon, BIG W, Pokémon Center and Premium Bandai often do).
+  for (const id of ['target', 'jbhifi', 'trainertown', 'kmart', 'amazon', 'bigw', 'ebgames', 'pokemoncenter', 'pbandai']) assert.equal(mode(id), 'auto', id);
+  assert.equal(mode('zing'), 'off', "Zing: EB Games' search, already searched there");
   assert.equal(mode('demo-kmart'), 'off');
   assert.equal((await boss.put('/api/monitor/sweep', { keywords: '' })).status, 400, 'at least one keyword');
   assert.equal((await boss.put('/api/monitor/sweep', { everySeconds: 1 })).body.settings.everySeconds, 3, 'never faster than every 3 seconds');
@@ -718,22 +716,27 @@ test("EB Games' search JSON read end to end (from the server here, so the dummy 
   assert.equal(store.state.requests.at(-1).path, '/ebgames/search/query');
 });
 
-test("where each store is searched: Kmart moved to the server (a saved 'browser', its old default, gives way), Amazon at most every 20 s, BIG W opened in the browser", async () => {
+test("where each store is searched: server first everywhere (saved modes from before give way, 'off' stays), Amazon at most every 20 s, BIG W opened in the browser", async () => {
   const saved = env.app.repo.getSetting('sweep');
   try {
-    // Settings saved before this update: every store's mode, Kmart's old default among them.
-    env.app.repo.setSetting('sweep', { ...saved, modesVersion: undefined, stores: { ...saved.stores, kmart: 'browser' } });
-    assert.equal(sw.modeFor(R('kmart')), 'server', 'the old default, saved with the rest, gives way to the new one');
-    env.app.repo.setSetting('sweep', { ...saved, modesVersion: undefined, stores: { ...saved.stores, amazon: 'server' } });
-    assert.equal(sw.modeFor(R('amazon')), 'browser', "Amazon's old default (the server, which it refuses) gives way too");
+    // Settings saved before only changed modes were kept: every store's mode, old defaults among them.
+    env.app.repo.setSetting('sweep', { ...saved, modesVersion: undefined, stores: { ...saved.stores, kmart: 'browser', amazon: 'server' } });
+    assert.equal(sw.modeFor(R('kmart')), 'auto', 'an old default, saved with the rest, gives way to server first');
+    assert.equal(sw.modeFor(R('amazon')), 'auto');
+    assert.equal(sw.modeFor(R('target')), 'off', 'a store switched off stays off');
+    assert.equal(sw.modeFor(R('demo-kmart')), saved.stores['demo-kmart'], "the dummy stores keep theirs (they're off unless switched on)");
+    // Saved before server first (version 2): a store set to the server or a browser is searched server first now.
+    env.app.repo.setSetting('sweep', { ...saved, modesVersion: 2, stores: { ...saved.stores, bigw: 'browser', pbandai: 'server' } });
+    assert.deepEqual([sw.modeFor(R('bigw')), sw.modeFor(R('pbandai'))], ['auto', 'auto']);
     // A store's own default isn't saved, so a better default later reaches everyone.
-    const r = await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'server', bigw: 'browser' } });
+    const r = await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'auto', bigw: 'auto' } });
     assert.equal(r.status, 200, r.text);
     assert.equal(r.body.settings.stores.kmart, undefined);
     assert.equal(r.body.settings.stores.bigw, undefined);
-    // An admin who wants Kmart from a browser after all: that sticks.
-    assert.equal((await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'browser' } })).body.settings.stores.kmart, 'browser');
-    assert.equal(sw.modeFor(R('kmart')), 'browser');
+    assert.equal(r.body.settings.modesVersion, 3);
+    // An admin who wants Kmart from a browser after all (or the server only): that sticks.
+    assert.equal((await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'browser', bigw: 'server' } })).body.settings.stores.kmart, 'browser');
+    assert.deepEqual([sw.modeFor(R('kmart')), sw.modeFor(R('bigw'))], ['browser', 'server']);
   } finally {
     env.app.repo.setSetting('sweep', saved);
   }
@@ -1024,7 +1027,7 @@ test('the loops: each store swept from the server on its own loop, every few sec
   try {
     await waitFor(() => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length >= before + 2, { timeout: 15000, message: 'two Kmart searches' });
     assert.ok(sw.loops.has('demo-kmart'));
-    assert.ok(sw.events.some((e) => e.type === 'sys' && /Live sweeps started — .*Kmart \(dummy store\).* from Mugibot's server · .*EB Games \(dummy store\) from admins' browsers/.test(e.message)));
+    assert.ok(sw.events.some((e) => e.type === 'sys' && /Live sweeps started — .*Kmart \(dummy store\).* from Mugibot's server only · .*EB Games \(dummy store\) from admins' browsers/.test(e.message)));
     assert.ok(sw.loops.has('demo-jbhifi'));
     assert.ok(!sw.loops.has('demo-ebgames'), 'browser stores have no server loop');
     const h = (await boss.get('/api/monitor/sweep')).body.stores.find((s) => s.store === 'demo-kmart');

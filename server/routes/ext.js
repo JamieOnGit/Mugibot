@@ -11,8 +11,12 @@ import { DEFAULT_ALERTS, HttpError, bad, cardBackup, cardBackupInfo, num, str } 
 
 const EVENT_TYPES = { add: 'info', basket: 'info', step: 'info', checkout: 'success', ready: 'success', error: 'warn' };
 
+/** "ebgames,pokemoncenter" → the stores this browser has got through the queue of (it says, since 1.16.0). */
+const throughFrom = (v) => new Set(String(v || '').split(',').map((x) => x.trim()).filter((x) => /^[a-z0-9-]{1,40}$/.test(x)).slice(0, 20));
+
 export function register(router, ctx) {
   const { cfg, repo, limiter, retailers } = ctx;
+  const gatesUp = () => (ctx.gates ? ctx.gates.upList().map((g) => ({ store: g.store, kind: g.kind, since: g.since, wait: g.wait })) : []);
 
   // Pairing: a code shown in the dashboard → a device token for this browser.
   router.post('/api/ext/pair', async (req) => {
@@ -91,8 +95,12 @@ export function register(router, ctx) {
       browserChecks: settings.browserChecks,
       browserIntervalSeconds: cfg.monitor.browserIntervalSeconds,
       // Auto-checkout: switched on, with items armed — this browser listens for runs.
-      // (pending: runs waiting to start — a Trigger ACO test, for one, whose item needn't be armed.)
-      aco: { enabled: ctx.aco.settings(req.user.id).enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id) },
+      // (pending: runs waiting to start — a Trigger ACO test, for one, whose item needn't be armed.
+      //  listen: this is the checkout browser, so Discord's ⚡ Buy may start a run here any time.)
+      aco: { enabled: ctx.aco.settings(req.user.id).enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id), listen: ctx.aco.listens(req.user, req.device) },
+      // Checkpoints and virtual queues up now (monitor/gates.js): this browser makes no requests to a store
+      // whose queue is up, unless it's got through it.
+      gates: gatesUp(),
     };
   }, { auth: 'device' });
 
@@ -103,7 +111,9 @@ export function register(router, ctx) {
     if (!row) throw new HttpError(404, 'That ⚡ Buy link has expired — press ⚡ Buy again');
     // An Auto-checkout run's code: what this checkout may do by itself (null: an ordinary ⚡ Buy).
     const aco = row.run_id ? ctx.aco.claimed(req.user.id, row.run_id, req.device) : null;
-    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, host: row.host, profileId: row.profile_id, aco };
+    // (The product's page: where to go once through a store's queue, which may let you in at its front page.)
+    const item = row.item_id ? repo.getItem(req.user.id, row.item_id) : null;
+    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, aco };
   }, { auth: 'device', entitled: true });
 
   // Delivery details for checkout autofill (the chosen set, else the default).
@@ -135,7 +145,7 @@ export function register(router, ctx) {
   // In-browser checks: which of your SKUs your browser should look at now…
   router.get('/api/ext/checks', async (req) => {
     if (!limiter.hit(`checks:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
-    return { checks: ctx.monitor.browserDue(req.user), intervalSeconds: cfg.monitor.browserIntervalSeconds };
+    return { checks: ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')) }), intervalSeconds: cfg.monitor.browserIntervalSeconds };
   }, { auth: 'device', entitled: true });
 
   // …and what it saw. Results only ever update this account's own items.
@@ -175,7 +185,19 @@ export function register(router, ctx) {
     res.on('close', () => { gone = true; });
     const runs = await ctx.aco.next(req.user, req.device, { waitMs, alive: () => !gone && !res.writableEnded });
     const s = ctx.aco.settings(req.user.id);
-    return { runs, enabled: s.enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id) };
+    return {
+      runs, enabled: s.enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id), listen: ctx.aco.listens(req.user, req.device),
+      // Queues to get in line at (a queue went up where something's armed, or Discord's "Join the queue"), and what's up now.
+      lobbies: ctx.aco.lobbiesFor(req.user, req.device), gates: gatesUp(),
+    };
+  }, { auth: 'device', entitled: true });
+
+  // A run this browser held while it waited in a store's queue, through now: a fresh link to open the store with.
+  router.post('/api/ext/aco/:id/link', async (req) => {
+    if (!limiter.hit(`aco-link:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const url = ctx.aco.freshLink(req.user, str(req.params.id, 40));
+    if (!url) throw new HttpError(404, 'That Auto-checkout run is not waiting any more');
+    return { url };
   }, { auth: 'device', entitled: true });
 
   // …and how each run is going: 'checkout' | 'placing' | 'placed' | 'ready' | 'needs_you' | 'failed' (with why).
@@ -190,13 +212,21 @@ export function register(router, ctx) {
     return { ok: true, run };
   }, { auth: 'device' });
 
+  // Checkpoints and virtual queues (monitor/gates.js): what this browser saw — a store page that's the
+  // queue or the checkpoint (anyone's browser), or an admin's browser's look at a store as a new visitor.
+  router.post('/api/ext/gates', async (req) => {
+    if (!limiter.hit(`gates:${req.device.id}`, 60, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    if (!Array.isArray(req.body.seen)) throw bad('seen must be a list');
+    return { ok: true, gates: ctx.gates.reports(req.user, req.body.seen) };
+  }, { auth: 'device' });
+
   // Live sweeps from an admin's browser (docs/MONITORING.md): the next search at each store
   // that refuses servers… Members' browsers get none: only admins can change the shared feed.
   router.get('/api/ext/sweeps', async (req) => {
     if (!limiter.hit(`sweeps:${req.device.id}`, 120, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     // Which version this copy of the extension is (it says, since 1.8.1; before that, the one it connected with).
     const version = str(req.query.get('v'), 20) || req.device.version || '';
-    return ctx.sweeper.browserDue(req.user, { version, who: req.user.username });
+    return ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through: throughFrom(req.query.get('through')) });
   }, { auth: 'device' });
 
   // …and what they found.

@@ -33,7 +33,6 @@ export default {
   // first. (Until this, an admin's browser read the search page, and found nothing in it.)
   sweep: {
     from: 'server',
-    formerDefault: 'browser',
     parser: 'constructor',
     apiBase: 'https://ac.cnstrc.com',
     path: '/search/{q}?key=key_GZTqlLr41FS2p7AY&c=mugibot-1.0&i=mugibot-monitor&s=1&section=Products&num_results_per_page=100'

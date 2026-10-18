@@ -17,7 +17,7 @@ const SLOT_ORDER = ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toy
 export const slotOf = (id) => SLOT_ORDER.indexOf(String(id || '').replace(/^demo-/, '')) + 1;
 const ABBR = { kmart: 'KM', bigw: 'BW', target: 'TG', ebgames: 'EB', zing: 'ZG', jbhifi: 'JB', toysrus: 'TR', trainertown: 'TT', amazon: 'AZ', thegamescube: 'GC', gamerholic: 'GH', pokemoncenter: 'PC', pbandai: 'PB' };
 const abbr = (id) => ABBR[String(id || '').replace(/^demo-/, '')] || String(id || '?').slice(0, 2).toUpperCase();
-const STATE = { ok: ['ok', 'Searching'], slowed: ['warn', 'Slowed'], retrying: ['err', 'Retrying'], waiting: ['warn', 'Waiting'], starting: ['', 'Starting'], off: ['off', 'Off'] };
+const STATE = { ok: ['ok', 'Searching'], slowed: ['warn', 'Slowed'], retrying: ['err', 'Retrying'], waiting: ['warn', 'Waiting'], held: ['warn', 'In queue'], starting: ['', 'Starting'], off: ['off', 'Off'] };
 const ALERT = { listed: ['drop', 'New drop'], restock: ['restock', 'Restock'], price_drop: ['price', 'Price ↓'], price_rise: ['price', 'Price ↑'], sold_out: ['out', 'Sold out'] };
 const LOG_MAX = 300;
 const ROWS_MAX = 220;
@@ -37,7 +37,7 @@ function loadPrefs() {
   try { return { ...def, ...(JSON.parse(localStorage.getItem(PREFS_KEY)) || {}) }; } catch { return def; }
 }
 
-export function setupLive({ storeName, buyUrl, openProduct, panelOpen, sampleProduct, onSettings, resetStore, setMode, onStores = () => {} }) {
+export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct, panelOpen, sampleProduct, onSettings, resetStore, setMode, onStores = () => {} }) {
   const L = {
     // Stores this member switched off: hidden from their live feed, products and this browser's alerts.
     hidden: new Set(),
@@ -148,6 +148,13 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
   // ---------------------------------------------------------------------------
   const sortedStores = () => [...L.stores.values()].sort((a, b) => (slotOf(a.id) || 99) - (slotOf(b.id) || 99) || a.name.localeCompare(b.name));
 
+  // Where a store's searches come from (admins only): "server first", "server", "admin's browser"…
+  function fromText(s) {
+    if (s.mode === 'off') return 'off';
+    if (s.mode === 'auto') return s.source === 'browser' ? "admin's browser, while the server's refused" : 'server first';
+    return s.mode === 'browser' ? "admin's browser" : 'server';
+  }
+
   function nextText(s) {
     if (!s.nextAt) return '—';
     const left = s.nextAt - serverNow();
@@ -190,13 +197,16 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
         h('div', { class: 'r' }, h('span', {}, 'last answer'), h('b', {}, msText(s.lastMs))),
         h('div', { class: 'r' }, h('span', {}, 'next search'), h('b', { class: 'sn-next' }, nextText(s))),
         // (Where the searches come from: admins only — members aren't sent it.)
-        L.admin && s.mode ? h('div', { class: 'r' }, h('span', {}, 'from'), h('b', {}, `${s.mode === 'browser' ? "admin's browser" : s.mode === 'off' ? 'off' : 'server'} · ${s.endpoint}`)) : null,
+        L.admin && s.mode ? h('div', { class: 'r' }, h('span', {}, 'from'), h('b', {}, `${fromText(s)} · ${s.endpoint}`)) : null,
+        // Server first, the server refused: an admin's browser stands in until the server's let back in.
+        L.admin && s.backup ? h('div', { class: 'r' }, h('span', {}, 'server'), h('b', {}, `refused since ${clockOf(s.backup.since - L.skew)} · ${s.backup.retryAt ? `tries again at ${clockOf(s.backup.retryAt - L.skew)}` : 'trying again now'}`)) : null,
         s.retryAt ? h('div', { class: 'r' }, h('span', {}, 'store asked'), h('b', {}, `wait until ${clockOf(s.retryAt - L.skew)}`)) : null,
         s.fails || s.lastError ? h('div', { class: 'r' }, h('span', {}, s.fails ? 'problem' : 'note'), h('b', {}, s.lastError || `${s.fails} failed`)) : null,
         waiting && !/extension/i.test(s.lastError || '') ? h('div', { class: 'r' }, h('span', {}, ''), h('b', {}, 'Keep Chrome open with the extension connected to an admin account')) : null,
-        // A store that keeps refusing the server: an admin's browser may get through.
+        // A store that keeps refusing the server (set to the server only): server first lets an
+        // admin's browser stand in while it's refused.
         L.admin && s.refused && s.mode === 'server' ? h('div', { class: 'st-acts' }, h('span', {}, 'Still refused after a reset?'),
-          h('button', { class: 'btn small', type: 'button', onclick: () => setMode(s.id, 'browser') }, "Search it from an admin's browser")) : null);
+          h('button', { class: 'btn small', type: 'button', onclick: () => setMode(s.id, 'auto') }, "Server first: an admin's browser stands in")) : null);
       box.append(h('div', { class: `sn-chan st-${cls || 'idle'}${open ? ' open' : ''}${mine || s.status === 'off' ? ' st-dim' : ''}`, dataset: { store: s.id } },
         h('div', { class: 'hd' }, toggle,
           L.admin && s.status !== 'off' ? h('button', { class: 'btn small ghost st-reset', type: 'button', title: `Reset ${s.name}: search it again now, gently`, 'aria-label': `Reset ${s.name}`, onclick: (e) => resetStore(s.id, e.currentTarget) }, '↻') : null,
@@ -219,7 +229,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
       try {
         if (L.admin) {
           if (on && !confirm(`Switch ${s.name}'s monitoring off for everyone? Nobody gets its drops until it's switched back on.`)) return;
-          await setMode(s.id, on ? 'off' : s.defaultMode && s.defaultMode !== 'off' ? s.defaultMode : 'server');
+          await setMode(s.id, on ? 'off' : s.defaultMode && s.defaultMode !== 'off' ? s.defaultMode : 'auto');
           refreshSoon();
         } else {
           const next = new Set(L.hidden);
@@ -576,7 +586,8 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
 
   function actions(p) {
     const out = [];
-    out.push(h('a', { class: 'btn small primary', href: buyUrl(p), target: '_blank', rel: 'noopener', title: 'Adds it to your watchlist and runs your checkout with the extension' }, '⚡ Buy'));
+    // (Only where Mugibot checks out: another website's drop is "Open ↗".)
+    if (canBuy(p.store)) out.push(h('a', { class: 'btn small primary', href: buyUrl(p), target: '_blank', rel: 'noopener', title: 'Adds it to your watchlist and runs your checkout with the extension' }, '⚡ Buy'));
     if (p.url) out.push(h('a', { class: 'btn small', href: p.url, target: '_blank', rel: 'noopener', 'aria-label': `Open ${p.name} at the store` }, '↗'));
     return h('div', { class: 'acts' }, ...out);
   }
@@ -591,7 +602,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     const was = typeof a.previousPrice === 'number' && a.previousPrice !== a.price ? h('s', {}, money(a.previousPrice)) : null;
     const body = [
       thumb(a.image, a.name),
-      h('span', { class: 'm' }, swatch(a.store), ' ', `${storeName(a.store)} · `, nameButton(a), ' — ', h('b', {}, money(a.price) || '—'), was ? ' ' : '', was,
+      h('span', { class: 'm' }, swatch(a.store), ' ', `${storeName(a.store, a.url)} · `, nameButton(a), ' — ', h('b', {}, money(a.price) || '—'), was ? ' ' : '', was,
         a.note ? ` · ${a.note}` : '', a.manual ? ' · reported by an admin' : '', a.test ? ' · test (this browser only)' : ''),
     ];
     const extra = typeof a.ttnMs === 'number' ? `alerted in ${msText(a.ttnMs)}` : '';
@@ -610,10 +621,11 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
         if (ev.baseline) bits.push('first look (no alerts)');
         if (ev.error) bits.push(ev.error);
         return row('hb', 'Search', ev.at, h('span', { class: 'm' }, ...store, `${ev.storeName} · "${ev.keyword}"${ev.page > 1 ? ` page ${ev.page}` : ''} — `, h('b', {}, plural(ev.found, 'product')), bits.length ? ` · ${bits.join(' · ')}` : '',
-          ev.source === 'browser' ? " · admin's browser" : ''), msText(ev.ms));
+          ev.source === 'browser' ? " · admin's browser" : ev.trial ? " · the server's try: it's back" : ''), msText(ev.ms));
       }
       case 'err':
-        return row('err', 'Fault', ev.at, h('span', { class: 'm' }, ...store, `${ev.storeName} · "${ev.keyword}" — ${ev.error || 'failed'}`), ev.ms ? msText(ev.ms) : '');
+        return row('err', 'Fault', ev.at, h('span', { class: 'm' }, ...store, `${ev.storeName} · "${ev.keyword}" — ${ev.error || 'failed'}`,
+          ev.trial ? " · the server's try (an admin's browser carries on)" : ''), ev.ms ? msText(ev.ms) : '');
       case 'out':
         return row('out', 'Gone', ev.at, [thumb(ev.product.image, ev.product.name),
           h('span', { class: 'm' }, ...store, `${ev.storeName} · `, nameButton(ev.product), ' dropped out of the results — counted as sold out')], '');
@@ -709,7 +721,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     if (!prefs.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
     try {
       const n = new Notification(`${label}: ${a.name}`, {
-        body: `${storeName(a.store)} · ${money(a.price) || 'price not shown'}${a.test ? ' (test)' : ''}`, icon: a.image || '/img/icon-192.png', tag: `mugibot-${a.id}`,
+        body: `${storeName(a.store, a.url)} · ${money(a.price) || 'price not shown'}${a.test ? ' (test)' : ''}`, icon: a.image || '/img/icon-192.png', tag: `mugibot-${a.id}`,
       });
       n.onclick = () => { window.focus(); n.close(); };
     } catch { /* some browsers only allow notifications from a service worker */ }
@@ -731,7 +743,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     chirp(a.kind);
     desktop(a, label);
     titleFlash(`${label}: ${a.name}`);
-    $('#sn-announce').textContent = `${label}: ${a.name}, ${money(a.price) || ''} at ${storeName(a.store)}`;
+    $('#sn-announce').textContent = `${label}: ${a.name}, ${money(a.price) || ''} at ${storeName(a.store, a.url)}`;
     if (prefs.popup) {
       L.queue.push(a);
       if (!L.showing) nextPop();
@@ -750,16 +762,17 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     $('#sn-ov-type').textContent = `${a.test ? 'Test · ' : ''}${a.kind === 'restock' ? (a.status === 'preorder' ? 'Pre-order open' : 'Restock') : 'New drop'}`;
     const st = $('#sn-ov-store');
     st.textContent = '';
-    st.append(swatch(a.store), storeName(a.store));
+    st.append(swatch(a.store), storeName(a.store, a.url));
     $('#sn-ov-title').textContent = a.name;
     $('#sn-ov-price').textContent = money(a.price) || 'Price not shown';
     $('#sn-ov-was').textContent = typeof a.previousPrice === 'number' && a.previousPrice !== a.price ? `was ${money(a.previousPrice)}` : '';
     $('#sn-ov-sku').textContent = a.sku;
-    $('#sn-ov-ttn').textContent = typeof a.ttnMs === 'number' ? `alerted ${msText(a.ttnMs)} after ${storeName(a.store)} answered` : '';
+    $('#sn-ov-ttn').textContent = typeof a.ttnMs === 'number' ? `alerted ${msText(a.ttnMs)} after ${storeName(a.store, a.url)} answered` : '';
     const img = $('#sn-ov-img');
     img.hidden = !a.image;
     if (a.image) img.src = a.image;
     $('#sn-ov-buy').href = buyUrl(a);
+    $('#sn-ov-buy').hidden = !canBuy(a.store);
     const open = $('#sn-ov-open');
     open.hidden = !a.url;
     if (a.url) open.href = a.url;
@@ -829,7 +842,11 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
   // ---------------------------------------------------------------------------
   function onSweep(ev) {
     if (!ev || !L.data) return;
-    if (ev.type === 'hb' || ev.type === 'err') {
+    // The server's try at a store an admin's browser searches for it (server first): the store's
+    // state is the browser's — only whether the server's back changes it, and that's fetched.
+    if (ev.trial) {
+      refreshSoon();
+    } else if (ev.type === 'hb' || ev.type === 'err') {
       const s = L.stores.get(ev.store);
       if (s) {
         s.searches += 1;
@@ -846,7 +863,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
           s.status = 'retrying';
         }
         // When the next search comes: the set pace, slower after a refusal, doubling after each failure.
-        const every = ((s.mode === 'browser' ? L.settings.browserEverySeconds : L.settings.everySeconds) || 5) * 1000;
+        const every = ((ev.source === 'browser' || s.source === 'browser' ? L.settings.browserEverySeconds : L.settings.everySeconds) || 5) * 1000;
         const slow = s.slowedUntil && s.slowedUntil > serverNow() ? 3 : 1;
         s.nextAt = ev.at + (ev.type === 'hb' ? every * slow : Math.min(15 * 60 * 1000, every * 2 ** Math.min(s.fails, 10)));
         s.latency = [...(s.latency || []), { at: ev.at, ms: ev.ms, ok: ev.type === 'hb' }].filter((p) => p.at >= serverNow() - 2 * CHART_WINDOW).slice(-300);
@@ -858,7 +875,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
       if (ev.type === 'hb') t.streak += 1;
       else { t.errors += 1; t.streak = 0; }
       if (!hiddenStore(ev.store)) ping(ev.store, ev.type === 'err');
-    } else if (ev.type === 'sys' && /changed the sweeps|started|switched off|searching it|needs mugibot's extension/i.test(ev.message || '')) {
+    } else if (ev.type === 'sys' && /changed the sweeps|started|switched off|searching it|needs mugibot's extension|mugibot's server/i.test(ev.message || '')) {
       refreshSoon();
     }
     addLog({ at: ev.at, ev });

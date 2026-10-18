@@ -1,11 +1,17 @@
 // The ⚡ Buy page. ⚡ Buy links normally go straight to the store (server/routes/web.js); this page
 // is for the ones that can't: an expired or old link, or one from another website. One press and
-// you're on your way to checkout.
+// you're on your way to checkout — in this browser, or (on a phone, say) in your checkout browser
+// on your computer: "Send to my computer" (server/aco.js remote()).
 import { $, api, setMsg } from './common.js';
 
 const q = new URLSearchParams(location.search);
 const idMatch = location.pathname.match(/^\/buy\/([\w-]+)/);
 let item = null;
+// No extension in this browser (a phone): sending it to the computer is the way.
+if (!document.documentElement.dataset.mugibotExtension) {
+  $('#b-remote').classList.add('primary');
+  $('#b-go').classList.remove('primary');
+}
 
 async function load() {
   if (idMatch) {
@@ -39,6 +45,20 @@ $('#b-go').addEventListener('click', async () => {
     if (!item) item = await api('POST', '/api/items', { url: q.get('url'), store: q.get('store'), sku: q.get('sku'), name: q.get('name') || '' });
     const r = await api('POST', `/api/items/${item.id}/go`, {});
     location.href = r.url;
+  } catch (e) {
+    setMsg($('#b-msg'), e.status === 402 ? `${e.message}.` : e.message);
+    btn.disabled = false;
+  }
+});
+
+$('#b-remote').addEventListener('click', async () => {
+  const btn = $('#b-remote');
+  btn.disabled = true;
+  try {
+    if (!item) item = await api('POST', '/api/items', { url: q.get('url'), store: q.get('store'), sku: q.get('sku'), name: q.get('name') || '' });
+    const r = await api('POST', `/api/aco/remote/${item.id}`, {});
+    const how = r.mode === 'place' ? 'It places the order by itself, within your Auto-checkout limits.' : `It fills checkout in and stops at the final button — ${r.why}.`;
+    setMsg($('#b-msg'), `Sent to ${r.device.name}: it's opening the store now. ${how}${r.listening ? '' : ` ${r.device.name} isn't open right now — it starts as soon as it is (within 2 minutes).`} You'll get a DM with how it went.`, true);
   } catch (e) {
     setMsg($('#b-msg'), e.status === 402 ? `${e.message}.` : e.message);
     btn.disabled = false;

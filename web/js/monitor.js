@@ -17,8 +17,9 @@ const STATUS = {
   in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', not_listed: 'Not listed yet',
   not_found: 'Page gone', blocked: 'Blocked by site', error: 'Check failed', unknown: 'Unknown', pending: 'Waiting for first check',
 };
-const CATEGORY = { pokemon: 'Pokémon', onepiece: 'One Piece', other: 'Other' };
-const MODES = { server: 'Server', browser: "Admin's browser", off: 'Off' };
+const CATEGORY = { pokemon: 'Pokémon', onepiece: 'One Piece', other: 'Other', nontcg: 'Non-TCG' };
+// Server first (every store's default): Mugibot's server searches it; an admin's browser stands in only while it's refused.
+const MODES = { auto: 'Server first', server: 'Server only', browser: "Admin's browser", off: 'Off' };
 const DAY = 86400000;
 const SVG = 'http://www.w3.org/2000/svg';
 
@@ -27,12 +28,15 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
   // The Monitor's pages: Live (everyone), Settings and Check log (admins).
   const panelOpen = () => !$('[data-panel="monitor"]').hidden;
   const settingsOpen = () => !$('[data-panel="monitor-settings"]').hidden;
-  const storeName = (id) => (m.stores.find((s) => s.id === id) || {}).name || id;
+  // (Another website's product — a drop watch's: monitor/drops.js — goes by its address, with no ⚡ Buy.)
+  const hostOf = (url) => { try { return new URL(url).host.replace(/^www\./, ''); } catch { return ''; } };
+  const storeName = (id, url = '') => (id === 'other' && hostOf(url)) || (m.stores.find((s) => s.id === id) || {}).name || (id === 'other' ? 'Another website' : id);
+  const canBuy = (id) => !!(m.stores.find((s) => s.id === id) || {}).buy;
   const filters = () => ({ q: $('#m-q').value.trim(), category: $('#m-category').value, store: $('#m-store').value, status: $('#m-status').value });
   const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v)).toString();
   const buyUrl = (a) => `/buy?${qs({ store: a.store, sku: a.sku, url: a.url, name: a.name })}`;
   const live = setupLive({
-    storeName, buyUrl, panelOpen: () => panelOpen() || settingsOpen(), openProduct: (id) => openProduct(id),
+    storeName, buyUrl, canBuy, panelOpen: () => panelOpen() || settingsOpen(), openProduct: (id) => openProduct(id),
     sampleProduct: () => m.products.find((p) => p.image && p.price) || m.products[0] || null,
     onSettings: (d) => { fillSweepForm(d); renderSweep(d); },
     resetStore: (id, button) => resetStore(id, button),
@@ -177,7 +181,7 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
 
   function actions(p, { compact = false } = {}) {
     const out = [];
-    if (p.kind !== 'sold_out') out.push(h('a', { class: 'btn small primary', href: buyUrl(p), title: 'Adds it to your watchlist and opens the store with ⚡ Buy' }, '⚡ Buy'));
+    if (p.kind !== 'sold_out' && canBuy(p.store)) out.push(h('a', { class: 'btn small primary', href: buyUrl(p), title: 'Adds it to your watchlist and opens the store with ⚡ Buy' }, '⚡ Buy'));
     if (p.url) out.push(h('a', { class: 'btn small', href: p.url, target: '_blank', rel: 'noopener' }, compact ? '↗' : 'Open ↗'));
     if (!compact) {
       const b = h('button', { class: 'btn small', type: 'button' }, '+ Watch');
@@ -197,7 +201,7 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
       h('div', { class: 'info' },
         h('div', { class: 'kind' }, `${k.emoji} ${label}`, a.manual ? h('span', { class: 'pill' }, 'reported by an admin') : null),
         h('div', { class: 'name' }, name),
-        h('div', { class: 'meta' }, `${storeName(a.store)} · `, money(a.price) || '—', ' ', was, ` · ${CATEGORY[a.category] || ''} · `, h('time', { datetime: new Date(a.at).toISOString(), title: when(a.at) }, ago(a.at)), a.note ? ` · ${a.note}` : '')),
+        h('div', { class: 'meta' }, `${storeName(a.store, a.url)} · `, money(a.price) || '—', ' ', was, ` · ${CATEGORY[a.category] || ''} · `, h('time', { datetime: new Date(a.at).toISOString(), title: when(a.at) }, ago(a.at)), a.note ? ` · ${a.note}` : '')),
       actions(a, { compact: true }));
   }
 
@@ -214,7 +218,7 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     const was = typeof p.previousPrice === 'number' && p.previousPrice !== p.price ? h('s', { class: 'muted small' }, money(p.previousPrice)) : null;
     const diff = typeof p.previousPrice === 'number' && typeof p.price === 'number' ? Math.round((p.price - p.previousPrice) * 100) / 100 : 0;
     const acts = [];
-    if (p.status !== 'not_found') acts.push(h('a', { class: 'btn small primary', href: buyUrl(p), target: '_blank', rel: 'noopener', title: 'Adds it to your watchlist and runs your checkout with the extension' }, '⚡ Buy'));
+    if (p.status !== 'not_found' && canBuy(p.store)) acts.push(h('a', { class: 'btn small primary', href: buyUrl(p), target: '_blank', rel: 'noopener', title: 'Adds it to your watchlist and runs your checkout with the extension' }, '⚡ Buy'));
     if (p.url) acts.push(h('a', { class: 'btn small', href: p.url, target: '_blank', rel: 'noopener', 'aria-label': `Open ${p.name || p.sku} at the store` }, '↗'));
     // On your watchlist (its own checks and DMs, and Auto-checkout) — or one click away.
     const mine = watching(p);
@@ -231,7 +235,7 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
         h('button', { class: 'link-btn name', type: 'button', onclick: () => openProduct(p.id), title: p.name || p.sku }, p.name || p.sku),
         h('div', { class: 'meta' }, isNewProduct(p) ? h('span', { class: 'pill info new-tag', title: `Found ${ago(p.sweep.firstAt)}` }, '🆕 New') : null,
           ` SKU ${p.sku}${p.monitor && p.monitor.paused ? ' · ⏸ paused' : ''}${p.sweep && p.sweep.seenAt ? ` · seen ${ago(p.sweep.seenAt)}` : ''}`)),
-      h('div', { class: 'store' }, h('span', { class: `sn-swatch s${slotOf(p.store)}`, 'aria-hidden': 'true' }), storeName(p.store)),
+      h('div', { class: 'store' }, h('span', { class: `sn-swatch s${slotOf(p.store)}`, 'aria-hidden': 'true' }), storeName(p.store, p.url)),
       h('div', { class: 'price' }, h('b', {}, money(p.price) || '—'), ' ', was),
       h('div', { class: 'state' }, statusPill(p), h('div', { class: 'muted small' }, p.statusAt ? `since ${ago(p.statusAt)}` : '')),
       h('div', { class: `delta ${diff < 0 ? 'down' : diff > 0 ? 'up' : ''}`, title: diff ? `Was ${money(p.previousPrice)}` : 'No price change' }, diff < 0 ? `▼ ${money(-diff)}` : diff > 0 ? `▲ ${money(diff)}` : '—'),
@@ -438,9 +442,10 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
       const rate = s.requests1h ? Math.round((s.ok1h / s.requests1h) * 100) : null;
       const status = s.mode === 'off' ? h('span', { class: 'muted' }, '—')
         : s.fails ? h('span', { class: `pill ${s.fails > 2 ? 'err' : 'warn'}`, title: s.lastError }, `${s.lastError || 'Failing'}${s.nextAt ? ` · ${retryIn(s.nextAt)}` : ''}`)
+          : s.backup ? h('span', { class: 'pill warn', title: `Mugibot's server: ${s.backup.why || 'refused'}` }, `Admin's browser standing in · server ${s.backup.retryAt ? `tries again ${new Date(s.backup.retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'trying again now'}`)
           : s.slowedUntil ? h('span', { class: 'pill warn', title: 'Searched at a third of the pace for a while (after a refusal, or a reset)' }, `Gentle until ${new Date(s.slowedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
             : s.lastOkAt ? h('span', { class: 'pill ok', title: s.lastError || '' }, s.lastError || 'OK')
-            : h('span', { class: 'pill' }, s.mode === 'browser' ? "Waiting for an admin's browser" : 'Starting');
+            : h('span', { class: 'pill' }, s.source === 'browser' ? "Waiting for an admin's browser" : 'Starting');
       const id = s.id || s.store;
       // Where it's searched from: changes straight away.
       const sel = h('select', { 'aria-label': `${s.name}: searched from`, dataset: { store: id } },
@@ -488,14 +493,15 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     }
   }
 
-  // Where a store is searched from (server, an admin's browser, or off): saved straight away.
+  // Where a store is searched from (server first, the server only, an admin's browser, or off): saved straight away.
   async function setMode(id, mode) {
     try {
       const current = m.sweep ? m.sweep.settings.stores : (await api('GET', '/api/monitor/sweep')).settings.stores;
       const d = await api('PUT', '/api/monitor/sweep', { stores: { ...current, [id]: mode } });
       renderSweep(d);
       live.setSettings(d.settings);
-      toast(`${storeName(id)}: ${MODES[mode].toLowerCase()}`, mode === 'browser' ? "Searched from an admin's browser with the extension from now on." : mode === 'off' ? 'No more searches there.' : "Searched from Mugibot's server from now on.", 'success');
+      toast(`${storeName(id)}: ${MODES[mode].toLowerCase()}`, mode === 'browser' ? "Searched from an admin's browser with the extension from now on." : mode === 'off' ? 'No more searches there.'
+        : mode === 'auto' ? "Searched from Mugibot's server; an admin's browser stands in only while the store refuses it." : "Searched from Mugibot's server only, from now on.", 'success');
     } catch (err) {
       toast("Couldn't change that", err.message, 'warn');
       if (m.sweep) renderSweep(m.sweep);

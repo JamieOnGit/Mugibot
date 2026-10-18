@@ -149,7 +149,13 @@ Each one restarts Mugibot, which takes about a minute.
 
 ---
 
-## 6. Slash commands
+## 6. Slash commands (and ⚡ Buy from a phone)
+
+The same address handles slash commands and the **⚡ Buy** buttons on alerts and
+DMs. With it set, ⚡ Buy works from a phone: Discord tells Mugibot who pressed
+it, and their checkout browser (on their computer) checks out
+(docs/AUTO-CHECKOUT.md, "⚡ Buy from your phone"). Without it, ⚡ Buy is a link
+that opens the store in the browser it's pressed in.
 
 1. Back in the Developer Portal → **General Information** → **Interactions
    Endpoint URL** → `<BASE_URL>/api/discord/interactions` → **Save Changes**.
@@ -194,12 +200,20 @@ Mugibot also checks that they're an admin in Mugibot.
    > Seen by the Mugibot monitor. Press ⚡ Buy to go straight to checkout.
    > [⚡ Buy] [Open product] [Watchlist]
 
-   **⚡ Buy** opens the store in their browser straight away: one click, no
-   page in between. With the extension connected, it goes straight to
-   checkout with one of it in the bag, and fills checkout in up to the final
-   button. The link is signed for that member and that SKU (it only works
-   signed in as them) and goes straight through for 7 days; after that it
-   opens the ⚡ Buy page, where they press ⚡ Buy once.
+   **⚡ Buy** works wherever they press it, their phone included: their
+   **checkout browser** (the computer with the extension) opens the store and
+   checks out. With Auto-checkout on, it places the order within their limits;
+   otherwise it fills checkout in and stops at the final button. Only they see
+   Discord's reply, which follows it to "Order placed" or "Checkout ready".
+   Nothing to sign in to on the phone (docs/AUTO-CHECKOUT.md, "⚡ Buy from your
+   phone"). The same goes for **⚡ Buy with Mugibot** on the channel alerts.
+
+   Without the interactions endpoint (step 6), ⚡ Buy is a link instead. It
+   opens the store in the browser it's pressed in, and with the extension there
+   it goes straight to checkout. The link is signed for that member and that
+   SKU (it only works signed in as them) and goes straight through for 7 days;
+   after that it opens the ⚡ Buy page. Emails and personal webhooks always
+   carry the link.
 4. Slash commands work in the server and in DMs with the bot.
 
 If someone's membership ends, the bot takes the `Member` role away (within 10
@@ -243,7 +257,9 @@ channels** → **Set up store channels** makes them in one go:
 | `bigw-…`, `target-…`, `jbhifi-…`, `ebgames-…`, `zing-…`, `toysrus-…` | The same for BIG W, Target, JB Hi-Fi, EB Games, Zing and Toys"R"Us |
 | `premium-bandai` | Everything from Premium Bandai |
 | `pokemon-center` | Everything from Pokémon Center |
+| `non-tcg-alerts` | What isn't trading cards, from every store and website: the admins' 🎯 drop watches (an Xbox at JB Hi-Fi, a figure at any shop — docs/MONITORING.md → Drop watches). Only there, not in the store's own channel |
 | `misc-retailers` | Everything no other channel takes: other stores (Trainer Town, Amazon AU, The Games Cube, Gamerholic…) and other games (Gundam, Dragon Ball, Riftbound…) at the split stores |
+| `virtual-queue-detection` | JB Hi-Fi's hCaptcha checkpoint and EB Games' and Pokémon Center's virtual queues going up and coming down (docs/MONITORING.md → Checkpoints and virtual queues), with **📥 Join the queue on my computer** on a queue's post |
 
 - The bot uses channels with those names that are **already there** (it also
   finds `kmart-onepiece` and `misc-retailer`), and makes the rest in a
@@ -259,6 +275,18 @@ channels** → **Set up store channels** makes them in one go:
   Leave it unticked to keep them (an alert then also goes to those).
 - `misc-retailers` is a **catch-all** rule: it only gets an alert no other rule
   took. Any rule can be a catch-all (tick **Catch-all** on it).
+- `non-tcg-alerts` is made the same way, or on its own with **Make
+  #non-tcg-alerts** on the Monitor page's 🎯 Drop watches tab. Made before it
+  existed? Press either. Until there's one, drop watches' alerts go to
+  `misc-retailers`. An admin can also pick, for each drop watch, the channel its
+  drops and restocks go to and the role they ping (the drop watch's **Post in**
+  and **Ping**, or **✎** on it): those go only there, instead of
+  `non-tcg-alerts`. A member's own drop watch is never posted anywhere: they get
+  a DM.
+- `virtual-queue-detection` has no rule: no product alerts go there, only the
+  checkpoints and queues. It pings the same role. Made before this channel
+  existed? Press **Set up store channels** again. Until then, the bot finds a
+  channel with that name, or makes one, the first time it has something to post.
 - The bot needs **View Channel**, **Send Messages** and **Embed Links** in each
   channel (in the category's permissions, they apply to all of them).
 

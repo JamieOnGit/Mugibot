@@ -3,6 +3,7 @@
 
 import http from 'node:http';
 import { Aco } from './aco.js';
+import { Drops } from './monitor/drops.js';
 import { Vip } from './monitor/vip.js';
 import { Catalog } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -13,6 +14,7 @@ import { Hub } from './hub.js';
 import { Router, RateLimiter, clientIp, parseCookies, parseJson, readBody, securityHeaders, sendJson } from './http.js';
 import { Mailer } from './mailer.js';
 import { Feed } from './monitor/feed.js';
+import { Gates } from './monitor/gates.js';
 import { storeFetch } from './monitor/http.js';
 import { Monitor } from './monitor/index.js';
 import { Sweeper } from './monitor/sweep.js';
@@ -60,11 +62,24 @@ export async function createApp(options = {}) {
   const vip = new Vip({ cfg, db, repo, catalog, retailers, hub, now });
   monitor.vip = vip;
   sweeper.vip = vip;
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, limiter, pageCache: new Map() };
+  // Checkpoints and virtual queues (JB Hi-Fi's, EB Games', Pokémon Center's): seen up and down, posted in #virtual-queue-detection.
+  const gates = new Gates({ cfg, db, repo, retailers, discord, notifier, hub, feed, fetchImpl: storeFetchImpl, now });
+  gates.sweeper = sweeper;
+  sweeper.gates = gates;
+  monitor.gates = gates;
+  // Drop watches: anything outside the card keywords, by link or words, at any store or website.
+  const drops = new Drops({ cfg, db, repo, catalog, retailers, hub, notifier, fetchImpl: storeFetchImpl, now });
+  Object.assign(drops, { monitor, sweeper });
+  monitor.drops = drops;
+  sweeper.drops = drops;
+  feed.drops = drops;
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, limiter, pageCache: new Map() };
+  drops.ctx = ctx;
   // Auto-checkout: started by the monitor when an armed item drops.
   const aco = new Aco({ ...ctx, now });
   ctx.aco = aco;
   monitor.aco = aco;
+  gates.aco = aco;
 
   const router = new Router();
   auth.register(router, ctx);
@@ -215,6 +230,8 @@ export async function createApp(options = {}) {
     hub,
     monitor,
     sweeper,
+    gates,
+    drops,
     aco,
     catalog,
     feed,
@@ -234,6 +251,8 @@ export async function createApp(options = {}) {
       if (cfg.baseUrlAuto) cfg.baseUrl = app.url;
       monitor.start();
       sweeper.start();
+      gates.start();
+      drops.start();
       aco.start();
       startJobs();
       return app.url;
@@ -241,6 +260,8 @@ export async function createApp(options = {}) {
     async close() {
       monitor.stop();
       sweeper.stop();
+      gates.stop();
+      drops.stop();
       aco.stop();
       timers.forEach(clearInterval);
       hub.close();

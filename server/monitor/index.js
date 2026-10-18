@@ -28,6 +28,7 @@ import { extractProduct, extractProductLinks } from './extract.js';
 import { SWEEP_FRESH_MS } from './feed.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
+import { gateOnPage } from './gate.js';
 
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
@@ -178,7 +179,8 @@ export class Monitor {
             };
           }
         }
-        if (res.status === 404) return { status: STATUS.NOT_FOUND };
+        // (A Shopify store's product that's gone. At another website it may just not be Shopify: its page says.)
+        if (res.status === 404 && retailer && retailer.id !== 'other') return { status: STATUS.NOT_FOUND };
       } catch (e) {
         if (e instanceof BlockedUrlError) throw e;
         /* fall back to the page */
@@ -189,10 +191,22 @@ export class Monitor {
     if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store refused the server check (HTTP ${res.status})` };
     if (!res.ok) return { status: STATUS.ERROR, error: `HTTP ${res.status}` };
     const html = (await res.text()).slice(0, 3_000_000);
+    const queued = this.gateSeen(retailer, res.url || url, html);
+    if (queued) return queued;
     const r = extractProduct(html, { url, hints: (retailer && retailer.hints) || {} });
     let image = r.image || null;
     try { if (image) image = new URL(image, url).href; } catch { image = null; }
     return { status: r.status, title: r.title, price: r.price, image, decidedBy: r.decidedBy, error: r.blocked ? 'The store showed a bot check instead of the page' : '' };
+  }
+
+  /**
+   * The store's virtual queue (or checkpoint) where its page should be (monitor/gates.js): the server
+   * saw it — and the check tells nothing about the product (never read as its stock).
+   */
+  gateSeen(retailer, url, html) {
+    if (!retailer || !retailer.gate || !gateOnPage(retailer.gate, { url, html })) return null;
+    if (this.gates) this.gates.observe(retailer.id, 'up', { source: 'server' });
+    return { status: STATUS.BLOCKED, error: `${retailer.name}'s ${retailer.gate.kind === 'queue' ? 'virtual queue' : 'checkpoint'} was there instead of the page` };
   }
 
   /** Look for a SKU on the store's search page. */
@@ -203,6 +217,8 @@ export class Monitor {
     if (!res.ok) return { status: STATUS.ERROR, error: `HTTP ${res.status}` };
     const html = (await res.text()).slice(0, 3_000_000);
     const finalUrl = res.url || page.url;
+    const queued = this.gateSeen(retailer, finalUrl, html);
+    if (queued) return queued;
     // Some stores send a search for an exact code straight to the product page.
     if (retailer && retailer.productPath && retailer.productPath.test(new URL(finalUrl).pathname) && pathHasSku(finalUrl, page.sku)) {
       return { status: STATUS.NOT_LISTED, foundUrl: finalUrl };
@@ -244,8 +260,9 @@ export class Monitor {
       if (prev.kind === 'search' && r.foundUrl) continue;
       // What this check really saw: the feed keeps the last confirmed status itself.
       await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
-      // A VIP watch waiting to see whether this is on sale yet (monitor/vip.js).
+      // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js).
       if (this.vip) this.vip.checked(this.catalog.productById(product.id));
+      if (this.drops) this.drops.checked(this.catalog.productById(product.id));
     }
     if (prev.kind === 'search' && r.foundUrl) {
       this.resolveSku(prev.store, prev.sku, r.foundUrl);
@@ -286,6 +303,10 @@ export class Monitor {
     }
     let status = r.status;
     if (source === 'browser' && failed && prev && !FAILED.has(prev) && prev !== 'pending' && item.browser_fails < 2) status = prev;
+    // A drop watch's find whose stock wasn't known (monitor/drops.js): its first read is how it is,
+    // not a change — and a failed read leaves it not known.
+    const firstRead = prev === STATUS.UNKNOWN && !!item.drop_watch;
+    if (firstRead && failed) status = prev;
     const changed = status !== prev;
     const error = r.error || '';
     this.db.run(`UPDATE items SET status = :st, status_source = :src, status_at = CASE WHEN :changed = 1 THEN :now ELSE status_at END, checked_at = :now,
@@ -296,6 +317,10 @@ export class Monitor {
     }
     if (!changed) return status;
     const fresh = { ...item, status, last_price: r.price ?? item.last_price, title: r.title || item.title };
+    if (firstRead) {
+      if (this.drops) this.drops.firstRead(fresh, status);
+      return status;
+    }
     if (isOrderable(status) && !isOrderable(prev)) {
       await this.alertRestock(fresh, { status, price: r.price ?? item.last_price, source, wasListed: prev !== STATUS.NOT_LISTED });
     } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.BLOCKED, STATUS.ERROR, STATUS.NOT_FOUND, 'pending'].includes(status)) {
@@ -360,8 +385,13 @@ export class Monitor {
   // -------------------------------------------------------------------------
   // In-browser checks (the extension)
   // -------------------------------------------------------------------------
-  /** Which of this member's SKUs their browser should check now (and lease them so two browsers don't both do it). */
-  browserDue(user) {
+  /**
+   * Which of this member's SKUs their browser should check now (and lease them so two browsers don't both do it).
+   * through: stores whose virtual queue this browser has got through. A store whose queue is up is left alone
+   * otherwise: a request there could cost the member their place in line (monitor/gates.js).
+   */
+  browserDue(user, { through = new Set() } = {}) {
+    const held = (store) => !!this.gates && this.gates.queueUp(store) && !through.has(store);
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(user.id, 'alerts', {}) || {}) };
     if (!settings.browserChecks) return [];
     const now = this.now();
@@ -371,7 +401,7 @@ export class Monitor {
     const out = [];
     for (const it of rows) {
       const r = this.retailers.get(it.store);
-      if (!r || it.store === 'other' || !this.retailers.enabled(r) || !this.retailers.settings(r).browserChecks) continue;
+      if (!r || it.store === 'other' || !this.retailers.enabled(r) || !this.retailers.settings(r).browserChecks || held(it.store)) continue;
       const serverOff = !this.retailers.settings(r).serverChecks;
       const serverStruggling = FAILED.has(it.page_status) || it.page_fails > 0 || /Server checks are off/.test(it.page_error || '');
       const serverSilent = !it.page_checked && now - it.created_at > 90 * 1000;
@@ -387,7 +417,7 @@ export class Monitor {
     // Members' browsers never do: only the server and admins can change what everyone sees.
     if (user.role === 'admin' && out.length < 5) {
       const stores = this.retailers.list.filter((r) => r.id !== 'other' && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
-        && (!this.retailers.settings(r).serverChecks || this.serverStruggles(r.id))).map((r) => r.id);
+        && (!this.retailers.settings(r).serverChecks || this.serverStruggles(r.id)) && !held(r.id)).map((r) => r.id);
       for (const p of this.catalog.browserTargets(stores, now, 5 - out.length)) {
         const r = this.retailers.get(p.store);
         const url = p.url || this.retailers.searchUrl(r, p.sku);

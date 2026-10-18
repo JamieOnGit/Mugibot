@@ -35,6 +35,18 @@ export default {
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
   account: { signIn: '' },
   monitor: { server: true, browser: true },
+  // Its virtual queue before big drops (www.pokemoncenter.com/?queue: you wait in line, the page
+  // moving you on by itself). Seen by any browser sent there; its going down, by an admin's browser
+  // asking for the front page as a new visitor every 3 minutes. Nothing ever refreshes the line.
+  gate: {
+    kind: 'queue', title: 'Queue Monitor', label: 'Virtual queue', module: 'Pokémon Center', url: '/?queue',
+    page: {
+      url: /[?&]queue\b/i,
+      text: [/you are (now )?in (the )?(line|queue)/i, /you'?re in the queue/i, /virtual (waiting )?(room|queue)/i],
+      wait: /wait(?:ing)? time[^0-9]{0,40}(\d+)\s*min/i,
+    },
+    check: { path: '/', everySeconds: 180 },
+  },
   flow: {
     product: {
       add: [/^add to (cart|bag)$/i, /\bpre-?order\b/i],

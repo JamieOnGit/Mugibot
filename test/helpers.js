@@ -56,9 +56,10 @@ export async function startFakeDiscord() {
     members: new Map(), // discord id → Set of role ids
     dmsClosed: new Set(),
     messages: [], // { channel, body }
+    edits: [], // { app, token, body }: replies to buttons, changed as their run goes
     guild: { id: 'guild-1', name: 'Mugibot Members' },
     // Bot role: Create Invite, View Channels, Send Messages, Embed Links, Manage Roles.
-    roles: [{ id: 'guild-1', name: '@everyone', position: 0, permissions: '0' }, { id: 'role-member', name: 'Member', position: 1, permissions: '0' }, { id: 'role-bot', name: 'Mugibot', position: 5, permissions: String(1n | (1n << 10n) | (1n << 11n) | (1n << 14n) | (1n << 28n)) }],
+    roles: [{ id: 'guild-1', name: '@everyone', position: 0, permissions: '0' }, { id: 'role-member', name: 'Member', position: 1, permissions: '0' }, { id: 'role-bot', name: 'Mugibot', position: 5, managed: true, permissions: String(1n | (1n << 10n) | (1n << 11n) | (1n << 14n) | (1n << 28n)) }],
     botRoles: ['role-bot'],
     rateLimitNext: 0,
     // The server's channels (text 0, category 4); the bot may make more when it can Manage Channels.
@@ -141,6 +142,11 @@ export async function startFakeDiscord() {
     }
     if ((m = p.match(/^\/channels\/([^/]+)$/))) return reply(200, { id: m[1], name: 'restocks' });
     if ((m = p.match(/^\/applications\/([^/]+)\/guilds\/([^/]+)\/commands$/)) && c.method === 'PUT') return reply(200, c.body.map((x, i) => ({ ...x, id: `cmd-${i}` })));
+    // A button's or command's reply, changed afterwards (by its interaction token).
+    if ((m = p.match(/^\/webhooks\/([^/]+)\/([^/]+)\/messages\/@original$/)) && c.method === 'PATCH') {
+      state.edits.push({ app: m[1], token: decodeURIComponent(m[2]), body: c.body });
+      return reply(200, { id: `reply-${m[2]}`, ...c.body });
+    }
     return reply(404, { message: `fake discord: no route ${c.method} ${p}`, code: 0 });
   });
   await fake.start();
@@ -148,6 +154,7 @@ export async function startFakeDiscord() {
     state,
     dmsTo: (discordId) => state.messages.filter((x) => x.to === discordId),
     channelPosts: (channel) => state.messages.filter((x) => x.channel === channel),
+    repliesFor: (token) => state.edits.filter((x) => x.token === token).map((x) => x.body.content),
   });
 }
 

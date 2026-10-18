@@ -35,6 +35,10 @@ export function publicProduct(p) {
 export function publicEvent(ev) {
   if (!ev) return null;
   if (ev.type === 'sys') return SOURCE_RE.test(ev.message || '') ? null : ev;
+  // (The server's try while an admin's browser searches a store for it: says where searches come from.)
+  if (ev.trial) return null;
   const { source, ...rest } = ev;
+  // (Someone's own drop watch's words are theirs: monitor/drops.js.)
+  if (rest.drop === 'private') rest.keyword = 'a drop watch';
   return rest.error ? { ...rest, error: publicError(rest.error) } : rest;
 }

@@ -27,6 +27,32 @@ community. Built on TCGCopBot's working Kmart flow.
   another item in the bag or a total over the limit. Every attempt is logged on
   the Auto-checkout tab with each step and why it ended, and DM'd. See
   [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md).
+- **⚡ Buy from your phone.** Press ⚡ Buy on a Discord alert or DM anywhere,
+  your phone included, with nothing signed in there: Discord says who pressed
+  it, and their **checkout browser** (the computer with the extension) opens
+  the store and checks out. With Auto-checkout on it places the order within
+  their limits; otherwise it stops at the final button for them. Discord's
+  reply, seen only by them, follows it to the end. Runs only ever go to one of a
+  member's browsers (the one they pick, or the newest), never to all of them.
+- **🚦 Checkpoints and virtual queues.** Mugibot watches for JB Hi-Fi's hCaptcha
+  checkpoint (`/checkpoint`) and EB Games' and Pokémon Center's virtual queues
+  going up before a drop and coming down after. Each is posted in
+  `#virtual-queue-detection`, shown on every dashboard and DM'd to members
+  watching that store. ⚡ Buy and Auto-checkout wait at the checkpoint for the
+  member to solve it, then carry on. In a queue they wait their turn, never
+  refreshing the page, and check out once through. A member armed at that store
+  gets their checkout browser in line by itself, and anyone can from Discord
+  (📥 Join the queue on my computer). See
+  [docs/MONITORING.md](docs/MONITORING.md#-checkpoints-and-virtual-queues).
+- **🎯 Drop watches: anything that isn't the card keywords.** A console at
+  JB Hi-Fi, a figure at any shop: paste its link, or type the words in its name
+  and where to look (a store Mugibot searches, or any other website). An admin's
+  are for everyone: posted in `#non-tcg-alerts` and every dashboard, with ⚡ Buy,
+  and members arm Auto-checkout on them as on anything else. A member's own are
+  theirs alone: what they find goes on their watchlist, DM'd. ⚡ Buy and
+  Auto-checkout work at every store Mugibot knows, the same way as for cards;
+  other websites get the alert only. See
+  [docs/MONITORING.md](docs/MONITORING.md#-drop-watches-anything-that-isnt-the-card-keywords).
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games,
   JB Hi-Fi, Target, Toys"R"Us, Amazon, The Games Cube, Gamerholic and Premium
   Bandai (Australia) are beta (built from walk-throughs of their real checkouts
@@ -47,13 +73,13 @@ community. Built on TCGCopBot's working Kmart flow.
   keywords (`pokemon`, `one piece`…) and alerts the moment it sees a 🆕 **new
   drop**, a 🟢 **restock** or a 📉 **price drop**: in the dashboard, in your
   Discord channels (image, store, price, stock and a ⚡ Buy button) and to
-  every member watching that SKU. Target, JB Hi-Fi, Toys"R"Us, Trainer Town
-  (each game's whole collection), Kmart (through its search provider), The Games
-  Cube and Gamerholic (its newest products) are searched from the server; BIG W
-  and Pokémon Center and Premium Bandai (their pages opened and read once they
-  have built their product lists), and EB Games and Amazon AU (asked for from
-  inside one of their pages; both turn servers away) from an admin's browser
-  with the extension. Admins can also monitor single products. Each channel
+  every member watching that SKU. Every store is searched **server first**:
+  from Mugibot's server, with an admin's browser (the extension) standing in
+  only while a store refuses the server or the server can't read it — BIG W,
+  Pokémon Center and Premium Bandai (their pages opened and read once they have
+  built their product lists), EB Games and Amazon AU (asked for from inside one
+  of their pages) often do — and the server taking back over as soon as it's
+  let in. Admins can also monitor single products. Each channel
   gets what its rule asks for (by category, store, kind or keyword), and one
   button sets up a channel per store and game (`kmart-pokemon`,
   `bigw-one-piece`…, `premium-bandai`, `pokemon-center`, and `misc-retailers`
@@ -155,6 +181,11 @@ Discord and Whop are optional for this. Add them later with the guides.
 - **Never evades bot protection.** If a store shows a bot check, Mugibot backs
   off and marks it "Blocked by site". It never solves CAPTCHAs, skips queues or
   disguises traffic. Admins can always send a manual restock ping.
+- **Checkpoints and queues.** JB Hi-Fi's checkpoint is looked at by the server
+  (honestly `Mugibot/1.0`). EB Games' and Pokémon Center's queues are looked at
+  from an admin's browser as a new visitor, with no cookies, so nobody's place
+  in line is touched. While a queue is up, a browser that isn't through it asks
+  that store for nothing.
 
 ## Fair play (same guardrails as TCGBot/TCGCopBot)
 
@@ -191,7 +222,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 227 tests in about eight minutes:
+the 279 tests in about ten minutes:
 
 ```bash
 npm install
@@ -216,6 +247,12 @@ npm test
   to members watching the SKU; the filters; refused searches back off; new
   keywords set the scene again; admins' browsers sweep the stores that refuse
   servers (members' never do); the per-store loops; the store client.
+- **Server first** (dummy stores): every store searched from the server; an
+  admin's browser stands in after 3 refusals (1 at stores known to refuse
+  servers, or a page the server can't read, with no flood of "new"), the
+  server's tries after 5, 10, 20, 30 minutes (its usual backoff while no browser
+  is searching), Retry-After, Reset, Sweep now, its take-back, and members never
+  seeing any of it; with the real extension standing in and stopping again.
 - **Monitor feed** (dummy stores, fake Discord): name, image, price and stock
   from the first check without an alert; restock, price drop and rise alerts
   once per cooldown; alert rules by category, store, kind and keyword; price
@@ -259,7 +296,51 @@ npm test
   - an add the store didn't take (the empty bag noticed, Add pressed once more,
     then it says why);
   - Trigger ACO (a test run now, from the dashboard), and stores that only sell
-    signed in (Amazon).
+    signed in (Amazon);
+  - ⚡ Buy from your phone: a Discord button pressed (signed by Discord, for
+    whoever pressed it) makes the checkout browser check out, the real
+    extension included, with nothing armed. It places the order with
+    Auto-checkout on and stops at the final button otherwise, or when a limit
+    or the max price is in the way. The reply follows the run. Runs go to the
+    checkout browser alone, a picked one or the newest. Also covered: someone
+    else's button, an unconnected Discord, no membership and "Send to my
+    computer" on the buy page.
+- **Checkpoints and virtual queues** (dummy JB Hi-Fi checkpoint that only a
+  person's click solves; dummy EB Games and Pokémon Center queues that refresh
+  themselves and lose your place if anything asks again too soon):
+  - the server seeing JB's checkpoint go up and be disabled (twice to count),
+    honestly itself;
+  - members' and admins' browsers seeing a queue, and only a look as a new
+    visitor taking it down;
+  - the posts in `#virtual-queue-detection` (the monitor's embed), DMs and the
+    dashboard banner;
+  - checks and searches held while a queue is up, unless the browser is through;
+  - with the real extension: ⚡ Buy and Auto-checkout waiting at JB's
+    checkpoint (never touching it) and carrying on once a person solves it;
+  - Auto-checkout through EB's queue and ⚡ Buy through Pokémon Center's, never
+    refreshing them (no place lost, only the page's own refreshes);
+  - a queue going up putting an armed member's browser in line, a drop
+    meanwhile waiting for that tab, then placing the order;
+  - an admin's sweep tab left alone in the queue, the queue seen up and down
+    as a new visitor;
+  - 📥 Join the queue from Discord, and runs not waiting forever.
+- **🎯 Drop watches** (dummy stores, a dummy "other website", fake Discord):
+  - `#non-tcg-alerts` made with the store channels (or on its own), and what
+    isn't trading cards going only there;
+  - an admin's link (an Xbox at JB Hi-Fi): monitored for everyone, posted with
+    ⚡ Buy, a member arming it and their Auto-checkout starting;
+  - an admin's words at a store: searched as typed in the sweeps' turn (one
+    search in three at most), the first look the scene, a new drop posted and
+    bought for the admin;
+  - a member's own words: on their watchlist only, DM'd and bought when it
+    drops, never posted, its words hidden from others;
+  - a link and words at another website: read as Mugibot, alerts with no
+    ⚡ Buy, a site that refuses backing off;
+  - with the real extension: ⚡ Buy for a product that isn't a trading card at
+    every one of the 13 stores, to its final button; a drop watch on a console
+    at JB Hi-Fi bought by Auto-checkout; the 🎯 tab's ⚡ Buy;
+  - the dashboard's 🎯 tab: link or words, where to look, Auto-checkout only
+    where Mugibot checks out, for everyone or just for you.
 - **Amazon sweeps from an admin's browser:** its search page asked for from inside
   an Amazon page (the dummy Amazon gives servers HTTP 503, like the real one).
 - **Dashboard round:** the card backup (only a locked copy reaches the server,
@@ -282,7 +363,9 @@ server/
   retailers/        one file per store, with its checkout flow (kmart.js, bigw.js, …)
   monitor/          sweep.js (live sweeps), listing.js (search results), http.js (store requests),
                     SKU page checks and in-browser check results, feed.js (alerts),
-                    public.js (what members see of the sweeps)
+                    public.js (what members see of the sweeps), gates.js and gate.js
+                    (checkpoints and virtual queues: up, down, #virtual-queue-detection),
+                    drops.js (drop watches: anything outside the card keywords, #non-tcg-alerts)
   catalog.js        the Monitor's products, monitors, price history, check log, alert rules
   discord.js        Discord OAuth, server roles, DMs, channel posts
   whop.js           Whop checkout links, webhooks, membership sync

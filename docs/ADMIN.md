@@ -99,13 +99,17 @@ cleared, searched now, then at a third of the pace for 10 minutes (see
 [MONITORING.md](MONITORING.md#-reset-when-a-store-keeps-failing)). In
 Discord: `/monitor add · list · pause · resume · remove · status`.
 
-BIG W, EB Games, Pokémon Center and Premium Bandai refuse Mugibot's server, so
-they're searched from an admin's browser: keep Chrome open with the extension
-(1.8.1 or later for Pokémon Center and Premium Bandai: with an older one the
-Monitor tab says so on their cards, and they wait for an updated browser)
-connected to an admin account. (Zing's website now sends everyone to EB Games, so Zing's sweeps are
-off.) Kmart, Target, JB Hi-Fi, Toys"R"Us, Trainer Town, Amazon AU, The Games
-Cube and Gamerholic are searched from the server. See [MONITORING.md](MONITORING.md).
+Every store is searched **server first**: Mugibot's server searches it, and an
+admin's browser stands in only while the store refuses the server (3 times in a
+row; once at BIG W, Amazon AU, EB Games, Pokémon Center and Premium Bandai,
+which often turn servers away) or the server can't read its products. The
+server tries again after 5 minutes (then 10, 20, every 30) and takes back over
+the moment it's let in. So keep Chrome open with the extension (1.8.1 or later
+for Pokémon Center and Premium Bandai: with an older one the Monitor tab says so
+on their cards, and they wait for an updated browser) connected to an admin
+account, to stand in. Settings → Stores can pin a store to **Server only**,
+**Admin's browser** or **Off**. (Zing's website now sends everyone to EB Games,
+so Zing's sweeps are off.) See [MONITORING.md](MONITORING.md#1-where-each-store-is-searched-from).
 
 ## Command line (on the server)
 

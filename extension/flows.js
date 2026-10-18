@@ -46,5 +46,46 @@ var MGBFlows = (function () {
     return (retailer && retailer.flow && retailer.flow[name]) || {};
   }
 
-  return { revive: revive, forLocation: forLocation, any: any, part: part, decodedPath: decodedPath };
+  // A store's own page (its menus, its products) has lots of links; a queue page has a handful. A store
+  // page that mentions its queue (a banner about a launch) is still the store. (server/monitor/gate.js)
+  var STORE_PAGE_LINKS = 40;
+  var QUEUE_WORDS = /queue|in (the )?line|waiting room/i;
+
+  /**
+   * Is this page the store's checkpoint (JB Hi-Fi's hCaptcha page at /checkpoint) or its virtual
+   * queue ("You're in the queue!")? → { kind: 'checkpoint' | 'queue', wait: minutes or null }, or
+   * null. Read the same way as the server reads it (server/monitor/gate.js), from the open page —
+   * cheaply: an ordinary page is never read word by word or laid out for it.
+   */
+  function gateHere(retailer, doc, loc) {
+    var g = retailer && retailer.gate;
+    if (!g || !g.page) return null;
+    var p = g.page;
+    var list = function (v) { return (Array.isArray(v) ? v : v ? [v] : []).filter(function (re) { return re && re.test; }); };
+    var where = !!((p.path && p.path.test && p.path.test(decodedPath(loc))) || (p.url && p.url.test && p.url.test(String(loc.href || ''))));
+    var html = function () { try { return doc.documentElement.outerHTML.slice(0, 2000000); } catch (e) { return ''; } };
+    var markers = list(p.markers);
+    var text = null;
+    var words = function () {
+      if (text === null) { try { text = String((doc.body && doc.body.innerText) || '').slice(0, 20000); } catch (e) { text = ''; } }
+      return text;
+    };
+    if (g.kind === 'checkpoint') {
+      // Its own address, with its check on it (a "not found" page there isn't one).
+      if (!where) return null;
+      if (markers.length) { var h = html(); if (!markers.some(function (re) { return re.test(h); })) return null; }
+    } else {
+      if (!where) {
+        var raw = '';
+        try { raw = String((doc.body && doc.body.textContent) || ''); } catch (e) { raw = ''; }
+        if (!QUEUE_WORDS.test(raw) || !list(p.text).some(function (re) { return re.test(words()); })) return null;
+      }
+      if (doc.querySelectorAll('a[href]').length >= STORE_PAGE_LINKS) return null;
+    }
+    var m = p.wait && p.wait.test ? words().match(p.wait) : null;
+    var wait = m ? Math.min(1440, Math.max(0, parseInt(m[1], 10))) : null;
+    return { kind: g.kind, wait: isFinite(wait) ? wait : null };
+  }
+
+  return { revive: revive, forLocation: forLocation, any: any, part: part, decodedPath: decodedPath, gateHere: gateHere };
 })();
