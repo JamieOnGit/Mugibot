@@ -48,6 +48,10 @@
     if (storeCopy) return;
   }
 
+  // Payment frames ask the page to focus their card boxes: listening from the start, before anything is
+  // asked of the extension (a checkout's frames can be ready first).
+  MGBFill.startFocusBroker();
+
   // The ⚡ Buy code: grabbed by capture.js as the page started loading (or still in the address).
   let goCode = null;
   try {
@@ -72,7 +76,6 @@
   const retailer = MGBFlows.forLocation(retailers, location);
   if (!retailer) return; // not a store Mugibot has a flow for (or a page outside it)
   const checkoutFlow = MGBFlows.part(retailer, 'checkout');
-  MGBFill.startFocusBroker(); // payment frames ask the page to focus their card boxes
 
   // The store login monitor (logins.js): are you signed in here? Read from the page as it settles
   // (headers often fill in a moment after the page loads); nothing is clicked.

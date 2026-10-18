@@ -273,7 +273,9 @@ var MGBFill = (function () {
   // Card boxes in a payment provider's frame (Kmart's, for one) only keep what's
   // typed into a focused box. A frame can't always focus itself, so it asks the
   // page above to focus it (which asks its own parent first, if it's a frame too),
-  // one box at a time. Messages carry no card details.
+  // one box at a time. Messages carry no card details. A frame's script can start
+  // before the page above is listening, so it asks again every 100 ms until it's
+  // answered (the page above takes each ask once).
   var FOCUS = 'mugibot-focus:';
 
   /** On a store page or a frame that holds other frames: focus a child frame when it asks. */
@@ -282,6 +284,7 @@ var MGBFill = (function () {
     window.__mugibotFocusBroker = true;
     var queue = [];
     var current = null;
+    var known = function (id) { return (current && current.id === id) || queue.some(function (j) { return j.id === id; }); };
     function frameOf(win) {
       return toArray(document.querySelectorAll('iframe, frame')).find(function (f) { return f.contentWindow === win; });
     }
@@ -310,6 +313,8 @@ var MGBFill = (function () {
         if (frame) {
           // "You're in the queue": the frame waits its turn instead of typing without the focus.
           try { e.source.postMessage(FOCUS + 'queued:' + parts[1], '*'); } catch (x) { /* ignore */ }
+          // (An ask repeated before our answer reached it: already queued, or being focused now.)
+          if (known(parts[1])) return;
           queue.push({ id: parts[1], source: e.source, frame: frame });
           next();
         }
@@ -326,9 +331,12 @@ var MGBFill = (function () {
       var id = Math.random().toString(36).slice(2);
       var settled = false;
       var release = function () { try { window.parent.postMessage(FOCUS + 'done:' + id, '*'); } catch (e) { /* ignore */ } };
+      var ask = function () { try { window.parent.postMessage(FOCUS + 'ask:' + id, '*'); } catch (e) { /* ignore */ } };
+      var asking = null;
       var settle = function () {
         if (settled) return;
         settled = true;
+        clearInterval(asking);
         window.removeEventListener('message', onMessage);
         resolve(release);
       };
@@ -337,10 +345,12 @@ var MGBFill = (function () {
         if (e.source !== window.parent) return;
         if (e.data === FOCUS + 'go:' + id) { clearTimeout(fallback); settle(); }
         // Queued behind other boxes: wait for our turn (each box takes at most a few seconds).
-        else if (e.data === FOCUS + 'queued:' + id) { clearTimeout(fallback); fallback = setTimeout(settle, 20000); }
+        else if (e.data === FOCUS + 'queued:' + id) { clearInterval(asking); clearTimeout(fallback); fallback = setTimeout(settle, 20000); }
       };
       window.addEventListener('message', onMessage);
-      try { window.parent.postMessage(FOCUS + 'ask:' + id, '*'); } catch (e) { /* ignore */ }
+      ask();
+      // (The page above may not be listening yet — its script starts when it's ready: asked again until it answers.)
+      asking = setInterval(ask, 100);
       fallback = setTimeout(settle, 1500); // nobody above to help: type anyway
     });
   }
