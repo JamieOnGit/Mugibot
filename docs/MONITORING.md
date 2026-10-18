@@ -336,7 +336,13 @@ collectible, a product at any shop. One box takes either:
   website** its page is read for its stock every minute (Shopify's product
   data where the site is a Shopify shop, else the page itself): you're told
   when it's back in stock, and buy it there yourself. There's no ⚡ Buy and no
-  Auto-checkout at other websites.
+  Auto-checkout at other websites. The whole link you gave is what's read; its
+  SKU (the website and the link's last part, e.g. `microsoft.com/8wg5vqp0x4h3`)
+  is only Mugibot's own code for it. Until its page answers, it's called by the
+  words in its link ("Xbox Series X25 Limited Edition"), then by its page's
+  own name. The extension's in-browser checks don't cover other websites (it
+  only runs on the stores Mugibot knows): a site that turns Mugibot's server
+  away (Microsoft's, say) shows **Check failed**, and is asked again later.
 - **The words in its name**, and where to look:
   - **A store Mugibot searches** (JB Hi-Fi, Kmart, Target, EB Games…): the
     words are searched at that store as typed (no "tcg" added), in the live

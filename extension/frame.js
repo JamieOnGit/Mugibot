@@ -20,7 +20,7 @@
   const ask = (msg) => new Promise((resolve) => {
     try { chrome.runtime.sendMessage(msg, (res) => resolve(chrome.runtime.lastError ? null : res)); } catch { resolve(null); }
   });
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const wait = MGBFlows.wait; // (at full speed in a tab in the background too)
   const kindOf = (el) => MGBFill.fieldKind(el, null, { hasParts: true }) || '';
   const cardBoxes = () => [...document.querySelectorAll('input, select')].filter((el) => MGBFill.CARD_KINDS.includes(kindOf(el)));
   const digits = (s) => String(s || '').replace(/\D/g, '');
@@ -88,6 +88,8 @@
       cardReady: data.card ? cardReady : null,
     });
     clearInterval(watch);
+    // (A ⚡ Buy at the final button, or stuck, for you: the store's next checkout goes in a few minutes. Auto-checkout's runs say so themselves.)
+    if (!run && ['ready', 'final', 'needs_you', 'timeout'].includes(result)) ask({ type: 'turnEnd', parked: true });
     if (result === 'final' && run && fin) return finish(run, fin);
     if (run && (result === 'needs_you' || result === 'timeout')) await acoReport('needs_you', result === 'timeout' ? 'timeout' : 'needs_details', `Checkout got stuck at ${name} — finish it yourself in this tab.`);
     if (run && result === 'done') await acoReport('placed', '', `Order confirmed at ${name}`);
@@ -210,6 +212,8 @@
       if ((tries.get(el) || 0) >= MAX_TRIES) continue;
       const n = (tries.get(el) || 0) + 1;
       tries.set(el, n);
+      // Several checkouts at once: one tab types a card box at a time, brought forward for it.
+      const turn = await ask({ type: 'typeTurn' });
       const release = await MGBFill.requestFocus();
       let focused = document.hasFocus();
       if (!focused && !focusAsked) {
@@ -225,6 +229,7 @@
       const value = kind === 'cardExpiry' && n > 1 ? digits(values[kind]) : values[kind];
       const result = MGBFill.typeInto(el, value, kind);
       release();
+      if (turn && turn.ok) ask({ type: 'typeDone' });
       await wait(250); // the box's own formatting, and (some) its check
       how.set(el, `${focused ? result : `${result}, no focus`}${el.value && !kept(el) ? ', kept wrong' : ''}`);
     }

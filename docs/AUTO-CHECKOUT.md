@@ -124,6 +124,40 @@ Trigger ACO and ⚡ Buy from your phone.
 - Your other browsers still do everything else: ⚡ Buy pressed in them,
   in-browser checks, the store login monitor.
 
+### Several at once
+
+Several drops at once — armed items, Trigger ACO, ⚡ Buy pressed in Discord
+while a run is going — each get a checkout of their own, all in your checkout
+browser:
+
+- **At different stores they go side by side**, each in a tab of its own. A run
+  never waits for one at another store.
+- **At the same store they take turns.** A store keeps **one bag** for your
+  browser, whichever tab adds to it, so two checkouts there at once would put
+  both items in one order (or stop for each other's). The second is **next in
+  line**: it waits (no tab yet), and opens the store the moment the one before
+  it is done — its order placed, it stopped, or you closed its tab. Each order
+  then has just its own item. The Run history and Discord's reply say "Next in
+  line", and name the checkout it's waiting for.
+- **A checkout that's waiting for you** (stopped at the final button, or for
+  your bank's check) holds the store's turn for 3 minutes more, so you can
+  finish it. Then the next one goes. One that stopped before anything went into
+  the bag (sold out, signed out…) hands over straight away.
+- **⚡ Buy pressed yourself** (on the dashboard, or a link) at a store where
+  another of your checkouts is going waits on its page and says so. Then it
+  reloads the page and goes.
+- **The tab in front, and the ones behind.** Chrome slows a background tab's
+  own timers to about once a second. A checkout's waits are timed by the
+  extension instead, so a checkout behind another tab runs at full speed. Card
+  boxes in payment frames take turns: each tab is brought forward to type its
+  card, one at a time, so two cards are never typed at once.
+- One run at a time for the **same item**: pressing ⚡ Buy again while it's
+  checking out says so.
+- **The day's limits hold** with runs at once. The runs still checking out
+  count towards the day's orders and spending, so several starting together
+  never go over them ("2 of 2 today (2 checking out now)"). One that stops
+  short frees its place again.
+
 ### Checkpoints and virtual queues
 
 Before a big drop, JB Hi-Fi can switch on its **checkpoint** (an hCaptcha
@@ -185,6 +219,18 @@ opens the bag instead. When that happens, Mugibot goes back to the product and
 presses Add once more. If the bag is still empty, it stops and says so, with
 what the store's page said ("Something went wrong…"). It never checks out an
 empty bag, and never adds twice.
+
+**Never stuck between the bag and checkout.**
+
+- A bag icon whose number doesn't change until the next page: when the store's
+  cart answered the add, it goes on to checkout. It doesn't press Add again,
+  which would put a second one in.
+- Added, with no "added" pop-up and no bag link it knows: it opens the store's
+  bag page by its address (`bag.url` in the flow, else the store's `/cart`).
+- A bag page whose Checkout button it doesn't know by its words: the store's
+  checkout page (`checkout.url`), or a link on the page that goes to checkout.
+  With neither, it says so within a few seconds, with your item in the bag.
+- Shopify's cart link landing back on the product page: it presses Add there.
 After **3 failures in a day** it stops trying and disarms until you arm it again.
 
 ### What it checks before pressing the final button
@@ -366,8 +412,14 @@ the monitor sees an armed item drop (live sweep, page check or a browser's check
   A card backup (below) is locked in the browser before it's sent.
 - **Limits come from the server**, with the run, not from anything the store's
   page could change. The server also counts the day's orders and spending.
+- **Several at once** (`extension/background.js`, "one at a time at each
+  store"): the extension keeps a line per store, first come first served. A run
+  whose store is busy reports `waiting` with reason `turn` and is opened later
+  with a fresh link (`POST /api/ext/aco/:id/link`). Waits are timed by the
+  extension's worker (`MGBFlows.wait`), and card boxes take turns across tabs.
 - **Runs that stall are closed.**
   - Not picked up by a browser within 2 minutes: "didn't start".
+  - Next in line for 20 minutes: "failed".
   - Opened but not finished in 10 minutes: "failed".
   - Final button pressed with no outcome in 5 minutes: "needs you".
 - **Another member's browser** can't see, start or report your runs. A run's
@@ -399,7 +451,9 @@ Tests:
 
 - `test/aco.test.js`: server.
 - `test/remote.test.js`: ⚡ Buy from your phone and the checkout browser.
-- `test/extension.e2e.test.js`: the real extension on the dummy stores.
+- `test/extension.e2e.test.js`: the real extension on the dummy stores
+  (several at once included).
+- `test/background.test.js`: a checkout in a background tab, at full speed.
 - `test/ui.test.js`: the tab.
 
 ## Fair play

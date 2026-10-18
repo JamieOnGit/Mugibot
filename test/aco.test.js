@@ -381,3 +381,90 @@ test('stores that only check out signed in (Amazon): not while the browser says 
   await drop(amazon.id, 90);
   assert.equal(lastRun(amazon.id).status, 'queued');
 });
+
+test('several at once: drops at the same moment each get a run, all handed to the browser together; one next in line at its store says so (no DM), goes when its turn comes, and gives up after 20 minutes', async () => {
+  await ash.put('/api/aco', { enabled: true, mode: 'place', perDay: 10, spendPerDay: 5000, maxOrder: 400, signedInOnly: false });
+  env.app.db.run("UPDATE aco_runs SET status = 'expired' WHERE user_id = :u AND status IN ('queued', 'sent', 'started', 'waiting', 'checkout')", { u: ash.user.id });
+  // (New items: the ones before have had their failures today.)
+  const add = async (n) => (await ash.post('/api/items', { url: `https://www.kmart.com.au/product/several-at-once-${n}-4390000${n}/`, name: `Several ${n}`, maxPrice: 400, aco: true })).body;
+  const a = await add(1);
+  const b = await add(2);
+  await drop(a.id, 100);
+  await drop(b.id, 100);
+  assert.deepEqual([lastRun(a.id).status, lastRun(b.id).status], ['queued', 'queued'], JSON.stringify([lastRun(a.id), lastRun(b.id)].map((r) => r && [r.status, r.reason, r.message])));
+  const next = await ashBrowser.call('GET', '/api/ext/aco/next');
+  assert.deepEqual(next.body.runs.map((r) => r.name).sort(), [a.name, b.name].sort(), 'both handed over at once');
+  // The browser's: the first opens its store; the second (the same store) is next in line.
+  const [first, second] = next.body.runs;
+  assert.equal((await ashBrowser.call('POST', '/api/ext/claim', { code: codeOf(first.url) })).status, 200);
+  // (What the member was told: their activity — a queue's or checkpoint's wait tells them, a turn doesn't.)
+  const told = async () => (await events(ash)).filter((e) => /In .+'s queue|checkpoint needs you/.test(e.message)).length;
+  const before = await told();
+  let r = await report(second.id, { status: 'waiting', reason: 'turn', message: `Next in line at ${second.storeName}: your checkout of ${first.name} there goes first` });
+  assert.equal(r.status, 200, r.text);
+  let run = toRun(env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: second.id }));
+  assert.equal(run.status, 'waiting');
+  assert.equal(run.reason, 'turn');
+  assert.equal(run.statusText, 'Next in line');
+  assert.match(run.reasonText, /your other checkout at this store goes first/);
+  assert.match(aco.remoteText(run, 'Chrome on Mac'), /⏳ Next in line at .+ in \*\*Chrome on Mac\*\*: your other checkout there goes first/);
+  assert.equal(await told(), before, 'no "in the queue" message for a turn: it goes in a moment');
+  // Still in line a few minutes on (said again): the same one step.
+  await report(second.id, { status: 'waiting', reason: 'turn', message: `Next in line at ${second.storeName}: your checkout of ${first.name} there goes first` });
+  assert.equal(toRun(env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: second.id })).steps.filter((x) => x.status === 'waiting').length, 1);
+  // The first is placed: the second's turn — a fresh link, then the store opens with it.
+  await report(first.id, { status: 'placed', total: 110 });
+  const fresh = await ashBrowser.call('POST', `/api/ext/aco/${second.id}/link`, {});
+  assert.equal(fresh.status, 200, fresh.text);
+  const claim = await ashBrowser.call('POST', '/api/ext/claim', { code: codeOf(fresh.body.url) });
+  assert.equal(claim.status, 200);
+  assert.equal(claim.body.aco.runId, second.id);
+  run = toRun(env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: second.id }));
+  assert.equal(run.status, 'started');
+  assert.deepEqual(run.steps.map((x) => x.status), ['queued', 'sent', 'waiting', 'started']);
+  await report(second.id, { status: 'placed', total: 110 });
+  assert.equal(lastRun(b.id).status, 'placed');
+
+  // Next in line for 20 minutes (the one before it never finishing): it gives up, saying why.
+  const c = await add(3);
+  await drop(c.id, 100);
+  const third = (await ashBrowser.call('GET', '/api/ext/aco/next')).body.runs[0];
+  await report(third.id, { status: 'waiting', reason: 'turn', message: 'Next in line' });
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - :ms WHERE id = :id', { id: third.id, ms: 21 * 60 * 1000 });
+  aco.expire();
+  run = lastRun(c.id);
+  assert.equal(run.status, 'failed');
+  assert.equal(run.reason, 'timeout');
+  assert.match(run.message, /Your other checkout at .+ was still going after 20 minutes — it stopped waiting for its turn/);
+  // (And an extension that gave up on the wait itself says so the same way.)
+  for (const it of [a, b, c]) await ash.del(`/api/items/${it.id}`);
+});
+
+test("several at once never go over the day's limits together: runs still checking out count towards the orders and spending", async () => {
+  await ash.put('/api/aco', { enabled: true, mode: 'place', perDay: 2, spendPerDay: 5000, maxOrder: 400, signedInOnly: false });
+  // (A day of its own: the orders the tests before placed count as yesterday's.)
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: ash.user.id });
+  env.app.db.run("UPDATE aco_runs SET status = 'expired' WHERE user_id = :u AND status IN ('queued', 'sent', 'started', 'waiting', 'checkout')", { u: ash.user.id });
+  const add = async (n) => (await ash.post('/api/items', { url: `https://www.kmart.com.au/product/limits-at-once-${n}-4391000${n}/`, name: `Limits ${n}`, maxPrice: 300, aco: true })).body;
+  const items = [await add(1), await add(2), await add(3)];
+  // Three drop in the same moment, with 2 orders a day allowed: two start, the third waits for tomorrow.
+  for (const it of items) await drop(it.id, 100);
+  assert.deepEqual(items.map((it) => lastRun(it.id).status), ['queued', 'queued', 'skipped']);
+  assert.equal(lastRun(items[2].id).reason, 'daily_orders');
+  assert.match(lastRun(items[2].id).message, /2 of 2 today \(2 checking out now\)/);
+  // The spending too: $250 a day, two $100 runs on their way — a third $100 would make $300.
+  await ash.put('/api/aco', { perDay: 10, spendPerDay: 250 });
+  await ash.put(`/api/items/${items[2].id}`, { aco: true });
+  await drop(items[2].id, 100);
+  assert.equal(lastRun(items[2].id).reason, 'daily_spend');
+  assert.match(lastRun(items[2].id).message, /\$200\.00 of \$250\.00 spent today \(2 checking out now\)/);
+  // One of them stops short (nothing bought): the third may go now.
+  const [first] = (await ashBrowser.call('GET', '/api/ext/aco/next')).body.runs;
+  await report(first.id, { status: 'failed', reason: 'sold_out' });
+  await ash.put(`/api/items/${items[2].id}`, { aco: true });
+  await drop(items[2].id, 100);
+  assert.equal(lastRun(items[2].id).status, 'queued');
+  env.app.db.run("UPDATE aco_runs SET status = 'expired' WHERE user_id = :u AND status IN ('queued', 'sent', 'started')", { u: ash.user.id });
+  for (const it of items) await ash.del(`/api/items/${it.id}`);
+  await ash.put('/api/aco', { perDay: 10, spendPerDay: 5000 });
+});

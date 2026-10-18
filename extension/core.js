@@ -30,6 +30,14 @@ var MGBQuick = (function () {
   // more; or, if the count can't be read, go on anyway.
   var QUIET_MS = 5000;
   var CONFIRM_MS = 6000;
+  // Added, and no "added" pop-up with a Checkout button, nor a bag link Mugibot knows, after this
+  // long: the store's bag page, by its address. On the bag page with the item in it and no Checkout
+  // button Mugibot knows after BAG_MS: a link that goes to checkout, else it says so (not 30 s on).
+  var NO_ROUTE_MS = 2500;
+  var BAG_MS = 4000;
+  // The bag link's number hasn't moved this long after Add, but the store's cart answered the add: it's
+  // in (some stores only update that number on the next page) — on to checkout, never Add again.
+  var ANSWERED_MS = 2500;
   // How long to wait for a page built with React or Vue to wire up its Add button.
   var READY_MS = 8000;
   var ADDED_RE = /\badded to (your )?(bag|cart|basket|trolley)\b|\bitems? added\b/i;
@@ -48,7 +56,7 @@ var MGBQuick = (function () {
   var CLOSE_RE = /^(×|✕|✖|x|close|close (this )?(dialog|popup|pop-up|modal|window)|dismiss|no,? thanks?|not now|maybe later|skip|continue without( adding)?|no thank you)$/i;
   var POPUP = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], [class*="modal" i], [class*="popup" i], [class*="pop-up" i], [class*="overlay" i], [class*="lightbox" i]';
 
-  var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  var wait = MGBFlows.wait; // (at full speed in a tab in the background too)
   var toArray = function (list) { return Array.prototype.slice.call(list); };
   var part = MGBFlows.part;
   var any = MGBFlows.any;
@@ -231,6 +239,28 @@ var MGBQuick = (function () {
     }
     var list = controls().filter(function (el) { return isCheckoutLabel(R, textOf(el), 'bag'); });
     return list.find(function (el) { return !el.closest('header, nav'); }) || list[0] || null;
+  }
+
+  /**
+   * A link that goes to the store's checkout (by its address), for a bag page whose Checkout button
+   * Mugibot doesn't know by its words. Never PayPal's or another express one, nor a final button.
+   */
+  function checkoutLink(R) {
+    return controls().find(function (el) {
+      var href = el.getAttribute('href') || el.getAttribute('formaction') || '';
+      if (!/\/check-?outs?\b|checkout/i.test(href) || EXPRESS.test(href) || /paypal|afterpay|klarna|shop-?pay|apple-?pay|google-?pay/i.test(href)) return false;
+      var t = textOf(el);
+      return !EXPRESS.test(t) && !isFinal(R, t) && t.length < 60;
+    }) || null;
+  }
+
+  /** The store's bag page: flow bag.url, else /cart under the store's own address (Pokémon Center's is /en-au/cart). */
+  function bagUrl(R) {
+    var B = part(R, 'bag');
+    if (B.url) return storePath(R, B.url);
+    var under = '';
+    try { under = new URL(R.base).pathname.replace(/\/+$/, ''); } catch (e) { under = (R && R.pathPrefix) || ''; }
+    return under + '/cart';
   }
 
   function findBag(R) {
@@ -496,6 +526,9 @@ var MGBQuick = (function () {
     var C = part(R, 'checkout');
     var why = opts.why || function () {};
     var closed = 0;
+    // On its way to another page already (a link the store's code followed): nothing sent anywhere else meanwhile.
+    var leaving = false;
+    addEventListener('beforeunload', function () { leaving = true; }, { once: true });
     function skipUpsell() {
       if (closed >= 5) return false;
       var title = dismissUpsell(R);
@@ -695,6 +728,22 @@ var MGBQuick = (function () {
       } else if (flow.stage === 'cart-link') {
         // The cart link opened the cart instead of checkout (e.g. the store wants you to look first).
         if (onBagPage(R)) return checkoutFromBag();
+        // Somewhere else (the product page again, say — the link's option has gone): its Add button, as for any store.
+        if (Date.now() - arrived > NO_ROUTE_MS) {
+          var add2 = findAddToBag(R);
+          if (!add2) {
+            store.clear();
+            setStatus("The store's cart link didn't open checkout, and there's no Add button here. Continue yourself.");
+            report('error', "The store's cart link didn't open checkout", product);
+            why('no_checkout');
+            return 'error';
+          }
+          add2 = await whenReady(R, add2, opts.probe, setStatus);
+          store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), productUrl: location.href.split('#')[0] }));
+          setStatus('Adding to your bag…');
+          pressAdd(page, add2);
+          report('add', 'The cart link didn\'t open checkout — pressed "' + textOf(add2).slice(0, 40) + '"', product);
+        }
       } else if (flow.stage === 'add-clicked') {
         var since = Date.now() - (flow.clickedAt || flow.startedAt);
         // The store's "added" popup, with its own Checkout button (one that wasn't there before the press).
@@ -738,6 +787,17 @@ var MGBQuick = (function () {
         // Nothing on the page reacted to the press (we watched it), or the count didn't move.
         var ignored = !!page.watch && page.watch.changes() === 0 && since > QUIET_MS;
         var unmoved = count != null && flow.countBefore != null && count === flow.countBefore && since > CONFIRM_MS;
+        // The bag link's number didn't move, but the store's cart answered the add (some stores only update
+        // it on the next page): on to checkout — not Add again, which would put a second one in. (Its bag
+        // turning out empty there: back for Add once more, as ever.)
+        var answered = count != null && flow.countBefore != null && count === flow.countBefore && since > ANSWERED_MS && cartRequestDone(flow.clickedAt);
+        if (!flow.added && answered) {
+          flow = Object.assign({}, flow, { added: true, addedAt: Date.now() });
+          store.save(flow);
+          setStatus('Added — going to checkout…');
+          report('add', 'The store\'s cart took it (its bag count didn\'t change on this page) — going to checkout', product);
+          continue;
+        }
         if (flow.added || (!ignored && !unmoved && since > CONFIRM_MS)) {
           if (C.url) return openCheckout(null, flow);
           // No checkout page to go to: the "added" popup's Checkout button (a moment for it to show), else the bag.
@@ -748,6 +808,13 @@ var MGBQuick = (function () {
             setStatus('Opening your bag…');
             report('basket', 'Opening the bag', product);
             bag.click();
+          } else if (waited > NO_ROUTE_MS && !leaving) {
+            // Neither an "added" pop-up with a Checkout button nor a bag link Mugibot knows: the bag page itself.
+            store.save(Object.assign({}, flow, { stage: 'bag-clicked', bagAt: Date.now(), bagUrlTried: true }));
+            setStatus('Added — opening your bag…');
+            report('basket', 'Opening the bag page (no bag link Mugibot knows on this page)', product);
+            location.assign(bagUrl(R));
+            return 'navigating';
           }
         } else if (ignored || unmoved) {
           var again = flow.retried ? null : findAddToBag(R);
@@ -764,10 +831,11 @@ var MGBQuick = (function () {
         var checkout = findCheckout(R, true) || (onBagPage(R) || late ? findCheckout(R, false) : null);
         if (checkout) return goCheckout(checkout);
         // The bag page, empty: the add didn't go through.
-        if (onBagPage(R) && Date.now() - arrived > 4000) {
+        if (onBagPage(R) && Date.now() - arrived > BAG_MS) {
           var empty2 = emptyBag(flow, 'Opened the bag');
           if (empty2) return empty2;
-          // The item's in the bag, but no Checkout button Mugibot knows: the store's checkout page, once.
+          // The item's in the bag, but no Checkout button Mugibot knows: the store's checkout page, once —
+          // or a link on the page that goes there — else it says so now (nothing more will show up).
           if (C.url && !flow.urlTried) {
             store.save(Object.assign({}, flow, { stage: 'to-checkout', urlTried: true, leftAt: Date.now() }));
             setStatus('Opening checkout…');
@@ -775,6 +843,24 @@ var MGBQuick = (function () {
             location.assign(storePath(R, C.url));
             return 'navigating';
           }
+          var link = checkoutLink(R);
+          if (link) {
+            report('checkout', 'Opening checkout (its link on the bag page)', product);
+            return goCheckout(link);
+          }
+          store.clear();
+          setStatus("Couldn't find the Checkout button on your bag page. Continue yourself.");
+          report('error', 'The bag page had no Checkout button Mugibot knows', product);
+          why('no_checkout');
+          return 'error';
+        }
+        // A bag drawer with no Checkout button Mugibot knows, a while on: the bag page itself, once.
+        if (!onBagPage(R) && !leaving && Date.now() - (flow.bagAt || 0) > NO_ROUTE_MS + 3500 && !flow.bagUrlTried) {
+          store.save(Object.assign({}, flow, { stage: 'bag-clicked', bagUrlTried: true, bagAt: Date.now() }));
+          setStatus('Opening your bag…');
+          report('basket', 'Opening the bag page (no Checkout button in its drawer)', product);
+          location.assign(bagUrl(R));
+          return 'navigating';
         }
       }
       await wait(POLL_MS);

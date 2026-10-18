@@ -800,7 +800,7 @@ loaders.checkout = async () => {
 const ACO_ICON = { placed: '✅', ready: '🛒', needs_you: '⚠️', failed: '❌', expired: '❌', skipped: '⏭️', waiting: '🚦' };
 const ACO_TONE = { placed: 'ok', ready: 'info', needs_you: 'warn', failed: 'err', expired: 'err', skipped: '', waiting: 'warn' };
 const ACO_STEP = {
-  queued: 'Dropped', sent: 'Sent to your browser', started: 'Store opened', waiting: 'Waiting (queue or checkpoint)', checkout: 'At checkout', placing: 'Final button pressed',
+  queued: 'Dropped', sent: 'Sent to your browser', started: 'Store opened', waiting: 'Waiting (a queue, a checkpoint, or its turn at the store)', checkout: 'At checkout', placing: 'Final button pressed',
   placed: 'Order placed', ready: 'Filled in', needs_you: 'Needs you', failed: 'Failed', skipped: "Didn't start", expired: "Didn't start",
 };
 const ACO_FILTER = { placed: ['placed'], needs: ['needs_you', 'ready'], failed: ['failed', 'expired'], skipped: ['skipped'] };

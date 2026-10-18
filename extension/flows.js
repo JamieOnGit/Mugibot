@@ -87,5 +87,22 @@ var MGBFlows = (function () {
     return { kind: g.kind, wait: isFinite(wait) ? wait : null };
   }
 
-  return { revive: revive, forLocation: forLocation, any: any, part: part, decodedPath: decodedPath, gateHere: gateHere };
+  /**
+   * Wait a moment. In a tab in the background (another checkout of yours in front), the page's own
+   * timers run at most about once a second, so a checkout there would crawl: its short waits are
+   * timed by the extension's worker instead, which runs at full speed. (The page's own timer too,
+   * whichever is first — in front, as ever.)
+   */
+  function wait(ms) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var fin = function () { if (!done) { done = true; resolve(); } };
+      if (document.hidden && ms < 1000 && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+        try { chrome.runtime.sendMessage({ type: 'sleep', ms: ms }, function () { void chrome.runtime.lastError; fin(); }); } catch (e) { /* the extension was updated */ }
+      }
+      setTimeout(fin, ms);
+    });
+  }
+
+  return { revive: revive, forLocation: forLocation, any: any, part: part, decodedPath: decodedPath, gateHere: gateHere, wait: wait };
 })();

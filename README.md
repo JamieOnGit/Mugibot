@@ -222,7 +222,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 283 tests in about ten minutes:
+the 294 tests in about twelve minutes:
 
 ```bash
 npm install
@@ -299,6 +299,16 @@ npm test
     at PayPal for you;
   - an add the store didn't take (the empty bag noticed, Add pressed once more,
     then it says why);
+  - several at once: drops at two stores checked out side by side (the tabs
+    taking turns to type their cards), two at the same store one after the
+    other (the second next in line, then its own order), ⚡ Buy pressed in
+    Discord or on the dashboard while a run is going, and a run next in line
+    giving up after 20 minutes;
+  - a checkout in a tab behind another at full speed (Chromium on its own, the
+    way Chrome slows a background tab's timers);
+  - never stuck between the bag and checkout: a bag count that doesn't move
+    (added once, never twice), no bag link or "added" pop-up, and a bag page
+    whose Checkout button Mugibot doesn't know;
   - Trigger ACO (a test run now, from the dashboard), and stores that only sell
     signed in (Amazon);
   - ⚡ Buy from your phone: a Discord button pressed (signed by Discord, for

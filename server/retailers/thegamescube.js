@@ -44,6 +44,7 @@ export default {
     },
     bag: {
       path: /\/checkout\/cart(\/|$)/i,
+      url: '/checkout/cart',
       checkout: [/^check ?out\b/i, /^proceed to checkout$/i],
     },
     checkout: {
