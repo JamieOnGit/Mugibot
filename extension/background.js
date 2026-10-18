@@ -630,11 +630,22 @@ async function sweepTab(store) {
   return tab;
 }
 
+/**
+ * The page the tab is about to open, loaded: its own "complete", after it started loading — never the
+ * one the tab is leaving (a new tab's blank page can say "complete" just after it's been sent on).
+ * Read too early, a store's queue page would look like nothing at all, and the page be asked for
+ * again: in a virtual queue, that loses the place in line.
+ */
 function tabLoaded(tabId, timeoutMs) {
   return new Promise((resolve) => {
+    let started = false;
     const timer = setTimeout(done, timeoutMs);
     function done() { clearTimeout(timer); chrome.tabs.onUpdated.removeListener(onUpdated); resolve(); }
-    function onUpdated(id, info) { if (id === tabId && info.status === 'complete') done(); }
+    function onUpdated(id, info) {
+      if (id !== tabId) return;
+      if (info.status === 'loading') started = true;
+      else if (info.status === 'complete' && started) done();
+    }
     chrome.tabs.onUpdated.addListener(onUpdated);
   });
 }
