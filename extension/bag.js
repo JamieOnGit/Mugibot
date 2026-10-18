@@ -63,8 +63,24 @@ var MGBBag = (function () {
     return ASKS.test((pop.innerText || '').slice(0, 800));
   }
 
-  function aside(el) {
-    return !!(el.closest('header, nav, footer, [role="banner"], [role="navigation"], [role="contentinfo"]') || el.closest(OTHER_LIST) || el.closest(NOT_HERE) || el.closest(RECOMMENDATIONS));
+  function aside(R, el) {
+    return !!(el.closest('header, nav, footer, [role="banner"], [role="navigation"], [role="contentinfo"]') || el.closest(OTHER_LIST) || promoBox(R, el) || el.closest(RECOMMENDATIONS));
+  }
+
+  /** A link to one of the store's products. */
+  function productLink(R, a) {
+    var re = R && R.productPath;
+    if (!re || !re.test) return false;
+    try { return re.test(new URL(a.getAttribute('href'), location.href).pathname); } catch (e) { return false; }
+  }
+
+  /**
+   * A promo code's, discount's or gift card's box — not a line of the bag, which links to its product
+   * (a line marked "has a discount" is still a line: its Remove is pressed).
+   */
+  function promoBox(R, el) {
+    var box = el.closest(NOT_HERE);
+    return !!box && !Q.toArray(box.querySelectorAll('a[href]')).some(function (a) { return productLink(R, a); });
   }
 
   /** What the store calls a control in its own markup: its class, id, name, data-action, link. */
@@ -99,7 +115,7 @@ var MGBBag = (function () {
   function find(R, all) {
     var asks = visiblePops().filter(asking);
     return pressables(scopeOf(R)).filter(function (el) {
-      if (aside(el) || asks.some(function (p) { return p.contains(el); })) return false;
+      if (aside(R, el) || asks.some(function (p) { return p.contains(el); })) return false;
       return isRemove(R, el, all);
     });
   }
@@ -131,12 +147,7 @@ var MGBBag = (function () {
 
   /** The store's products still listed on the page (not "you may also like"): how many. */
   function productLines(R) {
-    var re = R && R.productPath;
-    if (!re || !re.test) return 0;
-    return Q.toArray(scopeOf(R).querySelectorAll('a[href]')).filter(function (a) {
-      if (aside(a) || !Q.isVisible(a)) return false;
-      try { return re.test(new URL(a.getAttribute('href'), location.href).pathname); } catch (e) { return false; }
-    }).length;
+    return Q.toArray(scopeOf(R).querySelectorAll('a[href]')).filter(function (a) { return Q.isVisible(a) && !aside(R, a) && productLink(R, a); }).length;
   }
 
   /** Nothing in the bag: the page says so, or its count says 0 — or, with neither, none of the store's products on it. */
@@ -176,7 +187,7 @@ var MGBBag = (function () {
   /** A quantity drop-down with a 0 in it (Amazon's "0 (Delete)"), for a line with no Remove Mugibot knows. */
   function zeroQty(R) {
     return Q.toArray(scopeOf(R).querySelectorAll('select')).find(function (s) {
-      return Q.isVisible(s) && !s.disabled && !aside(s) && s.value !== '0' && Q.toArray(s.options).some(function (o) { return o.value === '0'; });
+      return Q.isVisible(s) && !s.disabled && !aside(R, s) && s.value !== '0' && Q.toArray(s.options).some(function (o) { return o.value === '0'; });
     }) || null;
   }
 

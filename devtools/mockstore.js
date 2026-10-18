@@ -497,7 +497,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const sku = esc(c.sku);
     const link = `<a href="${p ? pathFor(shop, p) : '#'}">${name}</a>`;
     const vid = p ? p.id : 0;
-    const li = (extra) => `<li class="line-item" data-sku="${sku}"><div class="line-name">${link}</div><div class="line-qty">Qty ${qty}</div>${extra}</li>`;
+    // (A line on special: some stores mark the whole line as having a discount.)
+    const li = (extra) => `<li class="line-item${c.discount ? ' cart-item--has-discount' : ''}" data-sku="${sku}"><div class="line-name">${link}</div>${c.discount ? '<span class="discount-badge">Save $5</span>' : ''}<div class="line-qty">Qty ${qty}</div>${extra}</li>`;
     switch (shop) {
       case 'kmart': return li(`<button type="button" class="remove-line" data-remove="${sku}" aria-label="Remove ${name} from bag">Remove</button>`);
       case 'bigw': return li(`<button type="button" class="link-btn" data-remove="${sku}" data-name="${name}">Remove</button>`);

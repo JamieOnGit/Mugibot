@@ -1999,9 +1999,12 @@ for (const [shopId, skus, how, opts = {}] of BAGS) {
     const S = store.shop(shopId);
     const products = S.products.map((x) => x.sku);
     assert.ok(skus.every((x) => products.includes(x)), `the dummy ${shopId} sells ${skus.join(', ')} (${products.join(', ')})`);
+    await closeStorePages(shopId); // (an earlier test's tab at this store: not the one Clear cart opens)
     fillBag(shopId, [[skus[0], 2], [skus[1], 1]]);
     Object.assign(S, opts);
     if (shopId === 'amazon') S.saved = [{ sku: 'B0MGBSAVED', name: 'Pikachu Plush (saved for later)', price: 30 }];
+    // (A line on special — the whole line marked as having a discount: still a line, its Remove pressed.)
+    if (shopId === 'kmart' || shopId === 'toysrus') S.cart[0].discount = true;
     // (The dashboard closed whatever happens: each open one holds a connection to the site, and Chrome has six.)
     const dash = await openBags();
     t.after(() => dash.close());
@@ -2028,6 +2031,7 @@ const SHOPIFY_SHOPS = new Set(['jbhifi', 'gamerholic', 'toysrus', 'trainertown']
 
 test('🧹 Clear all: every store\'s bag in turn, in one tab — the ones with things in them emptied, the rest "already empty" — pressed where there\'s no extension (your phone), the checkout browser does it', async (t) => {
   t.after(closeDashboards);
+  for (const [id] of BAGS) await closeStorePages(id); // (earlier tests' tabs at these stores)
   fillBag('kmart', [['43818587', 1]]);
   fillBag('ebgames', [['312346', 1]]);
   fillBag('jbhifi', [['pokemon-tcg-30th-celebration-etb', 1]]);
@@ -2147,6 +2151,7 @@ test("🧹 a drop while a bag is being emptied: the run is next in line at that 
 test("🧹 when it can't: a Remove that does nothing — it says so, and leaves the bag open in its tab for you; a store's virtual queue where the bag should be — left alone, the tab closed; a page that won't load — said in seconds", async (t) => {
   t.after(closeDashboards);
   // A Remove that does nothing.
+  for (const id of ['bigw', 'ebgames', 'target']) await closeStorePages(id); // (earlier tests' tabs at these stores)
   fillBag('bigw', [['6012346', 1]]);
   store.shop('bigw').removeFails = true;
   const dash = await openBags();

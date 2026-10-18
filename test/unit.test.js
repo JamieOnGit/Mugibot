@@ -267,7 +267,7 @@ test('extension built for a live server: only that server and the stores; module
   const by = (f) => m.content_scripts.find((c) => c.js.includes(f));
   assert.deepEqual(by('bridge.js').matches, ['https://app.mugibot.example/*']);
   assert.equal(by('capture.js').run_at, 'document_start');
-  assert.deepEqual(by('content.js').js, ['flows.js', 'core.js', 'fill.js', 'checks.js', 'logins.js', 'content.js']);
+  assert.deepEqual(by('content.js').js, ['flows.js', 'core.js', 'fill.js', 'checks.js', 'logins.js', 'bag.js', 'content.js']);
   assert.equal(by('frame.js').all_frames, true);
   assert.deepEqual(by('frame.js').js, ['flows.js', 'fill.js', 'checks.js', 'frame.js'], 'the same Auto-checkout checks in a checkout frame');
   // The card boxes' hosts: Shopify's card fields (JB Hi-Fi, Toys"R"Us…), Target's Paydock and its gateway.
