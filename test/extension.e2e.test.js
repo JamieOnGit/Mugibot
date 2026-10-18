@@ -2251,7 +2251,7 @@ test("🚦 an admin's browser: a search that runs into EB's queue waits (its tab
     assert.equal(posts().at(-1).body.embeds[0].description.split('\n')[0], `🟢 Virtual queue up for EB Games (dummy store) | ${store.url}/ebgames/`);
     // The sweep tab: never sent anywhere while the queue's up (the server holds its searches; the extension does too).
     await new Promise((res) => setTimeout(res, 7000));
-    assert.equal(S.queue.kicks, 0, `no place in line lost (${S.queue.log.map((e) => `${e.at % 100000} ${e.id} ${e.what} ${e.path}`).join(' | ')})`);
+    assert.equal(S.queue.kicks, 0, `no place in line lost (${S.queue.log.map((e) => `${e.at % 100000} ${e.id} ${e.what} ${e.path} ${e.how}`).join(' | ')})`);
     assert.equal(sweeper.live().stores.find((s) => s.id === 'demo-ebgames').status, 'held');
     assert.ok(S.queue.cookieless >= 2, 'looked at as a new visitor (no cookies), again and again');
     // (If the sweep tab was opening EB's page just as the queue went up, it's in line now: only its own refreshes.)

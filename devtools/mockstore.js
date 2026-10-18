@@ -1178,7 +1178,9 @@ ${body}
     let id = v.startsWith('in-') ? v.slice(3) : null;
     if (!v) q.cookieless += 1;
     let place = id ? q.places[id] : null;
-    const note = (what) => { q.log.push({ id, at: now, path: u.pathname + u.search, what }); if (q.log.length > 3000) q.log.splice(0, 1000); };
+    // (how: a page load or a page's own request, from the browser's own headers — for a test's failure message.)
+    const how = `${req.headers['sec-fetch-mode'] || '-'}/${req.headers['sec-fetch-dest'] || '-'}`;
+    const note = (what) => { q.log.push({ id, at: now, path: u.pathname + u.search, what, how }); if (q.log.length > 3000) q.log.splice(0, 1000); };
     // Asked again too soon (refreshed by hand, a second tab, a script): the place in line is lost.
     if (place && now - place.lastAt < q.tooSoonMs) { note('kicked'); q.kicks += 1; delete q.places[id]; place = null; }
     if (!place) {

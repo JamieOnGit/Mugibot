@@ -92,9 +92,14 @@ before(async () => {
 
 after(async () => {
   try { browser?.close(); } catch { /* gone */ }
-  proc?.kill();
+  // (Chromium writes to its profile as it closes: its folders go once it has.)
+  if (proc && proc.exitCode === null) {
+    const exited = new Promise((r) => proc.once('exit', r));
+    proc.kill();
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 10000))]);
+  }
   srv?.close();
-  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 test("a checkout in a tab in the background waits at full speed: its waits are timed by the extension, not the page's slowed timers", async () => {
