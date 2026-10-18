@@ -427,6 +427,69 @@ test("Kmart showing nothing after Add, and turning the first press away: Mugibot
   await dash.close();
 });
 
+// --- 🛒 never stuck between the bag and checkout -----------------------------------------------------
+/** ⚡ Buy one of the store's products from the dashboard: to its checkout, stopped at its final button — with how long it took. */
+async function buyThrough(shop, sku, name, finalLabel) {
+  await useItems([{ url: store.productUrl(shop, sku), name }]);
+  const dash = await ctx.newPage();
+  const t0 = Date.now();
+  const page = await buyFromDashboard(dash, name);
+  await waitReady(page, finalLabel);
+  const ms = Date.now() - t0;
+  return { page, dash, ms };
+}
+
+test("🛒 a store whose bag count doesn't change after Add (it only updates it on the next page) — Kmart and BIG W: its cart took the add, so on to checkout — added once, never pressed twice", async () => {
+  for (const [shop, sku, label] of [['kmart', '43818587', 'Checkout securely'], ['bigw', '6012346', 'Place order']]) {
+    const S = store.shop(shop);
+    S.stale = true;
+    const { page, dash, ms } = await buyThrough(shop, sku, `${shop} stale`, label);
+    assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [[sku, 1]], `${shop}: in the bag once`);
+    assert.ok(ms < 15000, `${shop}: at its final button in ${ms} ms`);
+    const userId = env.app.repo.userByUsername('ash').id;
+    assert.ok(env.app.repo.listEvents(userId).some((e) => /The store's cart took it \(its bag count didn't change on this page\)/.test(e.message)));
+    S.stale = false;
+    await page.close();
+    await dash.close();
+  }
+});
+
+test('🛒 a product page with no bag link and no "added" pop-up (BIG W): added — then its bag page by its address, and on to checkout', async () => {
+  const S = store.shop('bigw');
+  S.hideBag = true;
+  const { page, dash, ms } = await buyThrough('bigw', '6012346', 'BIG W no bag link', 'Place order');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['6012346', 1]]);
+  assert.ok(S.bagViews.length >= 1, 'through its bag page');
+  assert.ok(ms < 15000, `at "Place order" in ${ms} ms`);
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /Opening the bag page \(no bag link Mugibot knows on this page\)/.test(e.message)));
+  await page.close();
+  await dash.close();
+});
+
+test("🛒 a bag page whose Checkout button has words Mugibot doesn't know (Pokémon Center's says \"Next\"): its link to checkout — and with no way to checkout at all (BIG W's button says \"→\"), it says so in seconds, not half a minute", async () => {
+  store.shop('pokemoncenter').bagButton = 'Next';
+  const pc = await buyThrough('pokemoncenter', '10-10447-108', 'PC words', 'Place Order');
+  assert.deepEqual(store.shop('pokemoncenter').cart.map((c) => [c.sku, c.qty]), [['10-10447-108', 1]]);
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /Opening checkout \(its link on the bag page\)/.test(e.message)));
+  await pc.page.close();
+  await pc.dash.close();
+
+  // BIG W's is a button that goes to checkout by its own code (no link): nothing Mugibot can tell — it says so.
+  store.shop('bigw').bagButton = '→';
+  await useItems([{ url: store.productUrl('bigw', '6012346'), name: 'BIG W arrow' }]);
+  const dash = await ctx.newPage();
+  const t0 = Date.now();
+  const shop = await buyFromDashboard(dash, 'BIG W arrow');
+  await shop.waitForFunction(() => /Couldn't find the Checkout button on your bag page/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 20000 });
+  assert.ok(Date.now() - t0 < 15000, `said so in ${Date.now() - t0} ms`);
+  assert.match(shop.url(), /\/bigw\/cart/, 'left on the bag page, the item in it, for you');
+  assert.deepEqual(store.shop('bigw').cart.map((c) => [c.sku, c.qty]), [['6012346', 1]]);
+  await shop.close();
+  await dash.close();
+});
+
 test("Kmart signed out (a guest): its cart turns the first add away until its page has started up — Add again once loaded, then the same flow as signed in: your details, delivery, card → stops at \"Checkout securely\"", async () => {
   store.state.account = null; // not signed in at Kmart: the details step is empty
   const S = store.shop('kmart');
@@ -1693,6 +1756,153 @@ test('🤖 ⚡ Buy with Mugibot on a channel alert, pressed on a phone with Auto
   await closeStorePages('kmart');
 });
 
+// --- 🤖 several at once ---------------------------------------------------------------------------
+/** A day of its own (the orders the tests before it placed count as yesterday's, for the day's limits). */
+const freshDay = () => env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
+const runFor = async (name) => (await acoRuns()).find((r) => r.name === name);
+const stepAt = (run, status) => (run.steps.find((x) => x.status === status) || {}).at;
+/** Every run named here over, each placed — or why not (where each store tab's panel got to). */
+async function allPlaced(names, message) {
+  try {
+    await waitFor(async () => { const runs = await acoRuns(); return names.every((n) => (runs.find((r) => r.name === n) || {}).status === 'placed'); }, { timeout: 90000, message });
+  } catch (e) {
+    const runs = await acoRuns();
+    const said = await Promise.all(ctx.pages().filter((pg) => pg.url().startsWith(store.url)).map(async (pg) => `${pg.url()}: ${await pg.locator('#mugibot-qc').textContent().catch(() => '-')}`));
+    throw new Error(`${message}: ${names.map((n) => { const r = runs.find((x) => x.name === n); return `${n} "${r ? r.status : 'no run'}" (${r ? JSON.stringify(r.steps.at(-1)) : ''})`; }).join(', ')} — ${said.join(' | ')}`);
+  }
+  return Promise.all(names.map(runFor));
+}
+/** Nothing left in line in this browser (each store's checkouts all done). */
+const lineEmpty = () => waitFor(async () => Object.values(await sw.evaluate(() => globalThis.mugibotTurns())).every((e) => e.over || e.parkedAt), { timeout: 15000, message: 'nothing left in line' });
+
+test('🤖 several at once — two armed items drop at two stores in the same moment (Kmart and Target, both with card boxes in frames): this browser checks both out side by side, each in a tab of its own, the tabs taking turns to type their cards — both orders placed, each with its own item', async () => {
+  freshDay();
+  store.state.cardInIframe = 'strict'; // (Kmart's card in Adyen-style frames, one per box; Target's in Paydock's)
+  await useItems([
+    { url: store.productUrl('kmart', '43818587'), name: 'ACO ETB', aco: true, maxPrice: 120 },
+    { url: store.productUrl('target', '71234567'), name: 'ACO Target ETB', aco: true, maxPrice: 90 },
+  ]);
+  await acoListen();
+  await Promise.all([drop('kmart', '43818587'), drop('target', '71234567')]);
+  const [k, t] = await allPlaced(['ACO ETB', 'ACO Target ETB'], 'both runs placed');
+  assert.deepEqual(store.shop('kmart').orders.map((o) => o.cart.map((c) => [c.sku, c.qty])), [[['43818587', 1]]], 'Kmart: one order, just its item');
+  assert.deepEqual(store.shop('target').orders.map((o) => o.cart.map((c) => [c.sku, c.qty])), [[['71234567', 1]]], 'Target: one order, just its item');
+  // (Kmart's card boxes keep the card in their own frames — the run placed its order only once every box had it.)
+  assert.equal(store.shop('target').orders[0].form.cardNumber, '4242 4242 4242 4242', "Target's card, from Paydock's frame");
+  // Side by side: neither waited for the other — each opened its store before the other was done.
+  for (const r of [k, t]) assert.ok(!r.steps.some((x) => x.status === 'waiting'), `${r.name} didn't wait: another store`);
+  const [first, second] = [k, t].sort((x, y) => stepAt(x, 'started') - stepAt(y, 'started'));
+  assert.ok(stepAt(second, 'started') < stepAt(first, 'placed'), `${second.name} opened its store while ${first.name} was still checking out`);
+  // The cards: one tab typing at a time (never two at once).
+  const log = await sw.evaluate(() => globalThis.mugibotTyping());
+  const tabs = new Set(log.map((x) => x.tab));
+  assert.ok(tabs.size >= 2, 'both tabs typed card boxes');
+  for (const a of log) for (const b of log) {
+    if (a.tab === b.tab) continue;
+    const end = (x) => x.to ?? x.from + 6000;
+    assert.ok(end(a) <= b.from || end(b) <= a.from, `tabs ${a.tab} and ${b.tab} typed one at a time`);
+  }
+  await lineEmpty();
+  store.state.cardInIframe = false;
+  await closeStorePages('kmart');
+  await closeStorePages('target');
+});
+
+test('🤖 two drops at the same store in the same moment (Kmart): Kmart keeps one bag for this browser, so the second is next in line — it waits (no tab yet; your account says so), then opens Kmart the moment the first order is placed, and places its own: two orders, each with just its own item', async () => {
+  freshDay();
+  await useItems([
+    { url: store.productUrl('kmart', '43818587'), name: 'ACO ETB', aco: true, maxPrice: 120 },
+    { url: store.productUrl('kmart', '43818556'), name: 'ACO Knock Out', aco: true, maxPrice: 30 },
+  ]);
+  await acoListen();
+  // When each Kmart tab opened.
+  const opened = [];
+  const onPage = (pg) => { opened.push(Date.now()); };
+  ctx.on('page', onPage);
+  await Promise.all([drop('kmart', '43818587'), drop('kmart', '43818556')]);
+  // The one next in line: waiting, on your account.
+  await waitFor(async () => (await acoRuns()).some((r) => r.status === 'waiting' && r.reason === 'turn'), { timeout: 20000, message: 'one of them next in line' });
+  const waiting = (await acoRuns()).find((r) => r.status === 'waiting');
+  assert.equal(waiting.statusText, 'Next in line');
+  assert.match(waiting.message, /^Next in line at Kmart \(dummy store\): your checkout of ACO (ETB|Knock Out) there goes first/);
+  const [a, b] = await allPlaced(['ACO ETB', 'ACO Knock Out'], 'both runs placed');
+  ctx.off('page', onPage);
+  const orders = store.shop('kmart').orders.map((o) => o.cart.map((c) => [c.sku, c.qty]));
+  assert.equal(orders.length, 2, 'two orders');
+  assert.deepEqual(orders.map((c) => c.length), [1, 1], 'each with one item');
+  assert.deepEqual(orders.map((c) => c[0]).sort(), [['43818556', 1], ['43818587', 1]]);
+  const second = [a, b].find((r) => r.steps.some((x) => x.status === 'waiting'));
+  const first = [a, b].find((r) => r !== second);
+  assert.ok(second && first, 'one went first, the other waited its turn');
+  assert.ok(!first.steps.some((x) => x.status === 'waiting'));
+  assert.ok(stepAt(second, 'started') >= stepAt(first, 'placed'), 'it opened Kmart once the first order was placed');
+  assert.ok(stepAt(second, 'started') - stepAt(first, 'placed') < 6000, `straight away (${stepAt(second, 'started') - stepAt(first, 'placed')} ms)`);
+  assert.deepEqual(second.steps.map((x) => x.status), ['queued', 'sent', 'waiting', 'started', 'checkout', 'placing', 'placed']);
+  assert.equal(opened.length, 2, 'a tab each');
+  assert.ok(opened[1] >= stepAt(first, 'placed'), "the second's tab opened once the first order was placed (none before)");
+  await lineEmpty();
+  await closeStorePages('kmart');
+});
+
+test('🤖 ⚡ Buy pressed in Discord while an Auto-checkout run is going: another checkout starts at once — at another store side by side, and at the same store next in line, going the moment the first order is placed — and Discord\'s reply says which', async () => {
+  freshDay();
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO ETB', aco: true, maxPrice: 120 }]);
+  // (Kmart's add a little slow: the Discord presses come while the first run is still at Kmart.)
+  store.shop('kmart').addDelayMs = 2500;
+  const target = env.app.catalog.addAlert({ product_id: null, kind: 'restock', store: 'demo-target', sku: '71234568', name: 'Target bundle drop', url: store.productUrl('target', '71234568'), category: 'pokemon', status: 'in_stock', price: 49 });
+  const kmart = env.app.catalog.addAlert({ product_id: null, kind: 'restock', store: 'demo-kmart', sku: '43818556', name: 'Kmart Knock Out drop', url: store.productUrl('kmart', '43818556'), category: 'pokemon', status: 'in_stock', price: 20 });
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => ['sent', 'started'].includes((await runFor('ACO ETB') || {}).status), { timeout: 20000, message: 'the first run at Kmart' });
+  const toTarget = await pressInDiscord('d-ash', `buy:a:${target.id}`);
+  const toKmart = await pressInDiscord('d-ash', `buy:a:${kmart.id}`);
+  assert.match(toTarget.content, /Sent to \*\*.+\*\*/);
+  assert.match(toKmart.content, /Sent to \*\*.+\*\*/);
+  const names = ['ACO ETB', 'Target bundle drop', 'Kmart Knock Out drop'];
+  const [first, side, next] = await allPlaced(names, 'all three placed');
+  assert.ok(!side.steps.some((x) => x.status === 'waiting'), 'Target: no waiting — another store');
+  assert.ok(stepAt(side, 'started') < stepAt(first, 'placed'), 'Target opened while the Kmart run was still going');
+  assert.ok(next.steps.some((x) => x.status === 'waiting'), 'the second Kmart one: next in line');
+  assert.ok(stepAt(next, 'started') >= stepAt(first, 'placed'), 'and opened Kmart once the first order was placed');
+  assert.deepEqual(store.shop('kmart').orders.map((o) => o.cart.map((c) => c.sku)), [['43818587'], ['43818556']], 'Kmart: two orders, in turn, each its own item');
+  assert.deepEqual(store.shop('target').orders.map((o) => o.cart.map((c) => c.sku)), [['71234568']]);
+  await waitFor(() => discord.repliesFor(toKmart.token).some((x) => /Next in line at Kmart \(dummy store\)/.test(x)), { timeout: 15000, message: "Discord's reply: next in line" });
+  await waitFor(() => /Order placed/.test(discord.repliesFor(toKmart.token).at(-1) || ''), { timeout: 15000, message: "Discord's reply: then placed" });
+  await waitFor(() => /Order placed/.test(discord.repliesFor(toTarget.token).at(-1) || ''), { timeout: 15000, message: "Discord's reply (Target): placed" });
+  assert.ok(!discord.repliesFor(toTarget.token).some((x) => /Next in line/.test(x)), 'Target never waited');
+  store.shop('kmart').addDelayMs = 0;
+  await lineEmpty();
+  await closeStorePages('kmart');
+  await closeStorePages('target');
+});
+
+test('🤖 ⚡ Buy pressed on the dashboard while Auto-checkout is checking out at the same store: the ⚡ Buy waits on its page (it says so) — nothing of it in the order being placed — then reloads and goes to checkout, its own item alone in the bag', async () => {
+  freshDay();
+  await useItems([
+    { url: store.productUrl('kmart', '43818587'), name: 'ACO ETB', aco: true, maxPrice: 120 },
+    { url: store.productUrl('kmart', '43818556'), name: 'Knock Out by hand' },
+  ]);
+  store.shop('kmart').addDelayMs = 2500;
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await runFor('ACO ETB') || {}).status === 'started', { timeout: 20000, message: 'the Auto-checkout run at Kmart' });
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Knock Out by hand');
+  await shop.waitForFunction(() => /Next in line at Kmart/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 15000 });
+  assert.match(await panel(shop).textContent(), /Your checkout of ACO ETB at Kmart \(dummy store\) goes first — Kmart \(dummy store\) keeps one bag for this browser/);
+  await waitFor(() => store.shop('kmart').orders.length === 1, { timeout: 45000, message: "the Auto-checkout run's order" });
+  assert.deepEqual(store.shop('kmart').orders[0].cart.map((c) => [c.sku, c.qty]), [['43818587', 1]], "the ⚡ Buy's item isn't in it");
+  // Its turn: the page afresh, then on to checkout — stopping at the final button for you, its item alone in the bag.
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 30000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.deepEqual(store.shop('kmart').cart.map((c) => [c.sku, c.qty]), [['43818556', 1]]);
+  await waitFor(async () => (await runFor('ACO ETB')).status === 'placed', { message: 'the Auto-checkout run placed' });
+  store.shop('kmart').addDelayMs = 0;
+  await shop.close();
+  await dash.close();
+  await closeStorePages('kmart');
+});
+
 test('🤖 Auto-checkout set to stop at the final button: fills checkout in and leaves the button to you', async () => {
   await browserApi('PUT', '/api/aco', { mode: 'fill' });
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO fill', aco: true, maxPrice: 120 }]);
@@ -2041,7 +2251,7 @@ test("🚦 an admin's browser: a search that runs into EB's queue waits (its tab
     assert.equal(posts().at(-1).body.embeds[0].description.split('\n')[0], `🟢 Virtual queue up for EB Games (dummy store) | ${store.url}/ebgames/`);
     // The sweep tab: never sent anywhere while the queue's up (the server holds its searches; the extension does too).
     await new Promise((res) => setTimeout(res, 7000));
-    assert.equal(S.queue.kicks, 0, `no place in line lost (${S.queue.log.map((e) => `${e.at % 100000} ${e.id} ${e.what} ${e.path}`).join(' | ')})`);
+    assert.equal(S.queue.kicks, 0, `no place in line lost (${S.queue.log.map((e) => `${e.at % 100000} ${e.id} ${e.what} ${e.path} ${e.how}`).join(' | ')})`);
     assert.equal(sweeper.live().stores.find((s) => s.id === 'demo-ebgames').status, 'held');
     assert.ok(S.queue.cookieless >= 2, 'looked at as a new visitor (no cookies), again and again');
     // (If the sweep tab was opening EB's page just as the queue went up, it's in line now: only its own refreshes.)

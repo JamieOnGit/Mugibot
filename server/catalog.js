@@ -4,6 +4,7 @@
 // this is the shared feed everyone sees.
 
 import { newId } from './crypto.js';
+import { slugWords } from './monitor/extract.js';
 
 // nontcg: not trading cards at all — what drop watches find (monitor/drops.js), in #non-tcg-alerts.
 export const CATEGORIES = { pokemon: 'Pokémon', onepiece: 'One Piece', other: 'Other', nontcg: 'Non-TCG' };
@@ -24,9 +25,29 @@ export const PRODUCTS_FOR_PAGE = `((c.kind = 'product' AND p.url = c.url) OR (c.
 
 const json = (s, fallback) => { try { const v = JSON.parse(s); return v ?? fallback; } catch { return fallback; } };
 
+/** A name from a product link ("…/d/xbox-series-x25-limited-edition/8wg5vqp0x4h3" → "Xbox Series X25 Limited Edition"). */
+export function linkName(url) {
+  let p = '';
+  try { p = new URL(url).pathname; } catch { return ''; }
+  return slugWords(p).replace(/\b[a-z]/g, (c) => c.toUpperCase()).slice(0, 120);
+}
+
+/**
+ * A product at another website that hasn't been named yet (its page hasn't been read): the words in
+ * its link, until its page's title comes in. (Its SKU there is only Mugibot's own code for the link.)
+ */
+const unnamed = (r) => r.store === 'other' && (!r.name || r.name === linkName(r.url));
+const shownName = (r) => r.name || (r.store === 'other' ? linkName(r.url) : '');
+
+/** What a product is called, wherever it's shown: its name, else (another website) its link's words, else its SKU. */
+export const productName = (r) => shownName(r) || r.sku;
+
+/** May the page's title name this product? Not named yet — or named only by its link's words. */
+export const nameable = (r) => !r.name || unnamed(r);
+
 export function toProduct(r) {
   return r && {
-    id: r.id, store: r.store, sku: r.sku, name: r.name, url: r.url, image: r.image, category: r.category,
+    id: r.id, store: r.store, sku: r.sku, name: shownName(r), url: r.url, image: r.image, category: r.category,
     status: r.status, statusSource: r.status_source, confirmed: !!r.confirmed, price: r.price, previousPrice: r.previous_price,
     variantId: r.variant_id, failCount: r.fail_count, error: r.error,
     statusAt: r.status_at, priceAt: r.price_at, checkedAt: r.checked_at, lastOkAt: r.last_ok_at, createdAt: r.created_at,

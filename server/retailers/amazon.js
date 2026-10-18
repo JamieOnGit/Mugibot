@@ -50,7 +50,8 @@ export default {
     // "Buy Now" first (straight to checkout); "Add to Cart" where there's none.
     product: { add: [/^add to cart$/i], buyNow: [/^buy now$/i], waitMs: 12000 },
     added: { checkout: [/\bproceed to (checkout|buy)\b/i], viewBag: [/^go to cart$/i] },
-    bag: { path: /\/(gp\/cart|cart)/i, checkout: [/\bproceed to (checkout|buy)\b/i] },
+    // (url: the cart's own page, for when nothing on the product page leads there.)
+    bag: { path: /\/(gp\/cart|cart)/i, url: '/gp/cart/view.html', checkout: [/\bproceed to (checkout|buy)\b/i] },
     checkout: {
       path: /\/(gp\/buy|checkout)\//i,
       // Amazon's "Try Prime free for 30 days" on the way (a page or a pop-up): "No thanks".

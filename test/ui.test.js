@@ -252,7 +252,19 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   await page.waitForFunction(() => location.hash === '#monitor');
   await page.goto(`${env.url}/app#monitor/${p.id}`);
   await page.waitForSelector('#m-detail[open]');
+  assert.match(await page.textContent('#md-state'), /\$360\.00\s*\$379\.00/, 'the price, and the old one struck through');
   await page.click('#md-close');
+  // No old price (never on sale before), or a page that hasn't answered yet: nothing written as "null".
+  const once = cat.upsertProduct({ store: 'other', sku: 'microsoft.com/8wg5vqp0x4h3', url: 'https://www.microsoft.com/en-au/d/xbox-series-x25-limited-edition/8wg5vqp0x4h3', category: 'nontcg' });
+  cat.updateProduct(once.id, { status: 'error', error: 'The store took too long to answer' });
+  await page.goto(`${env.url}/app#monitor/${once.id}`);
+  await page.waitForSelector('#m-detail[open]');
+  assert.equal(await page.textContent('#md-name'), 'Xbox Series X25 Limited Edition', "its link's words, not Mugibot's code for it");
+  assert.match(await page.textContent('#md-meta'), /SKU microsoft\.com\/8wg5vqp0x4h3/);
+  assert.doesNotMatch(await page.textContent('#md-state'), /null/);
+  assert.match(await page.textContent('#md-state'), /—$/);
+  await page.click('#md-close');
+  cat.db.run('DELETE FROM products WHERE id = :id', { id: once.id });
 
   // Settings and the Check log are pages of their own (admins): Live · Settings · Check log.
   assert.equal(await page.isVisible('[data-panel="monitor"] .mon-tabs'), true);
@@ -880,6 +892,17 @@ test("Monitor page for a member: each store's switch (hidden just for them), ☆
   await fan.waitForSelector('#sn-channels .sn-chan[data-store="kmart"]');
   // Where each store is searched from (server, an admin's browser) is for admins: not in the page at all.
   assert.doesNotMatch(await fan.textContent('#sn-channels'), /admin's browser|server/i);
+  // A store that keeps failing: members see it too — no Reset button (admins'), and nothing in its place.
+  const jb = env.app.retailers.get('jbhifi');
+  const term = { keyword: 'pokemon', page: 1 };
+  // (Twice: a third would hand it to an admin's browser, which members aren't told about.)
+  for (let i = 0; i < 2; i += 1) env.app.sweeper.record(jb, term, { ok: false, blocked: true, error: 'The store refused the search (HTTP 503)', source: 'server', url: env.app.sweeper.urlFor(jb, 'pokemon'), ms: 300 });
+  await fan.reload();
+  await fan.waitForFunction(() => /JB Hi-Fi needs attention/.test(document.querySelector('#sn-attention:not([hidden])')?.textContent || ''));
+  const said = await fan.textContent('#sn-attention');
+  assert.match(said, /Mugibot keeps trying, waiting a little longer each time\.$/, said);
+  assert.equal(await fan.locator('#sn-attention button').count(), 0);
+  env.app.sweeper.reset('jbhifi');
   await fan.click('#sn-channels .sn-chan[data-store="kmart"] .st-toggle');
   assert.doesNotMatch(await fan.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /\bfrom\b/);
   // Members start at Tracked products: both test products, each with ☆ Watch.

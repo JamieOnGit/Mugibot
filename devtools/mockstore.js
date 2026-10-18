@@ -89,6 +89,11 @@ export function defaultShops() {
       // "added" message) — only a busy button. refuseAdds: true, or how many adds to refuse first
       // (each says "Something went wrong" for a moment, like a store under load).
       quiet: false,
+      // stale: its bag link shows the count from when the page opened and doesn't change after an add (some
+      // stores only update it on the next page), and no "added" message. hideBag: no bag link on the product
+      // page, and no "added" pop-up — nothing to click after an add. bagButton: other words for the bag
+      // page's Checkout button (its link still goes to checkout).
+      stale: false, hideBag: false, bagButton: '',
       // A React-style page (like Kmart's): its code wires up "Add" reactMs after the page
       // opens, long before a slow picture lets the page finish loading (slowLoadMs).
       // vueMs: the same for a Vue page (Premium Bandai's).
@@ -129,7 +134,7 @@ export function defaultAcme() {
   };
 }
 
-function page(shop, title, body, { head = '', bagCount = null } = {}) {
+function page(shop, title, body, { head = '', bagCount = null, noBag = false } = {}) {
   const s = SHOPS[shop] || { name: 'Dummy store', color: '#444' };
   const base = shop ? `/${shop}` : '';
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>
@@ -141,7 +146,7 @@ button[disabled]{background:#999;cursor:default}label{display:block;margin:8px 0
 .drawer.modal{left:8%;right:8%;top:8%;bottom:auto;width:auto;border-radius:8px}.obt-item{display:inline-block;width:22%;vertical-align:top;margin:4px}
 .choice[aria-pressed=true]{outline:3px solid #0a0}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style>${head}</head>
 <body><div class="dummy">⚠ Dummy store for testing Mugibot — nothing here is real. <a href="/">Control panel</a></div>
-<header><a href="${base}/">${esc(s.name)}</a> · ${bagLink(shop, bagCount)} · <!--mgb-account--></header><main>${body}</main>
+<header><a href="${base}/">${esc(s.name)}</a> · ${noBag ? '' : bagLink(shop, bagCount)} · <!--mgb-account--></header><main>${body}</main>
 <footer>${esc(s.name)} is a fake store for testing.</footer></body></html>`;
 }
 
@@ -354,7 +359,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
             }
             return;
           }
-          if (${shopOf(shop).quiet ? 'true' : 'false'}) return; // (a store whose page shows nothing Mugibot can read)
+          if (${shopOf(shop).quiet || shopOf(shop).stale || shopOf(shop).hideBag ? 'true' : 'false'}) return; // (a store whose page shows nothing Mugibot can read, or nothing new)
           const showBag = () => {
             const bag = document.getElementById('bag-link');
             bag.setAttribute('aria-label', '${shop === 'kmart' ? 'Bag' : 'Cart'}, ' + d.items + ' items');
@@ -365,7 +370,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     ? "window.__afterUpsell = showBag; document.getElementById('drawer').classList.add('open');"
     : "showBag(); setTimeout(() => { document.getElementById('drawer-msg').textContent = d.count + ' item(s) in your " + (shop === 'kmart' ? 'bag' : 'cart') + "'; document.getElementById('drawer').classList.add('open'); }, 150);"}
         });
-      </script>`, { head: ldFor(p, shop), bagCount: shopOf(shop).quiet ? null : bagCount(shop) });
+      </script>`, { head: ldFor(p, shop), bagCount: shopOf(shop).quiet ? null : bagCount(shop), noBag: shopOf(shop).hideBag });
   }
 
   // CrystalCommerce (The Games Cube): each option in stock has its own small cart button — an icon, no words.
@@ -473,11 +478,13 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       const qty = SHOPIFY.has(shop) ? `<input type="number" name="updates[]" aria-label="Quantity" data-sku="${c.sku}" value="${c.qty}" min="1" style="width:60px">` : `<select aria-label="Quantity" data-sku="${c.sku}">${opts}</select>`;
       return `<li class="line-item"><div class="line-name"><a href="${p ? pathFor(shop, p) : '#'}">${esc(c.name)}</a></div><div class="line-qty">Qty ${qty}</div></li>`;
     }).join('');
-    const go = {
+    let go = {
       kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>',
       thegamescube: '<a class="utility-button checkout" href="/thegamescube/checkout/proceed_to_checkout">Checkout &rarr;</a>', pokemoncenter: '<a class="btn" href="/pokemoncenter/checkout">Checkout</a>', pbandai: '<a class="btn" href="/pbandai/checkout">Proceed to Checkout</a>',
       target: '<a class="btn" href="/target/checkout">Checkout</a>', citybeach: '<a class="btn checkout-btn" href="/citybeach/checkout">Checkout</a>',
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
+    // (Its Checkout button in other words: bagButton.)
+    if (go && shopOf(shop).bagButton) go = go.replace(/>([^<]*)<\/(a|button)>$/, `>${esc(shopOf(shop).bagButton)}</$2>`);
     return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || `<li>Your ${shop === 'kmart' ? 'bag' : 'cart'} is empty</li>`}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
       <script>
         for (const s of document.querySelectorAll('[data-sku]')) s.addEventListener('change', () => fetch('/${shop}/api/cart/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: s.dataset.sku, qty: Number(s.value) }) }));
@@ -1171,7 +1178,9 @@ ${body}
     let id = v.startsWith('in-') ? v.slice(3) : null;
     if (!v) q.cookieless += 1;
     let place = id ? q.places[id] : null;
-    const note = (what) => { q.log.push({ id, at: now, path: u.pathname + u.search, what }); if (q.log.length > 3000) q.log.splice(0, 1000); };
+    // (how: a page load or a page's own request, from the browser's own headers — for a test's failure message.)
+    const how = `${req.headers['sec-fetch-mode'] || '-'}/${req.headers['sec-fetch-dest'] || '-'}`;
+    const note = (what) => { q.log.push({ id, at: now, path: u.pathname + u.search, what, how }); if (q.log.length > 3000) q.log.splice(0, 1000); };
     // Asked again too soon (refreshed by hand, a second tab, a script): the place in line is lost.
     if (place && now - place.lastAt < q.tooSoonMs) { note('kicked'); q.kicks += 1; delete q.places[id]; place = null; }
     if (!place) {
@@ -1247,7 +1256,8 @@ ${body}
       const hits = listed.filter((x) => q.every((w) => x.name.toLowerCase().includes(w)));
       return json(200, { resources: { results: { products: hits.map((x) => ({ handle: x.handle, title: x.name, url: `/acme/products/${x.handle}`, price: x.price.toFixed(2), available: x.status === 'in_stock' || x.status === 'preorder' })) } } });
     }
-    const m = sub.match(/^\/products\/([a-z0-9-]+)(\.js)?$/);
+    // (Its pages under a Microsoft-style link too: /en-au/d/<name>/<code>.)
+    const m = sub.match(/^\/products\/([a-z0-9-]+)(\.js)?$/) || sub.match(/^\/(?:[a-z]{2}-[a-z]{2}\/)?d\/([a-z0-9-]+)\/[a-z0-9]+()$/);
     const x = m && A.products.find((y) => y.handle === m[1]);
     if (!x || !x.listed) return html(404, shell('Not found', '<h1>Page not found</h1>'));
     if (m[2]) {

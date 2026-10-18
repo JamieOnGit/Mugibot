@@ -13,7 +13,7 @@
 // the sweep's view is fresher, and two sources taking turns would flip its
 // status back and forth.
 
-import { CATEGORIES, categoryFor, toAlert, toProduct } from '../catalog.js';
+import { CATEGORIES, categoryFor, nameable, productName, toAlert, toProduct } from '../catalog.js';
 import { entitlement } from '../entitlement.js';
 import { buyAction } from '../notifier.js';
 import { publicEvent, publicProduct } from './public.js';
@@ -71,10 +71,11 @@ export class Feed {
     const price = typeof r.price === 'number' && Number.isFinite(r.price) && r.price > 0 ? Math.round(r.price * 100) / 100 : null;
     const set = { status: r.status, status_source: source, confirmed: 1, fail_count: 0, error: '', checked_at: now, last_ok_at: now };
     if (r.status !== prev) set.status_at = now;
-    if (r.title && !product.name) set.name = String(r.title).slice(0, 200);
+    // (A product at another website named only by its link's words, until now: its page's title.)
+    if (r.title && nameable(product)) set.name = String(r.title).slice(0, 200);
     if (r.image && /^https?:\/\//.test(r.image) && r.image !== product.image) set.image = String(r.image).slice(0, 1000);
     if (r.variantId) set.variant_id = String(r.variantId).slice(0, 40);
-    if (product.category === 'other' && !product.name && r.title) set.category = categoryFor(r.title);
+    if (product.category === 'other' && nameable(product) && r.title) set.category = categoryFor(r.title);
     const priceMoved = price !== null && (prevPrice === null || prevPrice === undefined || Math.abs(price - prevPrice) >= 0.005);
     if (priceMoved) {
       set.price = price;
@@ -144,7 +145,7 @@ export class Feed {
       if (last && this.now() - last.at < this.cfg.monitor.alertCooldownSeconds * 1000) return null;
     }
     const row = this.catalog.addAlert({
-      product_id: product.id, kind, store: product.store, sku: product.sku, name: product.name || product.sku, url: product.url || '',
+      product_id: product.id, kind, store: product.store, sku: product.sku, name: productName(product), url: product.url || '',
       image: product.image || '', category: product.category, status: product.status, price: product.price ?? null,
       previous_price: product.previous_price ?? null, manual: manual ? 1 : 0, vip: vip || (monitor && monitor.vip_watch) ? 1 : 0, note: [note, pct !== null ? `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%` : ''].filter(Boolean).join(' '),
     });

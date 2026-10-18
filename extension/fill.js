@@ -13,7 +13,8 @@
 var MGBFill = (function () {
   'use strict';
 
-  var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  // (At full speed in a tab in the background too: MGBFlows.wait.)
+  var wait = function (ms) { return typeof MGBFlows !== 'undefined' && MGBFlows.wait ? MGBFlows.wait(ms) : new Promise(function (r) { setTimeout(r, ms); }); };
   var toArray = function (l) { return Array.prototype.slice.call(l); };
   var any = function (list, t) { return typeof MGBFlows !== 'undefined' && MGBFlows.any(list, t); };
 

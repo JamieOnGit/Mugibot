@@ -134,6 +134,7 @@ export default {
     bag: {                          // the cart page
       path: /\/cart(\/|$)/i,
       checkout: [/^proceed to checkout$/i],
+      // url: '/gp/cart/view.html',  // optional: its address, when it isn't /cart (opened when nothing on the page leads there)
     },
     checkout: {
       path: /\/checkout(\/|$)/i,
@@ -205,6 +206,19 @@ stores. Some rules always apply, whatever a flow says:
   add. If the page didn't react to the Add press at all (it wasn't ready yet), Add
   is pressed once more; if it still doesn't go in, Mugibot stops and says so
   instead of opening an empty bag.
+- Never stuck between the bag and checkout:
+  - The bag icon's number doesn't move until the next page (some stores), but
+    the store's cart answered the add (after 2.5 s): it's in. On to checkout;
+    Add is never pressed a second time for that.
+  - Added, with no "added" popup Checkout button and no bag link Mugibot knows
+    (2.5 s on): the bag page by its address (`bag.url`, else `/cart` under the
+    store's own address, e.g. Pokémon Center's `/en-au/cart`).
+  - A bag drawer with no Checkout button it knows: the bag page itself, once.
+  - The bag page, the item in it, and no Checkout button it knows (4 s on): the
+    checkout page (`checkout.url`), else a link on the page that goes to
+    checkout. With neither, it stops and says so (not 30 s later).
+  - Shopify's cart link landing anywhere but the cart or checkout (the product
+    page again): its Add button, like any store.
 
 Field names for `fields`: `email`, `phone`, `firstName`, `lastName`,
 `fullName`, `address1`, `address2`, `suburb`, `state`, `postcode`, `country`,

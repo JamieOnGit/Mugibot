@@ -21,7 +21,9 @@
 // Auto-checkout (only once you've switched it on and armed an item, docs/AUTO-CHECKOUT.md): this
 // browser listens for your armed items dropping, and checks out by itself in a tab of its own —
 // within your limits, with your details and the card saved here. It never gets past a bot check
-// or your bank's check: it stops and tells you.
+// or your bank's check: it stops and tells you. Several runs go at once: at different stores side
+// by side, each in a tab of its own; at the same store one after another (it keeps one bag for this
+// browser), each the moment the one before it is done.
 //
 // Checkpoints and virtual queues (JB Hi-Fi's hCaptcha checkpoint, EB Games' and Pokémon Center's
 // queues): a tab in a store's queue is never refreshed or sent anywhere by Mugibot, and while this
@@ -206,12 +208,17 @@ function rx(v) {
 
 /** The store whose flow applies to the page in this tab (by address, and path for the dummy store). */
 async function storeForTab(sender) {
+  return storeOfUrl((await getState()).flows, sender.tab && sender.tab.url);
+}
+
+/** The store whose flow applies to a page's address, from these flows (or null). */
+function storeOfUrl(flows, url) {
   let u;
-  try { u = new URL(sender.tab.url); } catch { return null; }
+  try { u = new URL(url); } catch { return null; }
   let p = u.pathname;
   try { p = decodeURIComponent(p); } catch { /* keep raw */ }
   const host = u.host.toLowerCase();
-  return ((await getState()).flows || []).find((r) => (r.hosts || []).some((h) => host === h || host.endsWith(`.${h.replace(/^www\./, '')}`))
+  return (flows || []).find((r) => (r.hosts || []).some((h) => host === h || host.endsWith(`.${h.replace(/^www\./, '')}`))
     && (!r.pathPrefix || p === r.pathPrefix || p.startsWith(`${r.pathPrefix}/`))) || null;
 }
 
@@ -623,11 +630,22 @@ async function sweepTab(store) {
   return tab;
 }
 
+/**
+ * The page the tab is about to open, loaded: its own "complete", after it started loading — never the
+ * one the tab is leaving (a new tab's blank page can say "complete" just after it's been sent on).
+ * Read too early, a store's queue page would look like nothing at all, and the page be asked for
+ * again: in a virtual queue, that loses the place in line.
+ */
 function tabLoaded(tabId, timeoutMs) {
   return new Promise((resolve) => {
+    let started = false;
     const timer = setTimeout(done, timeoutMs);
     function done() { clearTimeout(timer); chrome.tabs.onUpdated.removeListener(onUpdated); resolve(); }
-    function onUpdated(id, info) { if (id === tabId && info.status === 'complete') done(); }
+    function onUpdated(id, info) {
+      if (id !== tabId) return;
+      if (info.status === 'loading') started = true;
+      else if (info.status === 'complete' && started) done();
+    }
     chrome.tabs.onUpdated.addListener(onUpdated);
   });
 }
@@ -942,6 +960,7 @@ async function acoLoop() {
       quiet = 0;
       // Runs first: every moment counts in a drop.
       for (const run of res.body.runs || []) await startRun(run).catch(() => null);
+      await releaseTurns().catch(() => null);
       if (Array.isArray(res.body.gates)) await noteGatesUp(res.body.gates);
       // A store's queue went up where you have something armed (or you pressed "Join the queue"): get in line —
       // unless a run just opened that store (its tab gets in line itself: never two tabs into one queue).
@@ -967,17 +986,41 @@ async function openStoreTab(url, { active = true } = {}) {
   return tab;
 }
 
-async function startRun(run) {
+/**
+ * A run opens the store in a tab of its own — unless another checkout of yours at that store goes
+ * first (turns, below): then it's next in line, and opens the store the moment that one is done.
+ * (turn: false — its turn has come.)
+ */
+async function startRun(run, { turn = true } = {}) {
   // This browser is in that store's queue (a tab of yours waiting its turn): the run waits for it to
   // get through, rather than ask the store again (which could cost the place in line).
   const g = await gatesNow();
   if (g[run.store] && g[run.store].kind === 'queue' && inLine(g[run.store])) {
     const wait = g[run.store].wait;
+    await withTurns((t) => { delete t[`r:${run.id}`]; }); // (in the queue's line instead: it comes back here once through)
     await withGates((all) => { const s = all[run.store]; s.runs = [...(s.runs || []).filter((x) => x.id !== run.id), { id: run.id, store: run.store, storeName: run.storeName, name: run.name, sku: run.sku }]; });
     await api('POST', `/api/ext/aco/${encodeURIComponent(run.id)}`, { status: 'waiting', reason: 'queue', message: `In ${run.storeName}'s virtual queue in this browser${wait != null ? ` — about ${wait} min` : ''} — it checks out once it's through` });
     return null;
   }
-  const tab = await openStoreTab(run.url, { active: true });
+  const key = `r:${run.id}`;
+  const before = await withTurns((t) => {
+    if (!t[key]) t[key] = { store: run.store, since: Date.now(), runId: run.id, name: run.name || '', run: { id: run.id, store: run.store, storeName: run.storeName, name: run.name, sku: run.sku, mode: run.mode } };
+    const a = turn ? ahead(t, key) : null;
+    if (a) t[key].beatAt = Date.now();
+    else t[key].opening = true;
+    return a;
+  });
+  if (before) {
+    await api('POST', `/api/ext/aco/${encodeURIComponent(run.id)}`, { status: 'waiting', reason: 'turn', message: nextInLine(run.storeName, before) });
+    return null;
+  }
+  // (Not in front of a card being typed in another tab: that tab keeps the front for it.)
+  const tab = await openStoreTab(run.url, { active: !typingElsewhere(null) });
+  await withTurns((t) => {
+    const e = t[key] || { store: run.store, since: Date.now(), runId: run.id, name: run.name || '' };
+    delete t[key];
+    if (tab) t[`t:${tab.id}`] = { store: e.store, since: e.since, runId: e.runId, name: e.name, tabId: tab.id };
+  });
   const { acoRecent = [] } = await chrome.storage.local.get('acoRecent');
   await chrome.storage.local.set({ acoRecent: [{ id: run.id, name: run.name, store: run.storeName, at: Date.now() }, ...acoRecent].slice(0, 10) });
   return tab;
@@ -985,6 +1028,160 @@ async function startRun(run) {
 
 async function isSweepWindow(windowId) {
   return (await sweepWindow()).windowId === windowId;
+}
+
+// --- several checkouts at once: one at a time at each store -----------------------------------
+// Checkouts at different stores go at the same time, each in a tab of its own. A store keeps one bag
+// for this browser, whichever tab adds to it — two checkouts there at once would put both items in
+// one order (or stop for each other's). So at each store the checkouts in this browser take turns,
+// first come first served: an Auto-checkout run whose store is busy waits here (no tab yet — your
+// account shows it as next in line) and opens the store the moment the one before it is done; a
+// ⚡ Buy you press meanwhile waits on its page (it says so), then reloads and goes.
+// A checkout holds its store until it's over (its order placed, it stopped, its tab closed or went to
+// another store), or — once it's waiting for you (at the final button, or stopped for you) — for 3
+// minutes more at most; and never more than 15 minutes in all.
+// Entries: 't:<tab>' (a checkout in a tab), 'r:<run>' (a run next in line, no tab yet).
+const TURNS = 'turns';
+const TURN_MAX_MS = 15 * 60 * 1000;
+const PARKED_MS = 3 * 60 * 1000;
+// Still next in line: your account hears so every couple of minutes (it gives up on a run it hasn't heard from in 10).
+const TURN_BEAT_MS = 2 * 60 * 1000;
+// Why a checkout stopped before anything of its went into the bag: the next one at the store goes now.
+const NOTHING_ADDED = new Set(['signed_out', 'wrong_item', 'sold_out', 'not_added', 'no_checkout', 'stopped', 'disarmed']);
+let turnLock = Promise.resolve();
+
+/** One change at a time (several tabs, and runs, at once). */
+function withTurns(fn) {
+  const run = turnLock.then(async () => {
+    const t = (await chrome.storage.session.get(TURNS))[TURNS] || {};
+    const out = await fn(t);
+    await chrome.storage.session.set({ [TURNS]: t });
+    return out;
+  });
+  turnLock = run.catch(() => null);
+  return run;
+}
+
+/** Is this checkout still holding its store? */
+const holds = (e, now = Date.now()) => !!e && !e.over && now - e.since < TURN_MAX_MS && !(e.parkedAt && now - e.parkedAt > PARKED_MS);
+
+/** The checkout before this one at its store that's still going, or null: it's this one's turn. */
+function ahead(t, key, now = Date.now()) {
+  const me = t[key];
+  if (!me) return null;
+  let first = null;
+  for (const [k, e] of Object.entries(t)) {
+    if (k === key || e.store !== me.store || !holds(e, now)) continue;
+    if ((e.since < me.since || (e.since === me.since && k < key)) && (!first || e.since < first.since)) first = e;
+  }
+  return first;
+}
+
+const nextInLine = (storeName, a) => `Next in line at ${storeName || 'the store'}: your checkout of ${(a && a.name) || 'another item'} there goes first (it keeps one bag for this browser) — this one goes the moment that's done`;
+
+/** This tab's checkout, in the line for its store (from its ⚡ Buy code: an Auto-checkout run's tab already is). */
+async function joinTurn(tabId, store, { runId = null, name = '' } = {}) {
+  if (tabId == null || !store) return;
+  await withTurns((t) => {
+    const key = `t:${tabId}`;
+    const run = runId ? t[`r:${runId}`] : null;
+    if (run) { delete t[`r:${runId}`]; t[key] = { store, since: run.since, runId, name: run.name || name, tabId }; return; }
+    // (The same checkout carrying on — or a new one in this tab: it starts again, at the back.)
+    if (t[key] && t[key].store === store && holds(t[key]) && (!runId || t[key].runId === runId)) return;
+    t[key] = { store, since: Date.now(), runId, name, tabId };
+  });
+}
+
+/** This tab's checkout is over (gone: true — out of the line altogether), or waiting for you (parked). */
+async function turnEnded(tabId, { parked = false, gone = false } = {}) {
+  if (tabId == null) return;
+  await withTurns((t) => {
+    const e = t[`t:${tabId}`];
+    if (!e) return;
+    if (gone) delete t[`t:${tabId}`];
+    else if (parked) { if (!e.parkedAt) e.parkedAt = Date.now(); }
+    else e.over = true;
+  });
+  releaseTurns().catch(() => null);
+}
+
+let releasing = null;
+/**
+ * The next checkout at each store whose turn has come: a run next in line opens the store now (with
+ * a fresh link: its first may have run out). Tabs waiting their turn see it themselves (they ask).
+ * Also: forgets closed tabs and finished checkouts, and tells your account a run is still in line.
+ */
+function releaseTurns() {
+  if (!releasing) releasing = doReleaseTurns().finally(() => { releasing = null; });
+  return releasing;
+}
+
+async function doReleaseTurns() {
+  const now = Date.now();
+  const open = new Set((await chrome.tabs.query({})).map((x) => x.id));
+  const { go, beat, late } = await withTurns((t) => {
+    const out = { go: [], beat: [], late: [] };
+    for (const [k, e] of Object.entries(t)) {
+      // (A tab that's closed, a checkout that's over or out of time: out of the line.)
+      if ((k.startsWith('t:') && !open.has(e.tabId)) || !holds(e, now)) {
+        if (k.startsWith('r:') && now - e.since >= TURN_MAX_MS) out.late.push(e);
+        delete t[k];
+        continue;
+      }
+      if (!k.startsWith('r:') || e.opening) continue;
+      if (!ahead(t, k, now)) { e.opening = true; out.go.push(e); } else if (now - (e.beatAt || 0) > TURN_BEAT_MS) { e.beatAt = now; out.beat.push({ e, a: ahead(t, k, now) }); }
+    }
+    return out;
+  });
+  for (const e of late) {
+    api('POST', `/api/ext/aco/${encodeURIComponent(e.runId)}`, { status: 'failed', reason: 'timeout', message: `Your other checkout at ${(e.run && e.run.storeName) || 'the store'} was still going after 15 minutes — it stopped waiting for its turn` }).catch(() => null);
+  }
+  for (const { e, a } of beat) api('POST', `/api/ext/aco/${encodeURIComponent(e.runId)}`, { status: 'waiting', reason: 'turn', message: nextInLine(e.run && e.run.storeName, a) }).catch(() => null);
+  for (const e of go) {
+    const r = await api('POST', `/api/ext/aco/${encodeURIComponent(e.runId)}/link`, {});
+    if (r.status === 200 && r.body && r.body.url) await startRun({ ...e.run, url: r.body.url }, { turn: false }).catch(() => null);
+    else if (r.status !== 0) await withTurns((t) => { delete t[`r:${e.runId}`]; }); // (your account says it's not waiting any more: stopped, or over)
+    else await withTurns((t) => { if (t[`r:${e.runId}`]) t[`r:${e.runId}`].opening = false; }); // offline: try again in a moment
+  }
+}
+
+/** A tab went somewhere: to another store, its checkout here is over (a bank's or payment page on the way isn't a store). */
+async function turnMoved(tabId, url) {
+  const t = (await chrome.storage.session.get(TURNS))[TURNS] || {};
+  const e = t[`t:${tabId}`];
+  if (!e) return;
+  const r = storeOfUrl((await getState()).flows, url);
+  if (r && r.id !== e.store) await turnEnded(tabId, { gone: true });
+}
+
+// --- card boxes: one tab at a time -------------------------------------------------------------
+// The card boxes in payment frames keep only typing into a box on a page in front of you. With
+// several checkouts going, the tabs take turns to type their cards: each is brought forward for its
+// boxes (a tab's own frames take their turns within it, through its page), and keeps the turn until
+// every frame of it that asked is done — and a moment after (for its next box), so tabs don't swap
+// back and forth.
+const TYPE_HOLD_MS = 6000; // one box takes a second or two (a frame that never says it's done)
+const TYPE_KEEP_MS = 700;
+const typing = { tab: null, holds: 0, until: 0, log: [] };
+
+const typingElsewhere = (tabId) => typing.tab !== null && typing.tab !== tabId && Date.now() < typing.until;
+
+async function takeTyping(tabId) {
+  const end = Date.now() + 20000;
+  while (typingElsewhere(tabId) && Date.now() < end) await new Promise((r) => setTimeout(r, 40));
+  if (typing.tab !== tabId) typing.holds = 0; // (the turn comes to this tab)
+  Object.assign(typing, { tab: tabId, holds: typing.holds + 1, until: Date.now() + TYPE_HOLD_MS });
+  typing.log = [...typing.log.slice(-49), { tab: tabId, from: Date.now(), to: null }]; // (for tests: who typed when)
+}
+
+function doneTyping(tabId, { all = false } = {}) {
+  if (typing.tab !== tabId) return;
+  typing.holds = all ? 0 : Math.max(0, typing.holds - 1);
+  const open = typing.log.find((x) => x.tab === tabId && x.to === null);
+  if (open) open.to = Date.now();
+  if (all) for (const x of typing.log) if (x.tab === tabId && x.to === null) x.to = Date.now();
+  // (Still typing in another of its frames: the turn stays, as long as they keep going.)
+  typing.until = all ? 0 : Date.now() + (typing.holds ? TYPE_HOLD_MS : TYPE_KEEP_MS);
 }
 
 // --- the store login monitor -----------------------------------------------------
@@ -1049,6 +1246,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   runChecks().catch(() => null);
   sweepLoop().catch(() => null);
   acoLoop().catch(() => null);
+  releaseTurns().catch(() => null); // (a checkout waiting for you that's had its few minutes)
   checkLogins().catch(() => null);
   updateInfo().catch(() => null); // keeps the "NEW" badge on the toolbar icon up to date
 });
@@ -1145,6 +1343,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // (An Auto-checkout run's code: the run's limits ride on this tab's pass, never on the page.)
           await savePass(sender.tab.id, res.body.host === tabHost(sender) ? res.body.host : tabHost(sender), auth.user.id, res.body.profileId, res.body.aco || null);
           profileFor(res.body.profileId || '').catch(() => null); // for checkout, in a moment
+          // In the line for this store (one checkout at a time there: turns, above).
+          const r = await storeForTab(sender);
+          if (r) await joinTurn(sender.tab.id, r.id, { runId: res.body.aco ? res.body.aco.runId : null, name: res.body.name || '' });
           return res.body;
         }
         return { ok: false, status: res.status, error: res.body && res.body.error };
@@ -1201,6 +1402,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (status === 'placing') run.placing = true;
         if (['ready', 'needs_you', 'failed'].includes(status) && !run.placing) run.done = true;
         await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: run } });
+        // The store's next checkout: on its way once this one's order is placed or it's stopped, or (waiting
+        // for you) in a few minutes. (Stopped before anything went into the bag: straight away.)
+        if (status === 'placed' || status === 'failed' || (status === 'needs_you' && NOTHING_ADDED.has(String(msg.reason || '')))) turnEnded(sender.tab.id).catch(() => null);
+        else if (status === 'ready' || status === 'needs_you') turnEnded(sender.tab.id, { parked: true }).catch(() => null);
         const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, {
           status, reason: String(msg.reason || ''), message: String(msg.message || '').slice(0, 300),
           total: typeof msg.total === 'number' ? msg.total : null,
@@ -1259,7 +1464,47 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (sender.tab) {
           await chrome.storage.session.remove(passKey(sender.tab.id));
           await clearCardFrames(sender.tab.id);
+          await turnEnded(sender.tab.id, { gone: true });
         }
+        return { ok: true };
+      case 'turn': {
+        // A store page with a checkout to start: is it its turn at this store? (Another of yours there first: no.)
+        if (!sender.tab || sender.frameId !== 0) return null;
+        const r = await storeForTab(sender);
+        if (!r) return { go: true };
+        const key = `t:${sender.tab.id}`;
+        const mine = ((await chrome.storage.session.get(TURNS))[TURNS] || {})[key];
+        if (!mine || mine.store !== r.id || !holds(mine)) await joinTurn(sender.tab.id, r.id, { name: typeof msg.name === 'string' ? msg.name.slice(0, 120) : '' });
+        await releaseTurns(); // (closed tabs and finished checkouts forgotten first)
+        const a = ahead((await chrome.storage.session.get(TURNS))[TURNS] || {}, key);
+        return a ? { go: false, name: a.name || '', store: r.name } : { go: true };
+      }
+      case 'turnEnd':
+        // This tab's checkout stopped (you pressed Stop, or it couldn't go on), or it's at the final button for you (parked).
+        if (sender.tab) await turnEnded(sender.tab.id, { parked: !!msg.parked });
+        return { ok: true };
+      case 'sleep': {
+        // A store page or frame in a tab in the background: its own timers run at most about once a second
+        // there, so its checkout's short waits are timed here instead (this worker's run at full speed).
+        const ms = Math.max(0, Math.min(1000, Number(msg.ms) || 0));
+        await new Promise((r) => setTimeout(r, ms));
+        return { ok: true };
+      }
+      case 'typeTurn': {
+        // A payment frame about to type a card box: its tab's turn (one tab at a time), in front.
+        if (!sender.tab) return null;
+        const pass = (await chrome.storage.session.get(passKey(sender.tab.id)))[passKey(sender.tab.id)];
+        if (!pass || Date.now() > pass.expires || tabHost(sender) !== pass.host) return { ok: false };
+        await takeTyping(sender.tab.id);
+        const tab = await chrome.tabs.get(sender.tab.id).catch(() => null);
+        if (tab && !tab.active) {
+          await chrome.tabs.update(tab.id, { active: true }).catch(() => null);
+          await new Promise((r) => setTimeout(r, 150)); // (the page comes forward)
+        }
+        return { ok: true };
+      }
+      case 'typeDone':
+        if (sender.tab) doneTyping(sender.tab.id);
         return { ok: true };
 
       // From your Mugibot dashboard (bridge.js) or the extension's own pages
@@ -1358,6 +1603,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.storage.session.remove(passKey(tabId));
   clearCardFrames(tabId).catch(() => null);
+  doneTyping(tabId, { all: true });
+  turnEnded(tabId, { gone: true }).catch(() => null); // (the store's next checkout goes)
   // (A tab closed while in a queue: out of line — not through. Runs that were waiting for it go their own way:
   // each opens the store, and waits in line itself.)
   withGates((g) => {
@@ -1371,8 +1618,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }).then((stores) => { for (const store of stores || []) releaseRuns(store).catch(() => null); }).catch(() => null);
 });
 
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.url) turnMoved(tabId, info.url).catch(() => null);
+});
+
 // For tests and the "Check now" button.
 globalThis.mugibotGates = async () => ({ gates: await gatesNow(), held: [...(await heldStores())], through: await throughStores() });
 globalThis.mugibotRunChecks = runChecks;
 globalThis.mugibotSweepLoop = sweepLoop;
 globalThis.mugibotAcoLoop = acoLoop;
+globalThis.mugibotTurns = async () => (await chrome.storage.session.get(TURNS))[TURNS] || {};
+globalThis.mugibotTyping = () => typing.log;

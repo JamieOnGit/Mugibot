@@ -17,6 +17,11 @@
 // checkout once you have. In the store's virtual queue it waits its turn with you and never
 // refreshes the page (the queue page refreshes itself; refreshing it yourself can lose your place),
 // then carries on with the ⚡ Buy or Auto-checkout run as soon as you're through.
+//
+// Several checkouts at once: a store keeps one bag for this browser, so checkouts at the same store
+// take turns (the extension keeps the line). One whose store is busy with another of yours waits on
+// its page — saying so — then reloads the page (what's in the bag now) and goes. Checkouts at
+// different stores go side by side.
 
 (async () => {
   'use strict';
@@ -174,7 +179,7 @@
     let said = null;
     let errSince = 0;
     while (Date.now() < until) {
-      await new Promise((r) => setTimeout(r, 400));
+      await MGBFlows.wait(400);
       let o = outcome();
       if (!o && await pressReview(run)) continue;
       // The store refused the press (a box it says is wrong), and it's still saying so a few seconds on: for you.
@@ -210,7 +215,7 @@
   async function cardIn() {
     for (let i = 0; i < 15; i++) {
       if (await cardReady(true)) return true;
-      await new Promise((r) => setTimeout(r, 1000));
+      await MGBFlows.wait(1000);
     }
     return false;
   }
@@ -236,7 +241,7 @@
       && !((await ask({ type: 'cardFrames' })) || []).some((f) => f.seen > 0);
     if (ownCard && !saved && !data.card) return acoStop('needs_you', 'card_missing', 'No card is saved in the extension — add it (icon → Card settings) and finish this yourself.', fin);
     if (ownCard && checkoutFlow && checkoutFlow.payment === 'card' && !(await cardIn())) return acoStop('needs_you', 'card_not_filled', "Your card didn't go into the store's card boxes — type it in and press the button yourself.", fin);
-    await new Promise((r) => setTimeout(r, 400)); // the page's own checks on the last boxes
+    await MGBFlows.wait(400); // the page's own checks on the last boxes
     const err = pageError();
     if (err) return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);
     const missing = MGBChecks.missingRequired(document);
@@ -247,7 +252,7 @@
     // The button, ready to press (some turn on a moment after the last box is filled).
     let btn = fin.el;
     for (let i = 0; i < 25 && (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true' || !MGBFill.isVisible(btn)); i++) {
-      await new Promise((r) => setTimeout(r, 200));
+      await MGBFlows.wait(200);
       if (!btn.isConnected) btn = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')].find((el) => MGBFill.isVisible(el) && (el.innerText || el.value || '').trim() === fin.text) || btn;
     }
     if (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true') return acoStop('needs_you', 'needs_details', `"${fin.text}" didn't become available — check the page and press it yourself.`, fin, total);
@@ -327,6 +332,8 @@
       }
       if (run && result === 'done') await acoReport('placed', '', `Order confirmed at ${retailer.name}`);
       if (run && (result === 'needs_you' || result === 'timeout')) await acoReport('needs_you', result === 'timeout' ? 'timeout' : 'needs_details', `Checkout got stuck at ${retailer.name} — finish it yourself in this tab.`);
+      // (A ⚡ Buy at the final button, or stuck, for you: the store's next checkout goes in a few minutes. Auto-checkout's runs say so themselves.)
+      if (!run && ['ready', 'needs_you', 'timeout'].includes(result)) ask({ type: 'turnEnd', parked: true });
       if (result !== 'ready' && result !== 'stopped') assistFlag.off();
       if (result === 'done') ask({ type: 'endFill' });
       if (result === 'ready' && data.card && checkoutFlow && checkoutFlow.payment === 'card') checkCard();
@@ -348,7 +355,7 @@
       if (!cardBoxesOnPage().length && MGBChecks.savedCardShown(document, checkoutFlow, false) && !((await ask({ type: 'cardFrames' })) || []).some((f) => f.seen > 0)) return;
       const frames = (await ask({ type: 'cardFrames' })) || [];
       if (frames.some((f) => f.filled > 0)) return;
-      await new Promise((r) => setTimeout(r, 1000));
+      await MGBFlows.wait(1000);
     }
     const reached = ((await ask({ type: 'cardFrames' })) || []).filter((f) => f.seen > 0);
     const hostOf = (src) => { try { return new URL(src, location.href).host; } catch { return ''; } };
@@ -378,7 +385,7 @@
     (function look() {
       if (leaving) return;
       if (MGBQuick.onCheckoutPage(retailer) || Date.now() > until) fillCheckout();
-      else setTimeout(look, 100);
+      else MGBFlows.wait(100).then(look);
     })();
   }
 
@@ -400,6 +407,8 @@
       }
       // (On its way: the flow's own progress carries it from here.)
       if (fresh && (holdStore.read() || {}).provisional) holdStore.clear();
+      // Stopped short of checkout (sold out, not added…): the store's next checkout goes now. (Auto-checkout's runs say so themselves.)
+      if (!aco && ['error', 'timeout', 'stopped'].includes(result)) ask({ type: 'turnEnd' });
       if (result === 'checkout') atCheckout();
       // (The store's quick checkout, in a frame on this page: frame.js fills it in and says how it goes.)
       if (result === 'checkout-frame') panel.setStatus(`At ${retailer.name}'s checkout — filling it in…`);
@@ -424,6 +433,13 @@
     onStart: async () => {
       // Your click on the panel: fill in checkout afterwards too.
       const item = MGBQuick.productForPage(items, retailer);
+      // (Another checkout of yours going at this store — its one bag: this one once that's done.)
+      const turn = await ask({ type: 'turn', name: item && item.name });
+      if (turn && turn.go === false) {
+        ask({ type: 'turnEnd' });
+        panel.setStatus(`Your checkout of ${turn.name || 'another item'} at ${retailer.name} is going — ${retailer.name} keeps one bag for this browser. Press this again once it's done.`);
+        return;
+      }
       const ok = await ask({ type: 'startFill' });
       if (ok) assistFlag.on(item && item.profileId);
       go(true);
@@ -432,6 +448,8 @@
       store.clear();
       assistFlag.off();
       holdStore.clear();
+      turnStopped = true;
+      ask({ type: 'turnEnd' }); // (the store's next checkout goes)
       panel.setStatus('Stopped. You can continue yourself.');
       if (aco && !aco.placing) await acoReport('failed', 'stopped', 'You stopped it');
       // (A checkout running in a frame on this page stops too: this tab's checkout pass is gone.)
@@ -439,10 +457,14 @@
     },
   });
 
-  /** A ⚡ Buy (or Auto-checkout run) confirmed for this tab: to checkout with it. */
+  /** A ⚡ Buy (or Auto-checkout run) confirmed for this tab: to checkout with it — when it's its turn at this store. */
   let claimed = null;
-  function startClaimed(claim, product) {
+  let turnStopped = false;
+  async function startClaimed(claim, product) {
     claimed = { code: goCode, claim, product };
+    // Another checkout of yours at this store goes first (its one bag): next in line, here.
+    const turn = await ask({ type: 'turn', name: product && product.name });
+    if (turn && turn.go === false) { waitTurn(claim, product, turn); return; }
     // Auto-checkout only ever buys the one item: a bag with other things in it is left for you.
     const inBag = aco ? MGBQuick.bagCount() : null;
     if (aco && inBag) {
@@ -467,6 +489,38 @@
     // The buy box can take a few seconds to appear on a fresh page load.
     const waitMs = (MGBFlows.part(retailer, 'product').waitMs) || 12000;
     go(true, { product, waitForButtonMs: waitMs });
+  }
+
+  /**
+   * Next in line at this store: waits here (the extension says when it's this one's turn — the one
+   * before it placed its order, stopped, or was closed), then reloads the page and goes: a page
+   * opened while the other checkout had its item in the bag would show the bag as it was then.
+   */
+  async function waitTurn(claim, product, turn) {
+    holdStore.save({ code: goCode, claim, product, kind: 'turn', at: Date.now() });
+    panel.setNote(`⏳ Next in line at ${retailer.name}${aco ? ' — 🤖 Auto-checkout' : ''}`);
+    const say = (t) => panel.setStatus(`Your checkout of ${t.name || 'another item'} at ${retailer.name} goes first — ${retailer.name} keeps one bag for this browser. This one goes the moment that's done.`);
+    const tell = (t) => { if (aco) acoReport('waiting', 'turn', `Next in line at ${retailer.name}: your checkout of ${t.name || 'another item'} there goes first`); };
+    say(turn);
+    tell(turn);
+    let beat = Date.now();
+    for (;;) {
+      await MGBFlows.wait(500);
+      if (turnStopped) return;
+      const t = await ask({ type: 'turn', name: product && product.name });
+      if (!t || t.go !== false) break; // its turn (or the extension can't say: go)
+      say(t);
+      if (Date.now() - beat > 120 * 1000) {
+        // Still in line: this tab's checkout pass, its ⚡ Buy and your account kept up to date.
+        beat = Date.now();
+        ask({ type: 'gateWait' });
+        const h = holdStore.read();
+        if (h) holdStore.save({ ...h, at: Date.now() });
+        tell(t);
+      }
+    }
+    panel.setStatus(`Its turn — opening ${retailer.name} afresh…`);
+    location.reload();
   }
 
   // ---------------------------------------------------------------------------
@@ -539,6 +593,8 @@
         waitAtGate(gate);
         return;
       }
+      // (Reloaded for its turn at this store — after waiting for another checkout of yours here.)
+      if (held && held.kind === 'turn' && aco) acoReport('started', '', `Its turn at ${retailer.name} — carrying on`);
       holdStore.clear();
       startClaimed(claim, product);
       return;
@@ -578,7 +634,10 @@
     }
     holdStore.clear();
     // (A ⚡ Buy only kept in case — its page reloaded before it got going — just carries on.)
-    if (held.kind) {
+    if (held.kind === 'turn') {
+      // Its turn at this store (the page just reloaded for it). (Still another's turn — the line changed: it waits again.)
+      if (aco) acoReport('started', '', `Its turn at ${retailer.name} — carrying on`);
+    } else if (held.kind) {
       report('step', `Through ${retailer.name}'s ${held.kind === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — carrying on`, product);
       if (aco) acoReport('started', '', `Through ${retailer.name}'s ${held.kind === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — carrying on`);
     }
