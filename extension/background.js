@@ -188,6 +188,38 @@ function tabHost(sender) {
   try { return new URL(sender.tab.url || (sender.frameId === 0 ? sender.url : '')).host; } catch { return ''; }
 }
 
+/** A pattern from a flow (it travels as { re, f }). */
+function rx(v) {
+  if (v instanceof RegExp) return v;
+  if (v && typeof v.re === 'string') { try { return new RegExp(v.re, v.f || ''); } catch { return null; } }
+  return null;
+}
+
+/** The store whose flow applies to the page in this tab (by address, and path for the dummy store). */
+async function storeForTab(sender) {
+  let u;
+  try { u = new URL(sender.tab.url); } catch { return null; }
+  let p = u.pathname;
+  try { p = decodeURIComponent(p); } catch { /* keep raw */ }
+  const host = u.host.toLowerCase();
+  return ((await getState()).flows || []).find((r) => (r.hosts || []).some((h) => host === h || host.endsWith(`.${h.replace(/^www\./, '')}`))
+    && (!r.pathPrefix || p === r.pathPrefix || p.startsWith(`${r.pathPrefix}/`))) || null;
+}
+
+/**
+ * A frame running the store's whole checkout (its flow's checkout.frames: Global-e's for Premium
+ * Bandai, Amazon's quick checkout), in a tab with a checkout you started on that store: its store
+ * and pass — or null. Only such a frame may be handed your details and report an Auto-checkout run.
+ */
+async function checkoutFrame(sender) {
+  if (!sender.tab || !sender.frameId) return null;
+  const pass = await passFor(sender);
+  if (!pass) return null;
+  const r = await storeForTab(sender);
+  const frames = (r && r.flow && r.flow.checkout && r.flow.checkout.frames || []).map(rx).filter(Boolean);
+  return frames.some((re) => re.test(String(sender.url || ''))) ? { store: r, pass } : null;
+}
+
 async function fillData(sender, part, profileId) {
   const tabId = sender.tab && sender.tab.id;
   if (tabId == null) return null;
@@ -854,9 +886,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case 'fillData': return fillData(sender, msg.part, typeof msg.profileId === 'string' ? msg.profileId : null);
       case 'acoReport': {
-        // How the Auto-checkout run in this tab is going (only the tab the run's code opened).
-        if (!sender.tab || sender.frameId !== 0) return null;
-        const pass = await passFor(sender);
+        // How the Auto-checkout run in this tab is going (only the tab the run's code opened: its page,
+        // or the store's checkout running in a frame on it).
+        if (!sender.tab) return null;
+        const pass = sender.frameId === 0 ? await passFor(sender) : ((await checkoutFrame(sender)) || {}).pass;
         if (!pass || !pass.aco || !pass.aco.runId) return null;
         const status = String(msg.status || '');
         const run = { ...pass.aco };
@@ -877,8 +910,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case 'acoInfo': {
         // The store page: is this tab running an Auto-checkout run (and how far has it got)?
-        if (!sender.tab || sender.frameId !== 0) return null;
-        const pass = await passFor(sender);
+        if (!sender.tab) return null;
+        const pass = sender.frameId === 0 ? await passFor(sender) : ((await checkoutFrame(sender)) || {}).pass;
         return pass && pass.aco && !pass.aco.done ? pass.aco : null;
       }
       case 'cardFrame': {
@@ -886,11 +919,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!sender.tab || !sender.frameId) return null;
         let host = '';
         try { host = new URL(sender.url).host; } catch { /* keep empty */ }
-        await chrome.storage.session.set({ [frameKey(sender.tab.id, sender.frameId)]: { host, seen: Number(msg.seen) || 0, filled: Number(msg.filled) || 0, detail: String(msg.detail || '').slice(0, 300), at: Date.now() } });
+        // (done: every box there's something saved for has kept it — or been given up on.)
+        await chrome.storage.session.set({ [frameKey(sender.tab.id, sender.frameId)]: { host, seen: Number(msg.seen) || 0, filled: Number(msg.filled) || 0, done: !!msg.done, detail: String(msg.detail || '').slice(0, 300), at: Date.now() } });
         return { ok: true };
       }
       case 'cardFrames':
-        return sender.tab && sender.frameId === 0 ? cardFrames(sender.tab.id) : null;
+        if (!sender.tab) return null;
+        return sender.frameId === 0 || (await checkoutFrame(sender)) ? cardFrames(sender.tab.id) : null;
+      case 'frameRole': {
+        // A frame on a store page: is it the store's whole checkout (checkout.frames)? Then it gets
+        // that store's checkout flow, and runs it there (frame.js). false: no, and no need to ask again.
+        if (!sender.tab || !sender.frameId) return null;
+        const r = await storeForTab(sender);
+        if (!r || !(r.flow && r.flow.checkout && (r.flow.checkout.frames || []).length)) return false;
+        const hit = await checkoutFrame(sender);
+        if (!hit) return (r.flow.checkout.frames || []).map(rx).some((re) => re && re.test(String(sender.url || ''))) ? null : false;
+        return { checkout: true, store: r.name, flow: r.flow.checkout };
+      }
+      case 'frameStatus': {
+        // How a checkout running in a frame is going, for the panel on the page above it.
+        if (!sender.tab || !(await checkoutFrame(sender))) return null;
+        chrome.tabs.sendMessage(sender.tab.id, { type: 'frameStatus', text: String(msg.text || '').slice(0, 300) }, { frameId: 0 }, () => void chrome.runtime.lastError);
+        return { ok: true };
+      }
+      case 'focusTab': {
+        // A card box needs real typing, and the browser window isn't in front: bring this checkout's
+        // tab forward (once — only for a tab with a checkout you started).
+        if (!sender.tab) return null;
+        const pass = (await chrome.storage.session.get(passKey(sender.tab.id)))[passKey(sender.tab.id)];
+        if (!pass || Date.now() > pass.expires || tabHost(sender) !== pass.host) return null;
+        await chrome.tabs.update(sender.tab.id, { active: true }).catch(() => null);
+        await chrome.windows.update(sender.tab.windowId, { focused: true }).catch(() => null);
+        return { ok: true };
+      }
       case 'storeCopy':
         // From this copy's own scripts on a store page or the dashboard: is the Chrome Web Store copy there too?
         await setRetired(!!msg.present);

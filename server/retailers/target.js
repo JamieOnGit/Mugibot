@@ -1,10 +1,14 @@
-// Target — DRAFT. Product links and restock checks are set up; the checkout
-// steps below are a first guess and have NOT been tested on target.com.au yet
-// (they're tested on the Target-style dummy store). Send the real flow
-// (docs/RETAILER-FLOWS.md).
+// Target — the checkout as Target's real one goes (from a member's walk-through, Oct 2026),
+// tested on the Target-style dummy store; not run end to end on target.com.au yet.
 //
-// After "Add to basket", Target shows an "Often Bought Together" pop-up offering
-// more things to add: ⚡ Buy and Auto-checkout close it with its ✕ and carry on.
+// Product page: "Add to basket" → an "Often Bought Together" pop-up offering more things to add:
+//   ⚡ Buy and Auto-checkout close it with its ✕ and carry on → straight to /checkout (its one-page
+//   checkout at /spc/order) → Delivery Options: "Home Delivery" (a tile, nothing chosen until you
+//   pick it) → your details (first and last name, contact number, email) and your delivery address,
+//   one line, picked from Target's suggestions as it's typed → Payment Method: "Credit Card" (a
+//   tile) → card holder's name, card number, expiry (MM/YY) and CVV, in Paydock's card form (a
+//   frame from paydock.com, PAYMENT_HOSTS) → STOP at "Place order". Signed in: the same, with your
+//   details already in.
 
 export default {
   id: 'target',
@@ -13,8 +17,8 @@ export default {
   hosts: ['www.target.com.au'],
   // Where this retailer's copy lives in the dummy store (npm run mockstore).
   devPath: '/target',
-  flowStatus: 'draft',
-  flowNote: 'Not tested yet — the checkout fill is a best guess. Waiting for the real flow.',
+  flowStatus: 'beta',
+  flowNote: 'Built from a walk-through of Target\'s real checkout; tested on the Target-style dummy store. Home Delivery, your address from Target\'s suggestions, Credit Card.',
   skuLabel: 'Product code',
   skuHint: 'The code at the end of the link, e.g. …/p/…/71234567',
   skuFromPath: /^(?:\/target)?\/p\/[^/]+\/([A-Za-z0-9_-]+)/,
@@ -38,7 +42,11 @@ export default {
       path: /\/(checkout|spc\/order)(\/|$)/i,
       url: '/checkout',
       guest: [/^continue as (a )?guest$/i, /^guest checkout$/i],
-      steps: [/^continue( to (delivery|payment))?$/i, /^next$/i],
+      // Delivery Options and Payment Method are tiles: "Home Delivery", then "Credit Card".
+      choose: [/^home delivery$/i, /^credit card$/i],
+      steps: [/^continue( to (delivery|payment|review))?$/i, /^next$/i],
+      // The delivery address is one line, picked from Target's suggestions as you type.
+      addressLookup: true,
       final: [/\bplace (my |your )?order\b/i, /\bpay now\b/i],
       delivery: 'home',
       payment: 'card',

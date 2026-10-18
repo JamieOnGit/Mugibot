@@ -46,6 +46,11 @@ export const DUMMY_PRODUCTS = {
     { sku: 'pokemon-tcg-mega-evolution-elite-trainer-box', name: 'Pokemon TCG Mega Evolution Elite Trainer Box', price: 99.95, status: 'in_stock' },
     { sku: 'preorder-one-piece-card-game-op-15-booster-box', name: 'PREORDER One Piece Card Game OP-15 Booster Box', price: 199.95, status: 'out_of_stock' },
   ],
+  // Toys"R"Us (Shopify), at toysrus.com.au.
+  toysrus: [
+    { sku: 'pokemon-tcg-scarlet-violet-151-ultra-premium-collection', name: 'Pokemon TCG Scarlet & Violet 151 Ultra Premium Collection', price: 179.99, status: 'in_stock' },
+    { sku: 'pokemon-tcg-mega-evolution-booster-bundle', name: 'Pokemon TCG Mega Evolution Booster Bundle', price: 54.99, status: 'out_of_stock' },
+  ],
   pokemoncenter: [
     { sku: '10-10447-108', name: 'Pokémon TCG: 30th Celebration Pokémon Center Elite Trainer Box', price: 129.95, status: 'in_stock' },
     { sku: '10-10450-101', name: 'Pokémon TCG: Mega Evolution Booster Bundle', price: 49.95, status: 'out_of_stock' },
@@ -88,6 +93,7 @@ export function dummyProductPath(store, p) {
     case 'trainertown': return `/trainertown/products/${p.sku}`;
     case 'thegamescube': return `/thegamescube/catalog/${p.category || 'all_other_tcgs'}/${slugify(p.name).replace(/-/g, '_')}/${p.sku}`;
     case 'gamerholic': return `/gamerholic/products/${p.sku}`;
+    case 'toysrus': return `/toysrus/products/${p.sku}`;
     case 'pokemoncenter': return `/pokemoncenter/product/${p.sku}/${slugify(p.name)}`;
     case 'pbandai': return `/pbandai/item/${p.sku}`;
     case 'target': return `/target/p/${slugify(p.name)}/${p.sku}`;

@@ -1,7 +1,10 @@
-// Gamerholic — DRAFT checkout. An Australian games and cards store on Shopify,
-// so ⚡ Buy uses the Shopify flow: Shopify's own cart link straight into its
-// one-page checkout (tested on the Shopify-style dummy store, /gamerholic; not
-// on gamerholic.com.au yet).
+// Gamerholic — an Australian games and cards store on Shopify, so ⚡ Buy uses the Shopify
+// flow: Shopify's own cart link straight into its one-page checkout. As Gamerholic's real
+// checkout goes (a member's walk-through, Oct 2026), tested on the Shopify-style dummy store
+// (/gamerholic): signed in with Shop (Shop Pay), straight to "Pay now"; as a guest: email,
+// delivery (country/region, first and last name, address, suburb, state/territory, postcode,
+// phone — optional) → shipping method "Standard Shipping" → card number, expiration date
+// (MM/YY) and security code (Shopify's card fields) → STOP at "Pay now".
 //
 // Live sweeps from Mugibot's server: Gamerholic lists hundreds of new products a
 // day (pre-orders from its suppliers, cards, toys), so the sweeps read its newest
@@ -18,8 +21,8 @@ export default {
   base: 'https://gamerholic.com.au',
   hosts: ['gamerholic.com.au', 'www.gamerholic.com.au'],
   devPath: '/gamerholic',
-  flowStatus: 'draft',
-  flowNote: 'Uses the Shopify flow (tested on the Shopify-style dummy store). Not tested on gamerholic.com.au yet.',
+  flowStatus: 'beta',
+  flowNote: 'Shopify checkout: Shop Pay or your details and card, Standard Shipping, stops at "Pay now". Tested on the Shopify-style dummy store.',
   productPath: /^(\/gamerholic)?\/products\/[^/?#.]+$/,
   searchPath: '/search?q={q}&type=product',
   sweep: {
@@ -31,4 +34,8 @@ export default {
     minSeconds: 15,
   },
   monitor: { server: true, browser: true },
+  flow: {
+    ...jbhifi.flow,
+    checkout: { ...jbhifi.flow.checkout, shipping: [/standard shipping/i, /^standard\b/i] },
+  },
 };

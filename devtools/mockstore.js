@@ -48,6 +48,7 @@ const SHOPS = {
   jbhifi: { name: 'JB Hi-Fi (dummy Shopify)', color: '#222' },
   trainertown: { name: 'Trainer Town (dummy Shopify)', color: '#1d4e89' },
   gamerholic: { name: 'Gamerholic (dummy Shopify)', color: '#6b21a8' },
+  toysrus: { name: 'Toys"R"Us (dummy Shopify)', color: '#0b5394' },
   thegamescube: { name: 'The Games Cube (dummy CrystalCommerce)', color: '#0f766e' },
   pokemoncenter: { name: 'Pokémon Center (dummy)', color: '#d32f2f' },
   pbandai: { name: 'Premium Bandai (dummy)', color: '#1f2937' },
@@ -56,8 +57,8 @@ const SHOPS = {
   citybeach: { name: 'City Beach (dummy)', color: '#111111' },
 };
 // The Shopify-style shops: the same product, cart and checkout pages.
-const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic']);
-const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target|amazon|citybeach)(\/.*|$)/;
+const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic', 'toysrus']);
+const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|toysrus|thegamescube|pokemoncenter|pbandai|target|amazon|citybeach)(\/.*|$)/;
 const LD_AVAIL = { in_stock: 'InStock', preorder: 'PreOrder', out_of_stock: 'OutOfStock' };
 // City Beach's marketing pop-up (Emarsys), over the product page a moment after it opens.
 const CITYBEACH_POPUP = `<div id="wps_popup" class="wps-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:900;align-items:center;justify-content:center">
@@ -91,6 +92,9 @@ export function defaultShops() {
       servedAt: 0, addedAt: 0,
       // Placing an order: the card is declined; or the bank's "verify it's you" check comes up first.
       decline: false, threeDS: false,
+      // addNeedsLoad: the cart turns an add away (HTTP 403) until the product page has finished
+      // loading and its own start-up is done, this many ms after (like Kmart for a signed-out visitor).
+      addNeedsLoad: 0,
       // What the bag page showed each time it was opened (number of items in it).
       bagViews: [],
     };
@@ -121,6 +125,8 @@ function accountBits(shop, on) {
   if (SHOPIFY.has(shop)) return `<script>var __st={"a":1,"offset":36000,"p":"home","u":"dummy"${on ? ',"cid":4242' : ''}};</script><a href="/${shop}/account">${on ? 'Account' : 'Sign in'}</a>`;
   if (shop === 'thegamescube') return `<a href="/thegamescube/user/${on ? 'logout' : 'login'}" class="account ${on ? 'logged-in' : 'not-logged-in'}">${on ? 'Logout' : 'Login'}</a>`;
   if (shop === 'pbandai') return `<script>USER_DATA = {"loadTime":"now","csrfToken":"dummy"${on ? ',"loggedInMember":{"memberNo":"1"}' : ''}}</script><a href="/pbandai/login">${on ? 'My page' : 'Sign In'}</a>`;
+  // Amazon's header: "Hello, sign in" / "Hello, Ash" (what its sign-in check reads).
+  if (shop === 'amazon') return `<a id="nav-link-accountList" href="/amazon/gp/css/homepage.html"><span id="nav-link-accountList-nav-line-1" class="nav-line-1">Hello, ${on ? 'Ash' : 'sign in'}</span></a>`;
   return on ? `<span class="hi">Hi, Ash</span> <a href="/${shop}/logout">Sign out</a>` : `<a href="/${shop}/login">Sign in</a>`;
 }
 
@@ -161,6 +167,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     // 'strict': one frame per box (like Adyen), ignoring anything that isn't real typing.
     // 'keys': one frame per box, taking key presses only.
     // 'never': one frame per box, taking nothing.
+    // 'slow': like 'strict', each box taking a moment with what's typed (the boxes queue for the focus).
     cardInIframe: false,
     // Signed in at each shop (the store login monitor): shop → true.
     signedIn: {},
@@ -173,6 +180,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   const shopOf = (id) => state.shops[id];
   const find = (shop, sku) => shopOf(shop) && shopOf(shop).products.find((p) => p.sku === sku);
   const pathFor = (shop, p) => dummyProductPath(shop, p);
+  // The token the product page last served sets once it has started up (addNeedsLoad).
+  const S_TOKEN = (shop) => shopOf(shop).startToken || '';
   const total = (shop) => shopOf(shop).cart.reduce((s, c) => s + c.price * c.qty, 0);
 
   function addToCart(shop, sku, qty) {
@@ -217,7 +226,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       ebgames: { in_stock: 'Add to Cart', preorder: 'Pre-order Now', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
       jbhifi: { in_stock: 'Add to cart', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon' },
       pokemoncenter: { in_stock: 'Add to Cart', preorder: 'Pre-order', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
-      pbandai: { in_stock: 'Add to Cart', preorder: 'Add to Cart', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
+      pbandai: { in_stock: 'Add to Cart', preorder: 'PLACE PRE-ORDER', out_of_stock: 'Sold Out', coming_soon: 'Coming Soon' },
       target: { in_stock: 'Add to basket', preorder: 'Pre-order', out_of_stock: 'Out of stock online', coming_soon: 'Coming soon' },
       amazon: { in_stock: 'Add to Cart', preorder: 'Pre-order now', out_of_stock: 'Currently unavailable', coming_soon: 'Currently unavailable' },
       citybeach: { in_stock: 'Add To Bag', preorder: 'Pre-order', out_of_stock: 'Out of stock', coming_soon: 'Coming soon' },
@@ -236,7 +245,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       bigw: '<div class="drawer added-to-cart-drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/bigw/cart">View cart</a> <a href="/bigw/">Continue shopping</a></div>',
       ebgames: '<div class="drawer mini-cart" id="drawer"><h3>Added to cart</h3><p id="drawer-msg"></p><a class="btn" href="/ebgames/checkout">Checkout</a> <a href="/ebgames/cart">View cart</a></div>',
       pokemoncenter: '<div class="drawer mini-cart" id="drawer" role="dialog" aria-label="Added to cart"><h3>Added to cart</h3><p id="drawer-msg"></p><a class="btn" href="/pokemoncenter/cart">View Cart</a> <a href="/pokemoncenter/">Continue Shopping</a></div>',
-      pbandai: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Item added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/pbandai/cart">Go to Cart</a></div>',
+      pbandai: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Item added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/pbandai/cart">View Cart</a> <a href="/pbandai/">Continue Shopping</a></div>',
       amazon: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to Cart"><h3>Added to Cart</h3><p id="drawer-msg"></p><a href="/amazon/cart">Go to Cart</a></div>',
       // City Beach: the mini bag that opens after "Add To Bag" (its words: "Close", "View Your Bag").
       citybeach: '<div class="drawer minicart-flyout" id="drawer"><button type="button" aria-label="Close" onclick="this.parentNode.classList.remove(\'open\')">Close</button><p id="drawer-msg"></p><a class="btn" href="/citybeach/cart">View Your Bag</a></div>',
@@ -257,6 +266,15 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <p>${shop === 'kmart' ? 'Keycode' : 'Product code'} ${p.sku}</p>
         ${qtyControl(p)}
         <div id="buybox">${p.lateMs ? '<p>Loading…</p>' : button}</div>
+        ${shop === 'amazon' && orderable ? `<form id="buy-now-form" method="post" action="/amazon/checkout/entry/buynow"><input type="hidden" name="asin" value="${esc(p.sku)}">
+          <span class="a-button a-button-oneclick"><input id="buy-now-button" name="submit.buy-now" type="submit" class="a-button-input" aria-labelledby="submit.buy-now-announce" style="width:120px;height:30px"><span id="submit.buy-now-announce" class="a-button-text" aria-hidden="true">Buy Now</span></span></form>
+          ${shopOf(shop).turbo ? `<div id="turbo-checkout-panel-container" class="a-popover" role="dialog" hidden><iframe id="turbo-checkout-iframe" width="420" height="320" title="Buy now" style="border:1px solid #ccc"></iframe></div>
+          <script>document.getElementById('buy-now-form').addEventListener('submit', (e) => {
+            e.preventDefault(); // Amazon's quick checkout: a window over the page instead of a new page
+            const box = document.getElementById('turbo-checkout-panel-container');
+            box.querySelector('iframe').src = '/amazon/checkout/turbo?asin=${encodeURIComponent(p.sku)}';
+            box.hidden = false;
+          });</script>` : ''}` : ''}
         ${shopOf(shop).slowLoadMs ? `<img src="/slow.gif?ms=${Number(shopOf(shop).slowLoadMs)}" alt="" width="1" height="1">` : ''}
       </div>
       <section class="recommendations"><h3>You may also like</h3>
@@ -266,6 +284,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       ${shop === 'citybeach' && !shopOf(shop).noPopup ? CITYBEACH_POPUP : ''}
       <script>
         ${p.lateMs ? `setTimeout(() => { document.getElementById('buybox').innerHTML = ${JSON.stringify(button)}; }, ${Number(p.lateMs)});` : ''}
+        ${shopOf(shop).addNeedsLoad ? `addEventListener('load', () => setTimeout(() => { document.cookie = 'mgb_started=${S_TOKEN(shop)}; path=/'; }, ${Number(shopOf(shop).addNeedsLoad)}));` : ''}
         ${stepperJs(p)}
         // Until the page's code has started, pressing Add does nothing (like a store that's still loading).
         let started = ${shopOf(shop).hydrateMs || shopOf(shop).reactMs || shopOf(shop).vueMs ? 'false' : 'true'};
@@ -427,7 +446,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     }).join('');
     const go = {
       kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>',
-      thegamescube: '<a class="utility-button checkout" href="/thegamescube/checkout/proceed_to_checkout">Checkout &rarr;</a>', pokemoncenter: '<a class="btn" href="/pokemoncenter/checkout">Checkout</a>', pbandai: '<a class="btn" href="/pbandai/checkout">Proceed to checkout</a>',
+      thegamescube: '<a class="utility-button checkout" href="/thegamescube/checkout/proceed_to_checkout">Checkout &rarr;</a>', pokemoncenter: '<a class="btn" href="/pokemoncenter/checkout">Checkout</a>', pbandai: '<a class="btn" href="/pbandai/checkout">Proceed to Checkout</a>',
       target: '<a class="btn" href="/target/checkout">Checkout</a>', citybeach: '<a class="btn checkout-btn" href="/citybeach/checkout">Checkout</a>',
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || `<li>Your ${shop === 'kmart' ? 'bag' : 'cart'} is empty</li>`}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
@@ -446,7 +465,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   // mode 'keys': boxes that build their value from key presses only (like masked-input widgets).
   function strictCardBoxes(mode) {
     const box = (field, label) => `<label>${label}<br><iframe class="sf" data-field="${field}" src="${cardOrigin}/card-frame?style=strict&mode=${mode}&field=${field}" width="300" height="44" style="border:1px solid #ccc"></iframe></label>`;
-    return `<p><b>Pay with credit or debit card</b></p>${box('number', 'Card number')}${box('expiry', 'Expiry')}${box('cvc', 'CVV')}`;
+    return `<p><b>Pay with credit or debit card</b></p>${box('number', 'Card number')}${box('expiry', 'Expiry (MM/YY)')}${box('cvc', 'CVV')}
+      <script>addEventListener('message', (e) => { if (e.data && e.data.adyenNext) document.querySelector('iframe.sf[data-field=' + e.data.adyenNext + ']')?.focus(); });</script>`;
   }
 
 
@@ -462,7 +482,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   function kmartCheckout() {
     const acc = state.account || {};
     const v = (x) => esc(x || '');
-    const cardFields = ['strict', 'keys', 'never'].includes(state.cardInIframe) ? strictCardBoxes(state.cardInIframe) : state.cardInIframe ? cardBoxes(state.cardInIframe === 'mystery' ? 'mystery' : 'kmart')
+    const cardFields = ['strict', 'keys', 'never', 'slow'].includes(state.cardInIframe) ? strictCardBoxes(state.cardInIframe) : state.cardInIframe ? cardBoxes(state.cardInIframe === 'mystery' ? 'mystery' : 'kmart')
       : `<p><b>Pay with credit or debit card</b></p>
          <label>Card number <input name="cardNumber" inputmode="numeric"></label>
          <label>Expiry <input name="cardExpiry" placeholder="MM/YY"></label>
@@ -592,48 +612,223 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       </script>`;
   }
 
+  // EB Games' checkout, as the real one goes: your details → Delivery, with Click & Collect chosen for
+  // you → "Home Delivery" → Country (Australia) → the address, one line, picked from EB's suggestions →
+  // the shipping method EB picked → "How would you like to pay?": Pay Now, then "Credit / Debit card" →
+  // card number, MM/YY, CVV and name on card (in a payment frame), billing address the same as the
+  // delivery one (ticked) → "Done" → "CONFIRM & PAY". Signed in (state.signedIn.ebgames): it's all in —
+  // home delivery, your address, your saved card — and only "CONFIRM & PAY" is left.
+  function ebgamesCheckout() {
+    const sum = total('ebgames');
+    const signed = !!state.signedIn.ebgames;
+    const acc = signed ? { email: 'ash.eb@example.com', firstName: 'Ash', lastName: 'Ketchum', phone: '0412345678' } : {};
+    const v = (k) => (acc[k] ? ` value="${esc(acc[k])}"` : '');
+    return `<h1>Checkout</h1>
+      <form method="post" action="/ebgames/checkout/place" id="eb-form">
+      <section id="eb-contact"><h2>Contact details</h2>
+        <label>Email address <input name="email" type="email" required${v('email')}></label>
+        <label>First name <input name="firstName" required${v('firstName')}></label>
+        <label>Last name <input name="lastName" required${v('lastName')}></label>
+        <label>Mobile number <input name="phone" type="tel" required${v('phone')}></label>
+        <label><input type="checkbox" name="news"> Send me news and offers</label></section>
+      <section id="eb-delivery"><h2>Delivery</h2>
+        <label><input type="radio" name="fulfilment" value="cnc" ${signed ? '' : 'checked'}> Click &amp; Collect</label>
+        <label><input type="radio" name="fulfilment" value="home" ${signed ? 'checked' : ''}> Home Delivery</label>
+        <div id="eb-cnc" ${signed ? 'hidden' : ''}><label>Choose a store <select name="cncStore"><option value="">Select a store</option><option>EB Games Sydney CBD</option></select></label></div>
+        <div id="eb-home" ${signed ? '' : 'hidden'}>
+          <label>Country <select name="country"><option value="">Select country</option><option value="NZ">New Zealand</option><option value="AU" ${signed ? 'selected' : ''}>Australia</option></select></label>
+          <label for="eb-addr">Address</label>
+          <input id="eb-addr" name="addressSearch" role="combobox" aria-autocomplete="list" autocomplete="off" placeholder="Start typing your address" ${signed ? 'value="1 Pallet Town Rd, Sydney NSW 2000"' : 'disabled'}>
+          <ul id="eb-addr-list" role="listbox" class="address-suggestions" hidden></ul>
+          <input type="hidden" name="address" value="${signed ? '1 Pallet Town Rd, Sydney NSW 2000' : ''}">
+          <div id="eb-ship" ${signed ? '' : 'hidden'}><h3>Shipping method</h3>
+            <label><input type="radio" name="shipping" value="standard" checked> Standard Delivery $9.95</label>
+            <label><input type="radio" name="shipping" value="express"> Express Delivery $14.95</label></div>
+        </div></section>
+      <section id="eb-pay" ${signed ? '' : 'hidden'}><h2>How would you like to pay?</h2>
+        <div role="tablist"><button type="button" role="tab" aria-selected="true" class="pay-tab is-active">Pay Now</button> <button type="button" role="tab" aria-selected="false" class="pay-tab">Pay Later</button></div>
+        ${signed ? '<p class="saved-card">Visa ending in 4242 <small>Expires 07/29</small></p>' : `<div class="pay-options">
+          <button type="button" class="pay-option" data-m="card">Credit / Debit card</button>
+          <button type="button" class="pay-option" data-m="paypal">PayPal</button>
+          <button type="button" class="pay-option" data-m="applepay">Apple Pay</button></div>
+        <div id="eb-card" hidden><iframe id="eb-card-frame" title="Card details" src="${cardOrigin}/card-frame?style=eb" width="360" height="230" style="border:1px solid #ccc"></iframe>
+          <label><input type="checkbox" name="billingSame" checked> Billing address same as delivery address</label>
+          <p><button type="button" id="eb-done">Done</button></p></div>
+        <p id="eb-card-saved" hidden></p>`}</section>
+      <p class="order-total">Total: $${(sum + 9.95).toFixed(2)}</p>
+      <label class="terms"><input type="checkbox" name="marketing"> Subscribe to our newsletter</label>
+      <p><button type="submit" id="eb-confirm" ${signed ? '' : 'disabled'}>CONFIRM &amp; PAY</button></p>
+      <input type="hidden" name="cardDone" value="${signed ? 'saved' : ''}">
+      </form>
+      <p id="eb-error" class="err"></p>
+      <script>
+        const $ = (id) => document.getElementById(id);
+        const post = (step, data) => fetch('/ebgames/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step, data }) });
+        const form = $('eb-form');
+        for (const r of form.querySelectorAll('input[name=fulfilment]')) r.addEventListener('change', () => {
+          const home = r.value === 'home' && r.checked;
+          $('eb-home').hidden = !home; $('eb-cnc').hidden = home;
+          post('fulfilment', { fulfilment: r.value });
+        });
+        form.querySelector('select[name=country]').addEventListener('change', (e) => { $('eb-addr').disabled = e.target.value !== 'AU'; post('country', { country: e.target.value }); });
+        const ADDRESSES = ['1 Pallet Town Rd, SYDNEY NSW 2000', '1 Pallet Town Rd, PALLET QLD 4999'];
+        const list = $('eb-addr-list');
+        $('eb-addr').addEventListener('input', () => {
+          form.querySelector('[name=address]').value = '';
+          const q = $('eb-addr').value.toLowerCase();
+          clearTimeout(window.__t);
+          window.__t = setTimeout(() => {
+            const hits = q.length >= 4 ? ADDRESSES.filter((a) => q.split(/[\\s,]+/).filter((w) => w.length > 2).slice(0, 2).every((w) => a.toLowerCase().includes(w))) : [];
+            list.innerHTML = hits.map((a) => '<li role="option">' + a + '</li>').join('');
+            list.hidden = !hits.length;
+          }, 250);
+        });
+        $('eb-addr').addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 200));
+        list.addEventListener('mousedown', (e) => {
+          const li = e.target.closest('li'); if (!li) return;
+          e.preventDefault();
+          $('eb-addr').value = li.textContent; form.querySelector('[name=address]').value = li.textContent; list.hidden = true;
+          const d = Object.fromEntries(['email', 'firstName', 'lastName', 'phone', 'country'].map((n) => [n, form.querySelector('[name=' + n + ']').value]));
+          post('address', { ...d, address: li.textContent });
+          setTimeout(() => { $('eb-ship').hidden = false; $('eb-pay').hidden = false; }, 400);
+        });
+        for (const b of document.querySelectorAll('.pay-option')) b.addEventListener('click', () => {
+          for (const x of document.querySelectorAll('.pay-option')) x.classList.remove('is-selected');
+          b.classList.add('is-selected');
+          $('eb-card').hidden = b.dataset.m !== 'card';
+          post('payment', { method: b.dataset.m });
+        });
+        // The card frame says what's in it; "Done" takes it (only once it's all in).
+        const card = {};
+        addEventListener('message', (e) => { if (e.data && e.data.ebCard) card[e.data.ebCard] = e.data.value; });
+        $('eb-done')?.addEventListener('click', () => {
+          if (!(card.cardNumber && card.expiry && card.cvv && card.nameOnCard)) { $('eb-error').textContent = 'Please complete your card details'; return; }
+          $('eb-error').textContent = '';
+          form.querySelector('[name=cardDone]').value = card.cardNumber.slice(-4);
+          post('card', { last4: card.cardNumber.replace(/\\D/g, '').slice(-4), expiry: card.expiry, name: card.nameOnCard });
+          $('eb-card').hidden = true; $('eb-card-saved').hidden = false; $('eb-card-saved').textContent = 'Card ending in ' + card.cardNumber.replace(/\\D/g, '').slice(-4);
+          $('eb-confirm').disabled = false;
+        });
+      </script>`;
+  }
+
+  // Target's one-page checkout (/spc/order), as the real one goes: Delivery Options as tiles (nothing
+  // chosen) → "Home Delivery" → your details (first and last name, contact number, email) and the
+  // delivery address, one line, picked from Target's suggestions as you type → Payment Method tiles →
+  // "Credit Card" → Paydock's card form (a frame from another address: card holder's name, card
+  // number, expiry MM/YY, CVV). "Place order" shows from the start, greyed out until it's all done.
+  // Signed in (state.signedIn.target): your details are already in; the rest is the same.
   function targetCheckout() {
     const sum = total('target');
+    const acc = state.signedIn.target ? { firstName: 'Ash', lastName: 'Ketchum', phone: '0412345678', email: 'ash.target@example.com' } : {};
+    const v = (k) => (acc[k] ? ` value="${esc(acc[k])}"` : '');
+    const tile = (cls, attr, title, sub) => `<div class="${cls}" role="radio" aria-checked="false" tabindex="0" ${attr}><span class="${cls}-title">${title}</span>${sub ? `<small> ${sub}</small>` : ''}</div>`;
     return `<h1>Checkout</h1>
-      <section id="t-contact"><h2>1. Your details</h2>
-        <label>Email address <input name="email" type="email" required></label>
-        <p><button type="button" id="t-guest">Continue as guest</button> or <a href="#">Sign in</a></p></section>
-      <section id="t-delivery" hidden><h2>2. Delivery</h2>
-        <label><input type="radio" name="method" value="home"> Home delivery</label>
-        <label><input type="radio" name="method" value="cc"> Click &amp; Collect</label>
-        <label>First name <input name="firstName" required></label>
-        <label>Last name <input name="lastName" required></label>
-        <label>Phone <input name="phone" type="tel" required></label>
-        <label>Street address <input name="address1" required></label>
-        <label>Suburb <input name="suburb" required></label>
-        <label>State <select name="state" required>${STATES}</select></label>
-        <label>Postcode <input name="postcode" required maxlength="4"></label>
-        <button type="button" id="t-to-payment">Continue to payment</button></section>
-      <section id="t-payment" hidden><h2>3. Payment</h2>
-        <label>Card number <input name="cardNumber" autocomplete="cc-number" inputmode="numeric"></label>
-        <label>Expiry date <input name="cardExpiry" autocomplete="cc-exp" placeholder="MM/YY"></label>
-        <label>Security code <input name="cardCvc" autocomplete="cc-csc" inputmode="numeric"></label>
-        <p>Subtotal $${sum.toFixed(2)} · Delivery $9.00</p><p class="order-total"><b>Order total $${(sum + 9).toFixed(2)}</b></p>
-        <button type="button" id="t-place">Place order</button></section>
+      <section id="t-options"><h2>Delivery Options</h2>
+        ${tile('DeliveryOption', 'data-mode="home"', 'Home Delivery', 'Delivered to your door')}
+        ${tile('DeliveryOption', 'data-mode="cnc"', 'Click &amp; Collect', 'Free, at a store near you')}</section>
+      <section id="t-details" hidden><h2>Your details</h2>
+        <label>First Name <input name="firstName" autocomplete="given-name" required${v('firstName')}></label>
+        <label>Last Name <input name="lastName" autocomplete="family-name" required${v('lastName')}></label>
+        <label>Contact Number <input name="contactNumber" type="tel" required${v('phone')}></label>
+        <label>Email <input name="email" type="email" required${v('email')}></label>
+        <label for="t-addr">Delivery Address</label>
+        <input id="t-addr" name="deliveryAddress" role="combobox" aria-autocomplete="list" aria-controls="t-addr-list" aria-expanded="false" autocomplete="off" placeholder="Start typing your address">
+        <ul id="t-addr-list" role="listbox" class="AddressSuggestions" hidden></ul></section>
+      <section id="t-payment" hidden><h2>Payment Method</h2>
+        ${tile('PaymentTile', 'data-pay="card"', 'Credit Card')}${tile('PaymentTile', 'data-pay="paypal"', 'PayPal')}${tile('PaymentTile', 'data-pay="afterpay"', 'Afterpay')}${tile('PaymentTile', 'data-pay="zip"', 'Zip')}
+        <div id="t-card" hidden><iframe id="paydock" title="Credit card" src="${cardOrigin}/paydock-widget" width="380" height="260" style="border:1px solid #ccc"></iframe></div></section>
+      <div class="OrderSummary"><p>Subtotal $${sum.toFixed(2)} · Home Delivery $9.00</p><p class="order-total"><b>Order total $${(sum + 9).toFixed(2)}</b></p>
+        <button type="button" id="t-place" disabled>Place order</button></div>
+      <input type="hidden" id="t-cardNumber"><input type="hidden" id="t-cardName"><input type="hidden" id="t-cardExpiry"><input type="hidden" id="t-cardCvv">
       <p id="t-error" class="err"></p>
       <script>
         const $ = (id) => document.getElementById(id);
-        const vals = (sec) => Object.fromEntries([...sec.querySelectorAll('input,select')].filter((i) => i.name && (i.type !== 'radio' || i.checked)).map((i) => [i.name, i.value]));
         const post = (step, data) => fetch('/target/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step, data }) });
-        $('t-guest').addEventListener('click', () => {
-          if (!document.querySelector('[name=email]').value) { $('t-error').textContent = 'Enter your email address'; return; }
-          $('t-error').textContent = '';
-          post('contact', vals($('t-contact'))); $('t-guest').remove(); setTimeout(() => { $('t-delivery').hidden = false; }, 200);
+        const ADDRESSES = ['1 Pallet Town Rd, SYDNEY NSW 2000', '1 Pallet Town Rd, PALLET VIC 3999', '10 Pallet Town Ave, SYDNEY NSW 2000'];
+        let mode = '', address = '', pay = '';
+        const pick = (el, group) => { for (const t of document.querySelectorAll(group)) { t.setAttribute('aria-checked', 'false'); t.classList.remove('is-selected'); } el.setAttribute('aria-checked', 'true'); el.classList.add('is-selected'); };
+        const ready = () => {
+          const d = Object.fromEntries([...$('t-details').querySelectorAll('input')].filter((i) => i.name !== 'deliveryAddress').map((i) => [i.name, i.value]));
+          const card = $('t-cardNumber').value && $('t-cardExpiry').value && $('t-cardCvv').value && $('t-cardName').value;
+          $('t-place').disabled = !(mode === 'home' && address && Object.values(d).every(Boolean) && pay === 'card' && card);
+          return d;
+        };
+        for (const t of document.querySelectorAll('.DeliveryOption')) t.addEventListener('click', () => {
+          pick(t, '.DeliveryOption'); mode = t.dataset.mode;
+          if (mode === 'cnc') { $('t-error').textContent = 'Choose a store to collect from'; $('t-details').hidden = true; return; }
+          $('t-error').textContent = ''; setTimeout(() => { $('t-details').hidden = false; }, 250);
         });
-        $('t-to-payment').addEventListener('click', () => {
-          const d = vals($('t-delivery'));
-          const missing = ['method', 'firstName', 'lastName', 'phone', 'address1', 'suburb', 'state', 'postcode'].filter((k) => !d[k]);
-          if (missing.length) { $('t-error').textContent = 'Please complete: ' + missing.join(', '); return; }
-          $('t-error').textContent = '';
-          post('delivery', d); $('t-to-payment').remove(); setTimeout(() => { $('t-payment').hidden = false; }, 200);
+        // The address finder: suggestions once a few letters are in; only a picked one counts.
+        const list = $('t-addr-list');
+        $('t-addr').addEventListener('input', () => {
+          address = '';
+          const q = $('t-addr').value.toLowerCase();
+          clearTimeout(window.__t);
+          window.__t = setTimeout(() => {
+            const hits = q.length >= 3 ? ADDRESSES.filter((a) => q.split(/[\\s,]+/).filter((w) => w.length > 2).slice(0, 3).every((w) => a.toLowerCase().includes(w))) : [];
+            list.innerHTML = hits.map((a) => '<li role="option" class="AddressSuggestions-item">' + a + '</li>').join('');
+            list.hidden = !hits.length; $('t-addr').setAttribute('aria-expanded', String(!!hits.length));
+          }, 300);
         });
+        list.addEventListener('mousedown', (e) => {
+          const li = e.target.closest('li'); if (!li) return;
+          e.preventDefault();
+          address = li.textContent; $('t-addr').value = address; list.hidden = true; $('t-error').textContent = '';
+          post('delivery', { mode, ...ready(), address });
+          setTimeout(() => { $('t-payment').hidden = false; ready(); }, 600);
+        });
+        $('t-addr').addEventListener('blur', () => { setTimeout(() => { if (!address && $('t-addr').value) $('t-error').textContent = 'Please select an address from the list'; list.hidden = true; }, 200); });
+        for (const t of document.querySelectorAll('.PaymentTile')) t.addEventListener('click', () => {
+          pick(t, '.PaymentTile'); pay = t.dataset.pay; $('t-card').hidden = pay !== 'card'; ready();
+        });
+        // Paydock's card form says what's in it.
+        addEventListener('message', (e) => { const d = e.data; if (d && d.paydock) { $('t-' + d.paydock).value = d.value; ready(); } });
+        for (const i of $('t-details').querySelectorAll('input')) i.addEventListener('input', ready);
         const place = ${placeJs('target', 't-error')};
-        $('t-place').addEventListener('click', () => place(vals($('t-payment'))));
+        $('t-place').addEventListener('click', () => { if (!$('t-place').disabled) place({ cardNumber: $('t-cardNumber').value, cardName: $('t-cardName').value, cardExpiry: $('t-cardExpiry').value, cardCvv: $('t-cardCvv').value }); });
+      </script>`;
+  }
+
+  // Shopify's one-page checkout, the way it is now: contact, delivery (with Australia chosen), the
+  // shipping methods, and the card in Shopify's card fields — one frame per box, from another address
+  // (checkout.pci.shopifyinc.com on the real ones), each box only keeping real typing. Toys"R"Us adds
+  // "Authority to leave" (ticked), and "Use shipping address as billing address" comes ticked.
+  // Signed in with Shop (state.signedIn[shop] === 'shop'): everything's in, Shop Pay's card shown.
+  function shopifyCheckout(shop) {
+    const shopPay = state.signedIn[shop] === 'shop';
+    const P = shopPay ? { email: 'ash.shop@example.com', firstName: 'Ash', lastName: 'Ketchum', address1: '1 Pallet Town Rd', city: 'Sydney', zone: 'NSW', postalCode: '2000', phone: '0412345678' } : {};
+    const v = (k) => (P[k] ? ` value="${esc(P[k])}"` : '');
+    const ship = shopOf(shop).shippingRates || (shop === 'jbhifi' ? 'standard' : 'none');
+    const rates = [['standard', shop === 'toysrus' ? 'Standard Shipping - AusPost' : 'Standard Shipping', 10], ['express', shop === 'toysrus' ? 'Express Shipping - AusPost' : 'Express Shipping', 15]];
+    const field = (f, label) => `<div class="card-field"><iframe class="card-fields-iframe" name="card-fields-${f}-abc" title="Field container for: ${label}" src="${cardOrigin}/shopify-card?field=${f}" width="300" height="44" style="border:1px solid #ccc"></iframe></div>`;
+    const card = shopPay
+      ? '<div class="shop-pay"><b>Shop Pay</b> <span>Visa •••• 4242</span> <span class="muted">Expires 07/29</span></div>'
+      : `<label><input type="radio" name="payment" value="card" checked> Credit card</label>${field('number', 'Card number')}${field('expiry', 'Expiration date')}${field('verification_value', 'Security code')}${shop === 'gamerholic' ? '' : field('name', 'Name on card')}
+         <label><input type="checkbox" name="billingSame" checked> Use shipping address as billing address</label>`;
+    return `<h1>Checkout</h1><form method="post" id="sf">
+        <h3>Contact</h3><input name="email" type="email" autocomplete="email" placeholder="Email" required${v('email')}>
+        <h3>Delivery</h3>
+        <select name="countryCode" autocomplete="shipping country"><option value="AU" selected>Australia</option><option value="NZ">New Zealand</option></select>
+        <input name="firstName" autocomplete="shipping given-name" placeholder="First name" required${v('firstName')}>
+        <input name="lastName" autocomplete="shipping family-name" placeholder="Last name" required${v('lastName')}>
+        <input name="address1" autocomplete="shipping address-line1" placeholder="Address" required role="combobox" aria-autocomplete="list"${v('address1')}>
+        <input name="address2" autocomplete="shipping address-line2" placeholder="Apartment, suite, etc. (optional)">
+        <input name="city" autocomplete="shipping address-level2" placeholder="Suburb" required${v('city')}>
+        <select name="zone" autocomplete="shipping address-level1" required><option value="" disabled ${P.zone ? '' : 'selected'}>State/territory</option><option value="ACT">Australian Capital Territory</option><option value="NSW" ${P.zone === 'NSW' ? 'selected' : ''}>New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option></select>
+        <input name="postalCode" autocomplete="shipping postal-code" placeholder="Postcode" required${v('postalCode')}>
+        <input name="phone" autocomplete="shipping tel" placeholder="Phone${shop === 'gamerholic' ? ' (optional)' : ''}" type="tel"${v('phone')}>
+        ${shop === 'toysrus' ? '<label><input type="checkbox" name="atl" checked> Authority to leave</label>' : ''}
+        <h3>Shipping method</h3>${rates.map(([id, label, price]) => `<label><input type="radio" name="shipping" value="${id}" ${ship === id ? 'checked' : ''}> ${label} $${price.toFixed(2)}</label>`).join('')}
+        <h3>Payment</h3><p>All transactions are secure and encrypted.</p>${card}
+        <input type="hidden" name="card_number"><input type="hidden" name="card_expiry"><input type="hidden" name="card_cvv"><input type="hidden" name="card_name">
+        <p class="order-total">Total: $<span id="tot">${(total(shop) + 10).toFixed(2)}</span></p>
+        <button type="submit" id="pay">Pay now</button></form>
+      <script>
+        // The card fields' frames say what's in them (Shopify keeps it in its vault; here, in the form).
+        const map = { number: 'card_number', expiry: 'card_expiry', verification_value: 'card_cvv', name: 'card_name' };
+        addEventListener('message', (e) => { if (e.data && e.data.cardField && map[e.data.cardField]) document.querySelector('[name=' + map[e.data.cardField] + ']').value = e.data.value; });
+        for (const r of document.querySelectorAll('input[name=shipping]')) r.addEventListener('change', () => { document.getElementById('tot').textContent = (${total(shop)} + (r.value === 'express' ? 15 : 10)).toFixed(2); });
       </script>`;
   }
 
@@ -695,27 +890,145 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   }
 
   // -------------------------------------------------------------------- card iframe server
-  const cardServer = http.createServer((req, res) => {
+  const cardServer = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
+    const json = (status, obj) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     // A whole checkout in a frame (like Global-e's, which runs Premium Bandai's): details and card.
     if (u.pathname === '/ge-checkout') {
+      // Global-e's checkout (Premium Bandai's), as the real one goes: your billing details (signed in:
+      // already there, and the delivery address is "Default (same as billing address)" — to pick),
+      // area Australia, state drop-down, the phone after its +61, the shipping method it picked,
+      // CREDIT CARD (chosen): card number, expiry month and year (drop-downs) and CVV in a frame of its
+      // own, the purchase agreement box (required) → "Pay and Place Order".
+      const PB = state.shops.pbandai;
+      const signed = !!state.signedIn.pbandai;
+      const acc = signed ? { firstName: 'Ash', lastName: 'Ketchum', email: 'ash.bandai@example.com', address1: '1 Pallet Town Rd', city: 'Sydney', zip: '2000', state: 'NSW', phone: '412345678' } : {};
+      const v = (k) => (acc[k] ? ` value="${esc(acc[k])}"` : '');
+      const sum = PB.cart.reduce((t, c) => t + c.price * c.qty, 0);
+      const st = (sel) => `<option value="">Select</option>${['ACT', 'NSW', 'NT', 'QLD', 'SA', 'TAS', 'VIC', 'WA'].map((x) => `<option value="${x}" ${sel === x ? 'selected' : ''}>${{ ACT: 'Australian Capital Territory', NSW: 'New South Wales', NT: 'Northern Territory', QLD: 'Queensland', SA: 'South Australia', TAS: 'Tasmania', VIC: 'Victoria', WA: 'Western Australia' }[x]}</option>`).join('')}`;
       res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui"><h2>Secure checkout</h2>
-<style>label{display:block;margin:6px 0}input,select{display:block;padding:6px;width:300px}</style>
-<label>Email <input name="email" type="email" autocomplete="email"></label>
-<label>First name <input name="firstName" autocomplete="given-name"></label>
-<label>Last name <input name="lastName" autocomplete="family-name"></label>
-<label>Address <input name="address1" autocomplete="address-line1"></label>
-<label>City <input name="city" autocomplete="address-level2"></label>
-<label>State <select name="state" autocomplete="address-level1"><option value="">Select</option><option value="NSW">New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option></select></label>
-<label>Postcode <input name="zip" autocomplete="postal-code"></label>
-<label>Phone <input name="phone" type="tel" autocomplete="tel"></label>
+      res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui;padding:8px"><h2>Secure checkout</h2>
+<style>label{display:block;margin:6px 0}input:not([type=radio]):not([type=checkbox]),select{display:block;padding:6px;width:300px}.err{color:#c00}</style>
+<form id="ge">
+<h3>Billing Address</h3>
+<label>FIRST NAME <input name="FirstName" required${v('firstName')}></label>
+<label>LAST NAME <input name="LastName" required${v('lastName')}></label>
+<label>E-MAIL ADDRESS <input name="Email" type="email" required${v('email')}></label>
+<label>AREA <select name="CountryID"><option value="">Select</option><option value="12" selected>Australia</option><option value="153">New Zealand</option></select></label>
+<label>ADDRESS LINE 1 <input name="Address1" required${v('address1')}></label>
+<label>ADDRESS LINE 2 <input name="Address2"></label>
+<label>CITY / SUBURB <input name="City" required${v('city')}></label>
+<label>ZIP / POSTCODE <input name="Zip" required${v('zip')}></label>
+<label>STATE OR PROVINCE <select name="StateOrProvinceID" required>${st(acc.state)}</select></label>
+<div class="phone"><label for="ge-phone">PHONE NUMBER</label><select name="PhoneCountry" aria-label="Country code" style="width:90px;display:inline-block"><option selected>+61</option><option>+64</option></select>
+  <input id="ge-phone" name="Phone1" type="tel" required style="display:inline-block;width:200px"${v('phone')}></div>
+${signed ? `<h3>Delivery Address</h3>
+<label><input type="radio" name="DeliveryAddress" value="default"> Default (same as billing address)</label>
+<label><input type="radio" name="DeliveryAddress" value="new"> Use a different address</label>` : ''}
+<h3>Shipping Method</h3>
+<label><input type="radio" name="Shipping" value="std" checked> Standard Shipping AUD $15.00</label>
+<label><input type="radio" name="Shipping" value="exp"> Express Shipping AUD $30.00</label>
 <h3>Payment</h3>
-<label>Card number <input name="cardNumber" autocomplete="cc-number" inputmode="numeric"></label>
-<label>Expiry date <input name="expiry" autocomplete="cc-exp" placeholder="MM/YY"></label>
-<label>CVV <input name="cvv" autocomplete="cc-csc" inputmode="numeric"></label>
-<button type="button" id="ge-place" onclick="document.title='placed'">Place Order</button>
-</body></html>`);
+<label><input type="radio" name="PaymentMethod" value="cc" checked> CREDIT CARD</label>
+<label><input type="radio" name="PaymentMethod" value="paypal"> PayPal</label>
+<iframe id="ge-card" title="Card details" src="/ge-card" width="360" height="180" style="border:1px solid #ccc"></iframe>
+<p class="total">Total AUD $${(sum + 15).toFixed(2)}</p>
+<label><input type="checkbox" name="Terms" required> I confirm no returns or refunds are accepted for personal circumstances. I have read and agree to <a href="#">the Purchase Agreement</a> and understand that whenever there may be an inconsistency, Premium Bandai's policy prevails over Global-e's Terms of Sale.<small>Required</small></label>
+<label><input type="checkbox" name="Newsletter"> Send me news and offers by email</label>
+<button type="button" id="ge-place">Pay and Place Order</button>
+<p id="ge-err" class="err"></p>
+</form>
+<script>
+const form = document.getElementById('ge');
+const card = {};
+addEventListener('message', (e) => { if (e.data && e.data.geCard) card[e.data.geCard] = e.data.value; });
+document.getElementById('ge-place').addEventListener('click', async () => {
+  const d = Object.fromEntries([...form.querySelectorAll('input,select')].filter((i) => i.name && (!/radio|checkbox/.test(i.type) || i.checked)).map((i) => [i.name, i.type === 'checkbox' ? true : i.value]));
+  const missing = [...form.querySelectorAll('[required]')].filter((i) => (i.type === 'checkbox' ? !i.checked : !i.value)).map((i) => i.name);
+  if (${signed ? 'true' : 'false'} && !d.DeliveryAddress) missing.push('DeliveryAddress');
+  if (!(card.cardNumber && card.expMonth && card.expYear && card.cvv)) missing.push('card');
+  if (missing.length) { document.getElementById('ge-err').textContent = 'Please complete: ' + missing.join(', '); return; }
+  const r = await fetch('/ge-place', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...d, card }) });
+  const out = await r.json();
+  if (out.error) { const el = document.getElementById('ge-err'); el.textContent = out.error; el.setAttribute('role', 'alert'); return; }
+  document.body.insertAdjacentHTML('beforeend', '<p>Thank you for your order! Order number: GE-' + out.order + '</p>');
+  parent.postMessage({ gePlaced: out.order }, '*');
+});
+</script></body></html>`);
+      return;
+    }
+    // Global-e's card form: a frame of its own inside its checkout (expiry month and year are drop-downs).
+    if (u.pathname === '/ge-card') {
+      const years = Array.from({ length: 11 }, (_, i) => 2026 + i);
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui;padding:6px">
+<style>label{display:block;margin:4px 0}input,select{padding:5px}</style>
+<label>CARD NUMBER <input name="cardNumber" inputmode="numeric" style="width:260px"></label>
+<label for="m">EXPIRY DATE</label><select id="m" name="expMonth" aria-label="Expiry date month"><option value="">Month</option>${Array.from({ length: 12 }, (_, i) => `<option value="${String(i + 1).padStart(2, '0')}">${String(i + 1).padStart(2, '0')}</option>`).join('')}</select>
+<select name="expYear" aria-label="Expiry date year"><option value="">Year</option>${years.map((y) => `<option value="${y}">${y}</option>`).join('')}</select>
+<label>CVV <input name="cvv" inputmode="numeric" style="width:80px"></label>
+<script>
+for (const el of document.querySelectorAll('input, select')) {
+  const tell = () => parent.postMessage({ geCard: el.name, value: el.value }, '*');
+  el.addEventListener('input', () => { if (el.name === 'cardNumber') el.value = el.value.replace(/\\D/g, '').slice(0, 16).replace(/(\\d{4})(?=\\d)/g, '$1 '); tell(); });
+  el.addEventListener('change', tell);
+}
+</script></body></html>`);
+      return;
+    }
+    if (u.pathname === '/ge-place' && req.method === 'POST') {
+      const b = await parseBody(req);
+      const PB = state.shops.pbandai;
+      if (PB.decline) { PB.declined = (PB.declined || 0) + 1; return json(200, { error: 'Your card was declined. Please try another card.' }); }
+      PB.orders.push({ cart: PB.cart.slice(), form: b, ts: Date.now() });
+      PB.cart = [];
+      return json(200, { order: 1000 + PB.orders.length });
+    }
+    // Paydock's card form (Target's): card holder's name, card number, expiry (MM/YY), CVV — real typing only.
+    if (u.pathname === '/paydock-widget') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui;padding:8px">
+<style>label{display:block;margin:6px 0}input{display:block;padding:6px;width:300px}</style>
+<label>Card holders name <input name="card_name" data-k="cardName"></label>
+<label>Credit card number <input name="card_number" inputmode="numeric" data-k="cardNumber"></label>
+<label>Expiry date <input name="expire" placeholder="MM/YY" data-k="cardExpiry"></label>
+<label>CVV* <input name="card_ccv" inputmode="numeric" data-k="cardCvv"></label>
+<script>
+for (const el of document.querySelectorAll('input')) {
+  let typed = '';
+  el.addEventListener('input', (e) => {
+    if (!e.isTrusted) { el.value = typed; return; }
+    if (el.name === 'card_number') el.value = el.value.replace(/\\D/g, '').slice(0, 16).replace(/(\\d{4})(?=\\d)/g, '$1 ');
+    if (el.name === 'expire') { const d = el.value.replace(/\\D/g, '').slice(0, 4); el.value = d.length > 2 ? d.slice(0, 2) + '/' + d.slice(2) : d; }
+    typed = el.value;
+    parent.postMessage({ paydock: el.dataset.k, value: typed }, '*');
+  });
+}
+</script></body></html>`);
+      return;
+    }
+    // Shopify's card fields: one frame per box, keeping only real typing (like checkout.pci.shopifyinc.com's).
+    if (u.pathname === '/shopify-card') {
+      const f = { number: ['number', 'cc-number', 'Card number', 'numeric'], expiry: ['expiry', 'cc-exp', 'Expiration date (MM / YY)', 'numeric'], verification_value: ['verification_value', 'cc-csc', 'Security code', 'numeric'], name: ['name', 'cc-name', 'Name on card', 'text'] }[u.searchParams.get('field')] || [];
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui">
+<input id="${f[0]}" name="${f[0]}" autocomplete="${f[1]}" placeholder="${f[2]}" inputmode="${f[3]}" aria-label="${f[2]}" style="display:block;padding:8px;width:260px;border:0">
+<script>
+const el = document.querySelector('input');
+const format = (v) => {
+  if (el.name === 'number') return v.replace(/\\D/g, '').slice(0, 16).replace(/(\\d{4})(?=\\d)/g, '$1 ');
+  if (el.name === 'expiry') { const d = v.replace(/\\D/g, '').slice(0, 4); return d.length > 2 ? d.slice(0, 2) + ' / ' + d.slice(2) : d; }
+  if (el.name === 'verification_value') return v.replace(/\\D/g, '').slice(0, 4);
+  return v;
+};
+let typed = '';
+el.addEventListener('input', (e) => {
+  if (!e.isTrusted) { el.value = typed; return; }
+  el.value = format(el.value);
+  typed = el.value;
+  parent.postMessage({ cardField: el.name, value: typed }, '*');
+});
+</script></body></html>`);
       return;
     }
     if (u.pathname === '/acs/challenge') {
@@ -754,8 +1067,12 @@ if (${JSON.stringify(u.searchParams.get('mode'))} === 'never') {
 } else {
   el.addEventListener('input', (e) => {
     if (!e.isTrusted) { el.value = typed; return; }
+    // 'slow': a box that takes a while with what's typed (heavy formatting), like a busy payment page.
+    if (${JSON.stringify(u.searchParams.get('mode'))} === 'slow') { const t = Date.now() + 900; while (Date.now() < t) { /* busy */ } }
     el.value = format(el.value);
     typed = el.value;
+    // Like Adyen: a complete card number moves you on to the next box.
+    if (el.dataset.fieldtype === 'encryptedCardNumber' && typed.replace(/\\D/g, '').length === 16) parent.postMessage({ adyenNext: 'expiry' }, '*');
   });
 }
 </script></body></html>`);
@@ -766,6 +1083,8 @@ if (${JSON.stringify(u.searchParams.get('mode'))} === 'never') {
         ? '<input name="f1" inputmode="numeric"><input name="f2"><input name="f3" inputmode="numeric">'
         : style === 'kmart'
         ? '<label>Card number <input name="encryptedCardNumber" aria-label="Card number" inputmode="numeric"></label><label>Expiry <input name="encryptedExpiryDate" aria-label="Expiry date" placeholder="MM/YY"></label><label>CVV <input name="encryptedSecurityCode" aria-label="CVV" inputmode="numeric"></label>'
+        : style === 'eb'
+          ? '<label>Card Number <input name="cardNumber" inputmode="numeric" autocomplete="cc-number"></label><label>MM/YY <input name="expiry" placeholder="MM/YY" autocomplete="cc-exp"></label><label>CVV <input name="cvv" inputmode="numeric" autocomplete="cc-csc"></label><label>Name on Card <input name="nameOnCard" autocomplete="cc-name"></label>'
         : style === 'shopify'
           ? '<input name="number" placeholder="Card number" inputmode="numeric"><input name="name" placeholder="Name on card"><input name="expiry" placeholder="Expiration date (MM / YY)"><input name="verification_value" placeholder="Security code" inputmode="numeric">'
           : '<input name="cardnumber" autocomplete="cc-number" placeholder="Card number" inputmode="numeric"><input name="exp-date" autocomplete="cc-exp" placeholder="MM / YY"><input name="cvc" autocomplete="cc-csc" placeholder="CVC" inputmode="numeric"><input name="ccname" placeholder="Name on card">';
@@ -773,11 +1092,12 @@ if (${JSON.stringify(u.searchParams.get('mode'))} === 'never') {
       res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui">${fields}
 <style>input{display:block;margin:4px 0;padding:6px;width:260px}</style>
 <script>
-// Format like real payment widgets do.
+// Format like real payment widgets do (and tell the page what's in each box, like EB's).
 for (const el of document.querySelectorAll('input')) {
   el.addEventListener('input', () => {
     if (/number|cardnumber/i.test(el.name)) el.value = el.value.replace(/\\D/g,'').slice(0,16).replace(/(\\d{4})(?=\\d)/g,'$1 ');
     if (/exp/i.test(el.name)) { const d = el.value.replace(/\\D/g,'').slice(0,4); el.value = d.length > 2 ? d.slice(0,2) + ' / ' + d.slice(2) : d; }
+    parent.postMessage({ ebCard: el.name, value: el.value }, '*');
   });
 }
 </script></body></html>`);
@@ -802,7 +1122,7 @@ for (const el of document.querySelectorAll('input')) {
     const redirect = (to) => { res.writeHead(302, { location: to }); res.end(); };
 
     // Product pictures (a coloured card with the product's name).
-    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|thegamescube|pokemoncenter|pbandai|target|amazon|citybeach)\/([^/]+)\.svg$/);
+    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|toysrus|thegamescube|pokemoncenter|pbandai|target|amazon|citybeach)\/([^/]+)\.svg$/);
     if (img) {
       const prod = find(img[1], decodeURIComponent(img[2]));
       if (!prod) return html(404, 'Not found');
@@ -894,6 +1214,7 @@ for (const el of document.querySelectorAll('input')) {
       const prod = find(shop, sku);
       if (!prod || !prod.listed) return html(404, page(shop, 'Page not found', '<h1>Sorry, we can\'t find that page</h1>'));
       S.servedAt = Date.now();
+      S.startToken = Math.random().toString(36).slice(2);
       return html(200, productPage(shop, prod));
     }
 
@@ -1048,6 +1369,10 @@ for (const el of document.querySelectorAll('input')) {
     if (sub === '/api/cart/add' && req.method === 'POST') {
       const b = await parseBody(req);
       S.addedAt = Date.now();
+      if (S.addNeedsLoad && !(req.headers.cookie || '').includes(`mgb_started=${S.startToken}`)) {
+        S.refusedEarly = (S.refusedEarly || 0) + 1;
+        return json(403, { ok: false, error: 'Forbidden' });
+      }
       if (S.addDelayMs) await new Promise((r) => setTimeout(r, S.addDelayMs));
       const refuse = S.refuseAdds === true || (typeof S.refuseAdds === 'number' && S.refuseAdds > 0);
       if (typeof S.refuseAdds === 'number' && S.refuseAdds > 0) S.refuseAdds -= 1;
@@ -1093,6 +1418,51 @@ for (const el of document.querySelectorAll('input')) {
     }
     if (sub === '/checkout/confirmation') return html(200, page(shop, 'Order confirmed', `<h1>Thank you for your order!</h1><p>Order number: DUMMY-${1000 + S.orders.length}</p>`));
 
+    // ---------------- Amazon-style checkout: "Buy Now" → (signed out: sign in) → maybe the Prime offer
+    // → checkout with the address and card saved in your Amazon account → "Place your order"
+    if (shop === 'amazon') {
+      const a = (title, body) => html(200, page(shop, title, body));
+      const signedIn = !!state.signedIn.amazon;
+      const line = () => S.cart.map((c) => `<li>${esc(c.name)} x ${c.qty}</li>`).join('');
+      const summary = (place) => `<div class="a-box"><p>Delivering to Ash Ketchum, 1 Pallet Town Rd, Sydney NSW 2000</p><p>Paying with Visa ending in 4242</p>
+        <ul>${line()}</ul><p class="order-total">Order total: $${total(shop).toFixed(2)}</p>
+        <form method="post" action="${place}"><span class="a-button"><input type="submit" id="placeYourOrder" class="a-button-input" aria-labelledby="pyo-text"><span id="pyo-text" class="a-button-text">Place your order</span></span></form></div>`;
+      if (sub === '/checkout/entry/buynow' && req.method === 'POST') {
+        const b = await parseBody(req);
+        if (!signedIn) return redirect('/amazon/ap/signin?openid.return_to=checkout');
+        const prod = find(shop, b.asin);
+        S.cart = prod ? [{ sku: prod.sku, qty: 1, price: prod.price, name: prod.name }] : [];
+        S.steps.push({ step: 'buynow' });
+        return redirect(S.primeOffer && !S.primeDeclined ? '/amazon/gp/buy/primeinterstitial/handlers/display.html' : '/amazon/checkout/p/p-123/spc');
+      }
+      // Your Account: signed out, Amazon sends you to sign in.
+      if (sub === '/gp/css/homepage.html') return signedIn ? a('Your Account', '<h1>Your Account</h1>') : redirect('/amazon/ap/signin?openid.return_to=homepage');
+      if (sub === '/ap/signin') return a('Amazon Sign-In','<h1>Sign in</h1><label>Email or mobile phone number <input name="email" type="email"></label><button type="button">Continue</button>');
+      if (sub === '/gp/buy/primeinterstitial/handlers/display.html') {
+        return a('Try Prime', `<h1>Try Prime FREE for 30 days</h1><p>Get FREE fast delivery on this order and millions of items.</p>
+          <form method="post" action="/amazon/gp/buy/primeinterstitial/join"><button type="submit" id="prime-join">Start your free trial</button></form>
+          <p><a id="prime-decline" href="/amazon/gp/buy/primeinterstitial/decline">No thanks</a></p>`);
+      }
+      if (sub === '/gp/buy/primeinterstitial/join') { S.joinedPrime = true; return redirect('/amazon/checkout/p/p-123/spc'); }
+      if (sub === '/gp/buy/primeinterstitial/decline') { S.primeDeclined = true; S.steps.push({ step: 'prime-declined' }); return redirect('/amazon/checkout/p/p-123/spc'); }
+      if (sub === '/checkout/p/p-123/spc') return a('Checkout', `<h1>Review your order</h1>${summary('/amazon/checkout/spc/place-order')}`);
+      if (sub === '/checkout/turbo') {
+        const prod = find(shop, u.searchParams.get('asin'));
+        S.cart = prod ? [{ sku: prod.sku, qty: 1, price: prod.price, name: prod.name }] : [];
+        S.steps.push({ step: 'turbo' });
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        return res.end(`<!doctype html><html><body style="font:14px system-ui;margin:8px"><h3>Buy now</h3>${summary('/amazon/checkout/turbo/place')}</body></html>`);
+      }
+      if ((sub === '/checkout/spc/place-order' || sub === '/checkout/turbo/place') && req.method === 'POST') {
+        if (S.decline) { S.declined = (S.declined || 0) + 1; return a('Checkout', '<p class="err" role="alert">Your payment was declined. Please choose another payment method.</p>'); }
+        S.orders.push({ cart: S.cart.slice(), data: { ...S.data }, turbo: sub.includes('turbo'), ts: Date.now() });
+        S.cart = [];
+        if (sub.includes('turbo')) { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end('<!doctype html><html><body style="font:14px system-ui"><h3>Order placed, thanks!</h3><p>Your order has been placed.</p></body></html>'); }
+        return redirect('/amazon/gp/buy/thankyou/handlers/display.html');
+      }
+      if (sub === '/gp/buy/thankyou/handlers/display.html') return a('Thank you', '<h1>Order placed, thanks!</h1><p>Your order has been placed. Confirmation will be sent to your email.</p>');
+    }
+
     // ---------------- Kmart-style one-page checkout
     if (shop === 'kmart' && sub === '/checkout') {
       // (Like kmart.com.au: checkout with an empty bag opens the bag instead.)
@@ -1111,66 +1481,10 @@ for (const el of document.querySelectorAll('input')) {
     // ---------------- BIG W-style checkout
     if (shop === 'bigw' && sub === '/checkout') return html(200, page(shop, 'Checkout', bigwCheckout()));
 
-    // ---------------- EB Games-style multi-page checkout
-    if (shop === 'ebgames') {
-      if (sub === '/checkout') return redirect('/ebgames/checkout/login');
-      if (sub === '/checkout/login') {
-        return html(200, page(shop, 'Checkout', `<h1>Checkout</h1>
-          <div style="display:flex;gap:40px"><form><h3>Sign in</h3><label>Email<input name="login_email" type="email"></label><label>Password<input name="pw" type="password"></label><button type="button">Sign In</button></form>
-          <div><h3>New customer?</h3><a class="btn" href="/ebgames/checkout/shipping">Continue as Guest</a></div></div>`));
-      }
-      if (sub === '/checkout/shipping') {
-        if (req.method === 'POST') {
-          const b = await parseBody(req);
-          const missing = ['email', 'firstName', 'lastName', 'phone', 'street', 'suburb', 'state', 'postcode'].filter((k) => !b[k]);
-          if (missing.length) return html(200, page(shop, 'Shipping', `<p class="err">Missing: ${missing.join(', ')}</p><a href="/ebgames/checkout/shipping">Back</a>`));
-          S.data.shipping = b;
-          return redirect('/ebgames/checkout/delivery');
-        }
-        return html(200, page(shop, 'Shipping details', `<h1>Shipping details</h1>
-          <form method="post" id="ship">
-            <label>Email address <input name="email" type="email" required></label>
-            <label>First name <input name="firstName" required></label>
-            <label>Last name <input name="lastName" required></label>
-            <label>Mobile number <input name="phone" type="tel" required></label>
-            <label for="lookup">Start typing your address</label><input id="lookup" name="addressLookup" placeholder="Start typing your address">
-            <p><a href="#" id="manual">Enter address manually</a></p>
-            <div id="manual-fields" style="display:none">
-              <label>Street address <input name="street"></label>
-              <label>Unit / apartment <input name="unit"></label>
-              <label>Suburb <input name="suburb"></label>
-              <label>State <select name="state">${STATES}</select></label>
-              <label>Postcode <input name="postcode" maxlength="4"></label>
-            </div>
-            <label><input type="checkbox" name="news"> Send me news and offers</label>
-            <button type="submit">Continue to delivery</button>
-          </form>
-          <script>document.getElementById('manual').addEventListener('click', e => { e.preventDefault(); document.getElementById('manual-fields').style.display='block'; for (const n of ['street','suburb','state','postcode']) document.querySelector('[name='+n+']').required = true; });</script>`));
-      }
-      if (sub === '/checkout/delivery') {
-        if (req.method === 'POST') {
-          const b = await parseBody(req);
-          if (!b.delivery) return html(200, page(shop, 'Delivery', '<p class="err">Choose a delivery option</p><a href="/ebgames/checkout/delivery">Back</a>'));
-          S.data.delivery = b.delivery;
-          return redirect('/ebgames/checkout/payment');
-        }
-        return html(200, page(shop, 'Delivery', `<h1>Delivery</h1><form method="post">
-          <label><input type="radio" name="delivery" value="collect"> Click &amp; Collect (free)</label>
-          <label><input type="radio" name="delivery" value="standard"> Standard Delivery $9.95</label>
-          <label><input type="radio" name="delivery" value="express"> Express Delivery $14.95</label>
-          <button type="submit">Continue to payment</button></form>`));
-      }
-      if (sub === '/checkout/payment') {
-        return html(200, page(shop, 'Payment', `<h1>Payment</h1><form method="post" action="/ebgames/checkout/place">
-          <label><input type="radio" name="method" value="card"> Credit / debit card</label>
-          <label><input type="radio" name="method" value="paypal"> PayPal</label>
-          <label><input type="radio" name="method" value="afterpay"> Afterpay</label>
-          ${cardBoxes('stripe')}
-          <label class="terms"><input type="checkbox" name="terms" required> I agree to the Terms &amp; Conditions</label>
-          <label><input type="checkbox" name="marketing"> Subscribe to our newsletter</label>
-          <p>Total: $${(total('ebgames') + 9.95).toFixed(2)}</p>
-          <button type="submit" id="place">Place Order</button></form>`));
-      }
+    // ---------------- EB Games-style one-page checkout, as the real one goes
+    if (shop === 'ebgames' && sub === '/checkout') {
+      if (!S.cart.length) return redirect('/ebgames/cart');
+      return html(200, page(shop, 'Checkout', ebgamesCheckout()));
     }
 
     // ---------------- CrystalCommerce checkout (The Games Cube): guest → address → shipping and payment
@@ -1216,25 +1530,29 @@ for (const el of document.querySelectorAll('input')) {
         }
         if (!S.data.address) {
           return gc('Checkout', `<h2>1. Shipping Address</h2><form action="/thegamescube/checkout/address" method="post">
-            <label>Address <input name="address[street]" autocomplete="shipping address-line1" required></label>
-            <label>Address 2 <input name="address[street2]" autocomplete="shipping address-line2"></label>
-            <label>City / Suburb <input name="address[city]" autocomplete="shipping address-level2" required></label>
-            <label>State <select name="address[state]" autocomplete="shipping address-level1" required>${STATES}</select></label>
-            <label>Postcode <input name="address[postcode]" autocomplete="shipping postal-code" required></label>
-            <label>Phone <input name="address[phone]" type="tel" autocomplete="tel"></label>
+            <label>First Name <input name="address[first_name]" autocomplete="shipping given-name" required></label>
+            <label>Last Name <input name="address[last_name]" autocomplete="shipping family-name" required></label>
+            <label>Address Line 1 <input name="address[street]" autocomplete="shipping address-line1" required></label>
+            <label>Address line 2 (Optional) <input name="address[street2]" autocomplete="shipping address-line2"></label>
+            <label>City <input name="address[city]" autocomplete="shipping address-level2" required></label>
+            <label>State (Abbrev.) <input name="address[state]" required maxlength="3" style="width:80px"></label>
+            <label>Zip <input name="address[postcode]" required></label>
+            <label>Country <select name="address[country]" required><option value="">Select Country</option><option value="NZ">New Zealand</option><option value="AU">Australia</option></select></label>
+            <label>Phone <input name="address[phone]" type="tel" autocomplete="tel" required></label>
             <button type="submit">Continue</button></form><h3>Your Cart</h3><ul>${lines}</ul>`);
         }
         return gc('Checkout', `<form action="/thegamescube/checkout/create" method="post" id="place_order_form">
           <h2>2. Shipping Method</h2>
-          <label><input type="radio" name="shipping" value="pickup"> Pick up in store (free)</label>
-          <label><input type="radio" name="shipping" value="auspost"> Australia Post Standard — AUD$ 10.00</label>
-          <h2>3. Payment Options</h2>
-          <label>Card number <input name="cc_number" autocomplete="cc-number" inputmode="numeric"></label>
-          <label>Name on card <input name="cc_name" autocomplete="cc-name"></label>
-          <label>Expiry (MM/YY) <input name="cc_exp" autocomplete="cc-exp" placeholder="MM/YY"></label>
-          <label>CVV <input name="cc_cvv" autocomplete="cc-csc" inputmode="numeric"></label>
-          <h3>Your Cart</h3><ul>${lines}</ul>
-          <button type="submit" id="place-order">Place Order</button></form>`);
+          <h4>Pick Up</h4><label><input type="radio" name="shipping" value="pickup"> Pick up in store (free)</label>
+          <h4>Parcel Post</h4>
+          <label><input type="radio" name="shipping" value="parcel"> Australia Post (2-6 business days) — AUD$ 10.00</label>
+          <label><input type="radio" name="shipping" value="parcel_tracked"> Australia Post Tracked — AUD$ 14.00</label>
+          <h4>Express Post</h4><label><input type="radio" name="shipping" value="express"> Australia Post Express — AUD$ 18.00</label>
+          <h2>3. Payment Method</h2>
+          <p>Total: AUD$ ${(total(shop) + 10).toFixed(2)}</p>
+          <button type="button" id="paypal-checkout" class="paypal-button" onclick="document.title='paypal'">Checkout with PayPal</button>
+          <h3>Your Cart</h3><ul>${lines}</ul></form>
+          <script>for (const r of document.querySelectorAll('input[name=shipping]')) r.addEventListener('change', () => fetch('/thegamescube/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step: 'shipping', data: { shipping: r.value } }) }));</script>`);
       }
     }
 
@@ -1272,35 +1590,26 @@ for (const el of document.querySelectorAll('input')) {
     if (shop === 'pbandai' && sub === '/checkout') {
       S.data.checkoutOpened = Date.now();
       return html(200, page(shop, 'Checkout', `<h1>Checkout</h1><p>Your order is handled by our checkout partner.</p>
-        <iframe id="ge-frame" src="${cardOrigin}/ge-checkout" width="560" height="760" style="border:1px solid #ccc"></iframe>`));
+        <iframe id="ge-frame" src="${cardOrigin}/ge-checkout" width="600" height="1100" style="border:1px solid #ccc"></iframe>
+        <script>addEventListener('message', (e) => { if (e.data && e.data.gePlaced) location.href = '/pbandai/checkout/confirmation'; });</script>`));
     }
 
-    // ---------------- Shopify-style one-page checkout (JB Hi-Fi, Trainer Town, Gamerholic)
+    // ---------------- Shopify-style one-page checkout (JB Hi-Fi, Trainer Town, Gamerholic, Toys"R"Us)
     if (SHOPIFY.has(shop) && sub.startsWith('/checkouts/c/abc123')) {
       if (sub.endsWith('/thank-you')) return html(200, page(shop, 'Thank you', '<h1>Thank you for your purchase!</h1><p>Your order is confirmed.</p>'));
       if (req.method === 'POST') {
         const b = await parseBody(req);
-        S.orders.push({ form: b, cart: S.cart.slice() });
+        const shopPay = state.signedIn[shop] === 'shop';
+        // Like Shopify: no shipping method, or no card (unless Shop Pay has one), and it's not placed.
+        if (!b.shipping) return html(200, page(shop, 'Checkout', '<p class="err" role="alert">Choose a shipping method</p>'));
+        if (!shopPay && !b.card_number) return html(200, page(shop, 'Checkout', '<p class="err" role="alert">Enter a card number</p>'));
+        if (S.decline) { S.declined = (S.declined || 0) + 1; return html(200, page(shop, 'Checkout', '<p class="err" role="alert">Your card was declined. Please try another card.</p>')); }
+        S.orders.push({ form: b, cart: S.cart.slice(), shopPay });
         S.cart = [];
         return redirect(`/${shop}/checkouts/c/abc123/thank-you`);
       }
       S.data.checkoutOpened = Date.now();
-      return html(200, page(shop, `Checkout - ${SHOPS[shop].name}`, `<h1>Checkout</h1><form method="post">
-        <h3>Contact</h3><input name="email" type="email" autocomplete="email" placeholder="Email" required>
-        <h3>Delivery</h3>
-        <select name="countryCode" autocomplete="shipping country"><option value="AU" selected>Australia</option><option value="NZ">New Zealand</option></select>
-        <input name="firstName" autocomplete="shipping given-name" placeholder="First name" required>
-        <input name="lastName" autocomplete="shipping family-name" placeholder="Last name" required>
-        <input name="address1" autocomplete="shipping address-line1" placeholder="Address" required>
-        <input name="address2" autocomplete="shipping address-line2" placeholder="Apartment, suite, etc. (optional)">
-        <input name="city" autocomplete="shipping address-level2" placeholder="Suburb" required>
-        <select name="zone" autocomplete="shipping address-level1" required><option value="" disabled selected>State/territory</option><option value="ACT">Australian Capital Territory</option><option value="NSW">New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option></select>
-        <input name="postalCode" autocomplete="shipping postal-code" placeholder="Postcode" required>
-        <input name="phone" autocomplete="shipping tel" placeholder="Phone" type="tel">
-        <h3>Shipping method</h3><label><input type="radio" name="shipping" value="standard" checked> Standard $10.00</label>
-        <h3>Payment</h3>${cardBoxes('shopify')}
-        <p>Total: $${(total(shop) + 10).toFixed(2)}</p>
-        <button type="submit" id="pay">Pay now</button></form>`));
+      return html(200, page(shop, `Checkout - ${SHOPS[shop].name}`, shopifyCheckout(shop)));
     }
 
     return html(404, page(shop, 'Page not found', '<h1>Sorry, we can\'t find that page</h1>'));
@@ -1335,6 +1644,7 @@ for (const el of document.querySelectorAll('input')) {
       state.account = null;
       state.cardInIframe = false;
       state.blockNonBrowsers = false;
+      state.signedIn = {};
     },
     close: () => Promise.all([
       new Promise((r) => { server.close(() => r()); server.closeAllConnections?.(); }),

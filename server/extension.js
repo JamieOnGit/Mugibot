@@ -13,9 +13,10 @@ import { makeZip } from './zip.js';
 export const EXTENSION_SRC = path.join(ROOT, 'extension');
 const TEMPLATE = JSON.parse(fs.readFileSync(path.join(EXTENSION_SRC, 'manifest.json'), 'utf8'));
 export const EXTENSION_VERSION = TEMPLATE.version;
-// The oldest extension Auto-checkout is ready with at every store (City Beach's flow came in 1.12.0).
-// Raise it with a release that changes a checkout flow — not every release does (1.13.0 is card backup).
-export const ACO_EXTENSION_VERSION = '1.12.0';
+// The oldest extension Auto-checkout is ready with at every store. Raise it with a release that changes
+// how checkouts are filled in — not every release does (1.13.0 was card backup). 1.14.0: Shopify's,
+// Target's (Paydock) and Global-e's checkouts, tile choices, address finders, Amazon's "Buy Now".
+export const ACO_EXTENSION_VERSION = '1.14.0';
 // The monitor's page reader, used by the extension's in-browser checks too.
 const SHARED = ['html.js', 'extract.js', 'status.js', 'listing.js'].map((f) => ({ name: `lib/${f}`, from: path.join(ROOT, 'server', 'monitor', f) }));
 
@@ -52,8 +53,8 @@ export function extensionManifest(cfg, { version } = {}) {
   m.content_scripts = [
     { matches: appPatterns, js: ['bridge.js'], run_at: 'document_start' },
     { matches: [...stores, ...dev], js: ['capture.js'], run_at: 'document_start' },
-    { matches: [...stores, ...dev], js: ['flows.js', 'core.js', 'fill.js', 'logins.js', 'content.js'], run_at: 'document_idle' },
-    { matches: [...PAYMENT_HOSTS, ...stores, ...dev], js: ['flows.js', 'fill.js', 'frame.js'], run_at: 'document_idle', all_frames: true },
+    { matches: [...stores, ...dev], js: ['flows.js', 'core.js', 'fill.js', 'checks.js', 'logins.js', 'content.js'], run_at: 'document_idle' },
+    { matches: [...PAYMENT_HOSTS, ...stores, ...dev], js: ['flows.js', 'fill.js', 'checks.js', 'frame.js'], run_at: 'document_idle', all_frames: true },
   ];
   // The app's own pages aren't stores: keep the store scripts off them.
   if (dev.length) for (const cs of m.content_scripts.slice(1)) cs.exclude_matches = [`${app.protocol}//${app.hostname}:${app.port || (app.protocol === 'https:' ? 443 : 80)}/*`];

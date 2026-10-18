@@ -37,7 +37,8 @@ is bought for an item until they **arm** it, and each arming buys **once**.
 5. **Keep Chrome open** with the extension connected. The "Ready to check out?"
    list shows what's missing:
    - an active membership;
-   - the newest extension in this browser (1.12.0 or newer for City Beach);
+   - the newest extension in this browser (1.14.0 or newer: Shopify's, Target's
+     and Global-e's checkouts, tile choices, address finders, Amazon's "Buy Now");
    - a card saved in the extension (or backed up in your account: after a new
      install, restore it with your card passphrase, see "Card backup" below);
    - your delivery details;
@@ -85,10 +86,15 @@ After **3 failures in a day** it stops trying and disarms until you arm it again
 - **The order total.** Delivery included, read from the checkout page. It must
   be within the item's max price + $40 (for delivery) and your "most an order may
   cost". If it can't read the total, it stops.
-- **The card went in.** It checks the store's card boxes, including boxes from
-  a payment provider.
-- **The store didn't ask for something it couldn't fill in.** For example, a
-  required field or an error message.
+- **The card went in — every box of it.** It checks the store's card boxes,
+  including boxes from a payment provider (one frame per box at Kmart, Shopify
+  stores and Target). A card the store or Shop Pay already has for you ("Visa
+  •••• 4242", no card boxes) counts.
+- **The store didn't ask for something it couldn't fill in.** An error message,
+  a box marked wrong, or a required box (or tick box) still empty: it stops and
+  names it.
+- **The store doesn't only take PayPal.** At The Games Cube (PayPal only) it fills
+  everything in and stops at "Checkout with PayPal" for you.
 
 It presses the final button **once** per run, then watches the page:
 
@@ -98,6 +104,7 @@ It presses the final button **once** per run, then watches the page:
 | "Your card was declined" | ❌ **Failed:** the store declined the payment |
 | Your bank's check (3-D Secure, a code, "confirm in your banking app") | ⚠️ **Needs you:** finish it in the tab that's open |
 | A "check you're human" box (CAPTCHA) | ⚠️ **Needs you** |
+| The store refused the press (still saying what's wrong a few seconds on) | ⚠️ **Needs you:** what it said |
 | Nothing either way | ⚠️ **Needs you:** check your email from the store before buying again |
 
 It **never** gets past your bank's check or a store's bot check. It stops and
@@ -125,7 +132,7 @@ ending, and an email if "Email me when checkout is waiting for me" is on (Discor
 | 🛒 Filled in, waiting for you | "Stop at the final button" mode |
 | ⚠️ Needs you | Your bank's check, a bot check, the total over your limit, no confirmation after pressing |
 | ❌ Failed | Sold out by the time your browser got there, not added to the bag, couldn't reach checkout, card declined, the card didn't go in, another item in the bag, it took too long |
-| ⏭️ Didn't start | Over the item's max price, over your order or daily limits, 3 failures today, signed out (if you chose that, or at a store that only sells signed in: Amazon, Premium Bandai), no browser with the extension open, membership not active |
+| ⏭️ Didn't start | Over the item's max price, over your order or daily limits, 3 failures today, signed out (if you chose that, or at a store that only sells signed in: Amazon), no browser with the extension open, membership not active |
 
 ### Card backup: no typing the card again after a new install
 
@@ -161,14 +168,25 @@ How it's kept safe:
 Auto-checkout uses the same per-store flows as ⚡ Buy (see
 [RETAILER-FLOWS.md](RETAILER-FLOWS.md)), at every store that has one.
 
-At **Premium Bandai** the whole checkout is in Global-e's frame, so it fills it
-in and stops there for you to press.
+At **Premium Bandai** the whole checkout is in Global-e's frame. Mugibot runs it
+in there: your details, the card, the purchase agreement box, and — after the same
+checks (card in, nothing wrong, the total within your limit) — "Pay and Place
+Order", once. Signed in or as a guest.
 
-At **Amazon** you must be signed in. Amazon pays with the address and card saved
-in your Amazon account, so the extension's card isn't needed there. The order
-total is still checked against your limits before "Place your order". While the
-store login monitor sees you signed out at Amazon (or Premium Bandai), a drop
-doesn't start.
+At **Amazon** you must be signed in (no guest checkout). It presses "Buy Now",
+says "No thanks" to the Prime offer if Amazon shows it, and Amazon pays with the
+address and card saved in your Amazon account, so the extension's card isn't
+needed there. The order total is still checked against your limits before "Place
+your order" (in Amazon's quick-checkout window too, when it shows one). While the
+store login monitor sees you signed out at Amazon, a drop doesn't start; ⚡ Buy
+says to sign in first, and so does your watchlist.
+
+At **The Games Cube** (PayPal only) it fills everything in and stops at
+"Checkout with PayPal": you pay with PayPal yourself.
+
+At **EB Games**, **Target**, **JB Hi-Fi**, **Toys"R"Us** and **Gamerholic** it
+follows their real checkouts, as members walked them through (Oct 2026): see each
+store in [RETAILER-FLOWS.md](RETAILER-FLOWS.md).
 
 These flows are tested end to end on the **dummy stores** only:
 
@@ -181,8 +199,22 @@ These flows are tested end to end on the **dummy stores** only:
   - an add that didn't go through (Add pressed again, then it says so);
   - "stop at the final button";
   - Trigger ACO.
-- Target: the "Often Bought Together" pop-up closed with its ✕, then the order
-  placed.
+- Kmart signed out: its cart turning the first add away (Add pressed again once
+  the page had loaded), and Adyen-style card boxes slow to take typing.
+- Target: the "Often Bought Together" pop-up closed with its ✕, "Home Delivery",
+  your address from its suggestions, "Credit Card" and Paydock's card form, then
+  the order placed.
+- EB Games: as a guest (Home Delivery over Click & Collect, the address from its
+  suggestions, Credit / Debit card, "Done", "CONFIRM & PAY") and signed in.
+- JB Hi-Fi: the card in Shopify's card fields, the order placed.
+- Toys"R"Us signed in with Shop: Shop Pay's card, "Standard Shipping - AusPost",
+  the order placed.
+- Amazon: "Buy Now", "No thanks" to Prime, "Place your order"; and its quick
+  checkout window.
+- Premium Bandai signed in: "Default (same as billing address)", the card with
+  its month and year drop-downs, the agreement, "Pay and Place Order" in
+  Global-e's frame.
+- The Games Cube: everything filled in, stopped at "Checkout with PayPal".
 - City Beach:
   - an order placed;
   - a last "place order" stage, whose own "Confirm & pay" is pressed once.
@@ -193,8 +225,9 @@ VIP watch finds goes on your watchlist, armed up to the max price you gave it (s
 
 **Before relying on it at a real store, do one real run in "Fill in checkout and
 stop at the final button" mode** and check every field. Then switch to "Place the
-order for me". Draft flows (Target, Pokémon Center…) haven't been checked on the
-real stores yet.
+order for me". Beta flows were built from members' walk-throughs of the real
+stores and tested on their dummy copies; draft flows (Pokémon Center…) haven't
+been seen on the real stores at all.
 
 ### Upsell pop-ups
 

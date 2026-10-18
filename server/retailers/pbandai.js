@@ -1,13 +1,17 @@
-// Premium Bandai (Australia) — DRAFT. p-bandai.com/au, Bandai Namco's own store (One Piece
-// Card Game, Digimon, Gundam…, mostly pre-orders with order windows). Its pages are behind a
-// bot check that turns servers away, so its checkout couldn't be seen from here: the steps
-// below are a best guess, not tested anywhere yet. Members' browsers pass the check like any
-// visitor. Premium Bandai only sells to signed-in members (a Bandai Namco ID): stay signed in
-// there — ⚡ Buy never signs in for you. Its checkout is run by Global-e (a payment company,
-// in a frame on the page): Mugibot fills your delivery details and card in there too.
+// Premium Bandai (Australia) — p-bandai.com/au, Bandai Namco's own store (One Piece Card Game,
+// Digimon, Gundam…, mostly pre-orders with order windows). As its real checkout goes (a member's
+// walk-through, Oct 2026), tested on the Premium Bandai-style dummy store. Its pages are behind a
+// bot check that turns servers away; members' browsers pass it like any visitor.
 //
-// Product page: "Add to Cart" → straight to the cart → "Proceed to checkout" → Global-e's
-//   checkout (address, delivery, card) → STOP at "Place Order" / "Pay".
+// Product page: "PLACE PRE-ORDER" (or "Add to Cart") → "View Cart" → "Proceed to Checkout" →
+//   Global-e's checkout (a payment company), in a frame on the page (checkout.frames: frame.js fills
+//   it in there): first and last name, email, area (Australia), address lines 1 and 2, city /
+//   suburb, postcode, state (a drop-down), phone (after the +61 already shown) — signed in, your
+//   billing address is already there and the delivery address is "Default (same as billing
+//   address)" → the shipping method it picked → CREDIT CARD (already chosen): card number, expiry
+//   month and year (drop-downs), CVV → the "I confirm no returns or refunds… I have read and agree
+//   to the Purchase Agreement" box ticked → STOP at "Pay and Place Order" (⚡ Buy). Auto-checkout
+//   presses it once, in the frame, after the same checks as on any checkout.
 //
 // Live sweeps from an admin's browser: its search page gets its products from the site's own
 // search JSON (/api/search, newest first, up to 100 at a time), asked for with the region in a
@@ -24,8 +28,10 @@ export default {
   // Only the Australian store (the same address serves every region's).
   pathPrefix: '/au',
   devPath: '/pbandai',
-  flowStatus: 'draft',
-  flowNote: 'A best guess — Premium Bandai turns servers away, so its checkout hasn\'t been seen or tested. Stay signed in to your Bandai Namco ID there. Watch each step.',
+  // The dummy store's copy of Global-e's checkout frame.
+  devFrames: [/\/ge-checkout\b/],
+  flowStatus: 'beta',
+  flowNote: 'Built from a walk-through of its real checkout (Global-e\'s, in a frame); tested on the Premium Bandai-style dummy store. Signed in or as a guest.',
   skuLabel: 'Item code',
   skuHint: 'The code after /item/ in the link, e.g. N2863373001',
   skuFromPath: /\/item\/([A-Z]\d{6,15})/,
@@ -41,11 +47,12 @@ export default {
     minSeconds: 30,
   },
   // Store login monitor: the page's USER_DATA has the member ("loggedInMember") once you're signed in.
-  // required: Premium Bandai only sells to signed-in members (Auto-checkout doesn't start while you're signed out).
-  account: { signIn: '', required: true, check: { path: '', signedIn: /USER_DATA\s*=\s*\{[^\n]*"loggedInMember"\s*:\s*\{/, signedOut: /USER_DATA\s*=\s*\{/ } },
+  // (Guests can check out too — signed in, your billing address is already there.)
+  account: { signIn: '', check: { path: '', signedIn: /USER_DATA\s*=\s*\{[^\n]*"loggedInMember"\s*:\s*\{/, signedOut: /USER_DATA\s*=\s*\{/ } },
   monitor: { server: true, browser: true },
   flow: {
     product: {
+      // "PLACE PRE-ORDER" when it drops (a pre-order), or "Add to Cart".
       add: [/^add to cart$/i, /\bpre-?order\b/i, /^(buy|purchase) now$/i],
       waitMs: 15000,
     },
@@ -59,10 +66,16 @@ export default {
     },
     checkout: {
       path: /\/(checkout|order)(\/|$)/i,
-      // Global-e's checkout, in a frame on the page: your details and card are filled in there.
+      // Global-e's checkout, in a frame on the page: run in there (frame.js), the final button too.
       inFrame: true,
+      frames: [/^https:\/\/([a-z0-9-]+\.)*global-e\.com\//i],
+      // Signed in: the delivery address is "Default (same as billing address)". CREDIT CARD is chosen already.
+      // (Matched against the words alone: brackets and the like are left out.)
+      choose: [/^default \(?same as (the )?billing address\)?$/i, /^credit card$/i],
       steps: [/^continue( to (shipping|delivery|payment))?$/i, /^next$/i],
-      final: [/\bplace (my |your )?order\b/i, /\bpay now\b/i, /\bconfirm (my |your )?order\b/i],
+      final: [/^pay (and|&) place (my |your )?order$/i, /\bplace (my |your )?order\b/i, /\bpay now\b/i, /\bconfirm (my |your )?order\b/i],
+      // The phone box comes after the +61 already shown: the number without its leading 0.
+      phoneLocal: true,
       delivery: 'home',
       payment: 'card',
       done: /confirmation|thank-?you|order-?(complete|success)/i,

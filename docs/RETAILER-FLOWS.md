@@ -27,19 +27,19 @@ checkout as fast as the store allows:
 
 | Store | File | Status | Notes |
 |---|---|---|---|
-| Kmart | `kmart.js` | ✅ **verified** | Tested end to end on kmart.com.au. Stops at "Checkout securely". |
+| Kmart | `kmart.js` | ✅ **verified** | Tested end to end on kmart.com.au signed in. Signed out, the same flow: Kmart's cart can turn the first add away while its page starts up — Mugibot sees it refused, waits for the page to load and presses Add once more. Card boxes: Adyen's, one frame per box. Stops at "Checkout securely". |
 | BIG W | `bigw.js` | 🟦 beta | Tested on the BIG W-style dummy store only. **Waiting for the real flow.** |
-| EB Games | `ebgames.js` | 🟦 beta | Tested on the EB Games-style dummy store only. |
-| JB Hi-Fi | `jbhifi.js` | 🟦 beta | Shopify. Tested on the Shopify-style dummy store only. |
-| Target | `target.js` | 🟨 draft | Best guess, untested. |
-| Zing | `zing.js` | 🟨 draft | Uses the EB Games flow (same platform). |
-| Toys"R"Us | `toysrus.js` | 🟨 draft | Uses the Shopify flow. |
+| EB Games | `ebgames.js` | 🟦 beta | From a member's walk-through (Oct 2026): "Home Delivery" (EB picks Click & Collect for you) → Australia → the address from EB's suggestions → its shipping method → Pay Now: "Credit / Debit card" → card number, MM/YY, CVV, name on card → "Done" → "CONFIRM & PAY". Signed in: only "CONFIRM & PAY". |
+| JB Hi-Fi | `jbhifi.js` | 🟦 beta | Shopify, its cart link (`/cart/<variant>:1`). The card goes into Shopify's card fields (a frame per box, from `checkout.pci.shopifyinc.com`). Stops at "Pay now". |
+| Target | `target.js` | 🟦 beta | From a member's walk-through: "Home Delivery" (a tile) → your details → the address from Target's suggestions → "Credit Card" (a tile) → card in Paydock's form (`*.paydock.com`) → "Place order". |
+| Zing | `zing.js` | 🟨 draft | Uses the EB Games flow (same platform). Off: zingpopculture.com.au sends you to EB Games. |
+| Toys"R"Us | `toysrus.js` | 🟦 beta | Shopify, at **toysrus.com.au** (www. sends you there). Shop Pay (signed in to Shop) or your details and card; "Standard Shipping - AusPost"; Authority to leave and "use shipping address as billing" left ticked; "Pay now". |
 | Trainer Town | `trainertown.js` | 🟨 draft | Uses the Shopify flow; tested on the Shopify-style dummy store (`/trainertown`), not on trainertown.com.au yet. |
-| Gamerholic | `gamerholic.js` | 🟨 draft | Uses the Shopify flow; tested on the Shopify-style dummy store (`/gamerholic`), not on gamerholic.com.au yet. |
-| The Games Cube | `thegamescube.js` | 🟨 draft | CrystalCommerce. Built from its real pages (search, product page, cart, the start of checkout): its cart button is an icon (`addSelector`), straight to `/checkout/proceed_to_checkout`, "Checkout as a guest". Tested on the CrystalCommerce-style dummy store (`/thegamescube`). |
+| Gamerholic | `gamerholic.js` | 🟦 beta | Shopify. Shop Pay or your details; "Standard Shipping"; card number, expiry, security code (no name box); "Pay now". |
+| The Games Cube | `thegamescube.js` | 🟦 beta | CrystalCommerce. Its icon-only cart button → straight to checkout → guest → shipping address → the first "Parcel Post" option → **"Checkout with PayPal" only**: ⚡ Buy and Auto-checkout stop there for you (`payment: 'paypal'`). |
 | Pokémon Center | `pokemoncenter.js` | 🟨 draft | Australia only (`/en-au`). Its bot check turns servers away, so its checkout couldn't be seen: a best guess, tested on a dummy copy only. During big drops it may queue everyone first; ⚡ Buy waits like you do. |
-| Premium Bandai | `pbandai.js` | 🟨 draft | Australia only (`/au`). Members only (stay signed in to your Bandai Namco ID). Its checkout is in a Global-e frame (`checkout.inFrame`): your details and card are filled in there. A best guess, tested on a dummy copy only. |
-| Amazon AU | `amazon.js` | 🟨 draft | Adds to cart and opens checkout; Amazon fills your saved address and card. |
+| Premium Bandai | `pbandai.js` | 🟦 beta | Australia only (`/au`). "PLACE PRE-ORDER" → "View Cart" → "Proceed to Checkout" → Global-e's checkout in a frame (`checkout.frames`: filled in there, by `frame.js`) — area, state, phone after its +61, card with month/year drop-downs, the purchase agreement → "Pay and Place Order". Signed in: "Default (same as billing address)". Guests too. |
+| Amazon AU | `amazon.js` | 🟦 beta | **Signed in only** (no guest checkout: the panel and dashboard say so). "Buy Now" → "No thanks" to Prime → your Amazon address and card → "Place your order". Its quick checkout (a window over the product page) is filled in its frame. |
 | City Beach | `citybeach.js` | 🟨 draft | Australia only (`/au`). Salesforce Commerce Cloud. Built from its real pages up to the final button: "Add To Bag" → straight to `/au/checkout` → your email → "Continue as guest" → "Delivery" → delivery to your address → "Submit shipping" → card (in the payment provider's frame) → "Confirm & pay". If a last "place order" stage follows (`?stage=placeOrder`, `checkout.review`), Auto-checkout presses its button once. Its marketing pop-up doesn't get in the way. Tested on the City Beach-style dummy store (`/citybeach`), not end to end on citybeach.com yet. |
 
 - **verified**: tested on the real store.
@@ -119,6 +119,7 @@ export default {
   flow: {
     product: {
       add: [/\badd to (cart|trolley)\b/i, /\bpre-?order\b/i],  // the add button's label(s)
+      // buyNow: [/^buy now$/i],    // a button straight to checkout (Amazon): pressed instead of Add, when it's there
       addSelector: null,            // optional CSS selector for the add button
       waitMs: 12000,                // how long to wait for the add button on a fresh page
       readyMs: 8000,                // a React / Vue page: how long to wait for its code to wire up Add
@@ -144,9 +145,21 @@ export default {
       final: [/\bplace (my |your )?order\b/i],      // where ⚡ Buy stops (only Auto-checkout presses it)
       manual: [/enter address manually/i],          // optional: extra "type the address yourself" links
       fields: { 'input[name="mobile"]': 'phone' },  // optional: CSS selector → which detail goes there
-      delivery: 'home',                             // pick home delivery (never click & collect)
-      payment: 'card',                              // pick card payment ('account': the card saved in the store account, e.g. Amazon)
+      delivery: 'home',                             // pick home delivery (never click & collect) — even over the store's own default
+      payment: 'card',                              // pick card payment ('account': the card saved in the store account, e.g. Amazon;
+                                                    //   'paypal': the store only takes PayPal — stop there, Auto-checkout too)
       done: /confirmation|thank-?you/i,             // the order-placed page
+      // Optional, for stores that need them:
+      // choose: [/^home delivery$/i, /^credit card$/i],  // choices shown as tiles / tabs / radio labels, pressed once each
+      //                                                  //   (matched on the words alone: brackets and the like left out)
+      // addressLookup: true,          // the address is one line, picked from the store's suggestions as it's typed
+      // afterCard: [/^done$/i],       // step buttons only pressed once every card box is in (EB's "Done")
+      // notFinal: [/^pay now$/i],     // words that look final but aren't at this store (EB's "Pay Now" payment tab)
+      // shipping: [/standard shipping/i],  // the shipping method to pick (by its label, or the heading it's under: "Parcel Post")
+      // phoneLocal: true,             // the phone box comes after a +61 already shown: the number without its leading 0
+      // frames: [/global-e\.com\//i], // the store's whole checkout runs in a frame from here: filled in (and, for
+      //                               //   Auto-checkout, placed) in there — Premium Bandai's Global-e, Amazon's quick checkout
+      // savedCard: /ending in \d{4}/i, // how the page shows a card the store already has for you (no card boxes)
     },
   },
 };
@@ -168,7 +181,19 @@ stores. Some rules always apply, whatever a flow says:
   Add): back to the product, Add pressed once more; still empty, it stops and
   says so, with what the page said.
 - Express payments (PayPal, Afterpay, Zip, Apple Pay…), click & collect,
-  sign-in, newsletters and marketing boxes are never chosen.
+  sign-in, newsletters and marketing boxes are never chosen. A store that
+  chooses click & collect or PayPal for you (EB Games) is switched to home
+  delivery and the card.
+- The store's cart turns the add away (an HTTP error, e.g. Kmart's while its
+  page is still starting up): once the page has finished loading, Add is pressed
+  once more; turned away again, Mugibot stops and says what the store answered.
+- A one-line address box with suggestions (Target's, EB Games'): the address is
+  typed and the store's suggestion with your postcode (then suburb) is picked —
+  up to 3 tries, shorter each time. "Enter address manually" first, if there is one.
+- Card boxes are typed into one at a time, each focused through the page, and
+  checked afterwards: a box that didn't keep what was typed is typed again (the
+  expiry as digits alone the second time). If the browser window isn't in front,
+  the checkout's tab is brought forward once.
 - Fields that already have a value (e.g. from a store account) are left alone.
 - Checkout (or the bag) is only opened once the store shows the item went in:
   the "added" popup, an "Added to bag" message, the number on the store's bag

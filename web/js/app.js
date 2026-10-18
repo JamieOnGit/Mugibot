@@ -445,10 +445,18 @@ function renderItems() {
   if (!state.items.length) list.append(h('li', { class: 'empty' }, 'Nothing on your watchlist yet — press "+ Add SKU", or ☆ Watch a product in Tracked products.'));
   // Signed out at a store you're watching: ⚡ Buy is faster signed in.
   const out = state.logins ? state.logins.stores.filter((s) => s.status === 'out' && state.items.some((it) => it.store === s.id)) : [];
-  if (out.length) {
+  // A store that only sells to signed-in customers (Amazon): ⚡ Buy and Auto-checkout can't buy there signed out.
+  const must = out.filter((s) => s.required);
+  if (must.length) {
+    list.prepend(h('li', { class: 'notice err login-nudge login-required' },
+      h('span', {}, h('b', {}, `Sign in at ${must.map((s) => s.name).join(', ')} to buy there. `), `${must.length === 1 ? 'It only sells' : 'They only sell'} to signed-in customers (no guest checkout): ⚡ Buy and Auto-checkout can't buy there while you're signed out in this browser.`),
+      h('span', { class: 'acts' }, ...must.slice(0, 3).map((s) => h('a', { class: 'btn small primary', href: s.signInUrl, target: '_blank', rel: 'noopener' }, `Sign in at ${s.name} ↗`)))));
+  }
+  const faster = out.filter((s) => !s.required);
+  if (faster.length) {
     list.prepend(h('li', { class: 'notice warn login-nudge' },
-      h('span', {}, h('b', {}, `You're signed out at ${out.map((s) => s.name).join(', ')}. `), 'Sign in so ⚡ Buy\'s checkout is faster (the store fills in your saved details).'),
-      h('span', { class: 'acts' }, ...out.slice(0, 3).map((s) => h('a', { class: 'btn small', href: s.signInUrl, target: '_blank', rel: 'noopener' }, `${s.name} ↗`)))));
+      h('span', {}, h('b', {}, `You're signed out at ${faster.map((s) => s.name).join(', ')}. `), 'Sign in so ⚡ Buy\'s checkout is faster (the store fills in your saved details).'),
+      h('span', { class: 'acts' }, ...faster.slice(0, 3).map((s) => h('a', { class: 'btn small', href: s.signInUrl, target: '_blank', rel: 'noopener' }, `${s.name} ↗`)))));
   }
   const from = (state.wPage - 1) * W_PAGE_SIZE;
   state.items.slice(from, from + W_PAGE_SIZE).forEach((it, i) => list.append(itemRow(it, from + i)));
@@ -500,6 +508,9 @@ async function goBuy(it) {
   primed.delete(it.id); // this code is used now
   const warn = () => {
     if (!state.ext || !state.ext.paired) toast('Opened the product', "The extension isn't connected in this browser, so it won't take you to checkout automatically.", 'warn');
+    // (A store that only sells to signed-in customers, where this browser was last seen signed out.)
+    const l = state.logins && state.logins.stores.find((x) => x.id === it.store);
+    if (l && l.required && l.status === 'out') toast(`Sign in at ${l.name} first`, `${l.name} only sells to signed-in customers — sign in there in this browser, then ⚡ Buy again.`, 'warn', 9000);
   };
   // The code is here already: open the store straight away.
   if (entry.result) {
@@ -861,7 +872,7 @@ function renderAcoItems() {
       h('td', { class: 'info' },
         h('div', { class: 'name' }, it.name),
         h('div', { class: 'meta' }, [it.storeName, `SKU ${it.sku}`, money(it.lastPrice ?? it.price)].filter(Boolean).join(' · '),
-          !can ? ' · no checkout for this store yet' : !it.acoPlaces ? ' · stops at the final button here (its payment form is another site\'s)' : ''),
+          !can ? ' · no checkout for this store yet' : !it.acoPlaces ? (it.acoStops === 'paypal' ? ' · stops at PayPal here (this store only takes PayPal)' : ' · stops at the final button here (its payment form is another site\'s)') : ''),
         run ? h('div', { class: `meta aco-last ${ACO_TONE[run.status] || ''}` }, `Last: ${ACO_ICON[run.status] || '⏳'} ${run.statusText}${run.reasonText ? ` — ${run.reasonText}` : ''} · ${ago(run.createdAt)}`) : null),
       h('td', { class: 'signin' }, signInPill(it.store) || h('span', { class: 'muted' }, '—')),
       h('td', { class: 'max' }, h('label', { class: 'aco-max-wrap' }, h('span', { 'aria-hidden': 'true' }, '$'), max)),

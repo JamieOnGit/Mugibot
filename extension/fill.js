@@ -44,7 +44,8 @@ var MGBFill = (function () {
     ['address1', /address.?(line)?.?1|addr(ess)?1|street|\baddress\b|line ?1/],
     ['suburb', /suburb|city|town|locality/],
     ['postcode', /post.?code|postal|\bzip\b/],
-    ['country', /country/],
+    // ("Area": Premium Bandai's Global-e checkout calls the country that.)
+    ['country', /country|\barea\b(?!\s*code)/],
     ['state', /\bstate\b|province|region|territory/],
     ['fullName', /full.?name|\bname\b|recipient/],
   ];
@@ -57,7 +58,7 @@ var MGBFill = (function () {
   };
 
   // Buttons
-  var FINAL_RE = /^(check ?out securely|place (my |your )?order( (and|&) pay| now)?|place your order|pay now|pay securely( now)?|complete (my |your )?(order|purchase|payment)|submit (my )?(order|payment)|confirm (and|&) pay|confirm (my )?(order|purchase|payment)|pay \$?\s?[\d,.]+( now)?|buy now( and pay)?|buy now and pay|complete checkout)$/;
+  var FINAL_RE = /^(check ?out securely|place (my |your )?order( (and|&) pay| now)?|place your order|pay (and|&) place (my |your )?order|pay now|pay securely( now)?|complete (my |your )?(order|purchase|payment)|submit (my )?(order|payment)|confirm (and|&) pay|confirm (my )?(order|purchase|payment)|pay \$?\s?[\d,.]+( now)?|buy now( and pay)?|buy now and pay|complete checkout)$/;
   var STEP_RE = /^(continue to (details|delivery|shipping|payment|review|checkout)|continue|next|next step|proceed( to (delivery|shipping|payment|checkout))?|save (and|&) continue|use this address|deliver (here|to this address)|ship to this address|confirm (address|delivery|details)|review (my |your )?order)$/;
   var GUEST_RE = /^(continue as (a )?guest|guest checkout|check ?out as (a )?guest)$/;
   var MANUAL_RE = /enter (your |the |an )?address manually|enter (it )?manually|manual(ly)? (address|entry)|can.?t find (your |my )?address|add (an )?address manually|type (your )?address/;
@@ -74,7 +75,12 @@ var MGBFill = (function () {
     return !!el.closest('#mugibot-qc, #mugibot-banner, #tcgcopbot-qc, #tcgcopbot-banner, #tcgbot-qc, #tcgbot-quick-checkout, #kmart-upc-quick-checkout, #tcgbot-banner');
   }
   function textOf(el) {
-    return (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+    return (el.innerText || el.value || el.getAttribute('aria-label') || labelledBy(el) || el.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+  }
+  /** What a bare button is labelled by (Amazon's "Place your order": its words in a separate span). */
+  function labelledBy(el) {
+    var ids = (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+    return ids.map(function (id) { var x = document.getElementById(id); return x ? x.textContent : ''; }).join(' ').trim();
   }
   function norm(t) {
     return String(t || '').toLowerCase().replace(/[›»→>←‹«]/g, ' ').replace(/[^a-z0-9$.,&/' +-]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -86,6 +92,8 @@ var MGBFill = (function () {
     var t = norm(label);
     if (!t || t.length > 60) return null;
     if (MANUAL_RE.test(t) || any(C.manual, t)) return 'manual';
+    // (Words that aren't the final button at this store: EB Games' "Pay Now" is a kind of payment.)
+    if (any(C.notFinal, t)) return any(C.choose, t) ? 'choose' : null;
     if (FINAL_RE.test(t) || any(C.final, t) || any(C.final, label)) return 'final';
     if (any(C.choose, t)) return 'choose';
     if (EXCLUDE_RE.test(t)) return null;
@@ -104,15 +112,21 @@ var MGBFill = (function () {
     var lb = el.getAttribute('aria-labelledby');
     if (lb) lb.split(/\s+/).forEach(function (id) { var x = document.getElementById(id); if (x) parts.push(x.innerText); });
     if (!parts.length && el.parentElement) {
-      // Floating-label designs: the label is a sibling.
-      var sib = el.parentElement.querySelector('label, legend, span');
-      if (sib && sib !== el && (sib.innerText || '').length < 60) parts.push(sib.innerText);
+      // Floating-label designs: the label is a sibling — never another box's label (one holding its own
+      // field, or one "for" another field).
+      var sib = toArray(el.parentElement.querySelectorAll('label, legend, span')).find(function (x) {
+        return x !== el && !x.contains(el) && !x.querySelector('input, select, textarea') && !(x.htmlFor && x.htmlFor !== el.id) && (x.innerText || '').length < 60;
+      });
+      if (sib) parts.push(sib.innerText);
     }
     return parts.join(' ').replace(/\s+/g, ' ').trim();
   }
 
   function describe(el) {
-    return [el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('placeholder'), el.getAttribute('aria-label'),
+    // ("address[state]", "customer[email]": the part in brackets says what it is — not the "address" before it.)
+    var name = el.getAttribute('name') || '';
+    var inner = name.match(/\[([^\]]+)\]$/);
+    return [el.getAttribute('autocomplete'), inner ? inner[1] : name, el.id, el.getAttribute('placeholder'), el.getAttribute('aria-label'),
       el.getAttribute('data-fieldtype'), el.getAttribute('data-testid'), labelText(el)].filter(Boolean).join(' | ').toLowerCase().slice(0, 300);
   }
 
@@ -137,6 +151,51 @@ var MGBFill = (function () {
     if (type === 'tel' && !/card|cvv|cvc|security/.test(desc)) return 'phone';
     for (var i = 0; i < RULES.length; i++) if (RULES[i][1].test(desc)) return RULES[i][0];
     return null;
+  }
+
+  /** A box that suggests addresses as you type (a combobox), rather than a plain street box. */
+  function isSuggestBox(el) {
+    var ac = (el.getAttribute('aria-autocomplete') || '').toLowerCase();
+    return el.getAttribute('role') === 'combobox' || ac === 'list' || ac === 'both' || el.getAttribute('aria-haspopup') === 'listbox';
+  }
+
+  /**
+   * What a field is for, on this page: like classifyField, plus two things it can only tell from
+   * the rest of the form. A one-line address box (no suburb or postcode boxes to go with it, and it
+   * suggests addresses — or the flow says the address is one line: C.addressLookup) is an address
+   * lookup. A drop-down for "expiry" is the month or the year, by what it lists.
+   */
+  function fieldKind(el, C, ctx) {
+    var kind = classifyField(el, C);
+    if (kind === 'address1' && el.tagName === 'INPUT' && ctx && !ctx.hasParts && (isSuggestBox(el) || (C && C.addressLookup))) return 'addressLookup';
+    if (kind === 'cardExpiry' && el.tagName === 'SELECT') {
+      var nums = toArray(el.options).map(function (o) { return parseInt(o.value || o.textContent, 10); }).filter(function (n) { return !isNaN(n); });
+      if (nums.some(function (n) { return n >= 2000 || (n > 12 && n < 100); })) return 'cardExpYear';
+      if (nums.length && nums.every(function (n) { return n >= 1 && n <= 12; })) return 'cardExpMonth';
+    }
+    return kind;
+  }
+
+  /** Does the form have separate suburb / postcode boxes (so a street box is just the street)? */
+  function addressParts(fields, C) {
+    return fields.some(function (el) { var k = classifyField(el, C); return k === 'suburb' || k === 'postcode'; });
+  }
+
+  /**
+   * The phone number for a box that already shows the country's code next to it (a "+61" drop-down,
+   * like Premium Bandai's): the number without its leading 0. Otherwise as saved.
+   */
+  function phoneFor(el, values, C) {
+    var phone = String(values.phone || '');
+    var local = phone.replace(/^\+?61\s*/, '0').replace(/\s+/g, '');
+    var box = el.parentElement;
+    var shown = !!(C && C.phoneLocal);
+    for (var i = 0; !shown && box && i < 3; i++, box = box.parentElement) {
+      var sel = box.querySelector('select');
+      var t = sel && sel !== el && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].textContent : '';
+      if (/\+\s?61\b/.test(t) || (/\+\s?61\b/.test(box.innerText || '') && (box.innerText || '').length < 200)) shown = true;
+    }
+    return shown ? local.replace(/^0/, '') : phone;
   }
 
   /** What we can type, from your delivery details and your saved card. */
@@ -189,7 +248,7 @@ var MGBFill = (function () {
    * widgets notice). Returns how it went in: 'typed' (the browser's own typing),
    * 'keys' (key by key), 'set', or 'rejected' (the field wouldn't keep it).
    */
-  function typeInto(el, value, kind) {
+  function typeInto(el, value, kind, keepFocus) {
     var digits = function (s) { return String(s || '').replace(/\D/g, ''); };
     var took = function () { return /^card(Number|Cvc|Expiry|ExpMonth|ExpYear)$/.test(kind) ? digits(el.value) === digits(value) : el.value === value; };
     el.focus();
@@ -203,6 +262,8 @@ var MGBFill = (function () {
     }
     if (!took()) { how = 'set'; setNative(el, value); }
     if (!took()) how = 'rejected';
+    // (keepFocus: an address finder, whose suggestions close when it loses the focus.)
+    if (keepFocus) return how;
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
     return how;
@@ -246,7 +307,12 @@ var MGBFill = (function () {
       var parts = e.data.slice(FOCUS.length).split(':');
       if (parts[0] === 'ask') {
         var frame = frameOf(e.source);
-        if (frame) { queue.push({ id: parts[1], source: e.source, frame: frame }); next(); }
+        if (frame) {
+          // "You're in the queue": the frame waits its turn instead of typing without the focus.
+          try { e.source.postMessage(FOCUS + 'queued:' + parts[1], '*'); } catch (x) { /* ignore */ }
+          queue.push({ id: parts[1], source: e.source, frame: frame });
+          next();
+        }
       } else if (parts[0] === 'done' && current && current.id === parts[1] && current.source === e.source) {
         finish(current);
       }
@@ -266,10 +332,16 @@ var MGBFill = (function () {
         window.removeEventListener('message', onMessage);
         resolve(release);
       };
-      var onMessage = function (e) { if (e.source === window.parent && e.data === FOCUS + 'go:' + id) settle(); };
+      var fallback = null;
+      var onMessage = function (e) {
+        if (e.source !== window.parent) return;
+        if (e.data === FOCUS + 'go:' + id) { clearTimeout(fallback); settle(); }
+        // Queued behind other boxes: wait for our turn (each box takes at most a few seconds).
+        else if (e.data === FOCUS + 'queued:' + id) { clearTimeout(fallback); fallback = setTimeout(settle, 20000); }
+      };
       window.addEventListener('message', onMessage);
       try { window.parent.postMessage(FOCUS + 'ask:' + id, '*'); } catch (e) { /* ignore */ }
-      setTimeout(settle, 2000); // nobody above to help: type anyway
+      fallback = setTimeout(settle, 1500); // nobody above to help: type anyway
     });
   }
 
@@ -323,6 +395,31 @@ var MGBFill = (function () {
     return (labelText(el) || (el.parentElement ? el.parentElement.innerText : '') || el.value || '').toLowerCase();
   }
 
+  /** The heading a radio sits under ("Parcel Post", "Shipping method"), if any. */
+  function headingBefore(el) {
+    var row = el.closest('label, li, tr') || el.parentElement;
+    for (var up = 0; row && up < 3; up++, row = row.parentElement) {
+      for (var s = row.previousElementSibling, n = 0; s && n < 8; s = s.previousElementSibling, n++) {
+        if (s.matches('h1, h2, h3, h4, h5, h6, legend, dt, strong, b, [class*="heading" i], [class*="title" i]')) return (s.innerText || '').trim();
+        if (s.querySelector && s.querySelector('input[type="radio"]')) continue; // another option of the same group
+      }
+    }
+    var fs = el.closest('fieldset');
+    var lg = fs && fs.querySelector('legend');
+    return lg ? (lg.innerText || '').trim() : '';
+  }
+
+  /** A radio's label with the heading it sits under: what a flow's shipping choice is matched against. */
+  function radioContext(el) {
+    return (radioLabel(el) + ' ' + headingBefore(el)).replace(/\s+/g, ' ').trim();
+  }
+
+  var COLLECT_RE = /collect|pick ?up|in-?store|click (&|and) collect/;
+  // Payments that aren't the card (a store's default can be one): switched to the card when the flow pays by card.
+  var NOT_CARD_RE = /paypal|afterpay|\bzip\b|zip ?pay|klarna|humm|latitude|apple ?pay|google ?pay|pay (in|later)|\bpay later\b|gift ?card|flypay/;
+  // Radio groups switched away from the store's default, per page: never more than twice (a page that switches back).
+  var SWITCHED = {};
+
   /**
    * Fill empty, visible fields in `root`. opts.onlyCard: card fields only. opts.selectsOnly: drop-downs only.
    * opts.flow: the store's checkout flow.
@@ -343,8 +440,9 @@ var MGBFill = (function () {
       return isVisible(el);
     });
 
+    var ctx = { hasParts: addressParts(fields, C) };
     fields.forEach(function (el) {
-      var kind = classifyField(el, C);
+      var kind = fieldKind(el, C, ctx);
       if (!kind) return;
       out.kinds[kind] = true;
       var isCard = CARD_KINDS.indexOf(kind) !== -1;
@@ -353,13 +451,15 @@ var MGBFill = (function () {
       if (kind === 'addressLookup') return;
       if (opts.selectsOnly && el.tagName !== 'SELECT') return;
       if (el.tagName === 'SELECT') {
-        if (!placeholderSelected(el)) return;
+        // (Your details are Australian: a country box the store set to somewhere else is changed too.)
+        var otherCountry = kind === 'country' && !/australia|^au$|^aus$/i.test(el.selectedIndex >= 0 ? (el.options[el.selectedIndex].textContent + ' ' + el.value).trim() : '');
+        if (!placeholderSelected(el) && !otherCountry) return;
         var v = chooseOption(kind, el, values);
         if (v !== null && v !== undefined) { setNative(el, v); out.filled.push(kind); }
         return;
       }
       if (el.value) return; // never overwrite what's there (e.g. details from your store account)
-      var val = values[kind];
+      var val = kind === 'phone' ? phoneFor(el, values, C) : values[kind];
       if (isCard && !val) { out.missingCard = true; return; }
       if (!val) return;
       typeInto(el, val, kind);
@@ -367,8 +467,11 @@ var MGBFill = (function () {
     });
 
     if (!opts.onlyCard) {
-      // Radio groups: home delivery (or what the flow says); card payment.
+      // Radio groups: home delivery (or what the flow says) and the flow's shipping choice; card payment.
+      // A group nobody has chosen in yet gets one; a store's own default is changed only when it's
+      // click & collect (for home delivery), a payment that isn't the card, or not the flow's shipping.
       var wantCollect = C.delivery === 'collect';
+      var wantShip = C.shipping && C.shipping.length ? C.shipping : null;
       var groups = {};
       fields.forEach(function (el) {
         if ((el.getAttribute('type') || '').toLowerCase() !== 'radio') return;
@@ -377,15 +480,31 @@ var MGBFill = (function () {
       });
       Object.keys(groups).forEach(function (g) {
         var list = groups[g];
-        if (list.some(function (r) { return r.checked; })) return;
         var labels = list.map(radioLabel);
         var isPayment = labels.some(function (l) { return /paypal|afterpay|zip|klarna|apple pay|google pay|credit|debit/.test(l); });
-        var isDelivery = labels.some(function (l) { return /deliver|shipping|post|courier|express|standard|collect|pick ?up/.test(l); });
+        var isDelivery = !isPayment && labels.some(function (l) { return /deliver|shipping|post|courier|express|standard|collect|pick ?up/.test(l); });
+        var home = function (r) { var l = radioLabel(r); return /home delivery|standard|deliver|shipping|post/.test(l) && !COLLECT_RE.test(l); };
+        var card = function (r) { return /credit|debit|card/.test(radioLabel(r)) && !NOT_CARD_RE.test(radioLabel(r)); };
+        var ship = function (r) { return wantShip && !COLLECT_RE.test(radioLabel(r)) && any(wantShip, radioContext(r)); };
+        var checked = list.find(function (r) { return r.checked; });
         var pick = null;
-        if (isPayment) pick = list.find(function (r) { return /credit|debit|card/.test(radioLabel(r)); });
-        else if (isDelivery && wantCollect) pick = list.find(function (r) { return /collect|pick ?up/.test(radioLabel(r)); });
-        else if (isDelivery) pick = list.find(function (r) { var l = radioLabel(r); return /home delivery|standard|deliver|shipping|post/.test(l) && !/collect|pick ?up|in-?store|click/.test(l); });
-        if (pick) { pick.click(); out.filled.push(isPayment ? 'payment method' : 'delivery method'); }
+        if (!checked) {
+          if (isPayment) pick = list.find(card);
+          else if (isDelivery && wantCollect) pick = list.find(function (r) { return COLLECT_RE.test(radioLabel(r)); });
+          else if (isDelivery) pick = list.find(ship) || list.find(home);
+        } else if (isDelivery && !wantCollect && COLLECT_RE.test(radioLabel(checked))) {
+          pick = list.find(ship) || list.find(home); // the store chose click & collect for you
+        } else if (isDelivery && wantShip && !ship(checked)) {
+          pick = list.find(ship); // a shipping method the flow says to pick (e.g. Standard), when it isn't the one chosen
+        } else if (isPayment && C.payment === 'card' && NOT_CARD_RE.test(radioLabel(checked)) && !card(checked)) {
+          pick = list.find(card); // the store chose PayPal (or the like) for you
+        }
+        if (!pick || pick.checked) return;
+        var key = g + '|' + radioLabel(pick).slice(0, 40);
+        if (checked && (SWITCHED[key] || 0) >= 2) return;
+        if (checked) SWITCHED[key] = (SWITCHED[key] || 0) + 1;
+        pick.click();
+        out.filled.push(isPayment ? 'payment method' : 'delivery method');
       });
       // "I agree to the terms" only — never marketing.
       fields.forEach(function (el) {
@@ -400,6 +519,14 @@ var MGBFill = (function () {
     return out;
   }
 
+  /** The PayPal button: one that says so, or PayPal's own button frame. */
+  function paypalButton() {
+    var b = toArray(document.querySelectorAll('button, a, input[type="submit"], input[type="image"], [role="button"]')).find(function (el) {
+      return isVisible(el) && !inPanel(el) && /paypal/i.test(textOf(el) + ' ' + (el.getAttribute('alt') || '') + ' ' + (el.getAttribute('src') || '') + ' ' + (el.className || ''));
+    });
+    return b || toArray(document.querySelectorAll('iframe')).find(function (f) { return isVisible(f) && /paypal\.com/i.test(f.src || ''); }) || null;
+  }
+
   function isSelected(el) {
     return el.getAttribute('aria-pressed') === 'true' || el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-checked') === 'true'
       || /(^|\s)(is-)?(selected|active|checked)(\s|$)/i.test(el.className || '');
@@ -409,7 +536,10 @@ var MGBFill = (function () {
     return toArray(document.querySelectorAll('button, input[type="submit"], input[type="button"], a, [role="button"], [role="tab"], [role="radio"]')).filter(function (el) {
       return !inPanel(el) && isVisible(el) && textOf(el) && textOf(el).length <= 80;
     }).map(function (el) {
-      return { el: el, text: textOf(el), kind: classifyButton(textOf(el), C), disabled: el.disabled || el.getAttribute('aria-disabled') === 'true' };
+      var kind = classifyButton(textOf(el), C);
+      // A tab or an option ("Pay Now", "Pay Later") is a choice on the page, never the final button.
+      if (kind === 'final' && /^(tab|radio|option|menuitemradio)$/.test(el.getAttribute('role') || '')) kind = null;
+      return { el: el, text: textOf(el), kind: kind, disabled: el.disabled || el.getAttribute('aria-disabled') === 'true' };
     });
   }
 
@@ -441,22 +571,84 @@ var MGBFill = (function () {
     b.textContent = message;
   }
 
-  /** Try a suggestion list after typing into an address-lookup box. */
-  async function useAddressLookup(values, C) {
-    var box = toArray(document.querySelectorAll('input')).find(function (el) { return isVisible(el) && !el.value && classifyField(el, C) === 'addressLookup'; });
-    if (!box || !values.address1) return false;
-    typeInto(box, values.address1 + ', ' + values.suburb + ' ' + values.state + ' ' + values.postcode, 'addressLookup');
+  var SUGGESTIONS = '[role="option"], [role="listbox"] li, .pac-item, [class*="suggest" i] li, [class*="suggest" i] [class*="item" i], [class*="autocomplete" i] li, [class*="address-result" i], [class*="addressResult" i], [id*="listbox" i] li';
+
+  /** The address-lookup box on the page (the one-line "start typing your address" box), or null. */
+  function lookupBox(C) {
+    var fields = toArray(document.querySelectorAll('input')).filter(function (el) { return isVisible(el) && !inPanel(el); });
+    var ctx = { hasParts: addressParts(fields, C) };
+    return fields.find(function (el) { return fieldKind(el, C, ctx) === 'addressLookup'; }) || null;
+  }
+
+  /**
+   * Type your address into an address-lookup box and pick the store's suggestion for it (the one
+   * with your postcode, else your suburb, else the first). try: 0, 1, 2 — the address written a bit
+   * shorter each time (some lookups find nothing for the whole line). Resolves to what happened:
+   * 'picked', 'none' (no suggestions came up) or 'no-box'.
+   */
+  async function useAddressLookup(values, C, attempt) {
+    var box = lookupBox(C);
+    if (!box || !values.address1) return 'no-box';
+    var tries = [values.address1 + ', ' + values.suburb + ' ' + values.state + ' ' + values.postcode, values.address1 + ' ' + values.suburb, values.address1];
+    var query = tries[Math.min(attempt || 0, tries.length - 1)].replace(/\s+/g, ' ').trim();
+    if (box.value) setNative(box, '');
+    typeInto(box, query, 'addressLookup', true); // (still in the box: lookups show their list while it has the focus)
+    box.dispatchEvent(new KeyboardEvent('keyup', { key: query.slice(-1), bubbles: true }));
     var options = [];
-    for (var end = Date.now() + 2500; !options.length && Date.now() < end;) {
+    for (var end = Date.now() + 6000; !options.length && Date.now() < end;) {
       await wait(150);
-      options = toArray(document.querySelectorAll('[role="option"], [role="listbox"] li, .pac-item, [class*="suggestion" i] li, [class*="suggestion" i] [class*="item" i]')).filter(isVisible);
+      options = toArray(document.querySelectorAll(SUGGESTIONS)).filter(function (o) { var t = (o.innerText || '').trim(); return isVisible(o) && !inPanel(o) && t.length >= 5 && t.length < 200; });
     }
-    var want = String(values.postcode || '');
-    var pick = options.find(function (o) { return want && o.innerText.indexOf(want) !== -1; }) || options[0];
-    if (!pick) return false;
+    var has = function (o, s) { return s && (o.innerText || '').toLowerCase().indexOf(String(s).toLowerCase()) !== -1; };
+    var street = String(values.address1 || '').split(/\s+/).slice(0, 2).join(' ');
+    var pick = options.find(function (o) { return has(o, values.postcode) && has(o, street); }) || options.find(function (o) { return has(o, values.postcode); })
+      || options.find(function (o) { return has(o, values.suburb); }) || options[0];
+    if (!pick) return 'none';
+    // (Many lookups take the choice on mouse-down, before the click.)
+    ['mousedown', 'mouseup'].forEach(function (t) { pick.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); });
     pick.click();
-    await wait(500);
-    return true;
+    await wait(700);
+    return 'picked';
+  }
+
+  /** Is this choice already the one chosen? (Its own state only — never a neighbouring option's.) */
+  function isChosen(el) {
+    if (isSelected(el)) return true;
+    var lab = el.matches('label') ? el : el.closest('label');
+    var input = el.matches('input') ? el : el.querySelector('input[type="radio"], input[type="checkbox"]')
+      || (lab && (lab.htmlFor ? document.getElementById(lab.htmlFor) : lab.querySelector('input[type="radio"], input[type="checkbox"]')));
+    return !!(input && input.checked);
+  }
+
+  /**
+   * The flow's next choice to make (C.choose: "Home Delivery", "Credit Card"…), however the store
+   * shows it: a button, a tab, a tile, a radio's label. Matched against the choice's own words, then
+   * the nearest thing to click around them. Null when there's none still to make. chosen: what's
+   * been pressed already (each only once).
+   */
+  function findChoice(C, chosen, pressed) {
+    if (!C.choose || !C.choose.length) return null;
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    var CLICKABLE = 'button, a, label, [role="button"], [role="tab"], [role="radio"], [role="option"], [role="checkbox"], [role="menuitemradio"], [tabindex], [onclick], [class*="option" i], [class*="tile" i]';
+    var fallback = null;
+    for (var n = walker.nextNode(); n; n = walker.nextNode()) {
+      var t = norm(n.nodeValue);
+      if (!t || t.length > 60 || !any(C.choose, t)) continue;
+      var host = n.parentElement;
+      // (Each choice at most 3 times: a store that re-draws it without showing it's chosen.)
+      if (!host || inPanel(host) || !isVisible(host) || (chosen[t] || 0) >= 3) continue;
+      var el = host.closest(CLICKABLE);
+      var clickable = !!el && norm(textOf(el)).length <= 160;
+      if (!clickable) el = host;
+      if ((pressed && pressed.has(el)) || el.disabled || el.getAttribute('aria-disabled') === 'true' || isChosen(el)) continue;
+      var radio = el.matches('label') ? (el.htmlFor ? document.getElementById(el.htmlFor) : el.querySelector('input[type="radio"], input[type="checkbox"]')) : null;
+      var hit = { el: radio || el, text: t, from: el };
+      // The same words can show up where there's nothing to press (an order summary's "Home Delivery $9"):
+      // something to click first, plain words only if there's nothing else.
+      if (clickable) return hit;
+      if (!fallback) fallback = hit;
+    }
+    return fallback;
   }
 
   /**
@@ -471,8 +663,11 @@ var MGBFill = (function () {
     var done = C.done || /confirmation|thank-?you|order-?(complete|received|success)/i;
     var clicked = {};
     var chosen = {};
-    var lookupTried = false;
+    var pressed = new WeakSet();
+    var lookups = 0;
+    var picked = false;
     var manualTried = false;
+    var finalAt = 0;
     var idle = 0;
     var deadline = Date.now() + 4 * 60 * 1000;
     setStatus('Filling in checkout…');
@@ -491,18 +686,31 @@ var MGBFill = (function () {
       var list = buttons(C);
       var finals = list.filter(function (b) { return b.kind === 'final'; });
       var manual = list.find(function (b) { return b.kind === 'manual'; });
-      var choice = list.find(function (b) { return b.kind === 'choose' && !b.disabled && !chosen[norm(b.text)] && !isSelected(b.el); });
+      var choice = list.find(function (b) { return b.kind === 'choose' && !b.disabled && !chosen[norm(b.text)] && !isSelected(b.el); }) || findChoice(C, chosen, pressed);
       var steps = list.filter(function (b) { return (b.kind === 'step' || b.kind === 'guest') && !b.disabled; });
       var fresh = steps.filter(function (b) { return !clicked[norm(b.text)]; });
 
-      if (!fill.kinds.address1 && fill.kinds.addressLookup) {
+      // A one-line address box with suggestions: "Enter address manually" if the store has it, else
+      // type it and pick the suggestion (up to 3 tries, written a little shorter each time).
+      // (A box that already has your address — from your store account — is left as it is.)
+      var lbox = !fill.kinds.address1 && fill.kinds.addressLookup && !picked ? lookupBox(C) : null;
+      if (lbox && (lookups > 0 || !lbox.value)) {
         if (manual && !manualTried) { manualTried = true; manual.el.click(); await wait(300); continue; }
-        if (!manual && !lookupTried) { lookupTried = true; setStatus('Looking up your address…'); await useAddressLookup(opts.values, C); continue; }
+        if (!manual && lookups < 3) {
+          setStatus('Looking up your address…');
+          var how = await useAddressLookup(opts.values, C, lookups);
+          lookups += 1;
+          if (how === 'picked') { picked = true; report('step', 'Picked your address from the store\'s suggestions'); }
+          else if (lookups === 3) report('error', 'The store\'s address finder didn\'t suggest your address — pick it yourself');
+          idle = 0;
+          continue;
+        }
       }
 
       // The store's own choices first (e.g. "Home delivery"), each once.
       if (choice) {
-        chosen[norm(choice.text)] = 1;
+        chosen[norm(choice.text)] = (chosen[norm(choice.text)] || 0) + 1;
+        pressed.add(choice.from || choice.el);
         var beforeChoice = signature();
         setStatus('Choosing "' + choice.text + '"…');
         report('step', 'Chose "' + choice.text + '"');
@@ -510,6 +718,15 @@ var MGBFill = (function () {
         await waitForChange(beforeChoice, 4000);
         idle = 0;
         continue;
+      }
+
+      // Steps that need the card in first (EB Games' "Done" under its card boxes): not before it is.
+      if (C.afterCard && C.afterCard.length && opts.cardReady) {
+        var early = fresh.filter(function (b) { return any(C.afterCard, norm(b.text)); });
+        if (early.length && !(await opts.cardReady(true))) {
+          fresh = fresh.filter(function (b) { return early.indexOf(b) === -1; });
+          if (!fresh.length) { setStatus('Waiting for your card to go in…'); idle += 1; await wait(500); continue; }
+        }
       }
 
       var step = fresh.find(function (b) { return b.kind === 'guest'; }) || fresh[0];
@@ -524,7 +741,21 @@ var MGBFill = (function () {
         continue;
       }
 
+      // A store that only takes PayPal (C.payment 'paypal'): its PayPal button (often in PayPal's own frame) is where it stops.
+      if (!finals.length && C.payment === 'paypal') {
+        var pp = paypalButton();
+        if (pp) finals = [{ el: pp, text: textOf(pp) && textOf(pp).length < 60 ? textOf(pp) : 'Checkout with PayPal', kind: 'final', disabled: false }];
+      }
+
       if (finals.length) {
+        // The final button can show before the last choices do (a payment choice that only comes up
+        // once the address is in): with the card still to go in, keep making choices for a while.
+        if (!finalAt) finalAt = Date.now();
+        if (C.payment === 'card' && opts.cardReady && Date.now() - finalAt < 12000 && !(await opts.cardReady())) {
+          setStatus('Waiting for your card to go in…');
+          await wait(400);
+          continue;
+        }
         await wait(200); // let the last fields settle
         fillFields(document, opts.values, { flow: C });
         var fin = finals.find(function (b) { return !b.disabled; }) || finals[0];
@@ -570,6 +801,8 @@ var MGBFill = (function () {
     requestFocus: requestFocus,
     classifyButton: classifyButton,
     classifyField: classifyField,
+    fieldKind: fieldKind,
+    findChoice: findChoice,
     fieldValues: fieldValues,
     fillFields: fillFields,
     assist: assist,

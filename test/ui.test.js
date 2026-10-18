@@ -880,9 +880,10 @@ test('Auto-checkout run history in pages; the card backup on Checkout details', 
     env.app.db.run(`INSERT INTO aco_runs (id, user_id, item_id, store, sku, name, url, price, max_price, mode, trigger, status, reason, message, steps, created_at, updated_at)
       VALUES (:id, :u, :i, 'kmart', :sku, :name, '', 10, 20, 'place', 'test', 'skipped', 'over_max', '', '[]', :t, :t)`, { id: `acr_page${i}`, u: owner.id, i: it.id, sku: it.sku, name: `Paged run ${i}`, t: t - (13 - i) * 1000 });
   }
-  await page.goto(`${env.url}/app#aco`);
-  await page.waitForSelector('#aco-runs li.aco-run');
   const runs = env.app.db.get('SELECT COUNT(*) AS n FROM aco_runs WHERE user_id = :u', { u: owner.id }).n;
+  await page.goto(`${env.url}/app#aco`);
+  // (The dashboard's already open: the list it had shows first, then the one with these runs.)
+  await page.waitForFunction((n) => new RegExp(`of ${n}\\b`).test(document.querySelector('#aco-runs-pager')?.textContent || ''), runs);
   assert.equal(await page.locator('#aco-runs li.aco-run').count(), 10, '10 to a page, no endless list');
   assert.match(await page.textContent('#aco-runs-pager'), new RegExp(`1–10 of ${runs}`));
   assert.match(await page.textContent('#aco-runs li.aco-run:first-child'), /Paged run 13/);

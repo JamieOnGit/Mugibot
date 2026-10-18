@@ -1,8 +1,14 @@
-// Amazon AU — DRAFT. Restock checks work from the ASIN; for checkout Amazon
-// uses the address and card saved in your Amazon account (you must be signed in),
-// so Mugibot adds to cart and opens checkout. ⚡ Buy never presses "Buy Now" or
-// "Place your order"; Auto-checkout presses "Place your order" once, after checking
-// the order total against your limits (docs/AUTO-CHECKOUT.md).
+// Amazon AU — as Amazon's real checkout goes (a member's walk-through, Oct 2026), tested on the
+// Amazon-style dummy store. Amazon only sells to signed-in customers (no guest checkout): stay
+// signed in at Amazon in the browser with the extension — the panel and your dashboard say so
+// when you're not, and Auto-checkout doesn't start while you're signed out.
+//
+// Product page: "Buy Now" (straight to checkout; "Add to Cart" only if there's no Buy Now) → if
+//   Amazon offers "30 days free Prime" on the way: "No thanks" → checkout, with the address and
+//   card saved in your Amazon account → STOP at "Place your order" (⚡ Buy). Auto-checkout presses
+//   it once, after checking the order total against your limits (docs/AUTO-CHECKOUT.md). Amazon's
+//   quick checkout (a window over the product page, sometimes shown instead) is filled in the same
+//   way, in its frame (checkout.frames).
 
 export default {
   id: 'amazon',
@@ -11,8 +17,10 @@ export default {
   hosts: ['www.amazon.com.au'],
   // Where this retailer's copy lives in the dummy store (npm run mockstore): its search page, for the sweeps.
   devPath: '/amazon',
-  flowStatus: 'draft',
-  flowNote: 'Adds to cart and opens checkout; Amazon fills in your saved address and card. Not tested yet.',
+  // The dummy store's copy of Amazon's quick checkout frame.
+  devFrames: [/\/amazon\/checkout\/turbo/],
+  flowStatus: 'beta',
+  flowNote: 'Buy Now → (no thanks to Prime) → your Amazon address and card → Place your order. You must be signed in to Amazon in this browser.',
   skuLabel: 'ASIN',
   skuHint: 'The 10-character code after /dp/ in the link',
   skuFromPath: /\/(?:dp|gp\/product)\/([A-Z0-9]{10})/,
@@ -39,13 +47,18 @@ export default {
   monitor: { server: true, browser: true, hostGapSeconds: 10 },
   hints: { availabilityRe: /(^|[\s_-])(availability|outOfStock)([\s_-]|$)/i },
   flow: {
-    product: { add: [/^add to cart$/i], waitMs: 12000 },
+    // "Buy Now" first (straight to checkout); "Add to Cart" where there's none.
+    product: { add: [/^add to cart$/i], buyNow: [/^buy now$/i], waitMs: 12000 },
     added: { checkout: [/\bproceed to (checkout|buy)\b/i], viewBag: [/^go to cart$/i] },
     bag: { path: /\/(gp\/cart|cart)/i, checkout: [/\bproceed to (checkout|buy)\b/i] },
     checkout: {
       path: /\/(gp\/buy|checkout)\//i,
+      // Amazon's "Try Prime free for 30 days" on the way (a page or a pop-up): "No thanks".
+      choose: [/^no,? thanks\.?$/i, /^no thanks,? continue/i],
       steps: [/^use this address$/i, /^use this payment method$/i, /^continue$/i],
       final: [/\bplace your order\b/i, /\bbuy now\b/i],
+      // Amazon's quick checkout, in a window over the product page (sometimes shown instead).
+      frames: [/^https:\/\/www\.amazon\.com\.au\/checkout\/turbo/i],
       delivery: 'home',
       // Paid with the card saved in your Amazon account: nothing to type in.
       payment: 'account',

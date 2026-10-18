@@ -50,6 +50,7 @@ export const REASONS = {
   human_check: 'The store asked to check you are human',
   needs_details: 'Checkout needed something Mugibot could not fill in',
   payment_frame: "This store's payment form can't be pressed by Mugibot",
+  paypal_only: 'This store only takes PayPal: you pay there yourself',
   unconfirmed: "The final button was pressed, but no order confirmation showed",
   wrong_item: "The checkout wasn't for this item alone",
   stopped: 'You stopped it',
@@ -195,7 +196,7 @@ export class Aco {
     if (s.mode === 'place' && day.orders >= s.perDay) return skip('daily_orders', `${day.orders} of ${s.perDay} today.`);
     if (s.mode === 'place' && day.spent + (price ?? item.maxPrice) > s.spendPerDay) return skip('daily_spend', `${money(day.spent)} of ${money(s.spendPerDay)} spent today.`);
     if (s.signedInOnly && this.loginStatus(userId, item.store) !== 'in') return skip('signed_out', `Sign in at ${r.name} in the browser with the extension.`);
-    // Stores that only check out signed in (Amazon, Premium Bandai): not while you're seen signed out there.
+    // Stores that only check out signed in (Amazon): not while you're seen signed out there.
     if (r.account && r.account.required && this.loginStatus(userId, item.store) === 'out') return skip('signed_out', `${r.name} only checks out signed in — sign in there in the browser with the extension.`);
     if (!this.repo.listDevices(userId).length) return skip('no_browser', 'Connect the extension in the browser you keep open.');
 

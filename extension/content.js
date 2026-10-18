@@ -59,11 +59,15 @@
 
   // The store login monitor (logins.js): are you signed in here? Read from the page as it settles
   // (headers often fill in a moment after the page loads); nothing is clicked.
+  // A store that only sells to signed-in customers (Amazon: no guest checkout) says so in the panel.
+  const signedOutHere = () => !!(retailer.account && retailer.account.required && globalThis.MGBLogins && MGBLogins.fromPage(document, retailer.account.check) === 'out');
+  const SIGN_IN_FIRST = `${retailer.name} only sells to signed-in customers — sign in to ${retailer.name} in this browser first, then ⚡ Buy again.`;
   if (retailer.account && globalThis.MGBLogins) {
     let said = null;
     const look = () => {
       const status = MGBLogins.fromPage(document, retailer.account.check);
       if (status && status !== said) { said = status; ask({ type: 'login', store: retailer.id, status }); }
+      if (status === 'out' && retailer.account.required && !busy) { try { panel.setNote(SIGN_IN_FIRST); } catch { /* (the panel isn't up yet) */ } }
     };
     for (const ms of [1200, 4000, 9000]) setTimeout(look, ms);
   }
@@ -88,60 +92,34 @@
   // The run in this tab (from its ⚡ Buy code, or — on later pages — from the tab's pass in the extension).
   let aco = null;
   const acoReport = (status, reason, message, total) => ask({ type: 'acoReport', status, reason: reason || '', message: message || '', total: typeof total === 'number' ? total : undefined });
-  const acoWhy = (reason, message) => { if (aco) acoReport('failed', reason, message || null); };
+  // Why a run stopped short of checkout (core.js): failed, unless it's something for you to do (sign in).
+  const acoWhy = (reason, message, status) => { if (aco) acoReport(status || 'failed', reason, message || null); };
 
-  const CONFIRM_RE = /thank you for (your )?(order|purchase|shopping)|order (number|no\.?|#)\s*[:#]?\s*[A-Z0-9-]{4,}|your order (has been|is) (placed|confirmed|received)|order (confirmed|received|complete)\b/i;
-  const DECLINE_RE = /declined|payment (failed|unsuccessful|was not (successful|processed)|could not be processed|didn.?t go through)|card (was|has been) (declined|rejected)|unable to (process|authori[sz]e) (your )?(payment|card)|insufficient funds|transaction (failed|was declined)|card number is (invalid|incorrect)|(expired|invalid) card/i;
-  const BANK_RE = /3-?d ?secure|verify (it.?s you|your (identity|payment|purchase))|authenticat(e|ion)( your)? (payment|purchase)|one-?time (pass(code|word)|code)|enter the code (we|sent)|confirm (the )?payment in your (bank|banking) app|verified by visa|id check/i;
-  const BANK_FRAME = /3ds|\/acs|acs\.|challenge|authenticat|cardinalcommerce|securecode|threeds|3dsecure/i;
-  const HUMAN_FRAME = /recaptcha|hcaptcha|challenges\.cloudflare|turnstile|captcha|arkoselabs|funcaptcha/i;
-  const AMOUNT_RE = /(?:AUD\s?\$?|A\$|\$)\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/g;
-  const OURS = '#mugibot-qc, #mugibot-banner';
+  // (The checks themselves: checks.js, shared with checkouts that run in a frame.)
+  const orderTotal = () => MGBChecks.orderTotal(document);
+  const pageError = () => MGBChecks.pageError(document);
+  const outcome = () => MGBChecks.outcome(document, checkoutFlow && checkoutFlow.done, retailer.name);
+  const cardBoxesOnPage = () => [...document.querySelectorAll('input, select')]
+    .filter((el) => /^card(Number|Expiry|ExpMonth|Cvc)$/.test(MGBFill.classifyField(el, checkoutFlow) || '') && MGBFill.isVisible(el));
 
-  const visibleText = (el) => (el && MGBFill.isVisible(el) && !el.closest(OURS) ? (el.innerText || '').replace(/\s+/g, ' ').trim() : '');
-  const frameSrcs = () => [...document.querySelectorAll('iframe')].filter((f) => MGBFill.isVisible(f)).map((f) => f.src || f.getAttribute('src') || '');
-
-  /** The biggest amount of money shown on the checkout page: at least the order total (each line is at most that). */
-  function orderTotal() {
-    let best = null;
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const el = n.parentElement;
-      if (!el || el.closest(`${OURS}, script, style, noscript, [class*="carousel" i], [class*="recommend" i], [class*="upsell" i]`)) continue;
-      const t = n.nodeValue;
-      if (!/\d/.test(t) || !/\$/.test(t)) continue;
-      if (!MGBFill.isVisible(el)) continue;
-      for (const m of t.matchAll(AMOUNT_RE)) {
-        const v = parseFloat(m[1].replace(/,/g, ''));
-        if (Number.isFinite(v) && (best === null || v > best)) best = v;
-      }
+  /**
+   * Is the card in? On the page, in the payment provider's boxes, or — where neither shows any card
+   * boxes — a card the store or its wallet already has for you (Shop Pay's "•••• 4242").
+   */
+  async function cardReady(whole) {
+    const boxes = cardBoxesOnPage();
+    const frames = (await ask({ type: 'cardFrames' })) || [];
+    // whole: every card box done (before a "Done" button under them), not just the first one in.
+    if (whole) {
+      const pageDone = boxes.length > 0 && boxes.every((el) => el.value || !/^card(Number|Expiry|ExpMonth)$/.test(MGBFill.classifyField(el, checkoutFlow) || ''));
+      const seen = frames.filter((f) => f.seen > 0);
+      if (seen.length) return seen.every((f) => f.done) && (!boxes.length || pageDone);
+      if (boxes.length) return pageDone;
+      return MGBChecks.savedCardShown(document, checkoutFlow, false);
     }
-    return best;
-  }
-
-  /** What the page says is wrong (an error message, or a box marked invalid), or ''. */
-  function pageError() {
-    for (const el of document.querySelectorAll('[role="alert"], .error, .err, [class*="error" i], [class*="invalid" i]')) {
-      if (el.matches('input, select, textarea, form, body')) continue;
-      const t = visibleText(el);
-      if (t && t.length < 300 && /[a-z]/i.test(t)) return t.slice(0, 160);
-    }
-    const bad = [...document.querySelectorAll('[aria-invalid="true"]')].find((el) => MGBFill.isVisible(el));
-    return bad ? `"${(bad.getAttribute('aria-label') || bad.name || bad.id || 'a field').slice(0, 40)}" needs attention` : '';
-  }
-
-  function outcome() {
-    const done = (checkoutFlow && checkoutFlow.done) || /confirmation|thank-?you|order-?(complete|received|success)/i;
-    if (done.test(location.pathname)) return { status: 'placed' };
-    const text = (document.body.innerText || '').slice(0, 20000);
-    if (CONFIRM_RE.test(text)) return { status: 'placed' };
-    const frames = frameSrcs();
-    if (frames.some((f) => HUMAN_FRAME.test(f))) return { status: 'needs_you', reason: 'human_check', message: `${retailer.name} wants to check you're human — finish it yourself in this tab (Mugibot never gets past these).` };
-    if (frames.some((f) => BANK_FRAME.test(f)) || BANK_RE.test(text)) return { status: 'needs_you', reason: 'bank_check', message: 'Your bank wants you to confirm the payment — finish it in this tab.' };
-    const err = pageError();
-    if (err && DECLINE_RE.test(err)) return { status: 'failed', reason: 'card_declined', message: `${retailer.name} said: ${err}` };
-    if (DECLINE_RE.test(text.slice(0, 4000))) return { status: 'failed', reason: 'card_declined', message: `${retailer.name} declined the payment.` };
-    return null;
+    if (boxes.some((el) => el.value && /^card(Number|Expiry|ExpMonth)$/.test(MGBFill.classifyField(el, checkoutFlow) || ''))) return true;
+    if (frames.some((f) => f.filled > 0)) return true;
+    return !frames.some((f) => f.seen > 0) && MGBChecks.savedCardShown(document, checkoutFlow, boxes.length > 0);
   }
 
   /**
@@ -170,10 +148,15 @@
   async function watchOutcome(run, total) {
     const until = Date.now() + 45000;
     let said = null;
+    let errSince = 0;
     while (Date.now() < until) {
       await new Promise((r) => setTimeout(r, 400));
-      const o = outcome();
+      let o = outcome();
       if (!o && await pressReview(run)) continue;
+      // The store refused the press (a box it says is wrong), and it's still saying so a few seconds on: for you.
+      const err = o ? '' : pageError();
+      errSince = err ? errSince || Date.now() : 0;
+      if (!o && err && Date.now() - errSince > 4000) o = { status: 'needs_you', reason: 'needs_details', message: `${retailer.name} said: "${err}" — finish it yourself in this tab.` };
       if (!o || (said && said === o.status)) continue;
       said = o.status;
       if (o.status === 'placed') {
@@ -199,14 +182,10 @@
     await acoReport(status, reason, message, total);
   }
 
-  /** The card is in: on the page, or in the payment provider's boxes (up to 15 s for those). */
+  /** The card is in — every box of it: on the page, or in the payment provider's boxes (up to 15 s for those). */
   async function cardIn() {
     for (let i = 0; i < 15; i++) {
-      const onPage = [...document.querySelectorAll('input, select')]
-        .some((el) => /^card(Number|Expiry|ExpMonth)$/.test(MGBFill.classifyField(el, checkoutFlow) || '') && MGBFill.isVisible(el) && el.value);
-      if (onPage) return true;
-      const frames = (await ask({ type: 'cardFrames' })) || [];
-      if (frames.some((f) => f.filled > 0)) return true;
+      if (await cardReady(true)) return true;
       await new Promise((r) => setTimeout(r, 1000));
     }
     return false;
@@ -214,6 +193,10 @@
 
   /** At the final button of an Auto-checkout run: check the order, then press it — once. */
   async function acoFinish(run, fin, data) {
+    // A store that only takes PayPal at checkout (The Games Cube): Auto-checkout can't pay there.
+    if (checkoutFlow && checkoutFlow.payment === 'paypal') {
+      return acoStop('needs_you', 'paypal_only', `${retailer.name} only takes PayPal at checkout — your details are in; press "${fin.text}" and pay with PayPal yourself.`, fin);
+    }
     if (run.mode !== 'place') {
       fin.el.style.setProperty('outline', '4px solid #22c55e', 'important');
       try { fin.el.scrollIntoView({ block: 'center' }); } catch { /* ignore */ }
@@ -222,13 +205,18 @@
       return;
     }
     if (run.placing) return; // pressed already in this run (the page came back): never twice
-    // (Stores that pay with the card saved in your account there — Amazon's — need none from the extension.)
+    // (Stores that pay with the card saved in your account there — Amazon's — need none from the extension;
+    // nor does a card the store or Shop Pay shows it already has for you.)
     const ownCard = !checkoutFlow || checkoutFlow.payment !== 'account';
-    if (ownCard && !data.card) return acoStop('needs_you', 'card_missing', 'No card is saved in the extension — add it (icon → Card settings) and finish this yourself.', fin);
+    const saved = ownCard && !cardBoxesOnPage().length && MGBChecks.savedCardShown(document, checkoutFlow, false)
+      && !((await ask({ type: 'cardFrames' })) || []).some((f) => f.seen > 0);
+    if (ownCard && !saved && !data.card) return acoStop('needs_you', 'card_missing', 'No card is saved in the extension — add it (icon → Card settings) and finish this yourself.', fin);
     if (ownCard && checkoutFlow && checkoutFlow.payment === 'card' && !(await cardIn())) return acoStop('needs_you', 'card_not_filled', "Your card didn't go into the store's card boxes — type it in and press the button yourself.", fin);
     await new Promise((r) => setTimeout(r, 400)); // the page's own checks on the last boxes
     const err = pageError();
     if (err) return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);
+    const missing = MGBChecks.missingRequired(document);
+    if (missing) return acoStop('needs_you', 'needs_details', `"${missing}" still needs filling in — fill it and press the button yourself.`, fin);
     const total = orderTotal();
     if (total === null) return acoStop('needs_you', 'no_total', "Couldn't read the order total to check it against your limit — check it and press the button yourself.", fin);
     if (total > run.maxTotal) return acoStop('needs_you', 'over_limit', `The total, $${total.toFixed(2)}, is over your limit of $${run.maxTotal.toFixed(2)} — check it and press the button yourself if it's right.`, fin, total);
@@ -257,16 +245,30 @@
         panel.setStatus('Couldn\'t get your delivery details from your account — fill in checkout yourself.');
         return;
       }
+      if (data.aco && data.aco.placing) {
+        // Back after the final button was pressed (here, or in the store's checkout frame): what happened,
+        // without pressing it again.
+        aco = data.aco;
+        const o = outcome();
+        if (o) await acoReport(o.status, o.reason, o.message);
+        if (o && o.status === 'placed') { assistFlag.off(); ask({ type: 'endFill' }); }
+        else if (!o) watchOutcome(data.aco, null);
+        return;
+      }
       if (checkoutFlow && checkoutFlow.inFrame) {
-        // The whole checkout is in a frame (Global-e's): frame.js fills your details and card in there.
-        panel.setStatus(`${retailer.name}'s checkout is in the form on this page: your details and card go in there as each step shows them. Check them and press the final button yourself.`);
-        report('ready', `Checkout open at ${retailer.name} — your details and card go into its checkout form`, null);
-        if (data.aco) {
-          // (Auto-checkout can't press a button inside another site's form: it's left for you.)
-          aco = data.aco;
+        // The whole checkout is in a frame (Global-e's, for Premium Bandai): frame.js runs it in there —
+        // your details, its choices, your card and (an Auto-checkout run) its final button, after the
+        // same checks as here. This page only shows how it's going.
+        if (data.aco) aco = data.aco;
+        if (data.aco && !(checkoutFlow.frames && checkoutFlow.frames.length)) {
+          // (A store whose checkout frame Mugibot doesn't know the address of: left for you.)
           if (data.aco.mode === 'place') acoReport('needs_you', 'payment_frame', `${retailer.name}'s checkout is in a payment form Mugibot can't press — your details are going in; check them and press the final button yourself.`);
           else acoReport('ready', '', `${retailer.name}'s checkout is open with your details going in — press the final button yourself.`);
+        } else if (data.aco) {
+          await acoReport('checkout', '', `At ${retailer.name}'s checkout — filling it in`);
         }
+        panel.setStatus(`${retailer.name}'s checkout is in the form on this page: your details and card go in there as each step shows them.`);
+        report('step', `Checkout open at ${retailer.name} — your details and card go into its checkout form`, null);
         if (data.card && checkoutFlow.payment === 'card') checkCard();
         return;
       }
@@ -293,6 +295,7 @@
         isActive: assistFlag.active,
         auto: !!run,
         onFinal: (f) => { fin = f; },
+        cardReady: data.card ? cardReady : null,
       });
       if (result === 'final' && run && fin) {
         await acoFinish(run, fin, data);
@@ -317,6 +320,8 @@
     for (let i = 0; i < 20; i++) {
       if (!assistFlag.active()) return;
       if (onPage()) return;
+      // (A card the store or Shop Pay already has for you, and no card boxes: nothing to type.)
+      if (!cardBoxesOnPage().length && MGBChecks.savedCardShown(document, checkoutFlow, false) && !((await ask({ type: 'cardFrames' })) || []).some((f) => f.seen > 0)) return;
       const frames = (await ask({ type: 'cardFrames' })) || [];
       if (frames.some((f) => f.filled > 0)) return;
       await new Promise((r) => setTimeout(r, 1000));
@@ -362,6 +367,8 @@
       const product = extra.product || MGBQuick.productForPage(items, retailer) || (flow ? items.find((p) => p.sku === flow.sku) : null) || null;
       const result = await MGBQuick.run({ fresh, retailer, product, products: items, store, setStatus: panel.setStatus, report, probe, why: acoWhy, ...extra });
       if (result === 'checkout') atCheckout();
+      // (The store's quick checkout, in a frame on this page: frame.js fills it in and says how it goes.)
+      if (result === 'checkout-frame') panel.setStatus(`At ${retailer.name}'s checkout — filling it in…`);
     } catch {
       store.clear();
       panel.setStatus('Interrupted — please continue yourself.');
@@ -387,11 +394,13 @@
       if (ok) assistFlag.on(item && item.profileId);
       go(true);
     },
-    onStop: () => {
+    onStop: async () => {
       store.clear();
       assistFlag.off();
       panel.setStatus('Stopped. You can continue yourself.');
-      if (aco && !aco.placing) acoReport('failed', 'stopped', 'You stopped it');
+      if (aco && !aco.placing) await acoReport('failed', 'stopped', 'You stopped it');
+      // (A checkout running in a frame on this page stops too: this tab's checkout pass is gone.)
+      if (checkoutFlow && checkoutFlow.inFrame) ask({ type: 'endFill' });
     },
   });
 
@@ -409,6 +418,14 @@
         acoReport('needs_you', 'wrong_item', `Your ${retailer.name} bag already had ${inBag} item${inBag === 1 ? '' : 's'} in it`);
         return;
       }
+      // Signed out at a store that only sells signed in: say so, rather than run into its sign-in page.
+      if (signedOutHere()) {
+        panel.setNote(SIGN_IN_FIRST);
+        panel.setStatus('Sign in first — nothing was added.');
+        report('error', `Signed out at ${retailer.name}: sign in there first (it doesn't sell to guests)`, product);
+        if (aco) acoReport('needs_you', 'signed_out', `You're signed out at ${retailer.name}, and it only sells to signed-in customers — sign in there, then try again.`);
+        return;
+      }
       assistFlag.on(claim.profileId);
       panel.setNote(aco ? `🤖 Auto-checkout${aco.mode === 'place' ? ' — places the order within your limits' : ' — stops at the final button for you'}` : 'Started from ⚡ Buy');
       // The buy box can take a few seconds to appear on a fresh page load.
@@ -421,6 +438,11 @@
         : claim === null || (claim && claim.status === 0) ? 'Couldn\'t reach your account to confirm the ⚡ Buy — check your connection.'
           : 'That ⚡ Buy link has expired or belongs to another account — press ⚡ Buy again.');
   }
+
+  // A checkout running in a frame on this page (frame.js) says how it's going here.
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === 'frameStatus' && typeof msg.text === 'string' && assistFlag.active()) panel.setStatus(msg.text.slice(0, 300));
+  });
 
   // Carry on where we left off after the store changed page (an Auto-checkout run: still this tab's).
   if (store.read() || assistFlag.active()) aco = await ask({ type: 'acoInfo' });

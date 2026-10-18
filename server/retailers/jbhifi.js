@@ -1,11 +1,14 @@
 // JB Hi-Fi — BETA. A Shopify store: restock checks use Shopify's product JSON
-// (fast and light), and checkout is Shopify's one-page checkout. Tested
-// against the Shopify-style dummy store, not yet on jbhifi.com.au.
+// (fast and light), and checkout is Shopify's one-page checkout. Its address part
+// works on jbhifi.com.au (a member's walk-through, Oct 2026), signed in or not; the
+// card goes into Shopify's card fields — card number, expiration date (MM/YY),
+// security code and name on card, each in a frame of its own from
+// checkout.pci.shopifyinc.com (PAYMENT_HOSTS) — tested on the Shopify-style dummy store.
 //
-// ⚡ Buy: Shopify's own cart link (/cart/<variant>:1) — straight into the one-page
-//   checkout with the product in the cart (contact, delivery address, shipping
-//   method, card frame) → STOP at "Pay now". (From the product page by hand:
-//   "Add to cart" → cart → "Check out".)
+// ⚡ Buy: Shopify's own cart link (/cart/<variant>:1, one of it) — straight into the
+//   one-page checkout with the product in the cart (contact, delivery address,
+//   shipping method, card frames) → STOP at "Pay now". (From the product page by
+//   hand: "Add to cart" → cart → "Check out".)
 
 export default {
   id: 'jbhifi',
@@ -15,7 +18,7 @@ export default {
   devPath: '/jbhifi',
   platform: 'shopify',
   flowStatus: 'beta',
-  flowNote: 'Shopify checkout. Tested on the Shopify-style dummy store only.',
+  flowNote: 'Shopify checkout: straight in with its cart link, your details and card in, stops at "Pay now". Card boxes tested on the Shopify-style dummy store.',
   skuLabel: 'Product handle',
   skuHint: 'The part after /products/ in the link',
   skuFromPath: /\/products\/([^/?#.]+)/,
