@@ -263,7 +263,8 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
       h('span', { class: 'ic', 'aria-hidden': 'true' }, '!'),
       h('div', { class: 'tx' }, h('b', {}, `${list} ${names.length === 1 ? 'needs' : 'need'} attention.`), ' ',
         L.admin ? 'Each store below says what\'s wrong. Reset starts one again (gently), or all of them at once.' : 'Mugibot keeps trying, waiting a little longer each time.'),
-      L.admin ? h('button', { class: 'btn small primary', type: 'button', onclick: (e) => resetStore(null, e.currentTarget) }, '↻ Reset all') : null,
+      // (Members: no button — and nothing appended, which append() would write as "null".)
+      ...(L.admin ? [h('button', { class: 'btn small primary', type: 'button', onclick: (e) => resetStore(null, e.currentTarget) }, '↻ Reset all')] : []),
     );
   }
 

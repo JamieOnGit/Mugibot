@@ -20,11 +20,10 @@
 // would otherwise buy everything that matches).
 
 import crypto from 'node:crypto';
-import { CATEGORIES } from '../catalog.js';
+import { CATEGORIES, linkName, productName } from '../catalog.js';
 import { newId } from '../crypto.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { bad, bool, httpUrl, item as checkItem, num, str } from '../schema.js';
-import { slugWords } from './extract.js';
 import { mentions, norm, parseGeneric, parseShopifyProducts, parseShopifySuggest } from './listing.js';
 import { MonitorAdmin } from './manage.js';
 import { publicError } from './public.js';
@@ -66,11 +65,7 @@ export function otherSku(url) {
 }
 
 /** A name from a product link ("…/products/xbox-series-x-console" → "Xbox Series X Console"). */
-export function nameFromLink(url) {
-  let p = '';
-  try { p = new URL(url).pathname; } catch { return ''; }
-  return slugWords(p).replace(/\b[a-z]/g, (c) => c.toUpperCase()).slice(0, 120);
-}
+export const nameFromLink = linkName;
 
 function toWatch(r) {
   return r && {
@@ -287,7 +282,7 @@ export class Drops {
   }
 
   onSale(w, p) {
-    this.repo.addEvent(w.userId, { type: 'aco', level: 'info', message: `Drop watch: ${p.name || p.sku} was on sale already when the watch first looked, so it isn't armed — ⚡ Buy it yourself if you want it`, name: p.name || null, sku: p.sku, url: p.url || null });
+    this.repo.addEvent(w.userId, { type: 'aco', level: 'info', message: `Drop watch: ${productName(p)} was on sale already when the watch first looked, so it isn't armed — ⚡ Buy it yourself if you want it`, name: p.name || null, sku: p.sku, url: p.url || null });
   }
 
   /** Someone's watchlist is full: said once a day. */
@@ -331,7 +326,7 @@ export class Drops {
       if (this.repo.countItems(user.id) >= this.cfg.limits.items) { this.full(w); return null; }
       arm = this.armOf(w, p.store, p.url, p.store === 'other' ? null : status, baseline);
       try {
-        item = this.repo.addItem(user.id, checkItem({ url: p.url, sku: p.sku, name: p.name || p.sku, maxPrice: arm ? w.maxPrice : null, aco: arm === 'armed', monitor: true }, { retailers: this.retailers }));
+        item = this.repo.addItem(user.id, checkItem({ url: p.url, sku: p.sku, name: productName(p), maxPrice: arm ? w.maxPrice : null, aco: arm === 'armed', monitor: true }, { retailers: this.retailers }));
       } catch (e) {
         this.cfg.log('[drops]', e.message);
         return null;
@@ -826,7 +821,7 @@ export class Drops {
       const p = this.catalog.productById(f.productId);
       if (!p) return null;
       return {
-        id: p.id, productId: p.id, name: p.name || p.sku, url: p.url, image: p.image, status: p.status, price: p.price,
+        id: p.id, productId: p.id, name: productName(p), url: p.url, image: p.image, status: p.status, price: p.price,
         store: p.store, sku: p.sku, storeName: this.retailers.siteName(p.store, p.url), canBuy: this.retailers.canBuy(p.store), arm: mine ? f.arm || '' : '',
       };
     }

@@ -1247,7 +1247,8 @@ ${body}
       const hits = listed.filter((x) => q.every((w) => x.name.toLowerCase().includes(w)));
       return json(200, { resources: { results: { products: hits.map((x) => ({ handle: x.handle, title: x.name, url: `/acme/products/${x.handle}`, price: x.price.toFixed(2), available: x.status === 'in_stock' || x.status === 'preorder' })) } } });
     }
-    const m = sub.match(/^\/products\/([a-z0-9-]+)(\.js)?$/);
+    // (Its pages under a Microsoft-style link too: /en-au/d/<name>/<code>.)
+    const m = sub.match(/^\/products\/([a-z0-9-]+)(\.js)?$/) || sub.match(/^\/(?:[a-z]{2}-[a-z]{2}\/)?d\/([a-z0-9-]+)\/[a-z0-9]+()$/);
     const x = m && A.products.find((y) => y.handle === m[1]);
     if (!x || !x.listed) return html(404, shell('Not found', '<h1>Page not found</h1>'));
     if (m[2]) {

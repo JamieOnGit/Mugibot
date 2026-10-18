@@ -277,7 +277,8 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     const state = $('#md-state');
     state.textContent = '';
     const was = typeof p.previousPrice === 'number' && p.previousPrice !== p.price ? h('s', { class: 'muted' }, money(p.previousPrice)) : null;
-    state.append(statusPill(p), ' ', h('b', { class: 'big-price' }, money(p.price) || '—'), ' ', was);
+    // (Not on sale before: no old price — append() would write a missing one as "null".)
+    state.append(statusPill(p), ' ', h('b', { class: 'big-price' }, money(p.price) || '—'), ...(was ? [' ', was] : []));
     const acts = $('#md-actions');
     acts.textContent = '';
     acts.append(actions({ ...p, kind: p.status === 'out_of_stock' ? 'sold_out' : 'restock' }));

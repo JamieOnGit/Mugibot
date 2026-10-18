@@ -348,6 +348,38 @@ test('🎯 a link at another website: its page read for stock, the member DM\'d 
   assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
 });
 
+test("🎯 an admin's link at another website that turns Mugibot's server away (Microsoft's, say): the whole link is kept and read, and it's called by its link's words — not its code — until its page answers with its own name", async () => {
+  const url = `${store.url}/acme/en-au/d/xbox-series-x-console-1tb/8wg5vqp0x4h3`;
+  const host = new URL(store.url).host;
+  store.state.acme.refuse = true;
+  const r = await boss.post('/api/drops', { url, label: 'Xbox 25th Anniversary' });
+  assert.equal(r.status, 200, r.text);
+  const w = r.body.watch;
+  assert.equal(w.url, url, 'the watch keeps the whole link');
+  const p = env.app.catalog.productFor('other', otherSku(url));
+  assert.equal(p.sku, `${host}/8wg5vqp0x4h3`, "Mugibot's own code for it (the website and the link's last part)");
+  assert.equal(p.url, url, 'the page read is the whole link, never the code');
+  await env.app.monitor.checkPage(url);
+  const log = env.app.db.get('SELECT * FROM check_log WHERE product_id = :p ORDER BY at DESC LIMIT 1', { p: p.id });
+  assert.ok(log, 'the check is in the log');
+  const named = (await boss.get(`/api/monitor/products/${p.id}`)).body.product;
+  assert.equal(named.name, 'Xbox Series X Console 1tb', "the link's words while its page won't answer");
+  assert.equal(named.sku, `${host}/8wg5vqp0x4h3`);
+  const found = (await boss.get('/api/drops')).body.watches.find((x) => x.id === w.id).found;
+  assert.deepEqual(found.map((f) => [f.name, f.url]), [['Xbox Series X Console 1tb', url]]);
+  assert.equal(env.app.catalog.productById(p.id).name, '', 'nothing saved as its name: the page names it');
+  // The website answers again: its page's own name.
+  store.state.acme.refuse = false;
+  await env.app.monitor.checkPage(url);
+  assert.equal(env.app.catalog.productById(p.id).name, 'Xbox Series X Console 1TB');
+  assert.equal((await boss.get(`/api/monitor/products/${p.id}`)).body.product.name, 'Xbox Series X Console 1TB');
+  // (An admin who saved the link's words as its name: the page's title still takes over.)
+  env.app.catalog.updateProduct(p.id, { name: 'Xbox Series X Console 1tb' });
+  await env.app.monitor.checkPage(url);
+  assert.equal(env.app.catalog.productById(p.id).name, 'Xbox Series X Console 1TB');
+  assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
+});
+
 test('🎯 words at another website: read as Mugibot every couple of minutes — what drops is posted for everyone (admins) or DM\'d (members), alerts only', async () => {
   const site = store.acmeUrl();
   const nope = await boss.post('/api/drops', { store: 'other', site: `${store.url}/jbhifi`, words: 'xbox' });
