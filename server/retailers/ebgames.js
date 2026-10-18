@@ -34,6 +34,18 @@ export default {
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
   account: { signIn: '' },
   monitor: { server: true, browser: true },
+  // Its virtual queue before big drops ("You're in the queue!", an estimated wait, a page that
+  // refreshes itself — refresh it yourself and you lose your place). Seen by any browser that lands
+  // on it; its going down, by an admin's browser asking for the front page as a new visitor (no
+  // cookies: its own place in line is never touched) every 3 minutes. Nothing ever refreshes it.
+  gate: {
+    kind: 'queue', title: 'Queue Monitor', label: 'Virtual queue', module: 'EB Games', url: '/',
+    page: {
+      text: [/you'?re in the queue/i, /you are (now )?in (the )?(line|queue)/i, /using a virtual queue/i],
+      wait: /estimated wait time is\s+(?:about\s+)?(\d+)\s*min/i,
+    },
+    check: { path: '/', everySeconds: 180 },
+  },
   flow: {
     product: {
       add: [/\badd to cart\b/i, /\bpre-?order( now)?\b/i],

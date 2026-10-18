@@ -4,6 +4,7 @@
 
 import { ALERT_KINDS, CATEGORIES, DEFAULT_KINDS, toMonitor, toProduct } from '../catalog.js';
 import { HttpError, bad, bool, item as checkItem, num, str } from '../schema.js';
+import { GATE_CHANNEL, GATE_TOPIC } from './gates.js';
 
 const SNOWFLAKE = /^\d{5,25}$/;
 
@@ -129,7 +130,9 @@ export class MonitorAdmin {
    * "Set up store channels": a channel in the Discord server for each store and game (kmart-pokemon,
    * kmart-one-piece, …), one each for Premium Bandai and Pokémon Center, and misc-retailers for
    * everything else — found by name, or made by the bot (under "Mugibot alerts") — each with its
-   * alert rule. opts.roleId: a role every channel pings. opts.replace: remove the other rules.
+   * alert rule. Then #virtual-queue-detection: the stores' checkpoints and virtual queues going up
+   * and coming down (monitor/gates.js). opts.roleId: a role every channel pings. opts.replace:
+   * remove the other rules.
    */
   async setupChannels(opts = {}, user = null) {
     const { discord, cfg } = this.ctx;
@@ -178,8 +181,23 @@ export class MonitorAdmin {
     let removed = 0;
     // (The VIP channel's rule stays: it isn't a store channel.)
     if (opts.replace) for (const r of routes) if (!keep.has(r.id) && !r.vip && this.catalog.deleteRoute(r.id)) removed += 1;
-    if (user) this.ctx.repo.audit(user.id, null, 'alert-channels-setup', `${out.length} channels (${made.length} made), ${added} rules added${removed ? `, ${removed} removed` : ''}`);
-    return { channels: out.map((w) => ({ name: w.channelName, id: w.channelId, made: made.includes(w.channelName), rule: `#${w.channelName}` })), made: made.length, added, removed };
+    // #virtual-queue-detection: not an alert rule (no products go there) — the gates' own channel.
+    let gate = byName([GATE_CHANNEL]);
+    if (!gate) {
+      if (!parent) parent = await make({ name: 'Mugibot alerts', type: 4 });
+      gate = await make({ name: GATE_CHANNEL, type: 0, parent_id: parent.id, topic: GATE_TOPIC });
+      made.push(gate.name);
+    }
+    const before = this.ctx.repo.getSetting('gateChannel') || {};
+    this.ctx.repo.setSetting('gateChannel', { channelId: String(gate.id), roleId: roleId || (before.channelId === String(gate.id) ? before.roleId || '' : '') });
+    if (user) this.ctx.repo.audit(user.id, null, 'alert-channels-setup', `${out.length + 1} channels (${made.length} made), ${added} rules added${removed ? `, ${removed} removed` : ''}`);
+    return {
+      channels: [
+        ...out.map((w) => ({ name: w.channelName, id: w.channelId, made: made.includes(w.channelName), rule: `#${w.channelName}` })),
+        { name: gate.name, id: String(gate.id), made: made.includes(gate.name), rule: 'Checkpoints and virtual queues' },
+      ],
+      made: made.length, added, removed,
+    };
   }
 
   /**

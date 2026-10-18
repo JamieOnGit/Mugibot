@@ -195,6 +195,8 @@ export class Retailers {
       skuFromPath: r.skuFromPath, productPath: r.productPath, cartPath: r.cartPath || null, flow: r.flow,
       // The store login monitor: the store's address, and how to tell you're signed in there.
       base: r.base, account: r.account || null,
+      // Its checkpoint or virtual queue (monitor/gate.js): what one of its pages looks like.
+      gate: r.gate ? { kind: r.gate.kind, label: r.gate.label, page: r.gate.page } : null,
     }));
   }
 }

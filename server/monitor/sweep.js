@@ -826,10 +826,25 @@ export class Sweeper {
     if (!user || user.role !== 'admin') return { terms: [], waitMs: null };
     const now = this.now();
     const terms = [];
+    const held = [];
     let next = null;
+    const through = browser.through || new Set();
     for (const { retailer: r, mode } of this.stores()) {
       if (mode !== 'browser') continue;
       const st = this.stat(r.id);
+      // Its virtual queue is up (monitor/gates.js): no searches from a browser that isn't through it —
+      // a request there could cost the admin their place in line. Its tab is left exactly as it is.
+      if (this.gates && this.gates.queueUp(r.id) && !through.has(r.id)) {
+        if (!st.heldAt) this.sys(`${r.name}: its virtual queue is up — searches from ${browser.who ? `${browser.who}'s` : "admins'"} browser wait until it's through the queue or the queue's down (nothing refreshes the queue page)`, { store: r.id, level: 'warn' });
+        st.heldAt = now;
+        st.nextAt = null;
+        held.push(r.id);
+        continue;
+      }
+      if (st.heldAt) {
+        st.heldAt = 0;
+        this.sys(`${r.name}: searching it again (${this.gates && this.gates.queueUp(r.id) ? 'through its virtual queue' : 'its virtual queue is down'})`, { store: r.id });
+      }
       const needs = r.sweep.extension;
       if (needs && olderVersion(browser.version, needs)) {
         // (Unless another admin's browser, an up-to-date one, is searching it.)
@@ -858,10 +873,20 @@ export class Sweeper {
         // Reset by an admin: the store's tab is closed and opened again at its front page first.
         fresh: !!st.freshTab,
         frontUrl: r.base,
+        // Its checkpoint or virtual queue (monitor/gate.js): a tab showing it is never navigated, and a
+        // search that runs into it waits.
+        gate: r.gate ? { kind: r.gate.kind, page: r.gate.page } : null,
       }));
       st.freshTab = false;
     }
-    return { terms, waitMs: next === null ? null : Math.max(1000, next - now) };
+    // Queues to look at as a new visitor (monitor/gates.js): is one up, or has it come down?
+    const looks = this.gates ? this.gates.probesFor(user) : { probes: [], nextAt: null };
+    if (looks.nextAt !== null) next = Math.min(next ?? Infinity, looks.nextAt);
+    // (A held store: asked about again in a minute — sooner, if the browser gets through.)
+    if (held.length) next = Math.min(next ?? Infinity, now + 60 * 1000);
+    // (And what's up now: a browser that saw a queue lately knows when it's come down.)
+    const gates = this.gates ? this.gates.upList().map((g) => ({ store: g.store, kind: g.kind, since: g.since, wait: g.wait })) : [];
+    return { terms, probes: looks.probes, held, gates, waitMs: next === null ? null : Math.max(1000, next - now) };
   }
 
   /** An admin's browser whose extension is too old for a store (Chrome won't let it open that store's pages): say so, once. */
@@ -889,6 +914,14 @@ export class Sweeper {
       const url = this.urlFor(r, term.keyword, term.page);
       const ms = num(res.ms, { min: 0, max: 120000, int: true, def: null });
       const st = this.stat(r.id);
+      // The search ran into the store's virtual queue (or checkpoint): it's up, and the search waits —
+      // no failure, no backing off, and the tab's left alone.
+      if (res.gate && this.gates) {
+        this.gates.observe(r.id, 'up', { source: 'page', user, wait: res.gate.wait });
+        if (!st.heldAt) this.sys(`${r.name}: the search ran into its ${r.gate && r.gate.kind === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — waiting (nothing refreshes it)`, { store: r.id, level: 'warn' });
+        st.heldAt = this.now();
+        continue;
+      }
       if (!st.lastAt || this.now() - st.lastAt > 2 * 60 * 1000) this.sys(`${r.name}: ${user.username}'s browser is searching it`, { store: r.id });
       if (!res.ok) {
         const status = num(res.status, { min: 0, max: 999, int: true, def: 0 });
@@ -946,6 +979,8 @@ export class Sweeper {
 
   /** A store's state in a word: ok, slowed, retrying, waiting (for an admin's browser) or starting. */
   statusOf(mode, st, now, r) {
+    // Waiting while its virtual queue is up (from a browser that isn't through it).
+    if (mode === 'browser' && st.heldAt && now - st.heldAt < 2 * 60 * 1000) return 'held';
     // Waiting for an admin's browser with a newer extension (none has searched it since one asked).
     if (mode === 'browser' && st.needsUpdateAt && st.needsUpdateAt > (st.lastAt || 0)) return 'waiting';
     if (!st.lastAt) return mode === 'browser' ? 'waiting' : 'starting';

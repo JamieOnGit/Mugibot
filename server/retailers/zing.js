@@ -9,6 +9,8 @@ import ebgames from './ebgames.js';
 
 export default {
   ...ebgames,
+  // (EB's queue page, if Zing shows it: seen on a page here too — not checked from a browser.)
+  gate: { ...ebgames.gate, check: null },
   id: 'zing',
   name: 'Zing Pop Culture',
   base: 'https://www.zingpopculture.com.au',

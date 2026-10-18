@@ -33,6 +33,15 @@
 // Placing an order: each shop's `decline` (the card is declined) and `threeDS` (the
 // bank's "verify it's you" check, in a frame) options, for Auto-checkout's tests.
 //
+// Checkpoints and virtual queues (each shop's `checkpoint` and `queue`, off unless switched on):
+//   checkpoint (the Shopify shops: JB Hi-Fi's): Shopify's bot check — /checkpoint is an hCaptcha
+//     page, and checkout goes through it until someone solves it. Only a real click (a person's)
+//     solves it: a click from a script is counted (botClicks) and does nothing.
+//   queue (EB Games, Pokémon Center): a virtual queue — every page is "You're in the queue!" for a
+//     visitor not let in yet (Pokémon Center's at /?queue). The page refreshes itself and lets you in
+//     admitAfterMs after you joined; ask again sooner than tooSoonMs after your last request and you
+//     lose your place (kicks counts it). A visitor with no cookies is always new to the line.
+//
 // Open the root (/) for the control panel: restock, sell out, list or unlist
 // products and watch Mugibot react. A second server on another port serves
 // the card boxes so they're cross-origin, like real payment providers.
@@ -97,6 +106,10 @@ export function defaultShops() {
       addNeedsLoad: 0,
       // What the bag page showed each time it was opened (number of items in it).
       bagViews: [],
+      // Its checkpoint (Shopify's hCaptcha page) and its virtual queue: see the top of this file.
+      checkpoint: { on: false, shown: 0, solved: 0, botClicks: 0, passes: [] },
+      // (log: every request while it's on — { id, at, path, what } — to show nothing asked again too soon.)
+      queue: { on: false, admitAfterMs: 4000, refreshMs: 1500, tooSoonMs: 700, wait: 23, lateMs: 0, places: {}, admittedIds: [], kicks: 0, shown: 0, admitted: 0, cookieless: 0, log: [] },
     };
   }
   return out;
@@ -1107,6 +1120,90 @@ for (const el of document.querySelectorAll('input')) {
     res.end();
   });
 
+  // -------------------------------------------------------------------- checkpoints and queues
+  const cookieOf = (req, name) => {
+    const m = String(req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+    return m ? decodeURIComponent(m[1]) : null;
+  };
+
+  // The queue page, like EB Games' (Cloudflare's waiting room): it refreshes itself. lateMs: its words
+  // drawn by its own code a moment after it opens (like a queue page built in the browser).
+  function queuePage(shop, q) {
+    const s = SHOPS[shop];
+    const words = `<h1>You're in the queue!</h1>
+<p>Thanks for hanging in there. You'll head back into the queue after you complete your transaction.</p>
+<p id="wait">Your estimated wait time is ${Number(q.wait)} minutes.</p>
+<p>We are experiencing a high volume of traffic and using a virtual queue to limit the number of users on the site at the same time, so you can shop with confidence.</p>
+<p>This page will automatically refresh, please do not close your browser.</p>`;
+    const body = q.lateMs ? `<div id="queue"></div><script>setTimeout(() => { document.getElementById('queue').innerHTML = ${JSON.stringify(words)}; }, ${Number(q.lateMs)});</script>` : words;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(s.name)} — You're in the queue</title></head>
+<body style="font:16px system-ui;text-align:center;padding:40px;background:#f4f4f4"><div class="dummy">⚠ Dummy store for testing Mugibot — nothing here is real.</div>
+${body}
+<script>setTimeout(() => location.reload(), ${Number(q.refreshMs) || 1500});</script></body></html>`;
+  }
+
+  /**
+   * A shop's virtual queue (S.queue.on): null when this visitor may in (let in already, or let in
+   * now), else the response sent (the queue page, or Pokémon Center's redirect to /?queue).
+   */
+  function inQueue(shop, S, req, res, u, html, redirect) {
+    const q = S.queue;
+    const name = `${shop}_queue`;
+    const v = cookieOf(req, name) || '';
+    if (v.startsWith('ok-') && q.admittedIds.includes(v.slice(3))) return null;
+    const now = Date.now();
+    let id = v.startsWith('in-') ? v.slice(3) : null;
+    if (!v) q.cookieless += 1;
+    let place = id ? q.places[id] : null;
+    const note = (what) => { q.log.push({ id, at: now, path: u.pathname + u.search, what }); if (q.log.length > 3000) q.log.splice(0, 1000); };
+    // Asked again too soon (refreshed by hand, a second tab, a script): the place in line is lost.
+    if (place && now - place.lastAt < q.tooSoonMs) { note('kicked'); q.kicks += 1; delete q.places[id]; place = null; }
+    if (!place) {
+      id = Math.random().toString(36).slice(2, 10);
+      place = q.places[id] = { joinedAt: now, lastAt: now - q.tooSoonMs };
+    }
+    // Pokémon Center's line is at /?queue.
+    if (shop === 'pokemoncenter' && !u.searchParams.has('queue')) {
+      note('redirect');
+      res.setHeader('set-cookie', `${name}=in-${id}; Path=/`);
+      redirect('/pokemoncenter/?queue');
+      return true;
+    }
+    place.lastAt = now;
+    if (now - place.joinedAt >= q.admitAfterMs) {
+      note('admitted');
+      delete q.places[id];
+      q.admittedIds.push(id);
+      q.admitted += 1;
+      res.setHeader('set-cookie', `${name}=ok-${id}; Path=/`);
+      // (Pokémon Center's line sends you on to the store's front page.)
+      if (shop === 'pokemoncenter' && u.searchParams.has('queue')) { redirect('/pokemoncenter/'); return true; }
+      return null;
+    }
+    note('queued');
+    res.setHeader('set-cookie', `${name}=in-${id}; Path=/`);
+    q.shown += 1;
+    html(200, queuePage(shop, q));
+    return true;
+  }
+
+  // Shopify's checkpoint: an hCaptcha page. Only a person's click (a trusted one) ticks the box.
+  function checkpointPage(shop, back) {
+    return page(shop, 'Checkpoint', `<h1>Before you continue…</h1><p>Confirm you're human to carry on to checkout.</p>
+      <form method="post" action="/${shop}/checkpoint" id="checkpoint-form"><input type="hidden" name="return_to" value="${esc(back)}">
+      <div class="h-captcha" data-sitekey="10000000-ffff-ffff-ffff-000000000001"><label><button type="button" id="hcaptcha-box" aria-label="I am human" style="background:#fff;color:#222;border:2px solid #999">☐</button> I am human</label></div>
+      <input type="hidden" name="h-captcha-response" id="hcaptcha-response" value="">
+      <p><button type="submit" id="checkpoint-submit">Submit</button></p></form>
+      <script>
+        document.getElementById('hcaptcha-box').addEventListener('click', (e) => {
+          if (!e.isTrusted) { fetch('/${shop}/checkpoint/bot', { method: 'POST' }); return; }
+          e.currentTarget.textContent = '☑';
+          document.getElementById('hcaptcha-response').value = 'P1_human-' + Date.now();
+        });
+        document.getElementById('checkpoint-form').addEventListener('submit', (e) => { if (!e.isTrusted) { e.preventDefault(); fetch('/${shop}/checkpoint/bot', { method: 'POST' }); } });
+      </script>`);
+  }
+
   // -------------------------------------------------------------------- store server
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
@@ -1153,6 +1250,8 @@ for (const el of document.querySelectorAll('input')) {
         if (b.listed !== undefined) prod.listed = b.listed === true || b.listed === 'true';
       }
       if (b.blockNonBrowsers !== undefined) state.blockNonBrowsers = b.blockNonBrowsers === true || b.blockNonBrowsers === 'true';
+      // A shop's checkpoint (Shopify shops) or virtual queue (the others) on or off.
+      if (b.gate && shopOf(b.gate)) shopOf(b.gate)[SHOPIFY.has(b.gate) ? 'checkpoint' : 'queue'].on = b.on === true || b.on === 'true';
       if (req.headers['content-type']?.includes('json')) return json(200, { ok: true });
       return redirect('/');
     }
@@ -1166,6 +1265,7 @@ for (const el of document.querySelectorAll('input')) {
         <p>Fake shops for trying Mugibot end to end. Add these products to your Mugibot watchlist (the dashboard's <b>Add dummy-store test items</b> button does it for you), change their stock here, and watch the pings and ⚡ Buy work.</p>
         <table border="1" cellpadding="6" style="border-collapse:collapse;background:#fff;font-size:14px"><tr><th>Shop</th><th>Product</th><th>Listed</th><th>Stock</th><th>Price</th><th>Change</th></tr>${rows}</table>
         <p>${btn('', '', { blockNonBrowsers: state.blockNonBrowsers ? 'false' : 'true' }, state.blockNonBrowsers ? 'Stop refusing server checks' : 'Refuse server checks (like Kmart)')} Server checks are ${state.blockNonBrowsers ? '<b>refused</b> — only browsers get in' : 'allowed'}.</p>
+        <p>Checkpoints and virtual queues: ${['jbhifi', 'ebgames', 'pokemoncenter'].map((id) => { const g = state.shops[id][SHOPIFY.has(id) ? 'checkpoint' : 'queue']; return `${btn('', '', { gate: id, on: g.on ? 'false' : 'true' }, `${SHOPS[id].name}: ${SHOPIFY.has(id) ? 'checkpoint' : 'queue'} ${g.on ? 'off' : 'on'}`)}`; }).join(' ')}</p>
         <p>Orders placed (stays 0 with ⚡ Buy — you press the final button; only an armed Auto-checkout places one): <b>${orders}</b></p>`));
     }
 
@@ -1179,6 +1279,30 @@ for (const el of document.querySelectorAll('input')) {
       res.writeHead(429, { 'content-type': 'text/plain', 'retry-after': String(state.tooMany[shop]) });
       return res.end('Too many requests');
     }
+    // Its virtual queue, when it's on: every page (its search JSON too) for a visitor not let in yet.
+    if (S.queue.on && !sub.startsWith('/img/') && inQueue(shop, S, req, res, u, html, redirect)) return undefined;
+    // Shopify's checkpoint: the hCaptcha page, and checkout through it until it's solved.
+    if (SHOPIFY.has(shop) && (sub === '/checkpoint' || sub === '/checkpoint/')) {
+      if (req.method === 'POST') {
+        const b = await parseBody(req);
+        if (!S.checkpoint.on) return redirect(`/${shop}/`);
+        if (!/^P1_human-/.test(b['h-captcha-response'] || '')) return html(200, checkpointPage(shop, b.return_to || `/${shop}/checkouts/c/abc123`));
+        S.checkpoint.solved += 1;
+        const pass = `ok-${Math.random().toString(36).slice(2, 10)}`;
+        S.checkpoint.passes.push(pass);
+        res.setHeader('set-cookie', `${shop}_checkpoint=${pass}; Path=/`);
+        const back = String(b.return_to || '');
+        return redirect(back.startsWith(`/${shop}/`) ? back : `/${shop}/checkouts/c/abc123`);
+      }
+      if (!S.checkpoint.on) return html(404, page(shop, 'Page not found', '<h1>Sorry, we can\'t find that page</h1>'));
+      S.checkpoint.shown += 1;
+      return html(200, checkpointPage(shop, u.searchParams.get('return_to') || `/${shop}/checkouts/c/abc123`));
+    }
+    if (SHOPIFY.has(shop) && sub === '/checkpoint/bot' && req.method === 'POST') {
+      S.checkpoint.botClicks += 1;
+      return json(200, { ok: false });
+    }
+    const pastCheckpoint = () => !S.checkpoint.on || S.checkpoint.passes.includes(cookieOf(req, `${shop}_checkpoint`) || '');
 
     if (sub === '/' || sub === '') {
       return html(200, page(shop, SHOPS[shop].name, `<h1>${esc(SHOPS[shop].name)}</h1>${S.products.filter((x) => x.listed).map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}">${esc(x.name)}</a><div>$${x.price.toFixed(2)} · ${x.status.replace(/_/g, ' ')}</div></div>`).join('')}`));
@@ -1384,7 +1508,7 @@ for (const el of document.querySelectorAll('input')) {
     if (permalink) {
       const prod = S.products.find((x) => String(x.id) === permalink[1]);
       if (prod) addToCart(shop, prod.sku, Number(permalink[2]) || 1);
-      return redirect(`/${shop}/checkouts/c/abc123`);
+      return redirect(pastCheckpoint() ? `/${shop}/checkouts/c/abc123` : `/${shop}/checkpoint?return_to=${encodeURIComponent(`/${shop}/checkouts/c/abc123`)}`);
     }
     if (sub === '/cart/add' && SHOPIFY.has(shop)) {
       const prod = S.products.find((x) => String(x.id) === u.searchParams.get('id'));
@@ -1597,6 +1721,7 @@ for (const el of document.querySelectorAll('input')) {
     // ---------------- Shopify-style one-page checkout (JB Hi-Fi, Trainer Town, Gamerholic, Toys"R"Us)
     if (SHOPIFY.has(shop) && sub.startsWith('/checkouts/c/abc123')) {
       if (sub.endsWith('/thank-you')) return html(200, page(shop, 'Thank you', '<h1>Thank you for your purchase!</h1><p>Your order is confirmed.</p>'));
+      if (!pastCheckpoint()) return redirect(`/${shop}/checkpoint?return_to=${encodeURIComponent(`/${shop}/checkouts/c/abc123`)}`);
       if (req.method === 'POST') {
         const b = await parseBody(req);
         const shopPay = state.signedIn[shop] === 'shop';

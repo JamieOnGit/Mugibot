@@ -132,6 +132,14 @@ export function loadConfig(overrides = {}, env = process.env) {
       vipFastSeconds: o.vipFastSeconds ?? int(env.VIP_FAST_SECONDS, 5),
       vipSlowSeconds: o.vipSlowSeconds ?? int(env.VIP_SLOW_SECONDS, 15),
       vipSweepSeconds: o.vipSweepSeconds ?? int(env.VIP_SWEEP_SECONDS, 4),
+      // Checkpoints and virtual queues (monitor/gates.js): how often the server looks at a store's
+      // checkpoint, how soon it looks again to confirm a change, and how often an admin's browser
+      // looks at a store's queue as a new visitor (0: the store's own pace, from its file).
+      gateProbeSeconds: o.gateProbeSeconds ?? int(env.GATE_PROBE_SECONDS, 0),
+      gateConfirmSeconds: o.gateConfirmSeconds ?? int(env.GATE_CONFIRM_SECONDS, 10),
+      gateCheckSeconds: o.gateCheckSeconds ?? int(env.GATE_CHECK_SECONDS, 0),
+      // (A queue's down when a new visitor gets the store twice, this far apart.)
+      gateDownGapSeconds: o.gateDownGapSeconds ?? int(env.GATE_DOWN_GAP_SECONDS, 45),
       alertCooldownSeconds: o.alertCooldownSeconds ?? int(env.MONITOR_ALERT_COOLDOWN, 600),
       priceChangePercent: o.priceChangePercent ?? Number(env.MONITOR_PRICE_CHANGE_PERCENT || 1),
       logDays: o.logDays ?? int(env.MONITOR_LOG_DAYS, 7),

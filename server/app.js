@@ -13,6 +13,7 @@ import { Hub } from './hub.js';
 import { Router, RateLimiter, clientIp, parseCookies, parseJson, readBody, securityHeaders, sendJson } from './http.js';
 import { Mailer } from './mailer.js';
 import { Feed } from './monitor/feed.js';
+import { Gates } from './monitor/gates.js';
 import { storeFetch } from './monitor/http.js';
 import { Monitor } from './monitor/index.js';
 import { Sweeper } from './monitor/sweep.js';
@@ -60,11 +61,17 @@ export async function createApp(options = {}) {
   const vip = new Vip({ cfg, db, repo, catalog, retailers, hub, now });
   monitor.vip = vip;
   sweeper.vip = vip;
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, limiter, pageCache: new Map() };
+  // Checkpoints and virtual queues (JB Hi-Fi's, EB Games', Pokémon Center's): seen up and down, posted in #virtual-queue-detection.
+  const gates = new Gates({ cfg, db, repo, retailers, discord, notifier, hub, feed, fetchImpl: storeFetchImpl, now });
+  gates.sweeper = sweeper;
+  sweeper.gates = gates;
+  monitor.gates = gates;
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, limiter, pageCache: new Map() };
   // Auto-checkout: started by the monitor when an armed item drops.
   const aco = new Aco({ ...ctx, now });
   ctx.aco = aco;
   monitor.aco = aco;
+  gates.aco = aco;
 
   const router = new Router();
   auth.register(router, ctx);
@@ -215,6 +222,7 @@ export async function createApp(options = {}) {
     hub,
     monitor,
     sweeper,
+    gates,
     aco,
     catalog,
     feed,
@@ -234,6 +242,7 @@ export async function createApp(options = {}) {
       if (cfg.baseUrlAuto) cfg.baseUrl = app.url;
       monitor.start();
       sweeper.start();
+      gates.start();
       aco.start();
       startJobs();
       return app.url;
@@ -241,6 +250,7 @@ export async function createApp(options = {}) {
     async close() {
       monitor.stop();
       sweeper.stop();
+      gates.stop();
       aco.stop();
       timers.forEach(clearInterval);
       hub.close();

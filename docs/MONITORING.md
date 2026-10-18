@@ -284,6 +284,69 @@ before the drop, add that as well: its page is read directly.
 Settings (environment variables): `VIP_FAST_SECONDS` (5), `VIP_SLOW_SECONDS`
 (15), `VIP_SWEEP_SECONDS` (4).
 
+### 🚦 Checkpoints and virtual queues
+
+Before a big drop some stores put up a gate. Mugibot watches for each one going
+up and coming down, and tells everyone so they can get ready:
+
+| Store | Its gate | How Mugibot sees it |
+|---|---|---|
+| **JB Hi-Fi** | Shopify's **checkpoint**: an hCaptcha page at `https://www.jbhifi.com.au/checkpoint` that checkout goes through | The **server** looks at `/checkpoint` once a minute, as `Mugibot/1.0` (JB answers servers; it's swept from there too). Up: the page with its hCaptcha. Down: gone (404), sent on to the store, or no check there. A change is looked at again 10 seconds later and counts once it's seen twice. |
+| **EB Games** | A **virtual queue**: "You're in the queue!", an estimated wait, a page that refreshes itself | **Browsers**. Any member's browser that lands in the queue says so (two members, or one admin, make it up). An **admin's browser** asks for the front page as a **new visitor**, with no cookies, every 3 minutes (every minute while it's up). Down: that new visitor gets the store, twice in a row, at least 45 seconds apart. |
+| **Pokémon Center** | A **virtual queue** at `https://www.pokemoncenter.com/?queue` | The same as EB Games. |
+
+Toys"R"Us, Trainer Town and Gamerholic are Shopify stores too. Their checkpoint
+is recognised on any page a member opens, but only JB Hi-Fi's is checked by the
+server. Zing's pages are read for EB's queue the same way.
+
+**Why "as a new visitor":** a queue keeps your place in a cookie. Mugibot's own
+looks never send cookies, so they can't touch anyone's place in line. A browser
+that **got through** the queue sees the store as normal. That only means it was
+let in, not that the queue came down, so it never counts as "down".
+
+**Not seen for 30 minutes** while something was looking for it (or for 3 hours
+at all), a gate counts as down. A store nothing checks by itself, like Toys"R"Us,
+is down 30 minutes after anyone last saw its checkpoint.
+
+**What happens when one goes up or comes down:**
+
+- **`#virtual-queue-detection`** in your Discord server gets a post styled like
+  the monitors members know:
+  - the store's address on top, then **Checkpoint Monitor** or **Queue Monitor**;
+  - one line, e.g. `🟢 hcaptcha Checkpoint up for JB Hi-Fi | https://www.jbhifi.com.au/checkpoint`,
+    then `🔴 Checkpoint disabled for JB Hi-Fi | …` when it's off again;
+  - for a queue, `🟢 Virtual queue up for EB Games | https://www.ebgames.com.au/`
+    with the estimated wait, then `🔴 Virtual queue down for EB Games | …`;
+  - a white embed with the footer `Shopify | Mugibot Monitors [09:55:00 AEDT]`
+    (Sydney time).
+  - A queue's post has **📥 Join the queue on my computer**: the member's checkout
+    browser gets in line by itself (docs/AUTO-CHECKOUT.md).
+- **Set up store channels** (Monitor → Settings → Discord alert channels) makes
+  the channel with the others, pinging the same role. If it isn't set up, the
+  bot finds a channel called `virtual-queue-detection`, or makes one, the first
+  time it has something to post.
+- **Members watching something at that store** get a DM and an activity entry
+  when it goes up, and again when it comes down. It goes by their restock DM
+  setting.
+- **Every dashboard** shows a banner while it's up: what to do, and a link to
+  the store. The live monitor's event log says it too.
+
+**While a store's queue is up**, nothing of Mugibot's asks that store for
+anything from a browser that isn't through the queue: no in-browser checks, no
+searches from admins' browsers, no sign-in checks. A request there could cost
+someone their place in line. The live monitor shows the store as **In queue**.
+
+- An admin's sweep tab showing the queue is never navigated or reloaded. It
+  waits there like anyone in line, and its searches start again once it's
+  through, or the queue's down.
+- The server's own checks still run. The server is always a new visitor and
+  holds nobody's place. They see the queue where the product should be, never
+  read it as the product's stock, and count it as a sighting.
+
+Settings (environment variables, for testing): `GATE_PROBE_SECONDS` (the store's
+own: 60), `GATE_CONFIRM_SECONDS` (10), `GATE_CHECK_SECONDS` (180, or 60 while
+up), `GATE_DOWN_GAP_SECONDS` (45).
+
 ## 4. Running it day to day: the live monitor
 
 Dashboard → **Monitor** is the one page for everything the monitor does: the
@@ -390,6 +453,10 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | `MONITOR_HOST_GAP` | 5 | Seconds between page checks at the same store |
 | `MONITOR_PRICE_CHANGE_PERCENT` | 1 | The smallest price change a **monitor's** price alerts count (sweeps use the dashboard's price drop %) |
 | `MONITOR_LOG_DAYS` | 7 | How long the page-check log is kept |
+| `GATE_PROBE_SECONDS` | 0 (the store's own: 60) | How often the server looks at JB Hi-Fi's checkpoint |
+| `GATE_CONFIRM_SECONDS` | 10 | How soon it looks again to be sure of a change |
+| `GATE_CHECK_SECONDS` | 0 (180; 60 while up) | How often an admin's browser looks at EB Games' and Pokémon Center's queues as a new visitor |
+| `GATE_DOWN_GAP_SECONDS` | 45 | A queue's down when a new visitor gets the store twice, at least this far apart |
 
 ## 6. Troubleshooting
 
@@ -410,6 +477,9 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | A product you expect isn't tracked | Its name needs every word of the keyword and a trading-card word, no "not trading cards" word (unless it says TCG, trading card or card game), and it must be sold by the store itself. Adjust the word lists in Monitor → Settings. |
 | A JB Hi-Fi **Marketplace** product still pinged | Its first alert is held until its seller is known; if JB Hi-Fi didn't answer that question, the alert goes out as before. Blacklist it (🚫), or tell me the product link. |
 | Clothes or toys in the list | MugiWatch's card words include "pack" and "sleeve", so "3 Pack Socks" looks like cards. Add the word (e.g. "onesie") to **Not trading cards**; products that no longer count leave the list when you save. |
+| A store shows **In queue** on the live monitor | Its virtual queue is up, so the admin's browser isn't searching it until it's through the queue or the queue's down. That's on purpose: a search could cost the admin their place in line. Nothing to do. |
+| `#virtual-queue-detection` got nothing | Press **Set up store channels** again (it makes the channel), and check the bot can post there. EB Games' and Pokémon Center's queues need an admin's browser with the extension (1.16.0 or later) open, or members' browsers landing in the queue. |
+| A queue still shows **up** after it's gone | An admin's browser confirms it's down. Without one, it counts as down 30 minutes after anyone last saw it (3 hours at most). |
 | No sound | Press **🔔 Arm alerts** (browsers only play sound after a click on the page), and check **Sound** is on under **⚙**. |
 | No desktop notifications | Allow notifications for mugibot.com in the browser (the icon left of the address), then **Arm alerts** again. |
 | Lots of new drops after changing settings | Shouldn't happen: a changed keyword or filter sets the scene again first. If it does, tell me which store and keyword. |
@@ -431,6 +501,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
 | What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
+| 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |
 | The live event log | `emit()` and `live()` in `server/monitor/sweep.js`; `GET /api/monitor/live`; `monitor-sweep` events on the dashboard's stream |
 | Tests | `test/sweep.test.js`, plus the Monitor tab in `test/ui.test.js` and the admin's-browser sweep in `test/extension.e2e.test.js` |

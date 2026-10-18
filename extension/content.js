@@ -11,6 +11,12 @@
 // your card is in, nothing on the page is wrong, the total is within your limits —
 // then presses it once, and watches what happens: the order confirmation, a
 // declined card, or your bank's or the store's check (left for you: never got past).
+//
+// Checkpoints and virtual queues (docs/AUTO-CHECKOUT.md): on the store's checkpoint (JB Hi-Fi's
+// hCaptcha page) it waits for you to solve it — it never touches the check — and carries on to
+// checkout once you have. In the store's virtual queue it waits its turn with you and never
+// refreshes the page (the queue page refreshes itself; refreshing it yourself can lose your place),
+// then carries on with the ⚡ Buy or Auto-checkout run as soon as you're through.
 
 (async () => {
   'use strict';
@@ -18,6 +24,14 @@
 
   const ASSIST_KEY = 'mgbAssist';
   const ASSIST_TTL = 15 * 60 * 1000;
+  // A ⚡ Buy claimed in a store's queue (or at its checkpoint): kept for this tab until it's through.
+  const HOLD_KEY = 'mgbHold';
+  const HOLD_TTL = 3 * 60 * 60 * 1000;
+  const holdStore = {
+    read: () => { try { const h = JSON.parse(sessionStorage.getItem(HOLD_KEY) || 'null'); return h && Date.now() - h.at < HOLD_TTL ? h : null; } catch { return null; } },
+    save: (h) => { try { sessionStorage.setItem(HOLD_KEY, JSON.stringify(h)); } catch { /* ignore */ } },
+    clear: () => { try { sessionStorage.removeItem(HOLD_KEY); } catch { /* ignore */ } },
+  };
 
   const ask = (msg) => new Promise((resolve) => {
     try {
@@ -46,8 +60,11 @@
     if (m) goCode = m[1];
   }
 
-  // Your watchlist and the stores' flows, and the ⚡ Buy code confirmed — both at once.
-  const claiming = goCode ? ask({ type: 'claim', code: goCode }) : null;
+  // Your watchlist and the stores' flows, and the ⚡ Buy code confirmed — both at once. (A code claimed
+  // already in this tab, in the store's queue, isn't claimed again: it carries on from there.)
+  let held = holdStore.read();
+  if (held && goCode && held.code !== goCode) { holdStore.clear(); held = null; }
+  const claiming = goCode && !held ? ask({ type: 'claim', code: goCode }) : null;
   const state = await ask({ type: 'state' });
   if (state && state.sweepTab) return; // the extension's own window for live sweeps
   const items = (state && state.items) || [];
@@ -93,7 +110,11 @@
   let aco = null;
   const acoReport = (status, reason, message, total) => ask({ type: 'acoReport', status, reason: reason || '', message: message || '', total: typeof total === 'number' ? total : undefined });
   // Why a run stopped short of checkout (core.js): failed, unless it's something for you to do (sign in).
-  const acoWhy = (reason, message, status) => { if (aco) acoReport(status || 'failed', reason, message || null); };
+  // (The store's queue, drawn by its page's code after Mugibot looked: not a failure — it waits there, see go().)
+  const acoWhy = (reason, message, status) => {
+    if (!aco || (claimed && MGBFlows.gateHere(retailer, document, location))) return;
+    acoReport(status || 'failed', reason, message || null);
+  };
 
   // (The checks themselves: checks.js, shared with checkouts that run in a frame.)
   const orderTotal = () => MGBChecks.orderTotal(document);
@@ -366,6 +387,16 @@
       const flow = store.read();
       const product = extra.product || MGBQuick.productForPage(items, retailer) || (flow ? items.find((p) => p.sku === flow.sku) : null) || null;
       const result = await MGBQuick.run({ fresh, retailer, product, products: items, store, setStatus: panel.setStatus, report, probe, why: acoWhy, ...extra });
+      // Stopped short on what turned out to be the store's queue (or checkpoint), drawn late: wait there.
+      const late = (result === 'error' || result === 'timeout') && claimed ? MGBFlows.gateHere(retailer, document, location) : null;
+      if (late) {
+        holdStore.save({ ...claimed, kind: late.kind, at: Date.now() });
+        ask({ type: 'gate', store: retailer.id, on: true, kind: retailer.gate.kind, wait: late.wait });
+        waitAtGate(late);
+        return;
+      }
+      // (On its way: the flow's own progress carries it from here.)
+      if (fresh && (holdStore.read() || {}).provisional) holdStore.clear();
       if (result === 'checkout') atCheckout();
       // (The store's quick checkout, in a frame on this page: frame.js fills it in and says how it goes.)
       if (result === 'checkout-frame') panel.setStatus(`At ${retailer.name}'s checkout — filling it in…`);
@@ -397,6 +428,7 @@
     onStop: async () => {
       store.clear();
       assistFlag.off();
+      holdStore.clear();
       panel.setStatus('Stopped. You can continue yourself.');
       if (aco && !aco.placing) await acoReport('failed', 'stopped', 'You stopped it');
       // (A checkout running in a frame on this page stops too: this tab's checkout pass is gone.)
@@ -404,33 +436,102 @@
     },
   });
 
+  /** A ⚡ Buy (or Auto-checkout run) confirmed for this tab: to checkout with it. */
+  let claimed = null;
+  function startClaimed(claim, product) {
+    claimed = { code: goCode, claim, product };
+    // Auto-checkout only ever buys the one item: a bag with other things in it is left for you.
+    const inBag = aco ? MGBQuick.bagCount() : null;
+    if (aco && inBag) {
+      panel.setNote('🤖 Auto-checkout');
+      panel.setStatus(`Your ${retailer.name} bag already has ${inBag} item${inBag === 1 ? '' : 's'} in it — Auto-checkout only buys the one item. Empty it, or buy this yourself.`);
+      acoReport('needs_you', 'wrong_item', `Your ${retailer.name} bag already had ${inBag} item${inBag === 1 ? '' : 's'} in it`);
+      return;
+    }
+    // Signed out at a store that only sells signed in: say so, rather than run into its sign-in page.
+    if (signedOutHere()) {
+      panel.setNote(SIGN_IN_FIRST);
+      panel.setStatus('Sign in first — nothing was added.');
+      report('error', `Signed out at ${retailer.name}: sign in there first (it doesn't sell to guests)`, product);
+      if (aco) acoReport('needs_you', 'signed_out', `You're signed out at ${retailer.name}, and it only sells to signed-in customers — sign in there, then try again.`);
+      return;
+    }
+    assistFlag.on(claim.profileId);
+    panel.setNote(aco ? `🤖 Auto-checkout${aco.mode === 'place' ? ' — places the order within your limits' : ' — stops at the final button for you'}` : 'Started from ⚡ Buy');
+    // Kept for this tab until the ⚡ Buy gets going (go() clears it): a store's queue page drawn by its own
+    // code, or reloading itself, before Mugibot could tell it was one — then it waits there, not lost.
+    holdStore.save({ ...claimed, kind: null, provisional: true, at: Date.now() });
+    // The buy box can take a few seconds to appear on a fresh page load.
+    const waitMs = (MGBFlows.part(retailer, 'product').waitMs) || 12000;
+    go(true, { product, waitForButtonMs: waitMs });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Checkpoints and virtual queues
+  // ---------------------------------------------------------------------------
+  const gate = MGBFlows.gateHere(retailer, document, location);
+  // (The extension keeps track of which tabs are in a queue: it never refreshes them, and nothing
+  // else of yours asks that store for anything until you're through.)
+  if (retailer.gate) ask({ type: 'gate', store: retailer.id, on: !!gate, kind: retailer.gate.kind, wait: gate ? gate.wait : null });
+
+  /** What the panel says on the gate's page. */
+  function gateStatus(g, running) {
+    if (g.kind === 'checkpoint') {
+      return `${retailer.name} wants a human check here. Solve it yourself — Mugibot never touches it${running ? ' — and it carries on to checkout as soon as you have.' : '.'}`;
+    }
+    return `You're in line${g.wait !== null && g.wait !== undefined ? ` — about ${g.wait} min` : ''}. Leave this page alone: it refreshes itself, and refreshing it yourself can lose your place. Mugibot never refreshes it${running ? ', and carries on as soon as you\'re through.' : '.'}`;
+  }
+
+  /**
+   * On the gate's page with a ⚡ Buy or Auto-checkout run going: wait there — keeping the run, your
+   * checkout pass and the flow's progress alive — and say so (the run says it's waiting). Nothing on
+   * the page is pressed and the page is never reloaded: the queue page moves on by itself, and the
+   * checkpoint once you've solved it.
+   */
+  function waitAtGate(g) {
+    const queue = g.kind === 'queue';
+    panel.setNote(queue ? `🚦 In ${retailer.name}'s virtual queue${aco ? ' — 🤖 Auto-checkout waits in line' : ''}` : `🛡️ ${retailer.name}'s checkpoint${aco ? ' — 🤖 Auto-checkout waits for you' : ''}`);
+    let saidAt = 0;
+    let said = '';
+    const beat = (now) => {
+      const flow = store.read();
+      if (flow) store.save({ ...flow, startedAt: Date.now() });
+      const a = assistFlag.read();
+      if (a) assistFlag.on(a.profileId);
+      const h = holdStore.read();
+      if (h) holdStore.save({ ...h, at: Date.now() });
+      ask({ type: 'gateWait' });
+      panel.setStatus(gateStatus(now, true));
+      const msg = queue ? `In ${retailer.name}'s virtual queue${now.wait !== null && now.wait !== undefined ? ` — about ${now.wait} min` : ''}` : `At ${retailer.name}'s checkpoint — solve it in this tab`;
+      if (aco && (msg !== said || Date.now() - saidAt > 150 * 1000)) {
+        said = msg;
+        saidAt = Date.now();
+        acoReport('waiting', g.kind, msg);
+      }
+    };
+    beat(g);
+    // A checkpoint needs you: this tab comes forward (once), and the panel keeps clear of the check.
+    if (!queue) { ask({ type: 'focusTab' }); panel.moveAside(); }
+    setInterval(() => {
+      const now = MGBFlows.gateHere(retailer, document, location);
+      if (now) beat(now);
+    }, queue ? 30000 : 15000);
+  }
+
   if (goCode) {
-    const claim = await claiming;
+    const claim = held ? held.claim : await claiming;
     if (claim && claim.ok) {
       const listed = items.find((p) => p.id === claim.itemId) || items.find((p) => p.sku === claim.sku);
-      const product = { ...(listed || {}), sku: claim.sku, name: claim.name || (listed && listed.name) || claim.sku };
+      const product = { ...(listed || {}), sku: claim.sku, name: claim.name || (listed && listed.name) || claim.sku, url: claim.url || (listed && listed.url) || null, store: retailer.id };
       aco = claim.aco || null;
-      // Auto-checkout only ever buys the one item: a bag with other things in it is left for you.
-      const inBag = aco ? MGBQuick.bagCount() : null;
-      if (aco && inBag) {
-        panel.setNote('🤖 Auto-checkout');
-        panel.setStatus(`Your ${retailer.name} bag already has ${inBag} item${inBag === 1 ? '' : 's'} in it — Auto-checkout only buys the one item. Empty it, or buy this yourself.`);
-        acoReport('needs_you', 'wrong_item', `Your ${retailer.name} bag already had ${inBag} item${inBag === 1 ? '' : 's'} in it`);
+      if (gate) {
+        // The store opened in its queue (or at its checkpoint): this ⚡ Buy waits here, claimed.
+        holdStore.save({ code: goCode, claim, product, kind: gate.kind, at: Date.now() });
+        waitAtGate(gate);
         return;
       }
-      // Signed out at a store that only sells signed in: say so, rather than run into its sign-in page.
-      if (signedOutHere()) {
-        panel.setNote(SIGN_IN_FIRST);
-        panel.setStatus('Sign in first — nothing was added.');
-        report('error', `Signed out at ${retailer.name}: sign in there first (it doesn't sell to guests)`, product);
-        if (aco) acoReport('needs_you', 'signed_out', `You're signed out at ${retailer.name}, and it only sells to signed-in customers — sign in there, then try again.`);
-        return;
-      }
-      assistFlag.on(claim.profileId);
-      panel.setNote(aco ? `🤖 Auto-checkout${aco.mode === 'place' ? ' — places the order within your limits' : ' — stops at the final button for you'}` : 'Started from ⚡ Buy');
-      // The buy box can take a few seconds to appear on a fresh page load.
-      const waitMs = (MGBFlows.part(retailer, 'product').waitMs) || 12000;
-      go(true, { product, waitForButtonMs: waitMs });
+      holdStore.clear();
+      startClaimed(claim, product);
       return;
     }
     panel.setNote(!state || !state.paired ? 'This browser isn\'t connected to your account — click the Mugibot icon to connect, then press ⚡ Buy again.'
@@ -444,9 +545,49 @@
     if (msg && msg.type === 'frameStatus' && typeof msg.text === 'string' && assistFlag.active()) panel.setStatus(msg.text.slice(0, 300));
   });
 
+  // A ⚡ Buy that waited in the store's queue (or at its checkpoint) in this tab. (One that had got going —
+  // its progress kept by the flow — carries on as that, below.)
+  if (!goCode && held && store.read()) { holdStore.clear(); held = null; }
+  if (!goCode && held) {
+    aco = (await ask({ type: 'acoInfo' })) || held.claim.aco || null;
+    if (gate) {
+      // Still in line (the queue page refreshed itself) — or, kept in case, it turned out to be the queue.
+      if (!held.kind) holdStore.save({ ...held, kind: gate.kind, provisional: false, at: Date.now() });
+      waitAtGate(gate);
+      return;
+    }
+    const product = held.product || { sku: held.claim.sku, name: held.claim.name };
+    // Through, but somewhere other than the product (the store's front page): to the product, once.
+    const elsewhere = product.url && !MGBQuick.productForPage([product], retailer) && !MGBQuick.onCheckoutPage(retailer) && !MGBQuick.onBagPage(retailer);
+    if (elsewhere && !held.through) {
+      holdStore.save({ ...held, through: true, at: Date.now() });
+      panel.setStatus(`Through ${retailer.name}'s ${held.kind === 'checkpoint' ? 'checkpoint' : 'queue'} — opening the product…`);
+      location.assign(product.url);
+      return;
+    }
+    holdStore.clear();
+    // (A ⚡ Buy only kept in case — its page reloaded before it got going — just carries on.)
+    if (held.kind) {
+      report('step', `Through ${retailer.name}'s ${held.kind === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — carrying on`, product);
+      if (aco) acoReport('started', '', `Through ${retailer.name}'s ${held.kind === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — carrying on`);
+    }
+    startClaimed(held.claim, product);
+    return;
+  }
+
   // Carry on where we left off after the store changed page (an Auto-checkout run: still this tab's).
   if (store.read() || assistFlag.active()) aco = await ask({ type: 'acoInfo' });
   if (aco) panel.setNote('🤖 Auto-checkout');
+  // The store's checkpoint (or queue) partway through: wait there, then carry on.
+  if (gate && (store.read() || assistFlag.active())) { waitAtGate(gate); return; }
+  if (gate) {
+    // Just you, in line (or at the checkpoint): say so.
+    if (gate.kind === 'checkpoint') panel.moveAside();
+    panel.setNote(gate.kind === 'queue' ? `🚦 In ${retailer.name}'s virtual queue` : `🛡️ ${retailer.name}'s checkpoint`);
+    panel.setStatus(gateStatus(gate, false));
+    setInterval(() => { const now = MGBFlows.gateHere(retailer, document, location); if (now) panel.setStatus(gateStatus(now, false)); }, 30000);
+    return;
+  }
   if (store.read()) go(false);
   else if (assistFlag.active()) fillCheckout();
 })();

@@ -1479,7 +1479,12 @@ async function testRun(name) {
   // (Each of these tests a day of its own: the orders the tests before it placed count as yesterday's.)
   env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
   const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === name);
-  const r = await browserApi('POST', `/api/aco/test/${it.id}`);
+  let r = await browserApi('POST', `/api/aco/test/${it.id}`);
+  // (A few test runs a minute at most: the suite's many runs wait their turn.)
+  for (let i = 0; i < 8 && r.status === 429; i++) {
+    await new Promise((res) => setTimeout(res, 10000));
+    r = await browserApi('POST', `/api/aco/test/${it.id}`);
+  }
   assert.equal(r.status, 200, JSON.stringify(r.body));
   // (The browser picks the run up as it asks: nothing's armed, so it asks once, now — with what your account
   // says now, as the dashboard's Trigger ACO has it do, not what it last heard: it'd wait for its next alarm.)
@@ -1686,6 +1691,236 @@ test("🤖 Trigger ACO on the Auto-checkout page: a test run now, for an item th
   await dash.close();
   await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
   await useItems([]);
+});
+
+// --- Checkpoints and virtual queues (server/monitor/gates.js) -------------------------------------
+/** The gaps between each visitor's requests while they were in the queue: nothing but the queue page's own refreshes. */
+function queueGaps(q) {
+  const by = {};
+  for (const e of q.log) if (e.id && e.what !== 'redirect') (by[e.id] = by[e.id] || []).push(e.at);
+  return Object.values(by).flatMap((ts) => ts.slice(1).map((t, i) => t - ts[i]));
+}
+/** The extension's own record of a store's queue in this browser (its tabs in line, through or not). */
+const gatesHere = () => sw.evaluate(() => globalThis.mugibotGates());
+
+test("🛡️ JB Hi-Fi's checkpoint: ⚡ Buy runs into it and waits for you there — never touching the hCaptcha; you solve it, and it carries on to checkout", async () => {
+  const handle = 'pokemon-tcg-30th-celebration-etb';
+  await useItems([{ store: 'demo-jbhifi', sku: handle, name: 'JB ETB checkpoint' }]);
+  const S = store.shop('jbhifi');
+  S.checkpoint.on = true;
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'JB ETB checkpoint');
+  await reach(shop, /\/jbhifi\/checkpoint\?return_to=/);
+  await shop.waitForFunction(() => /checkpoint/.test(document.querySelector('#mugibot-qc')?.textContent || '')
+    && /wants a human check here\. Solve it yourself — Mugibot never touches it — and it carries on to checkout as soon as you have/.test(document.querySelector('#mugibot-qc').textContent), null, { timeout: 15000 });
+  // However long you take: the ⚡ Buy (90 seconds to reach checkout) is kept going while you're at the check.
+  await shop.evaluate(() => { const f = JSON.parse(sessionStorage.getItem('mgbFlow')); f.startedAt = Date.now() - 85000; sessionStorage.setItem('mgbFlow', JSON.stringify(f)); });
+  await shop.waitForFunction(() => { const f = JSON.parse(sessionStorage.getItem('mgbFlow') || 'null'); return !!f && Date.now() - f.startedAt < 20000; }, null, { timeout: 25000 });
+  assert.equal(S.checkpoint.botClicks, 0, 'the check is never touched');
+  assert.equal(S.checkpoint.solved, 0);
+  assert.equal(S.checkpoint.shown, 1, 'and the page never reloaded');
+  // Seen: the account hears it (a member's browser — one member alone doesn't make it "up" for everyone).
+  await waitFor(() => env.app.db.get("SELECT 1 FROM gates WHERE store = 'demo-jbhifi'"), { message: 'the sighting reported' });
+  // You solve it (a person's click) → straight on to checkout, filled in, stopping at "Pay now".
+  await shop.click('#hcaptcha-box');
+  await shop.click('#checkpoint-submit');
+  await reach(shop, /\/jbhifi\/checkouts\/c\/abc123$/);
+  await waitReady(shop, 'Pay now');
+  assert.equal(S.checkpoint.solved, 1);
+  assert.equal(S.checkpoint.botClicks, 0);
+  await waitFor(async () => JSON.stringify(await shopifyCard(shop)) === JSON.stringify(EXPECT_SHOPIFY_CARD), { timeout: 20000, message: 'the card typed in' });
+  assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test("🛡️ Auto-checkout at JB Hi-Fi's checkpoint: the run waits for you (it says so, and brings the tab forward), you solve it, and the order is placed", async () => {
+  await browserApi('PUT', '/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
+  const handle = 'pokemon-tcg-30th-celebration-etb';
+  await useItems([{ store: 'demo-jbhifi', sku: handle, name: 'ACO JB checkpoint', maxPrice: 120 }]);
+  const S = store.shop('jbhifi');
+  S.checkpoint.on = true;
+  await testRun('ACO JB checkpoint');
+  await waitFor(async () => (await lastRun()).status === 'waiting', { timeout: 30000, message: 'the run waiting at the checkpoint' });
+  const waiting = await lastRun();
+  assert.equal(waiting.reason, 'checkpoint');
+  assert.equal(waiting.statusText, 'Waiting for you at the checkpoint');
+  await waitFor(() => discord.dmsTo('d-ash').some((m) => /checkpoint needs you: ACO JB checkpoint/.test(m.body.embeds[0].title)), { message: 'the "checkpoint needs you" DM' });
+  const shop = ctx.pages().find((pg) => /\/jbhifi\/checkpoint/.test(pg.url()));
+  assert.ok(shop, 'the checkpoint, open in its tab');
+  assert.equal(S.checkpoint.botClicks, 0);
+  await shop.click('#hcaptcha-box');
+  await shop.click('#checkpoint-submit');
+  const run = await runOver('the JB Hi-Fi run past the checkpoint');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  assert.deepEqual(run.steps.map((x) => x.status).filter((x, i, a) => a.indexOf(x) === i), ['queued', 'sent', 'started', 'waiting', 'checkout', 'placing', 'placed']);
+  assert.equal(S.orders.length, 1, 'placed once');
+  assert.equal(S.checkpoint.botClicks, 0, 'the check was yours alone');
+  await closeStorePages('jbhifi');
+  await browserApi('PUT', '/api/aco', { enabled: false });
+});
+
+test("🚦 EB Games' virtual queue: an Auto-checkout run opens the store into the queue, waits its turn — never refreshing the page, nothing else asking EB for anything — and places the order once it's through", async () => {
+  await browserApi('PUT', '/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
+  await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'ACO EB queue', maxPrice: 120 }]);
+  const S = store.shop('ebgames');
+  Object.assign(S.queue, { on: true, admitAfterMs: 9000, refreshMs: 1500, tooSoonMs: 900, wait: 23 });
+  await testRun('ACO EB queue');
+  await waitFor(async () => (await lastRun()).status === 'waiting', { timeout: 30000, message: 'the run waiting in the queue' });
+  const waiting = await lastRun();
+  assert.equal(waiting.reason, 'queue');
+  assert.equal(waiting.statusText, 'Waiting in line');
+  assert.match(waiting.message, /virtual queue — about 23 min/);
+  const tab = ctx.pages().find((pg) => pg.url().startsWith(`${store.url}/ebgames/product/`));
+  assert.ok(tab);
+  await tab.waitForFunction(() => /In EB Games \(dummy store\)'s virtual queue/.test(document.querySelector('#mugibot-qc')?.textContent || '')
+    && /never refreshes it/.test(document.querySelector('#mugibot-qc').textContent), null, { timeout: 10000 });
+  // While it's in line: the extension knows this browser is in EB's queue, and holds everything else there.
+  const here = await gatesHere();
+  assert.ok(here.held.includes('demo-ebgames'), JSON.stringify(here));
+  assert.equal(Object.keys(here.gates['demo-ebgames'].line).length, 1, 'one tab in line');
+  // Your browser's own checks of your SKUs there, and its sign-in checks: none while it's in line (the
+  // server doesn't know the queue's up yet — one member's browser isn't enough — so this browser holds them itself).
+  env.app.repo.setSetting('retailer:demo-ebgames', { serverChecks: false });
+  env.app.db.run('UPDATE items SET browser_next_at = 0');
+  const eb = () => store.state.requests.filter((x) => x.path.startsWith('/ebgames/product/')).length;
+  const asked = eb();
+  await sw.evaluate(() => globalThis.mugibotRunChecks());
+  await sw.evaluate(() => globalThis.mugibotCheckLogins({ force: true }));
+  env.app.repo.setSetting('retailer:demo-ebgames', {});
+  assert.ok(eb() - asked <= 2, 'no check of it (only the queue page refreshing itself) — the gaps below prove it');
+  // Through (the queue page moved on by itself), then checked out and placed.
+  const run = await runOver('the EB Games run through the queue');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  assert.equal(S.orders.length, 1);
+  assert.deepEqual(S.orders[0].cart.map((c) => [c.sku, c.qty]), [['312346', 1]]);
+  assert.ok(run.steps.some((x) => x.status === 'waiting'));
+  assert.ok(run.steps.some((x) => x.status === 'started' && /Through EB Games \(dummy store\)'s virtual queue/.test(x.message)), JSON.stringify(run.steps));
+  // Never lost its place: the only requests while it waited were the queue page's own refreshes.
+  assert.equal(S.queue.kicks, 0, 'nothing asked again too soon');
+  assert.ok(S.queue.shown >= 3, `it waited (${S.queue.shown} queue pages)`);
+  assert.equal(S.queue.admitted, 1);
+  const gaps = queueGaps(S.queue);
+  assert.ok(gaps.length >= 2 && Math.min(...gaps) >= 1200, `only the page's own refreshes: ${gaps.join(', ')} ms`);
+  const after = await gatesHere();
+  assert.ok(after.through.includes('demo-ebgames'), 'through it now');
+  await closeStorePages('ebgames');
+  S.queue.on = false;
+  await browserApi('PUT', '/api/aco', { enabled: false });
+});
+
+test("🚦 ⚡ Buy into Pokémon Center's queue (/?queue): it waits in line with you, then — through, on the store's front page — opens the product and checks out (stopping at the final button)", async () => {
+  await useItems([{ url: store.productUrl('pokemoncenter', '10-10447-108'), name: 'PC ETB queue' }]);
+  const S = store.shop('pokemoncenter');
+  Object.assign(S.queue, { on: true, admitAfterMs: 6000, refreshMs: 1500, tooSoonMs: 900, wait: 12 });
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'PC ETB queue');
+  await reach(shop, /\/pokemoncenter\/\?queue$/);
+  await shop.waitForFunction(() => /In Pokémon Center \(dummy store\)'s virtual queue/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 10000 });
+  assert.equal(S.cart.length, 0, 'nothing added while in line');
+  await waitReady(shop, 'Place Order');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['10-10447-108', 1]]);
+  assert.equal(S.queue.kicks, 0);
+  const gaps = queueGaps(S.queue);
+  assert.ok(Math.min(...gaps) >= 1200, `only the page's own refreshes: ${gaps.join(', ')} ms`);
+  assert.equal(ordersPlaced(), 0, '"Place Order" was NOT pressed');
+  await shop.close();
+  await dash.close();
+  S.queue.on = false;
+});
+
+test("🚦 a queue page drawn by its own code after it opens (and reloading itself before Mugibot can tell): the ⚡ Buy isn't lost — it waits in line, then checks out", async () => {
+  await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'EB ETB late queue' }]);
+  const S = store.shop('ebgames');
+  Object.assign(S.queue, { on: true, admitAfterMs: 10000, refreshMs: 2500, tooSoonMs: 900, wait: 7, lateMs: 1200 });
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'EB ETB late queue');
+  await shop.waitForFunction(() => /You're in the queue/.test(document.body.innerText), null, { timeout: 15000 });
+  await waitReady(shop, 'CONFIRM & PAY');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['312346', 1]], 'one of it, once');
+  assert.equal(S.queue.kicks, 0);
+  assert.ok(S.queue.shown >= 3, `it waited (${S.queue.shown} queue pages)`);
+  assert.equal(ordersPlaced(), 0, 'stopped at the final button');
+  await shop.close();
+  await dash.close();
+  S.queue.on = false;
+});
+
+test("🚦 a queue goes up where you're armed: your checkout browser gets in line by itself (one tab, in the background); a drop meanwhile waits for it — no second tab into the queue — then opens the store from there and places the order", async () => {
+  await browserApi('PUT', '/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
+  await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'ACO EB lobby', aco: true, maxPrice: 120 }]);
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
+  const S = store.shop('ebgames');
+  Object.assign(S.queue, { on: true, admitAfterMs: 12000, refreshMs: 1500, tooSoonMs: 900, wait: 30 });
+  await acoListen();
+  const r = env.app.retailers.get('demo-ebgames');
+  const pagesBefore = ctx.pages().length;
+  env.app.gates.flip(r, 'up', { source: 'probe', wait: 30 });
+  await waitFor(() => ctx.pages().some((pg) => pg.url() === `${store.url}/ebgames/`), { timeout: 30000, message: 'a tab in line at EB Games' });
+  const lobby = ctx.pages().find((pg) => pg.url() === `${store.url}/ebgames/`);
+  await waitFor(async () => Object.keys(((await gatesHere()).gates['demo-ebgames'] || {}).line || {}).length === 1, { message: 'in line' });
+  // It drops while the lobby's in line: the run waits for it (no second tab knocking on the queue).
+  const run0 = await env.app.aco.trigger(env.app.db.get("SELECT * FROM items WHERE name = 'ACO EB lobby'"), { price: 99.95, source: 'browser' });
+  assert.ok(run0);
+  await waitFor(async () => (await lastRun()).status === 'waiting', { timeout: 20000, message: 'the run waiting for the tab in line' });
+  assert.match((await lastRun()).message, /In EB Games \(dummy store\)'s virtual queue in this browser — about 30 min — it checks out once it's through/);
+  assert.equal(ctx.pages().filter((pg) => pg.url().startsWith(`${store.url}/ebgames`)).length, 1, 'still only the one tab at EB Games');
+  // Through: the run opens the store (a fresh link) and places the order.
+  const run = await runOver('the run after the lobby got through');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  assert.equal(S.orders.length, 1);
+  assert.equal(S.queue.kicks, 0, 'nobody lost their place');
+  assert.equal(S.queue.admitted, 1, 'one place in line, for the whole browser');
+  assert.ok(ctx.pages().length > pagesBefore);
+  await lobby.close().catch(() => null);
+  await closeStorePages('ebgames');
+  env.app.gates.flip(r, 'down', { source: 'probe' });
+  S.queue.on = false;
+  await browserApi('PUT', '/api/aco', { enabled: false });
+  await useItems([]);
+});
+
+test("🚦 an admin's browser: a search that runs into EB's queue waits (its tab never reloaded); a look as a new visitor (no cookies) sees the queue go up and come down; #virtual-queue-detection gets both", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-ebgames': 'browser' } }, null);
+  Object.assign(env.app.cfg.monitor, { gateCheckSeconds: 2, gateDownGapSeconds: 2 });
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  const S = store.shop('ebgames');
+  const posts = () => { const ch = discord.state.channels.find((c) => c.name === 'virtual-queue-detection'); return ch ? discord.channelPosts(ch.id) : []; };
+  const before = posts().length;
+  try {
+    // A search first (its tab open at EB Games), then the queue goes up.
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => store.state.requests.some((x) => x.path === '/ebgames/search/query'), { timeout: 30000, message: 'a search from the sweep window' });
+    Object.assign(S.queue, { on: true, admitAfterMs: 600000, refreshMs: 1500, tooSoonMs: 900, wait: 45 });
+    await waitFor(() => env.app.gates.get('demo-ebgames').status === 'up', { timeout: 30000, message: 'the queue seen up' });
+    await waitFor(() => posts().length === before + 1, { message: 'posted' });
+    assert.equal(posts().at(-1).body.embeds[0].description.split('\n')[0], `🟢 Virtual queue up for EB Games (dummy store) | ${store.url}/ebgames/`);
+    // The sweep tab: never sent anywhere while the queue's up (the server holds its searches; the extension does too).
+    await new Promise((res) => setTimeout(res, 7000));
+    assert.equal(S.queue.kicks, 0, `no place in line lost (${S.queue.log.map((e) => `${e.at % 100000} ${e.id} ${e.what} ${e.path}`).join(' | ')})`);
+    assert.equal(sweeper.live().stores.find((s) => s.id === 'demo-ebgames').status, 'held');
+    assert.ok(S.queue.cookieless >= 2, 'looked at as a new visitor (no cookies), again and again');
+    // (If the sweep tab was opening EB's page just as the queue went up, it's in line now: only its own refreshes.)
+    const gaps = queueGaps(S.queue);
+    assert.ok(!gaps.length || Math.min(...gaps) >= 1200, `nothing asked again from a place in line — no tab reloaded, no search repeated: ${gaps.join(', ')} ms`);
+    // Down: the looks as a new visitor get the store, twice.
+    S.queue.on = false;
+    await waitFor(() => env.app.gates.get('demo-ebgames').status === 'down', { timeout: 30000, message: 'the queue seen down' });
+    await waitFor(() => posts().length === before + 2, { message: 'posted again' });
+    assert.equal(posts().at(-1).body.embeds[0].description, `🔴 Virtual queue down for EB Games (dummy store) | ${store.url}/ebgames/`);
+    // Searched again.
+    const m = store.state.requests.filter((x) => x.path === '/ebgames/search/query').length;
+    sweeper.sweepNow();
+    await waitFor(() => store.state.requests.filter((x) => x.path === '/ebgames/search/query').length > m, { timeout: 30000, message: 'searched again once it was down' });
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    Object.assign(env.app.cfg.monitor, { gateCheckSeconds: 0, gateDownGapSeconds: 45 });
+    S.queue.on = false;
+    sweeper.save({ stores: off }, null);
+  }
 });
 
 test("another account's ⚡ Buy link does nothing in this browser", async () => {

@@ -11,6 +11,12 @@
 // Runs go to one browser: the member's checkout browser (the one they picked, or the newest one
 // connected), never to all of them. Discord's ⚡ Buy, pressed anywhere (on a phone, with no
 // browser at all), starts a run there too: remote() below.
+//
+// Checkpoints and virtual queues (monitor/gates.js): a run that meets one waits ('waiting') — in
+// line, never refreshing the queue page, or at the checkpoint for the member to solve — and carries
+// on from there. A queue going up puts the checkout browser of every member armed at that store in
+// line straight away (a lobby: one tab at the store, waiting its turn), and Discord's "Join the
+// queue on my computer" does the same for anyone.
 
 import { entitlement } from './entitlement.js';
 import { newId } from './crypto.js';
@@ -19,7 +25,7 @@ import { DEFAULT_ACO } from './schema.js';
 import { startBuy } from './routes/user.js';
 
 // Still on its way: waiting for a browser, opening the store, at checkout, pressing the final button.
-const ACTIVE = ['queued', 'sent', 'started', 'checkout', 'placing'];
+const ACTIVE = ['queued', 'sent', 'started', 'waiting', 'checkout', 'placing'];
 const DONE = new Set(['placed', 'ready', 'needs_you', 'failed', 'skipped', 'expired']);
 // A browser has this long to pick a run up, and a run this long to finish.
 const PICKUP_MS = 2 * 60 * 1000;
@@ -30,6 +36,13 @@ const PLACING_MS = 5 * 60 * 1000;
 const LISTEN_MS = 45 * 1000;
 // Discord lets a button's reply be changed for 15 minutes.
 const FOLLOW_MS = 14 * 60 * 1000;
+// Waiting in a queue or at a checkpoint: the browser says it's still there every few minutes, and a
+// run waits this long at most (a queue can take a while; a checkpoint needs the member now).
+const WAIT_BEAT_MS = 10 * 60 * 1000;
+const QUEUE_MS = 2 * 60 * 60 * 1000;
+const CHECKPOINT_MS = 20 * 60 * 1000;
+// A queue's lobby (a browser told to get in line) lasts while the queue's up, or this long.
+const LOBBY_MS = 3 * 60 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
 // After this many failed runs in a day, an item stops trying until it's armed again.
 const MAX_FAILS = 3;
@@ -63,12 +76,14 @@ export const REASONS = {
   unconfirmed: "The final button was pressed, but no order confirmation showed",
   wrong_item: "The checkout wasn't for this item alone",
   stopped: 'You stopped it',
+  queue: "In the store's virtual queue",
+  checkpoint: "The store's checkpoint wants a human to solve it",
   timeout: 'It took too long',
   error: 'Something went wrong',
 };
 
 const STATUS_WORD = {
-  queued: 'Waiting for your browser', sent: 'Opening the store', started: 'Adding to bag', checkout: 'At checkout', placing: 'Placing the order',
+  queued: 'Waiting for your browser', sent: 'Opening the store', started: 'Adding to bag', waiting: 'Waiting in line', checkout: 'At checkout', placing: 'Placing the order',
   placed: 'Order placed', ready: 'Filled in — waiting for you', needs_you: 'Needs you', failed: 'Failed', skipped: 'Skipped', expired: 'Not started',
 };
 
@@ -78,7 +93,8 @@ const parseSteps = (v) => { try { const a = JSON.parse(v || '[]'); return Array.
 export function toRun(r) {
   return r && {
     id: r.id, itemId: r.item_id, store: r.store, sku: r.sku, name: r.name, url: r.url, price: r.price, total: r.total, maxPrice: r.max_price,
-    mode: r.mode, trigger: r.trigger, status: r.status, statusText: STATUS_WORD[r.status] || r.status, reason: r.reason || '',
+    mode: r.mode, trigger: r.trigger, status: r.status, reason: r.reason || '',
+    statusText: r.status === 'waiting' && r.reason === 'checkpoint' ? 'Waiting for you at the checkpoint' : STATUS_WORD[r.status] || r.status,
     reasonText: r.reason ? (REASONS[r.reason] || r.reason) : '', message: r.message || '', steps: parseSteps(r.steps),
     active: ACTIVE.includes(r.status), createdAt: r.created_at, updatedAt: r.updated_at,
   };
@@ -93,6 +109,7 @@ export class Aco {
     this.waiters = new Map(); // userId → Set<wake()>
     this.listening = new Map(); // deviceId → when it last asked for runs
     this.follows = new Map(); // runId → { token, until, last }: Discord's ⚡ Buy reply, kept up to date
+    this.lobbies = new Map(); // userId → Map(store → { id, store, url, by, at, sent }): browsers told to get in line
     this.timer = null;
   }
 
@@ -245,10 +262,11 @@ export class Aco {
 
     const run = this.create(base, 'queued', '', `Dropped at ${r.name}${price !== null ? ` for ${money(price)}` : ''} — waiting for your browser to check out.`);
     this.wake(userId); // first: every second counts in a drop
+    const queued = this.ctx.gates && this.ctx.gates.queueUp(item.store);
     await this.notifier.notify(userId, {
       type: 'aco', level: 'urgent', channel: 'aco',
       title: `🤖 Auto-checkout ${info.test ? 'test ' : ''}started: ${item.name}`,
-      message: `${r.name}${price !== null ? ` · ${money(price)}` : ''}\n${s.mode === 'place' ? 'Your browser is checking out now, and will place the order.' : 'Your browser is filling in checkout now, and will stop at the final button for you.'}`,
+      message: `${r.name}${price !== null ? ` · ${money(price)}` : ''}\n${s.mode === 'place' ? 'Your browser is checking out now, and will place the order.' : 'Your browser is filling in checkout now, and will stop at the final button for you.'}${queued ? `\n🚦 ${r.name}'s virtual queue is up: your browser waits its turn in line first (don't refresh the queue page).` : ''}`,
       name: item.name, sku: item.sku, url: item.url, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
     });
     return toRun(run);
@@ -327,6 +345,9 @@ export class Aco {
       queued: `⏳ Sent to **${deviceName}** — waiting for it to open ${where}.`,
       sent: `🛒 **${deviceName}** is opening ${where}…`,
       started: `🛒 Adding it to the bag at ${where} in **${deviceName}**…`,
+      waiting: run.reason === 'checkpoint'
+        ? `🛡️ ${where}'s checkpoint wants a human: solve it in **${deviceName}**, and it carries on to checkout.`
+        : `🚦 In ${where}'s virtual queue in **${deviceName}**${run.message && /about \d+ min/.test(run.message) ? ` — ${run.message.match(/about \d+ min\w*/)[0]}` : ''}. It waits its turn (never refreshing the page), then checks out.`,
       checkout: `🛒 At ${where}'s checkout in **${deviceName}** — filling it in…`,
       placing: `💳 Placing the order at ${where}…`,
       placed: `✅ **Order placed** at ${where}${total ? ` — ${money(total)}` : ''}. The store emails you the confirmation.`,
@@ -442,7 +463,8 @@ export class Aco {
   /** The store opened with the run's ⚡ Buy code (routes/ext.js /claim): what this checkout may do. */
   claimed(userId, runId, device) {
     const row = this.get(userId, runId);
-    if (!row || !['sent', 'queued'].includes(row.status)) return null;
+    // ('waiting': a run held while its browser waited in a queue, now opening the store with a fresh code.)
+    if (!row || !['sent', 'queued', 'waiting'].includes(row.status)) return null;
     const s = this.settings(userId);
     // (Discord's ⚡ Buy that only fills checkout in doesn't need Auto-checkout on: the member presses the button.)
     if (!s.enabled && !(row.trigger === 'remote' && row.mode === 'fill')) {
@@ -468,14 +490,134 @@ export class Aco {
     if (DONE.has(row.status) && !(row.status === 'needs_you' && status === 'placed')) return toRun(row);
     if (typeof total === 'number' && Number.isFinite(total) && total > 0) this.db.run('UPDATE aco_runs SET total = :t WHERE id = :id', { t: Math.round(total * 100) / 100, id: row.id });
     if (status === 'checkout' || status === 'placing') {
-      this.db.run('UPDATE aco_runs SET status = :st, updated_at = :t WHERE id = :id', { st: status, t: this.now(), id: row.id });
+      this.db.run("UPDATE aco_runs SET status = :st, reason = '', updated_at = :t WHERE id = :id", { st: status, t: this.now(), id: row.id });
       this.step(row.id, status, message);
       // The final button is pressed: this arming is used up, whatever happens next.
       if (status === 'placing') this.disarm(userId, row.item_id);
       return this.publish(userId, row.id);
     }
+    if (status === 'waiting') return this.waiting(userId, row, reason === 'checkpoint' ? 'checkpoint' : 'queue', message);
+    if (status === 'started' && row.status === 'waiting') {
+      // Through the queue (or past the checkpoint): carrying on.
+      this.db.run("UPDATE aco_runs SET status = 'started', reason = '', updated_at = :t WHERE id = :id", { t: this.now(), id: row.id });
+      this.step(row.id, 'started', message || `Through — carrying on at ${this.retailers.name(row.store)}`);
+      return this.publish(userId, row.id);
+    }
     if (!['ready', 'placed', 'needs_you', 'failed'].includes(status)) return toRun(row);
     return this.finish(userId, row, status, reason, message);
+  }
+
+  /**
+   * The run's browser is waiting: in the store's virtual queue (reason 'queue'), or at its checkpoint
+   * for the member to solve (reason 'checkpoint'). Said again every few minutes while it waits (only
+   * a new message is a new step); the member hears about it once.
+   */
+  async waiting(userId, row, reason, message) {
+    if (!['queued', 'sent', 'started', 'checkout', 'waiting'].includes(row.status)) return toRun(row);
+    const first = row.status !== 'waiting' || row.reason !== reason;
+    const text = message || REASONS[reason];
+    this.db.run("UPDATE aco_runs SET status = 'waiting', reason = :r, message = :m, updated_at = :t WHERE id = :id", { r: reason, m: text, t: this.now(), id: row.id });
+    const last = parseSteps(row.steps).at(-1);
+    if (first || !last || last.message !== text) this.step(row.id, 'waiting', text);
+    const run = this.publish(userId, row.id);
+    if (first) {
+      const where = this.retailers.name(row.store);
+      await this.notifier.notify(userId, {
+        type: 'aco', level: 'urgent', channel: 'aco',
+        title: reason === 'checkpoint' ? `🛡️ ${where}'s checkpoint needs you: ${row.name}` : `🚦 In ${where}'s queue: ${row.name}`,
+        message: reason === 'checkpoint'
+          ? `${where} wants a human check (hCaptcha) before checkout. Solve it in the tab that opened, and Mugibot carries on to checkout — it never touches the check itself.`
+          : `${text}\nYour browser is waiting its turn and carries on when it's through. Leave the queue page alone: it refreshes itself.`,
+        name: row.name, sku: row.sku, url: row.url || null, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
+      }).catch(() => null);
+    }
+    return run;
+  }
+
+  /** A fresh ⚡ Buy link for a run whose browser held it while it waited in a queue (its code may have run out). */
+  freshLink(user, runId) {
+    const row = this.get(user.id, runId);
+    if (!row || !['waiting', 'sent'].includes(row.status)) return null;
+    const item = row.item_id ? this.repo.getItem(user.id, row.item_id) : null;
+    if (!item || !item.url) return null;
+    return startBuy(this.ctx, user, { ...item, quantity: 1 }, { runId: row.id }).url;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Virtual queues: getting in line before the drop (monitor/gates.js)
+  // ---------------------------------------------------------------------------
+  /** Does this member's checkout browser get in line at this store when its queue goes up? Auto-checkout on, something armed there. */
+  joinsQueue(userId, store) {
+    if (!this.settings(userId).enabled) return false;
+    return !!this.db.get('SELECT 1 FROM items WHERE user_id = :u AND store = :s AND aco = 1 LIMIT 1', { u: userId, s: store });
+  }
+
+  /** A store's queue went up: every member armed there (Auto-checkout on) gets their checkout browser in line. */
+  queueUp(r) {
+    const rows = this.db.all('SELECT DISTINCT user_id FROM items WHERE store = :s AND aco = 1', { s: r.id });
+    for (const { user_id: userId } of rows) {
+      const user = this.repo.userById(userId);
+      if (!user || user.disabled || !entitlement(user, this.now()).active || !this.settings(userId).enabled) continue;
+      if (!this.checkoutDevice(userId)) continue;
+      this.lobby(userId, r, 'auto');
+    }
+  }
+
+  /** The queue came down (or the checkpoint's off): nobody needs to get in line there any more. */
+  gateDown(r) {
+    for (const [userId, map] of this.lobbies) {
+      map.delete(r.id);
+      if (!map.size) this.lobbies.delete(userId);
+    }
+  }
+
+  lobby(userId, r, by) {
+    let map = this.lobbies.get(userId);
+    if (!map) this.lobbies.set(userId, (map = new Map()));
+    const had = map.get(r.id);
+    if (had && this.now() - had.at < LOBBY_MS) return had;
+    const gates = this.ctx.gates;
+    // (Its front page: the store puts a new visitor in line there.)
+    const lobby = { id: newId('lob'), store: r.id, storeName: r.name, url: gates ? gates.checkUrl(r, (r.gate.check && r.gate.check.path) || '/') : r.base, by, at: this.now(), sent: null };
+    map.set(r.id, lobby);
+    this.repo.addEvent(userId, { type: 'aco', level: 'info', message: `🚦 ${r.name}'s virtual queue is up — ${by === 'auto' ? 'your checkout browser is getting in line for your armed items' : 'your checkout browser is getting in line (Discord)'}` });
+    this.wake(userId);
+    return lobby;
+  }
+
+  /**
+   * Discord's "📥 Join the queue on my computer" (routes/discord.js): the member's checkout browser
+   * gets in line at that store. { lobby, device, listening } — or { error }.
+   */
+  joinQueue(userId, storeId) {
+    const user = this.repo.userById(userId);
+    if (!user || user.disabled) return { error: 'Your account is suspended — contact support.' };
+    if (!entitlement(user, this.now()).active) return { error: `This needs an active membership: ${this.cfg.baseUrl}/app#membership` };
+    const r = this.retailers.get(storeId);
+    const gates = this.ctx.gates;
+    if (!r || !r.gate || r.gate.kind !== 'queue') return { error: "That store doesn't have a virtual queue Mugibot knows." };
+    if (!gates || !gates.queueUp(r.id)) return { error: `${r.name}'s virtual queue isn't up right now — nothing to join. Mugibot posts in #virtual-queue-detection when it is.` };
+    const device = this.checkoutDevice(userId);
+    if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension.` };
+    const lobby = this.lobby(userId, r, 'discord');
+    return { lobby, device: { id: device.id, name: device.name }, listening: this.isListening(device.id) };
+  }
+
+  /** The queues this (checkout) browser should get in line for now — each handed over once. */
+  lobbiesFor(user, device) {
+    const map = this.lobbies.get(user.id);
+    if (!map) return [];
+    const checkout = this.checkoutDevice(user.id);
+    if (!checkout || checkout.id !== device.id) return [];
+    const out = [];
+    for (const [store, l] of map) {
+      if (this.now() - l.at > LOBBY_MS) { map.delete(store); continue; }
+      if (l.sent === device.id) continue;
+      l.sent = device.id;
+      const g = this.ctx.gates ? this.ctx.gates.get(l.store) : null;
+      out.push({ id: l.id, store: l.store, storeName: l.storeName, url: l.url, by: l.by, since: g ? g.since : null });
+    }
+    return out;
   }
 
   async finish(userId, row, status, reason, message) {
@@ -538,11 +680,18 @@ export class Aco {
   expire() {
     const now = this.now();
     const stale = this.db.all(`SELECT * FROM aco_runs WHERE (status IN ('queued', 'sent') AND created_at < :pick)
-      OR (status IN ('started', 'checkout') AND updated_at < :run) OR (status = 'placing' AND updated_at < :placing)`,
-    { pick: now - PICKUP_MS, run: now - RUN_MS, placing: now - PLACING_MS });
+      OR (status IN ('started', 'checkout') AND updated_at < :run) OR (status = 'placing' AND updated_at < :placing)
+      OR (status = 'waiting' AND (updated_at < :beat OR (reason = 'checkpoint' AND created_at < :cp) OR created_at < :queue))`,
+    { pick: now - PICKUP_MS, run: now - RUN_MS, placing: now - PLACING_MS, beat: now - WAIT_BEAT_MS, cp: now - CHECKPOINT_MS, queue: now - QUEUE_MS });
     for (const row of stale) {
       if (row.status === 'queued' || row.status === 'sent') this.finish(row.user_id, row, 'expired', 'no_browser', '').catch(() => null);
       else if (row.status === 'placing') this.finish(row.user_id, row, 'needs_you', 'unconfirmed', 'The final button was pressed, but no order confirmation showed. Check your email from the store before buying again.').catch(() => null);
+      else if (row.status === 'waiting') {
+        const where = this.retailers.name(row.store);
+        const lost = row.updated_at < now - WAIT_BEAT_MS;
+        this.finish(row.user_id, row, 'failed', 'timeout', lost ? `Lost touch with your browser while it waited at ${where} — is it still open?`
+          : row.reason === 'checkpoint' ? `${where}'s checkpoint wasn't solved within 20 minutes` : `Still in ${where}'s queue after 2 hours — it stopped waiting`).catch(() => null);
+      }
       else this.finish(row.user_id, row, 'failed', 'timeout', '').catch(() => null);
     }
   }

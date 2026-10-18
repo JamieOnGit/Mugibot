@@ -161,6 +161,8 @@ export function register(router, ctx) {
    * custom_id: 'buy:a:<alert>' (a Monitor alert in a channel) or 'buy:i:<item>' (their own SKU).
    */
   async function press(i, discordId) {
+    const q = String((i.data && i.data.custom_id) || '').match(/^queue:([\w-]{1,40})$/);
+    if (q) return joinQueue(q[1], discordId);
     const m = String((i.data && i.data.custom_id) || '').match(/^buy:(a|i):([\w-]{1,60})$/);
     if (!m) return reply('That button is from an older message — use a newer one.');
     const alert = m[1] === 'a' ? ctx.catalog.alertById(m[2]) : null;
@@ -189,6 +191,22 @@ export function register(router, ctx) {
     ctx.aco.follow(out.run.id, i.token, out.device.name, how);
     const asleep = out.listening ? '' : `\n⚠️ **${out.device.name}** isn't open right now — it starts as soon as it is (within 2 minutes).`;
     return reply(`${ctx.aco.remoteText(out.run, out.device.name)}\n${how}${asleep}`);
+  }
+
+  /**
+   * "📥 Join the queue on my computer" on a #virtual-queue-detection post (monitor/gates.js): the
+   * member's checkout browser opens the store in a tab of its own and waits its turn in line there
+   * (never refreshing it). Their ⚡ Buy and Auto-checkout at that store carry on from that tab once
+   * it's through.
+   */
+  async function joinQueue(store, discordId) {
+    const user = repo.userByDiscordId(discordId);
+    if (!user) return reply(`Your Discord isn't connected to a ${cfg.appName} account yet. Log in at ${cfg.baseUrl}/app#discord and press **Connect Discord** — then this puts your computer's browser in line.`);
+    const out = ctx.aco.joinQueue(user.id, store);
+    if (out.error) return reply(`⚠️ ${out.error}`);
+    const name = out.lobby.storeName;
+    const asleep = out.listening ? '' : `\n⚠️ **${out.device.name}** isn't open right now — it gets in line as soon as it is (Discord's ⚡ Buy from your phone needs to be on: ${cfg.baseUrl}/app#aco).`;
+    return reply(`🚦 **${out.device.name}** is getting in line at ${name}: a tab of its own opens there and waits its turn. Leave it alone — the queue page refreshes itself, and refreshing it yourself can lose your place. ⚡ Buy and Auto-checkout at ${name} carry on from there once you're through.${asleep}`);
   }
 
   async function command(i, discordId) {

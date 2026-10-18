@@ -34,6 +34,16 @@ community. Built on TCGCopBot's working Kmart flow.
   their limits; otherwise it stops at the final button for them. Discord's
   reply, seen only by them, follows it to the end. Runs only ever go to one of a
   member's browsers (the one they pick, or the newest), never to all of them.
+- **🚦 Checkpoints and virtual queues.** Mugibot watches for JB Hi-Fi's hCaptcha
+  checkpoint (`/checkpoint`) and EB Games' and Pokémon Center's virtual queues
+  going up before a drop and coming down after. Each is posted in
+  `#virtual-queue-detection`, shown on every dashboard and DM'd to members
+  watching that store. ⚡ Buy and Auto-checkout wait at the checkpoint for the
+  member to solve it, then carry on. In a queue they wait their turn, never
+  refreshing the page, and check out once through. A member armed at that store
+  gets their checkout browser in line by itself, and anyone can from Discord
+  (📥 Join the queue on my computer). See
+  [docs/MONITORING.md](docs/MONITORING.md#-checkpoints-and-virtual-queues).
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games,
   JB Hi-Fi, Target, Toys"R"Us, Amazon, The Games Cube, Gamerholic and Premium
   Bandai (Australia) are beta (built from walk-throughs of their real checkouts
@@ -162,6 +172,11 @@ Discord and Whop are optional for this. Add them later with the guides.
 - **Never evades bot protection.** If a store shows a bot check, Mugibot backs
   off and marks it "Blocked by site". It never solves CAPTCHAs, skips queues or
   disguises traffic. Admins can always send a manual restock ping.
+- **Checkpoints and queues.** JB Hi-Fi's checkpoint is looked at by the server
+  (honestly `Mugibot/1.0`). EB Games' and Pokémon Center's queues are looked at
+  from an admin's browser as a new visitor, with no cookies, so nobody's place
+  in line is touched. While a queue is up, a browser that isn't through it asks
+  that store for nothing.
 
 ## Fair play (same guardrails as TCGBot/TCGCopBot)
 
@@ -198,7 +213,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 237 tests in about eight minutes:
+the 257 tests in about ten minutes:
 
 ```bash
 npm install
@@ -275,6 +290,25 @@ npm test
     checkout browser alone, a picked one or the newest. Also covered: someone
     else's button, an unconnected Discord, no membership and "Send to my
     computer" on the buy page.
+- **Checkpoints and virtual queues** (dummy JB Hi-Fi checkpoint that only a
+  person's click solves; dummy EB Games and Pokémon Center queues that refresh
+  themselves and lose your place if anything asks again too soon):
+  - the server seeing JB's checkpoint go up and be disabled (twice to count),
+    honestly itself;
+  - members' and admins' browsers seeing a queue, and only a look as a new
+    visitor taking it down;
+  - the posts in `#virtual-queue-detection` (the monitor's embed), DMs and the
+    dashboard banner;
+  - checks and searches held while a queue is up, unless the browser is through;
+  - with the real extension: ⚡ Buy and Auto-checkout waiting at JB's
+    checkpoint (never touching it) and carrying on once a person solves it;
+  - Auto-checkout through EB's queue and ⚡ Buy through Pokémon Center's, never
+    refreshing them (no place lost, only the page's own refreshes);
+  - a queue going up putting an armed member's browser in line, a drop
+    meanwhile waiting for that tab, then placing the order;
+  - an admin's sweep tab left alone in the queue, the queue seen up and down
+    as a new visitor;
+  - 📥 Join the queue from Discord, and runs not waiting forever.
 - **Amazon sweeps from an admin's browser:** its search page asked for from inside
   an Amazon page (the dummy Amazon gives servers HTTP 503, like the real one).
 - **Dashboard round:** the card backup (only a locked copy reaches the server,
@@ -297,7 +331,8 @@ server/
   retailers/        one file per store, with its checkout flow (kmart.js, bigw.js, …)
   monitor/          sweep.js (live sweeps), listing.js (search results), http.js (store requests),
                     SKU page checks and in-browser check results, feed.js (alerts),
-                    public.js (what members see of the sweeps)
+                    public.js (what members see of the sweeps), gates.js and gate.js
+                    (checkpoints and virtual queues: up, down, #virtual-queue-detection)
   catalog.js        the Monitor's products, monitors, price history, check log, alert rules
   discord.js        Discord OAuth, server roles, DMs, channel posts
   whop.js           Whop checkout links, webhooks, membership sync

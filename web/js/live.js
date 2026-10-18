@@ -17,7 +17,7 @@ const SLOT_ORDER = ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toy
 export const slotOf = (id) => SLOT_ORDER.indexOf(String(id || '').replace(/^demo-/, '')) + 1;
 const ABBR = { kmart: 'KM', bigw: 'BW', target: 'TG', ebgames: 'EB', zing: 'ZG', jbhifi: 'JB', toysrus: 'TR', trainertown: 'TT', amazon: 'AZ', thegamescube: 'GC', gamerholic: 'GH', pokemoncenter: 'PC', pbandai: 'PB' };
 const abbr = (id) => ABBR[String(id || '').replace(/^demo-/, '')] || String(id || '?').slice(0, 2).toUpperCase();
-const STATE = { ok: ['ok', 'Searching'], slowed: ['warn', 'Slowed'], retrying: ['err', 'Retrying'], waiting: ['warn', 'Waiting'], starting: ['', 'Starting'], off: ['off', 'Off'] };
+const STATE = { ok: ['ok', 'Searching'], slowed: ['warn', 'Slowed'], retrying: ['err', 'Retrying'], waiting: ['warn', 'Waiting'], held: ['warn', 'In queue'], starting: ['', 'Starting'], off: ['off', 'Off'] };
 const ALERT = { listed: ['drop', 'New drop'], restock: ['restock', 'Restock'], price_drop: ['price', 'Price ↓'], price_rise: ['price', 'Price ↑'], sold_out: ['out', 'Sold out'] };
 const LOG_MAX = 300;
 const ROWS_MAX = 220;

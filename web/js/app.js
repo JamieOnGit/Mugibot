@@ -158,6 +158,27 @@ function renderBanner() {
   }
 }
 
+// Checkpoints and virtual queues up now (server/monitor/gates.js): what to do before the drop.
+async function loadGates() {
+  state.gates = (await api('GET', '/api/gates').catch(() => ({ gates: [] }))).gates || [];
+  renderGates();
+}
+
+function renderGates() {
+  const box = $('#gates-banner');
+  box.textContent = '';
+  for (const g of (state.gates || []).filter((x) => x.status === 'up')) {
+    const queue = g.kind === 'queue';
+    const wait = queue && typeof g.wait === 'number' ? ` — about ${g.wait} min` : '';
+    box.append(h('div', { class: 'notice warn gate-notice', 'data-store': g.store },
+      h('b', {}, queue ? `🚦 ${g.name}'s virtual queue is up${wait}. ` : `🛡️ ${g.name}'s checkpoint is up. `),
+      queue
+        ? 'Get in line in your browser and leave the queue page alone: it refreshes itself, and refreshing it yourself can lose your place. ⚡ Buy and Auto-checkout wait in line, then carry on. '
+        : 'Solve it once in your browser before the drop: ⚡ Buy and Auto-checkout stop there for you, then carry on to checkout. ',
+      h('a', { href: g.url, target: '_blank', rel: 'noopener', class: 'btn small' }, `Open ${g.name}`)));
+  }
+}
+
 $('#logout').addEventListener('click', async () => {
   await api('POST', '/api/auth/logout').catch(() => null);
   location.href = '/';
@@ -762,10 +783,10 @@ loaders.checkout = async () => {
 // ---------------------------------------------------------------------------
 // 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md)
 // ---------------------------------------------------------------------------
-const ACO_ICON = { placed: '✅', ready: '🛒', needs_you: '⚠️', failed: '❌', expired: '❌', skipped: '⏭️' };
-const ACO_TONE = { placed: 'ok', ready: 'info', needs_you: 'warn', failed: 'err', expired: 'err', skipped: '' };
+const ACO_ICON = { placed: '✅', ready: '🛒', needs_you: '⚠️', failed: '❌', expired: '❌', skipped: '⏭️', waiting: '🚦' };
+const ACO_TONE = { placed: 'ok', ready: 'info', needs_you: 'warn', failed: 'err', expired: 'err', skipped: '', waiting: 'warn' };
 const ACO_STEP = {
-  queued: 'Dropped', sent: 'Sent to your browser', started: 'Store opened', checkout: 'At checkout', placing: 'Final button pressed',
+  queued: 'Dropped', sent: 'Sent to your browser', started: 'Store opened', waiting: 'Waiting (queue or checkpoint)', checkout: 'At checkout', placing: 'Final button pressed',
   placed: 'Order placed', ready: 'Filled in', needs_you: 'Needs you', failed: 'Failed', skipped: "Didn't start", expired: "Didn't start",
 };
 const ACO_FILTER = { placed: ['placed'], needs: ['needs_you', 'ready'], failed: ['failed', 'expired'], skipped: ['skipped'] };
@@ -1329,6 +1350,12 @@ function connectStream() {
   es.addEventListener('monitor-feed', (e) => monitorUI.onFeed(JSON.parse(e.data)));
   es.addEventListener('monitor-product', (e) => monitorUI.onProduct(JSON.parse(e.data)));
   es.addEventListener('monitor-sweep', (e) => monitorUI.onSweep(JSON.parse(e.data)));
+  // A checkpoint or virtual queue went up, or came down.
+  es.addEventListener('monitor-gate', (e) => {
+    const g = JSON.parse(e.data);
+    state.gates = [...(state.gates || []).filter((x) => x.store !== g.store), g];
+    renderGates();
+  });
   // The card's backup changed (made, updated or deleted in an extension).
   es.addEventListener('card', (e) => {
     state.cardBackup = JSON.parse(e.data).backup;
@@ -1348,4 +1375,5 @@ function connectStream() {
 await loadMe();
 showTab();
 connectStream();
+if (state.me.entitlement.active) loadGates();
 if (new URLSearchParams(location.search).get('welcome')) toast('Welcome!', 'Start with Membership, then the Extension tab and Discord.', 'success', 10000);

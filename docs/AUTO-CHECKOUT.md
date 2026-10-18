@@ -116,6 +116,45 @@ Trigger ACO and ⚡ Buy from your phone.
 - Your other browsers still do everything else: ⚡ Buy pressed in them,
   in-browser checks, the store login monitor.
 
+### Checkpoints and virtual queues
+
+Before a big drop, JB Hi-Fi can switch on its **checkpoint** (an hCaptcha
+check before checkout). EB Games and Pokémon Center can put up a **virtual
+queue**. Mugibot posts each one in `#virtual-queue-detection` when it goes up
+and comes down (docs/MONITORING.md). Auto-checkout and ⚡ Buy go through them
+like you would.
+
+- **At JB Hi-Fi's checkpoint** the run stops there and waits for **you** to
+  solve the check. Mugibot never touches it. The run says "Waiting for you at
+  the checkpoint" and DMs you. The tab comes forward with the panel moved out of
+  the way. Once you've solved it, the store sends you on to checkout and the
+  run carries on: details, card, the total checked, the final button. It waits
+  up to 20 minutes.
+- **In a virtual queue** the run waits its turn. The queue page refreshes
+  itself; Mugibot **never refreshes it**, because refreshing it yourself can
+  lose your place. Your ⚡ Buy, checkout pass and Auto-checkout limits are kept
+  the whole time. The run shows "Waiting in line" (about how long, when the
+  page says) and DMs you once. When you're through, it carries on. If the
+  store let you in at its front page, it opens the product first. It waits up
+  to 2 hours, as long as your browser keeps saying it's still in line (every
+  few minutes).
+- **While your browser is in a store's queue**, nothing else of Mugibot's asks
+  that store for anything: no in-browser checks of your SKUs there, no sign-in
+  checks, no second tab. A drop at that store while you're in line **waits for
+  the tab in line** to get through, then opens the store from there with a
+  fresh link.
+- **Getting in line before the drop:**
+  - **By itself**: when a store's queue goes up and you have Auto-checkout on
+    with something armed there, your checkout browser opens the store in a tab
+    of its own, in the background, and waits in line. It does this once a
+    queue, unless it's in line or through already. Your DM says so.
+  - **From Discord**: **📥 Join the queue on my computer** on the
+    `#virtual-queue-detection` post does the same for anyone, armed or not.
+    Your checkout browser must be open, with "⚡ Buy from your phone" on.
+- Needs **extension 1.16.0** or later (the Auto-checkout tab says when yours
+  is older). Older ones get no checks or searches at a store while its queue
+  is up, and their runs there don't wait in line.
+
 ### One purchase per arming
 
 Once the final button is pressed, the item is **disarmed**, whether the order was
@@ -357,5 +396,6 @@ Tests:
 - It uses the member's own browser, signed in as them, at a person's pace. There
   are no proxies, no extra accounts and no hidden identity.
 - It never solves CAPTCHAs, skips queues or gets past bot protection or a bank's
-  check.
+  check. At a store's checkpoint it waits for you to solve it. In a virtual
+  queue it waits its turn and never refreshes the queue page.
 - Store purchase limits are respected. It buys one of each item.

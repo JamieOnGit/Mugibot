@@ -426,6 +426,23 @@ const MIGRATIONS = [
   ALTER TABLE alert_routes ADD COLUMN vip INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE feed_alerts ADD COLUMN vip INTEGER NOT NULL DEFAULT 0;
   `,
+  // 10 — checkpoints and virtual queues (server/monitor/gates.js): whether each store's gate (JB
+  //      Hi-Fi's hCaptcha checkpoint, EB Games' and Pokémon Center's queues) is up, since when,
+  //      and what it last said about the wait.
+  `
+  CREATE TABLE gates (
+    store TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,                  -- checkpoint | queue
+    status TEXT NOT NULL DEFAULT 'down', -- up | down
+    since INTEGER,                       -- when it went up (or down)
+    seen_at INTEGER,                     -- last seen up
+    looked_at INTEGER,                   -- last looked at by a check that tells (server, an admin's browser)
+    wait INTEGER,                        -- the queue's estimated wait, in minutes
+    source TEXT NOT NULL DEFAULT '',     -- what saw it change: server | browser | probe | stale
+    ups INTEGER NOT NULL DEFAULT 0,      -- times it's gone up
+    posted_at INTEGER
+  );
+  `,
 ];
 
 export class Db {

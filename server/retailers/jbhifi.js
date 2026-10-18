@@ -43,6 +43,15 @@ export default {
   // open the store). /account goes to the store's sign-in when you're signed out.
   account: { signIn: '/account', check: { path: '/', signedIn: /var __st=\{[^}]*"cid":\s*\d+|"customerId":\s*\d+/, signedOut: /var __st=\{/ } },
   monitor: { server: true, browser: true },
+  // Its checkpoint (Shopify's bot check: an hCaptcha page at /checkpoint), switched on before big
+  // drops, then off again (docs/MONITORING.md, "Checkpoints and virtual queues"). The server looks
+  // at /checkpoint once a minute: up = the page with its hCaptcha; down = gone, or sent elsewhere.
+  // ⚡ Buy and Auto-checkout never touch the check: they wait for you to solve it, then carry on.
+  gate: {
+    kind: 'checkpoint', title: 'Checkpoint Monitor', label: 'hcaptcha Checkpoint', module: 'Shopify', url: '/checkpoint',
+    page: { path: /\/checkpoint\/?$/i, markers: [/h-captcha|hcaptcha/i] },
+    probe: { path: '/checkpoint', intervalSeconds: 60 },
+  },
   flow: {
     product: {
       add: [/\badd to cart\b/i, /\bpre-?order\b/i],

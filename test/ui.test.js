@@ -912,6 +912,32 @@ test("Monitor page for a member: each store's switch (hidden just for them), ☆
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"] .st-sw[aria-checked="true"]', { timeout: 10000 });
 });
 
+test('🚦 a checkpoint or virtual queue going up shows on every dashboard straight away — what to do, and a link — and goes when it comes down', async () => {
+  const c = await Client.signup(env.url, 'queuefan');
+  env.app.repo.updateUser(c.user.id, { plan: 'comped' });
+  const g = env.app.gates;
+  g.flip(env.app.retailers.get('ebgames'), 'up', { source: 'probe', wait: 23 });
+  const fan = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  fan.on('pageerror', (e) => errors.push(e.message));
+  await fan.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
+  await fan.goto(`${env.url}/app#monitor`);
+  await fan.waitForSelector('#gates-banner .gate-notice[data-store="ebgames"]');
+  assert.match(await fan.textContent('#gates-banner'), /EB Games's virtual queue is up — about 23 min\. Get in line in your browser and leave the queue page alone: it refreshes itself/);
+  assert.equal(await fan.getAttribute('#gates-banner .gate-notice[data-store="ebgames"] a', 'href'), 'https://www.ebgames.com.au/');
+  // Live: JB Hi-Fi's checkpoint goes up — there without a reload.
+  g.flip(env.app.retailers.get('jbhifi'), 'up', { source: 'server' });
+  await fan.waitForSelector('#gates-banner .gate-notice[data-store="jbhifi"]');
+  assert.match(await fan.textContent('#gates-banner .gate-notice[data-store="jbhifi"]'), /JB Hi-Fi's checkpoint is up\. Solve it once in your browser before the drop/);
+  assert.equal(await fan.getAttribute('#gates-banner .gate-notice[data-store="jbhifi"] a', 'href'), 'https://www.jbhifi.com.au/checkpoint');
+  // Down: gone.
+  g.flip(env.app.retailers.get('ebgames'), 'down', { source: 'probe' });
+  await fan.waitForFunction(() => !document.querySelector('#gates-banner .gate-notice[data-store="ebgames"]'));
+  g.flip(env.app.retailers.get('jbhifi'), 'down', { source: 'server' });
+  await fan.waitForFunction(() => !document.querySelector('#gates-banner .gate-notice'));
+  await g.settled();
+  await fan.close();
+});
+
 test('Auto-checkout run history in pages; the card backup on Checkout details', async () => {
   const owner = env.app.repo.userByUsername('owner');
   const it = env.app.repo.listItems(owner.id)[0];

@@ -258,6 +258,7 @@ channels** → **Set up store channels** makes them in one go:
 | `premium-bandai` | Everything from Premium Bandai |
 | `pokemon-center` | Everything from Pokémon Center |
 | `misc-retailers` | Everything no other channel takes: other stores (Trainer Town, Amazon AU, The Games Cube, Gamerholic…) and other games (Gundam, Dragon Ball, Riftbound…) at the split stores |
+| `virtual-queue-detection` | JB Hi-Fi's hCaptcha checkpoint and EB Games' and Pokémon Center's virtual queues going up and coming down (docs/MONITORING.md → Checkpoints and virtual queues), with **📥 Join the queue on my computer** on a queue's post |
 
 - The bot uses channels with those names that are **already there** (it also
   finds `kmart-onepiece` and `misc-retailer`), and makes the rest in a
@@ -273,6 +274,10 @@ channels** → **Set up store channels** makes them in one go:
   Leave it unticked to keep them (an alert then also goes to those).
 - `misc-retailers` is a **catch-all** rule: it only gets an alert no other rule
   took. Any rule can be a catch-all (tick **Catch-all** on it).
+- `virtual-queue-detection` has no rule: no product alerts go there, only the
+  checkpoints and queues. It pings the same role. Made before this channel
+  existed? Press **Set up store channels** again. Until then, the bot finds a
+  channel with that name, or makes one, the first time it has something to post.
 - The bot needs **View Channel**, **Send Messages** and **Embed Links** in each
   channel (in the category's permissions, they apply to all of them).
 

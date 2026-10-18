@@ -35,6 +35,11 @@ export function register(router, ctx) {
     admin: isAdmin(req),
   }), member);
 
+  // Checkpoints and virtual queues (monitor/gates.js): each store's, up or down, for the dashboard's banner.
+  router.get('/api/gates', async (req) => ({
+    gates: ctx.gates.list().map((g) => (isAdmin(req) ? g : { store: g.store, name: g.name, kind: g.kind, label: g.label, status: g.status, since: g.since, wait: g.wait, url: g.url, demo: g.demo })),
+  }), member);
+
   // The live monitor: each store's searches as they happen, the counters and the latest events.
   router.get('/api/monitor/live', async (req) => {
     const s = sweeper.settings;
