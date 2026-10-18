@@ -17,6 +17,9 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // how checkouts are filled in — not every release does (1.13.0 was card backup). 1.14.0: Shopify's,
 // Target's (Paydock) and Global-e's checkouts, tile choices, address finders, Amazon's "Buy Now".
 export const ACO_EXTENSION_VERSION = '1.14.0';
+// The oldest that listens all the time as your checkout browser, so Discord's ⚡ Buy (pressed on
+// your phone) starts at once. Older ones pick it up at their next check (within a minute or so).
+export const REMOTE_EXTENSION_VERSION = '1.15.0';
 // The monitor's page reader, used by the extension's in-browser checks too.
 const SHARED = ['html.js', 'extract.js', 'status.js', 'listing.js'].map((f) => ({ name: `lib/${f}`, from: path.join(ROOT, 'server', 'monitor', f) }));
 

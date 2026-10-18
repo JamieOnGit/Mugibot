@@ -405,7 +405,8 @@ export class Repo {
   }
 
   listDevices(userId) {
-    return this.db.all('SELECT * FROM devices WHERE user_id = :u ORDER BY created_at DESC', { u: userId }).map(toDevice);
+    // (Newest first: connected in the same moment, the one connected last.)
+    return this.db.all('SELECT * FROM devices WHERE user_id = :u ORDER BY created_at DESC, rowid DESC', { u: userId }).map(toDevice);
   }
 
   deleteDevice(userId, id) {

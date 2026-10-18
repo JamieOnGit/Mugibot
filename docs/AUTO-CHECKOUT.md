@@ -38,12 +38,14 @@ is bought for an item until they **arm** it, and each arming buys **once**.
    list shows what's missing:
    - an active membership;
    - the newest extension in this browser (1.14.0 or newer: Shopify's, Target's
-     and Global-e's checkouts, tile choices, address finders, Amazon's "Buy Now");
+     and Global-e's checkouts, tile choices, address finders, Amazon's "Buy Now";
+     1.15.0 for ⚡ Buy from your phone to start the moment you press it);
    - a card saved in the extension (or backed up in your account: after a new
      install, restore it with your card passphrase, see "Card backup" below);
    - your delivery details;
    - Discord, for a DM on every attempt (optional);
-   - whether this browser is listening.
+   - which browser is your **checkout browser** (below), and whether this one is
+     listening.
 
 ### Trigger ACO: try it now
 
@@ -59,6 +61,60 @@ work before a real drop.
 - The limits and checks are the same as for a real drop. A test run's failures
   don't count towards the 3 a day.
 - It shows up in the Run history as a "test run (Trigger ACO)".
+
+### ⚡ Buy from your phone (Discord)
+
+The **⚡ Buy** button on a Monitor alert in a channel, or on a restock DM, works
+from anywhere: a phone, with Discord open and nothing else. Press it and **your
+checkout browser** (the computer you keep on) opens the store and checks out.
+There's nothing to sign in to on the phone, and no browser needed there.
+
+- **Discord says who pressed it.** The button isn't a link. Discord tells
+  Mugibot it was pressed, and by which Discord account. The Discord account
+  must be connected to a Mugibot account (Discord tab), with an active
+  membership. Someone else pressing your DM's button gets "That SKU isn't on
+  your watchlist".
+- **What it does depends on your Auto-checkout settings:**
+  - **Auto-checkout on, "Place the order for me"**: it places the order within
+    your limits. The most it may cost is the item's max price, or else the
+    price the alert showed (plus up to $40 delivery, and never over your per-order
+    limit).
+  - **Otherwise**: it fills checkout in and stops at the final button for you.
+    That covers Auto-checkout off, set to stop at the final button, the price
+    over your max or a limit, today's orders or spending used up, or no price
+    to check against. The reply says which.
+- **The reply** (only you see it) says where it went ("Sent to Chrome on Home
+  PC") and is kept up to date for 15 minutes: adding to the bag, at checkout,
+  order placed, checkout ready, or what went wrong. You also get the usual DM.
+- **A channel alert for something you don't watch** adds it to your watchlist
+  first (as its link always did). It isn't armed by it.
+- **Your checkout browser isn't open?** The reply says so. The run waits 2
+  minutes for it, then shows as "didn't start".
+- **A store that only sells signed in** (Amazon): it doesn't start if your
+  checkout browser was last seen signed out there, and says to sign in first.
+- **Switch it off** under "⚡ Buy from your phone" on the Auto-checkout tab.
+  The button then says it's off.
+- In the Run history it's "⚡ Buy pressed in Discord". The day's limits count
+  its orders like any other.
+- Without Discord's interactions set up (docs/DISCORD.md, step 6), and in
+  emails and personal webhooks, ⚡ Buy is still the old link: it opens the store
+  in the browser you press it in.
+- **On the website**, the ⚡ Buy page has **Send to my computer**: the same thing,
+  for a phone signed in to Mugibot.
+
+### Your checkout browser
+
+Runs go to **one** browser: your checkout browser. Never to all of them, so two
+of your browsers never race for the same order. That covers armed items' drops,
+Trigger ACO and ⚡ Buy from your phone.
+
+- It's the newest browser you connected, unless you pick another under
+  "⚡ Buy from your phone" (or press **Use this browser** there).
+- The list shows each connected browser, and whether it's open now (it asks
+  for runs about every 20 seconds while open).
+- Disconnect it, and the newest one left takes over.
+- Your other browsers still do everything else: ⚡ Buy pressed in them,
+  in-browser checks, the store login monitor.
 
 ### One purchase per arming
 
@@ -264,15 +320,23 @@ the monitor sees an armed item drop (live sweep, page check or a browser's check
   - Final button pressed with no outcome in 5 minutes: "needs you".
 - **Another member's browser** can't see, start or report your runs. A run's
   code only works for your account.
-- **The extension listens** with one long-poll at a time, while something is
-  armed or a test run is waiting. The server answers as soon as a run starts, or
-  after 20 seconds. An alarm every 30 seconds starts it again if Chrome has put
-  the extension to sleep.
+- **The extension listens** with one long-poll at a time: in your checkout
+  browser all the time (for ⚡ Buy from your phone, unless that's switched off),
+  and in any browser while something is armed or a test run is waiting. The
+  server answers as soon as a run starts, or after 20 seconds. Only the checkout
+  browser is given runs. An alarm every 30 seconds starts it again if Chrome has
+  put the extension to sleep.
+- **⚡ Buy from Discord**: `/api/discord/interactions` (Ed25519-signed by
+  Discord) → `routes/discord.js` `press()` → `aco.remote()` makes the run
+  (trigger `remote`) → the same as above. The button's reply is changed with
+  the interaction's token as the run goes (`PATCH /webhooks/<app>/<token>/messages/@original`).
 
 Files:
 
 - `server/aco.js`: runs, limits, reasons and notifications.
-- `server/routes/user.js`: `/api/aco`, and `/api/aco/test/:id` (Trigger ACO).
+- `server/routes/user.js`: `/api/aco` (settings, your browsers), `/api/aco/test/:id`
+  (Trigger ACO) and `/api/aco/remote/:id` (Send to my computer).
+- `server/routes/discord.js`: the ⚡ Buy button, pressed.
 - `server/routes/ext.js`: `/api/ext/aco/*` and the claim.
 - `extension/background.js`: listening and opening the tab.
 - `extension/content.js`: the checks, the final button and the outcome.
@@ -282,6 +346,7 @@ Files:
 Tests:
 
 - `test/aco.test.js`: server.
+- `test/remote.test.js`: ⚡ Buy from your phone and the checkout browser.
 - `test/extension.e2e.test.js`: the real extension on the dummy stores.
 - `test/ui.test.js`: the tab.
 

@@ -153,7 +153,11 @@ test('Auto-checkout: switched on only once agreed, limits within bounds; an arme
   assert.equal(acoSettings({}, DEFAULT_ACO).enabled, false, 'off until switched on');
   assert.throws(() => acoSettings({ enabled: true }, DEFAULT_ACO), /agree/i);
   const on = acoSettings({ enabled: true, agree: true, mode: 'fill', maxOrder: 'lots', perDay: 0, spendPerDay: 1e9 }, DEFAULT_ACO, 1000);
-  assert.deepEqual(on, { enabled: true, agreedAt: 1000, mode: 'fill', maxOrder: 400, perDay: 1, spendPerDay: 20000, signedInOnly: false });
+  assert.deepEqual(on, { enabled: true, agreedAt: 1000, mode: 'fill', maxOrder: 400, perDay: 1, spendPerDay: 20000, signedInOnly: false, remoteBuy: true, deviceId: '' });
+  // Discord's ⚡ Buy on your computer: on unless switched off; the checkout browser, an ID or none.
+  assert.equal(acoSettings({ remoteBuy: false }, on).remoteBuy, false);
+  assert.equal(acoSettings({ deviceId: 'dev_abc-123' }, on).deviceId, 'dev_abc-123');
+  assert.equal(acoSettings({ deviceId: '"><script>' }, on).deviceId, '', 'only an ID');
   assert.equal(acoSettings({ enabled: true }, { ...on, enabled: false }, 2000).agreedAt, 1000, 'agreed once is enough');
   assert.equal(acoSettings({ mode: 'buy everything', agreedAt: 5 }, on).mode, 'place', 'only place or fill');
   assert.equal(acoSettings({ agreedAt: 5 }, DEFAULT_ACO).agreedAt, null, "the agreement isn't taken from the request");

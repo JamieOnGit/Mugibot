@@ -1,18 +1,22 @@
 // Discord: the dashboard's Discord tab, and slash commands.
 //
-// Slash commands arrive at /api/discord/interactions, signed by Discord with
-// Ed25519 (checked against DISCORD_PUBLIC_KEY before anything else). They
-// act for the Mugibot account the Discord user has connected, and answer
-// privately (only that person sees the reply).
+// Slash commands, and the ⚡ Buy buttons on alerts and DMs, arrive at
+// /api/discord/interactions, signed by Discord with Ed25519 (checked against
+// DISCORD_PUBLIC_KEY before anything else). They act for the Mugibot account
+// the Discord user has connected, and answer privately (only that person sees
+// the reply).
 
 import crypto from 'node:crypto';
 import { entitlement } from '../entitlement.js';
 import { CATEGORIES } from '../catalog.js';
+import { buyAction } from '../notifier.js';
 import { STATUS_LABEL } from '../monitor/status.js';
 import { HttpError, bad, item as checkItem, str } from '../schema.js';
+import { alertItem } from './web.js';
 
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const EPHEMERAL = 64;
+const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
 
 /** Is this request really from Discord? */
 export function verifyDiscordSignature(publicKeyHex, signatureHex, timestamp, rawBody) {
@@ -128,11 +132,12 @@ export function register(router, ctx) {
     let i;
     try { i = JSON.parse(req.rawBody.toString('utf8')); } catch { throw bad('Bad JSON'); }
     if (i.type === 1) return { type: 1 }; // PING
-    if (i.type !== 2) return reply('That isn\'t supported.');
+    if (i.type !== 2 && i.type !== 3) return reply('That isn\'t supported.');
     const discordId = (i.member && i.member.user && i.member.user.id) || (i.user && i.user.id);
     if (!limiter.hit(`slash:${discordId}`, 20, 60 * 1000)) return reply('Slow down a little — try again in a minute.');
     try {
-      return await command(i, discordId);
+      // 3: a button on one of the bot's messages (⚡ Buy); 2: a slash command.
+      return i.type === 3 ? await press(i, discordId) : await command(i, discordId);
     } catch (e) {
       if (e instanceof HttpError) return reply(`⚠️ ${e.message}`);
       cfg.log('[discord] command failed', e.stack || e.message);
@@ -147,6 +152,43 @@ export function register(router, ctx) {
   function card(ev) {
     const m = ctx.notifier.message(ev);
     return { embeds: m.embeds, components: m.components };
+  }
+
+  /**
+   * ⚡ Buy pressed — on a phone, a computer, anywhere. Discord says who pressed it, so it checks out
+   * in their checkout browser (server/aco.js remote()): nothing to sign in to, and no browser
+   * needed, where they pressed it. The reply (only they see it) is kept up to date as it goes.
+   * custom_id: 'buy:a:<alert>' (a Monitor alert in a channel) or 'buy:i:<item>' (their own SKU).
+   */
+  async function press(i, discordId) {
+    const m = String((i.data && i.data.custom_id) || '').match(/^buy:(a|i):([\w-]{1,60})$/);
+    if (!m) return reply('That button is from an older message — use a newer one.');
+    const alert = m[1] === 'a' ? ctx.catalog.alertById(m[2]) : null;
+    const user = repo.userByDiscordId(discordId);
+    if (!user) return reply(`Your Discord isn't connected to a ${cfg.appName} account yet. Log in at ${cfg.baseUrl}/app#discord and press **Connect Discord** — then ⚡ Buy checks out in your computer's browser, wherever you press it.`);
+    if (user.disabled) return reply('Your account is suspended — contact support.');
+    if (!entitlement(user, repo.now()).active) return reply(`⚡ Buy needs an active membership: ${cfg.baseUrl}/app#membership`);
+    let item;
+    let price = null;
+    if (m[1] === 'i') {
+      item = repo.getItem(user.id, m[2]);
+      if (!item) return reply('That SKU isn\'t on your watchlist any more.');
+      price = item.lastPrice ?? item.price ?? null;
+    } else {
+      if (!alert) return reply('That alert is too old to buy from — look for a newer one.');
+      // Theirs if it's on their watchlist, else added to it (like the alert's link does).
+      item = alertItem(ctx, user, alert);
+      if (!item) return reply(repo.countItems(user.id) >= cfg.limits.items ? `Your watchlist is full (${cfg.limits.items} SKUs) — remove one to buy this.` : 'That product\'s page isn\'t known yet.');
+      price = alert.price;
+    }
+    const out = await ctx.aco.remote(user.id, item.id, { price });
+    if (out.error) return reply(`⚠️ ${out.error}`);
+    const how = out.mode === 'place'
+      ? `It places the order by itself, within your Auto-checkout limits (up to ${money(out.run.maxPrice)} for it, plus delivery).`
+      : `It fills checkout in and stops at the final button — ${out.why}.`;
+    ctx.aco.follow(out.run.id, i.token, out.device.name, how);
+    const asleep = out.listening ? '' : `\n⚠️ **${out.device.name}** isn't open right now — it starts as soon as it is (within 2 minutes).`;
+    return reply(`${ctx.aco.remoteText(out.run, out.device.name)}\n${how}${asleep}`);
   }
 
   async function command(i, discordId) {
@@ -199,8 +241,8 @@ export function register(router, ctx) {
       if (!it) return reply(`SKU ${sku} isn't on your watchlist — add it with \`/watch\` first.`);
       if (!it.url) return reply(`The product page for SKU ${sku} hasn't been found yet.`);
       return reply('', card({
-        level: 'urgent', title: `⚡ ${it.name}`, message: `${retailers.name(it.store)} · SKU ${it.sku} · ${label(it.status)}\nOpens in the browser where the ${cfg.appName} extension is connected, straight to checkout with it in your bag, filled in. You press the final button.`,
-        url: it.url, buttons: [{ label: '⚡ Buy', url: ctx.notifier.buyLink(user.id, it) }, { label: 'Open product', url: it.url }],
+        level: 'urgent', title: `⚡ ${it.name}`, message: `${retailers.name(it.store)} · SKU ${it.sku} · ${label(it.status)}\nPress ⚡ Buy, from here or your phone: your checkout browser (the one with the ${cfg.appName} extension) opens the store and checks out — placing the order within your limits with Auto-checkout on, or stopping at the final button for you.`,
+        url: it.url, buttons: [{ label: '⚡ Buy', url: ctx.notifier.buyLink(user.id, it), action: buyAction('i', it.id) }, { label: 'Open product', url: it.url }],
       }));
     }
 

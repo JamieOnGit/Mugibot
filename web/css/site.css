@@ -661,6 +661,10 @@ details.menu[open] > summary { background: var(--surface-2); }
 .aco-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; margin-bottom: 16px; }
 .aco-grid > .card + .card { margin-top: 0; }
 .aco-switch-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+/* ⚡ Buy from your phone: the checkout browser picker. */
+#aco-remote .aco-device-row { margin-top: 12px; }
+#aco-remote .aco-device-pick { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#aco-remote .aco-device-pick select { flex: 1 1 260px; min-width: 0; }
 .aco-agree { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); font-weight: 500; font-size: 14px; }
 .aco-checks li { align-items: baseline; }
 .aco-runs { list-style: none; margin: 8px 0 0; padding: 0; }

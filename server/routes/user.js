@@ -4,7 +4,7 @@
 
 import { discordBotConfigured, discordOAuthConfigured } from '../config.js';
 import { entitlement } from '../entitlement.js';
-import { ACO_EXTENSION_VERSION, EXTENSION_VERSION, storeUrl } from '../extension.js';
+import { ACO_EXTENSION_VERSION, EXTENSION_VERSION, REMOTE_EXTENSION_VERSION, storeUrl } from '../extension.js';
 import { DUMMY_PRODUCTS, STARTER_ITEMS, dummyProductPath } from '../presets.js';
 import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, cardBackupInfo, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
 import { publicUser } from './auth.js';
@@ -179,19 +179,39 @@ export function register(router, ctx) {
     stats: ctx.aco.stats(req.user.id, 30),
     armed: ctx.aco.armedCount(req.user.id),
     extensionVersion: ACO_EXTENSION_VERSION,
+    remoteVersion: REMOTE_EXTENSION_VERSION,
+    // Your connected browsers: the one that checks out (runs and Discord's ⚡ Buy go there), and which are open now.
+    browsers: ctx.aco.browsers(req.user.id),
     runs: ctx.aco.list(req.user.id, num(req.query.get('limit'), { min: 1, max: 200, def: 50, int: true })),
   }));
 
   router.put('/api/aco', async (req) => {
     const current = ctx.aco.settings(req.user.id);
     const next = acoSettings(req.body, current, repo.now());
+    const devices = repo.listDevices(req.user.id);
+    if (next.deviceId && !devices.some((d) => d.id === next.deviceId)) {
+      if (req.body && req.body.deviceId !== undefined) throw bad("That browser isn't connected to your account");
+      next.deviceId = ''; // it was disconnected since: the newest one checks out
+    }
     repo.setData(req.user.id, 'aco', next);
     if (next.enabled !== current.enabled) {
       repo.addEvent(req.user.id, { type: 'aco', level: next.enabled ? 'warn' : 'info', message: next.enabled ? `Auto-checkout switched on (${next.mode === 'place' ? 'places orders' : 'stops at the final button'}, up to $${next.maxOrder} an order)` : 'Auto-checkout switched off' });
     }
+    if (next.deviceId !== current.deviceId && next.deviceId) {
+      repo.addEvent(req.user.id, { type: 'aco', level: 'info', message: `Checkout browser: ${devices.find((d) => d.id === next.deviceId).name} — Auto-checkout and Discord's ⚡ Buy check out there` });
+    }
     ctx.hub.publish(req.user.id, 'aco', { settings: true });
-    return { settings: next, today: ctx.aco.today(req.user.id), armed: ctx.aco.armedCount(req.user.id) };
+    return { settings: next, today: ctx.aco.today(req.user.id), armed: ctx.aco.armedCount(req.user.id), browsers: ctx.aco.browsers(req.user.id) };
   });
+
+  // "Send to my computer": check an item out in your checkout browser from wherever you are (the
+  // buy page on a phone, with no extension) — what Discord's ⚡ Buy does (server/aco.js remote()).
+  router.post('/api/aco/remote/:id', async (req) => {
+    if (!limiter.hit(`aco-remote:${req.user.id}`, 10, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const out = await ctx.aco.remote(req.user.id, str(req.params.id, 40), { price: num(req.body && req.body.price, { min: 0, max: 100000, def: null }) });
+    if (out.error) throw new HttpError(409, out.error);
+    return out;
+  }, { entitled: true });
 
   // Trigger ACO: a test run for one item, now — as if it had just dropped (the same limits and checks).
   router.post('/api/aco/test/:id', async (req) => {

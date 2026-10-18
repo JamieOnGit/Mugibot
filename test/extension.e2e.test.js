@@ -17,7 +17,7 @@ import { chromium } from 'playwright';
 import { EXTENSION_VERSION, writeExtension } from '../server/extension.js';
 import { RETAILER_DEFS } from '../server/retailers/index.js';
 import { startMockStore } from '../devtools/mockstore.js';
-import { Client, PASSWORD, discordOpts, startApp, startFakeDiscord, waitFor } from './helpers.js';
+import { Client, PASSWORD, discordOpts, interactionKeys, startApp, startFakeDiscord, waitFor } from './helpers.js';
 
 const PROFILE_A = { label: 'Home', firstName: 'Ash', lastName: 'Ketchum', email: 'ash.orders@example.com', phone: '0412345678', address1: '1 Pallet Town Rd', address2: 'Unit 2', suburb: 'Sydney', state: 'NSW', postcode: '2000' };
 const PROFILE_B = { label: 'Home', firstName: 'Misty', lastName: 'Waterflower', email: 'misty@example.com', phone: '0498765432', address1: '9 Cerulean Ave', suburb: 'Brisbane', state: 'QLD', postcode: '4000' };
@@ -27,6 +27,7 @@ const shots = process.env.MUGIBOT_SCREENSHOT_DIR;
 let env;
 let store;
 let discord;
+let keys; // Discord's interactions (its ⚡ Buy buttons, pressed)
 let ctx;
 let extId;
 let sw;
@@ -55,7 +56,8 @@ async function launch() {
 before(async () => {
   store = await startMockStore();
   discord = await startFakeDiscord();
-  env = await startApp({ demoStoreUrl: store.url, allowPrivateHosts: true, hostGapSeconds: 0, ...discordOpts(discord) });
+  keys = interactionKeys();
+  env = await startApp({ demoStoreUrl: store.url, allowPrivateHosts: true, hostGapSeconds: 0, ...discordOpts(discord), discordPublicKey: keys.publicKey });
   extDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-ext-'));
   profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-chrome-'));
   dirs = [extDir, profileDir];
@@ -868,12 +870,23 @@ test('Amazon signed in: "Buy Now" → Amazon\'s "Try Prime FREE" offer: "No than
   await dash.close();
 });
 
-test('the ⚡ Buy button in a Discord DM goes straight to the store and the flow runs', async () => {
+/** A ⚡ Buy button pressed in Discord — on a phone, say: Discord tells Mugibot who pressed it. */
+async function pressInDiscord(discordId, customId) {
+  const token = `tok-${Math.random().toString(36).slice(2)}`;
+  const body = JSON.stringify({ type: 3, id: `i-${token}`, token, member: { user: { id: discordId } }, data: { custom_id: customId, component_type: 2 } });
+  const ts = String(Math.floor(Date.now() / 1000));
+  const res = await fetch(`${env.url}/api/discord/interactions`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-signature-ed25519': keys.sign(ts, body), 'x-signature-timestamp': ts }, body });
+  const out = await res.json();
+  return { token, content: out.data && out.data.content };
+}
+
+test("the ⚡ Buy button in a Discord DM, pressed on a phone: this browser (your checkout browser) opens the store and checks out by itself — nothing armed, nothing signed in where it was pressed — and Discord's reply follows it", async () => {
   // Connect Discord for Ash (the fake Discord sends straight back).
   const page = await ctx.newPage();
   discord.state.nextUser = 'd-ash';
   await page.goto(`${env.url}/auth/discord`);
   await page.waitForURL(/discord=linked/);
+  await page.close();
   await useItems([{ url: store.productUrl('kmart', '43818648'), name: 'Kmart UPC' }]);
   const userId = env.app.repo.userByUsername('ash').id;
   const row = env.app.db.get("SELECT * FROM items WHERE user_id = :u AND sku = '43818648'", { u: userId });
@@ -883,12 +896,25 @@ test('the ⚡ Buy button in a Discord DM goes straight to the store and the flow
   const dm = discord.dmsTo('d-ash').slice(before)[0];
   const button = dm.body.components[0].components[0];
   assert.equal(button.label, '⚡ Buy');
-  await page.goto(button.url);
-  await page.waitForURL(/\/kmart\/checkout$/, { timeout: 25000 });
-  await waitReady(page, 'Checkout securely');
-  assert.equal(store.shop('kmart').cart[0].qty, 1);
-  assert.equal(ordersPlaced(), 0);
-  await page.close();
+  assert.equal(button.custom_id, `buy:i:${row.id}`, 'a button Discord tells Mugibot about, not a link to open');
+  // This browser is Ash's checkout browser (the only one), and listens for runs with nothing armed.
+  await waitFor(async () => (await browserApi('GET', '/api/aco')).body.browsers.some((b) => b.checkout && b.listening), { timeout: 40000, message: 'this browser listening for runs' });
+  assert.equal(env.app.aco.armedCount(userId), 0);
+
+  const opened = ctx.waitForEvent('page', { predicate: (p) => p.url().startsWith(`${store.url}/kmart`), timeout: 20000 });
+  const reply = await pressInDiscord('d-ash', button.custom_id);
+  assert.match(reply.content, /Sent to \*\*.+\*\* — waiting for it to open Kmart \(dummy store\)/);
+  assert.match(reply.content, /stops at the final button — Auto-checkout is off/);
+  const shop = await opened;
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 25000 });
+  await shop.waitForFunction(() => /review everything and press "Checkout securely" yourself/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 40000 });
+  assert.deepEqual(store.shop('kmart').cart.map((c) => [c.sku, c.qty]), [['43818648', 1]]);
+  assert.equal(await shop.inputValue('input[name=cardNumber]'), '4242 4242 4242 4242', 'the card in, from this browser');
+  await waitFor(() => /Checkout's ready/.test(discord.repliesFor(reply.token).at(-1) || ''), { timeout: 15000, message: 'Discord\'s reply: checkout ready' });
+  assert.match(discord.repliesFor(reply.token).at(-1), /press Kmart \(dummy store\)'s final button there to buy/);
+  await shop.waitForTimeout(800);
+  assert.equal(ordersPlaced(), 0, 'Auto-checkout off: the final button is left to Ash');
+  await shop.close();
 });
 
 test('in-browser checks: a store that refuses the server is checked by your browser, and the restock pings you', async () => {
@@ -1601,6 +1627,25 @@ test('🤖 Auto-checkout at The Games Cube: fills everything in, then stops at "
   assert.notEqual(await page.title(), 'paypal', 'PayPal not pressed');
   assert.equal(await page.isChecked('input[name=shipping][value=parcel]'), true);
   await closeStorePages('thegamescube');
+});
+
+test('🤖 ⚡ Buy with Mugibot on a channel alert, pressed on a phone with Auto-checkout on: this browser checks out by itself and places the order — up to the price the alert showed — and Discord\'s reply says so', async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  await useItems([]);
+  const alert = env.app.catalog.addAlert({ product_id: null, kind: 'restock', store: 'demo-kmart', sku: '43818587', name: 'Kmart ETB drop', url: store.productUrl('kmart', '43818587'), category: 'pokemon', status: 'in_stock', price: 100 });
+  // (A day of its own, like the Trigger ACO tests: the orders before it count as yesterday's.)
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: userId });
+  const reply = await pressInDiscord('d-ash', `buy:a:${alert.id}`);
+  assert.match(reply.content, /It places the order by itself, within your Auto-checkout limits \(up to \$100\.00 for it, plus delivery\)/);
+  const run = await runOver('the ⚡ Buy from Discord over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  assert.equal(run.trigger, 'remote');
+  const S = store.shop('kmart');
+  assert.equal(S.orders.length, 1, 'placed once');
+  assert.deepEqual(S.orders[0].cart.map((c) => [c.sku, c.qty]), [['43818587', 1]]);
+  assert.ok((await browserApi('GET', '/api/items')).body.items.some((x) => x.sku === '43818587'), 'on the watchlist now');
+  await waitFor(() => /Order placed/.test(discord.repliesFor(reply.token).at(-1) || ''), { timeout: 15000, message: "Discord's reply: order placed" });
+  await closeStorePages('kmart');
 });
 
 test('🤖 Auto-checkout set to stop at the final button: fills checkout in and leaves the button to you', async () => {

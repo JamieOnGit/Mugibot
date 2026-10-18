@@ -15,6 +15,7 @@
 
 import { CATEGORIES, categoryFor, toAlert, toProduct } from '../catalog.js';
 import { entitlement } from '../entitlement.js';
+import { buyAction } from '../notifier.js';
 import { publicEvent, publicProduct } from './public.js';
 import { STATUS, STATUS_LABEL, isOrderable } from './status.js';
 
@@ -193,8 +194,10 @@ export class Feed {
     const k = alert.kind === 'restock' && alert.status === STATUS.PREORDER ? KIND.preorder : KIND[alert.kind] || KIND.restock;
     const storeName = this.retailers.name(alert.store);
     const buttons = [];
-    // One click to the store, with whoever presses it's own checkout (signed: see Notifier.alertBuyLink).
-    if (alert.kind !== 'sold_out') buttons.push({ label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(alert) });
+    // Whoever presses it checks out in their own checkout browser, wherever they pressed it — their
+    // phone included (routes/discord.js). As a link (no Discord interactions set up): one click to the
+    // store, with their own checkout (signed: see Notifier.alertBuyLink).
+    if (alert.kind !== 'sold_out') buttons.push({ label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(alert), action: alert.id ? buyAction('a', alert.id) : null });
     if (alert.url) buttons.push({ label: 'Open product', url: alert.url });
     const cart = alert.kind !== 'sold_out' && this.retailers.cartUrl(alert.store, { sku: alert.sku, variantId: product.variant_id || product.variantId });
     if (cart) buttons.push({ label: 'Add to cart', url: cart });

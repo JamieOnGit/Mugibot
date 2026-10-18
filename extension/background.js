@@ -659,15 +659,19 @@ async function sweepLoop() {
 // --- Auto-checkout ---------------------------------------------------------------
 // While you have it switched on with items armed (or a Trigger ACO test waiting), this browser asks your account for runs to start
 // (each answer waits up to 20 seconds for an armed item to drop, so a drop starts within a moment).
+// Your checkout browser (the one runs go to) asks all the time, armed or not: Discord's ⚡ Buy,
+// pressed on your phone, starts a run here (aco.listen).
 // A run opens the store in a tab of its own, in front of you (payment forms need a page you can
 // see, and you can watch it go): the store page's script does the rest, with the run's limits.
 let acoLooping = false;
+
+const acoWanted = (a) => !!a && (a.listen || (a.enabled && (a.armed || a.pending)));
 
 async function acoLoop() {
   if (acoLooping) return;
   if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return;
   const st = await getState();
-  if (!st.paired || !st.aco || !st.aco.enabled || (!st.aco.armed && !st.aco.pending)) return;
+  if (!st.paired || !acoWanted(st.aco)) return;
   acoLooping = true;
   try {
     for (let quiet = 0; quiet < 3;) {
@@ -682,7 +686,7 @@ async function acoLoop() {
       }
       quiet = 0;
       for (const run of res.body.runs || []) await startRun(run).catch(() => null);
-      if (!res.body.enabled || (!res.body.armed && !res.body.pending)) break;
+      if (!acoWanted(res.body)) break;
       if (Date.now() - started < 1000) await new Promise((r) => setTimeout(r, 1000));
     }
   } finally {
@@ -967,7 +971,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'appHello': {
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
         const auth = await getAuth();
-        return { version: VERSION, server: SERVER, fromStore: FROM_STORE, paired: !!auth, userId: auth ? auth.user.id : null, username: auth ? auth.user.username : null };
+        // deviceId: which of your connected browsers this is (the dashboard's checkout browser picker).
+        return { version: VERSION, server: SERVER, fromStore: FROM_STORE, paired: !!auth, userId: auth ? auth.user.id : null, username: auth ? auth.user.username : null, deviceId: auth && auth.device ? auth.device.id : null };
       }
       case 'pair':
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;

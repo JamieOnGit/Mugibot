@@ -320,6 +320,11 @@ export class Catalog {
     this.db.run('UPDATE feed_alerts SET posted = :p WHERE id = :id', { p: JSON.stringify(channels), id: alertId });
   }
 
+  /** One alert (a Discord ⚡ Buy button says which). */
+  alertById(id) {
+    return toAlert(this.db.get('SELECT * FROM feed_alerts WHERE id = :id', { id: Number(id) || 0 }));
+  }
+
   lastAlert(productId, kind) {
     return this.db.get('SELECT * FROM feed_alerts WHERE product_id = :p AND kind = :k ORDER BY at DESC LIMIT 1', { p: productId, k: kind });
   }

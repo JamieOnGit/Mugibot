@@ -27,6 +27,13 @@ community. Built on TCGCopBot's working Kmart flow.
   another item in the bag or a total over the limit. Every attempt is logged on
   the Auto-checkout tab with each step and why it ended, and DM'd. See
   [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md).
+- **⚡ Buy from your phone.** Press ⚡ Buy on a Discord alert or DM anywhere,
+  your phone included, with nothing signed in there: Discord says who pressed
+  it, and their **checkout browser** (the computer with the extension) opens
+  the store and checks out. With Auto-checkout on it places the order within
+  their limits; otherwise it stops at the final button for them. Discord's
+  reply, seen only by them, follows it to the end. Runs only ever go to one of a
+  member's browsers (the one they pick, or the newest), never to all of them.
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games,
   JB Hi-Fi, Target, Toys"R"Us, Amazon, The Games Cube, Gamerholic and Premium
   Bandai (Australia) are beta (built from walk-throughs of their real checkouts
@@ -191,7 +198,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 227 tests in about eight minutes:
+the 237 tests in about eight minutes:
 
 ```bash
 npm install
@@ -259,7 +266,15 @@ npm test
   - an add the store didn't take (the empty bag noticed, Add pressed once more,
     then it says why);
   - Trigger ACO (a test run now, from the dashboard), and stores that only sell
-    signed in (Amazon).
+    signed in (Amazon);
+  - ⚡ Buy from your phone: a Discord button pressed (signed by Discord, for
+    whoever pressed it) makes the checkout browser check out, the real
+    extension included, with nothing armed. It places the order with
+    Auto-checkout on and stops at the final button otherwise, or when a limit
+    or the max price is in the way. The reply follows the run. Runs go to the
+    checkout browser alone, a picked one or the newest. Also covered: someone
+    else's button, an unconnected Discord, no membership and "Send to my
+    computer" on the buy page.
 - **Amazon sweeps from an admin's browser:** its search page asked for from inside
   an Amazon page (the dummy Amazon gives servers HTTP 503, like the real one).
 - **Dashboard round:** the card backup (only a locked copy reaches the server,

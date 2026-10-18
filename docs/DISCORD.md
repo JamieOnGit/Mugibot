@@ -149,7 +149,13 @@ Each one restarts Mugibot, which takes about a minute.
 
 ---
 
-## 6. Slash commands
+## 6. Slash commands (and ⚡ Buy from a phone)
+
+The same address handles slash commands and the **⚡ Buy** buttons on alerts and
+DMs. With it set, ⚡ Buy works from a phone: Discord tells Mugibot who pressed
+it, and their checkout browser (on their computer) checks out
+(docs/AUTO-CHECKOUT.md, "⚡ Buy from your phone"). Without it, ⚡ Buy is a link
+that opens the store in the browser it's pressed in.
 
 1. Back in the Developer Portal → **General Information** → **Interactions
    Endpoint URL** → `<BASE_URL>/api/discord/interactions` → **Save Changes**.
@@ -194,12 +200,20 @@ Mugibot also checks that they're an admin in Mugibot.
    > Seen by the Mugibot monitor. Press ⚡ Buy to go straight to checkout.
    > [⚡ Buy] [Open product] [Watchlist]
 
-   **⚡ Buy** opens the store in their browser straight away: one click, no
-   page in between. With the extension connected, it goes straight to
-   checkout with one of it in the bag, and fills checkout in up to the final
-   button. The link is signed for that member and that SKU (it only works
-   signed in as them) and goes straight through for 7 days; after that it
-   opens the ⚡ Buy page, where they press ⚡ Buy once.
+   **⚡ Buy** works wherever they press it, their phone included: their
+   **checkout browser** (the computer with the extension) opens the store and
+   checks out. With Auto-checkout on, it places the order within their limits;
+   otherwise it fills checkout in and stops at the final button. Only they see
+   Discord's reply, which follows it to "Order placed" or "Checkout ready".
+   Nothing to sign in to on the phone (docs/AUTO-CHECKOUT.md, "⚡ Buy from your
+   phone"). The same goes for **⚡ Buy with Mugibot** on the channel alerts.
+
+   Without the interactions endpoint (step 6), ⚡ Buy is a link instead. It
+   opens the store in the browser it's pressed in, and with the extension there
+   it goes straight to checkout. The link is signed for that member and that
+   SKU (it only works signed in as them) and goes straight through for 7 days;
+   after that it opens the ⚡ Buy page. Emails and personal webhooks always
+   carry the link.
 4. Slash commands work in the server and in DMs with the bot.
 
 If someone's membership ends, the bot takes the `Member` role away (within 10

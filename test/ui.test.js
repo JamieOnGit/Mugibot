@@ -7,7 +7,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { Client, PASSWORD, discordOpts, startApp, startFakeDiscord, startFakeWhop, waitFor, whopOpts, whopWebhook } from './helpers.js';
+import { Client, Device, PASSWORD, discordOpts, startApp, startFakeDiscord, startFakeWhop, waitFor, whopOpts, whopWebhook } from './helpers.js';
 import { RETAILER_DEFS } from '../server/retailers/index.js';
 
 let env;
@@ -811,6 +811,46 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   // Off again, for the rest of the tests.
   await env.app.aco.disarm(owner.id, dayItem.id);
   env.app.repo.setData(owner.id, 'aco', { ...env.app.aco.settings(owner.id), enabled: false });
+});
+
+test("Auto-checkout tab: ⚡ Buy from your phone — its switch, and the checkout browser (the one runs go to) with which of your browsers are open", async () => {
+  const owner = env.app.repo.userByUsername('owner');
+  await page.goto(`${env.url}/app#aco`);
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-remote');
+  // No browser connected yet.
+  await page.waitForFunction(() => /No browser connected/.test(document.querySelector('#aco-remote-state').textContent));
+  assert.match(await page.textContent('#aco-device-note'), /Connect the extension in the browser on the computer you keep on/);
+  // Two browsers: the newest checks out; the other can be picked.
+  const me = new Client(env.url);
+  await me.post('/api/auth/login', { username: 'owner', password: PASSWORD });
+  const work = await Device.pair(env.url, me, 'Chrome on Work PC');
+  const home = await Device.pair(env.url, me, 'Chrome on Home PC');
+  await home.call('GET', '/api/ext/aco/next'); // the home one is open (asking for runs)
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('#aco-device option').length === 2);
+  assert.equal(await page.locator('#aco-device option').count(), 2);
+  assert.match(await page.textContent('#aco-device option:checked'), /^Chrome on Home PC \(open now\)$/);
+  assert.match(await page.textContent('#aco-remote-state'), /^Ready$/);
+  assert.match(await page.textContent('#aco-device-note'), /go to this one browser — never to all of them/);
+  // Pick the work one: it checks out from now on (and isn't open, so the card says so).
+  const workId = (await me.get('/api/devices')).body.devices.find((d) => d.name === 'Chrome on Work PC').id;
+  await page.selectOption('#aco-device', workId);
+  await page.waitForFunction(() => /Checkout browser changed/.test(document.querySelector('#toasts')?.textContent || ''));
+  assert.equal(env.app.aco.settings(owner.id).deviceId, workId);
+  await page.waitForFunction(() => /Checkout browser not open/.test(document.querySelector('#aco-remote-state').textContent));
+  assert.match(await page.textContent('#aco-device-note'), /Chrome on Work PC isn't open right now: a ⚡ Buy waits 2 minutes for it/);
+  if (shots) await page.locator('#aco-remote').screenshot({ path: path.join(shots, 'aco-remote.png') });
+  assert.equal((await work.call('GET', '/api/ext/items')).body.aco.listen, true);
+  // The switch.
+  await page.click('#aco-remote-on');
+  await page.waitForFunction(() => document.querySelector('#aco-remote-on').getAttribute('aria-checked') === 'false');
+  assert.equal(env.app.aco.settings(owner.id).remoteBuy, false);
+  assert.match(await page.textContent('#aco-remote-state'), /^Off$/);
+  await page.click('#aco-remote-on');
+  await page.waitForFunction(() => document.querySelector('#aco-remote-on').getAttribute('aria-checked') === 'true');
+  // (Leave it as it was: no browsers.)
+  for (const d of (await me.get('/api/devices')).body.devices) await me.del(`/api/devices/${d.id}`);
+  await me.put('/api/aco', { deviceId: '' });
 });
 
 test("Monitor page for a member: each store's switch (hidden just for them), ☆ Watch on a tracked product, and never where the searches come from", async () => {

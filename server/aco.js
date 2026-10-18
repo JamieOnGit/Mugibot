@@ -7,9 +7,14 @@
 // One purchase per arming: once an order is placed (or the final button is pressed), the item
 // waits to be armed again. Every run is kept, with each step and why it ended, for the member's
 // Auto-checkout page.
+//
+// Runs go to one browser: the member's checkout browser (the one they picked, or the newest one
+// connected), never to all of them. Discord's ⚡ Buy, pressed anywhere (on a phone, with no
+// browser at all), starts a run there too: remote() below.
 
 import { entitlement } from './entitlement.js';
 import { newId } from './crypto.js';
+import { buyAction } from './notifier.js';
 import { DEFAULT_ACO } from './schema.js';
 import { startBuy } from './routes/user.js';
 
@@ -21,6 +26,10 @@ const PICKUP_MS = 2 * 60 * 1000;
 const RESEND_MS = 45 * 1000;
 const RUN_MS = 10 * 60 * 1000;
 const PLACING_MS = 5 * 60 * 1000;
+// A browser that asked for runs this recently is listening (it asks again every 20 seconds or so).
+const LISTEN_MS = 45 * 1000;
+// Discord lets a button's reply be changed for 15 minutes.
+const FOLLOW_MS = 14 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
 // After this many failed runs in a day, an item stops trying until it's armed again.
 const MAX_FAILS = 3;
@@ -82,6 +91,8 @@ export class Aco {
     Object.assign(this, { db, repo, hub, notifier, retailers, cfg });
     this.now = ctx.now || (() => Date.now());
     this.waiters = new Map(); // userId → Set<wake()>
+    this.listening = new Map(); // deviceId → when it last asked for runs
+    this.follows = new Map(); // runId → { token, until, last }: Discord's ⚡ Buy reply, kept up to date
     this.timer = null;
   }
 
@@ -137,6 +148,37 @@ export class Aco {
     return this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE user_id = :u AND status = 'queued'", { u: userId }).n;
   }
 
+  /**
+   * The browser that checks out: Auto-checkout's runs and Discord's ⚡ Buy go there and nowhere else
+   * (two browsers never race for the same order). The one the member picked, or the newest connected.
+   */
+  checkoutDevice(userId) {
+    const devices = this.repo.listDevices(userId); // newest first
+    const want = this.settings(userId).deviceId;
+    return devices.find((d) => d.id === want) || devices[0] || null;
+  }
+
+  /** Should this browser keep asking for runs with nothing armed? The checkout browser, while Discord's ⚡ Buy is on. */
+  listens(user, device) {
+    const checkout = this.checkoutDevice(user.id);
+    return !!checkout && checkout.id === device.id && this.settings(user.id).remoteBuy && entitlement(user, this.now()).active;
+  }
+
+  /** Is this browser open and asking for runs right now? */
+  isListening(deviceId) {
+    const at = this.listening.get(deviceId);
+    return !!at && this.now() - at < LISTEN_MS;
+  }
+
+  /** The member's browsers for the Auto-checkout page: which one checks out, and which are listening. */
+  browsers(userId) {
+    const checkout = this.checkoutDevice(userId);
+    return this.repo.listDevices(userId).map((d) => ({
+      id: d.id, name: d.name, version: d.version, lastSeenAt: d.lastSeenAt,
+      checkout: !!checkout && checkout.id === d.id, listening: this.isListening(d.id),
+    }));
+  }
+
   /** The latest any of this member's browsers saw: 'in' | 'out' | null, for a store. */
   loginStatus(userId, store) {
     let best = null;
@@ -186,7 +228,8 @@ export class Aco {
     if (item.maxPrice === null || item.maxPrice === undefined) return skip('no_max');
     if (price !== null && price > item.maxPrice) return skip('over_max', `${money(price)} is over your max of ${money(item.maxPrice)}.`);
     if (price !== null && price > s.maxOrder) return skip('over_limit', `${money(price)} is over your limit of ${money(s.maxOrder)} an order.`);
-    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND trigger != 'test' AND created_at > :since", { i: item.id, since: now - DAY }).n;
+    // (A drop's failures count — not Trigger ACO's, nor a ⚡ Buy pressed in Discord.)
+    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND trigger NOT IN ('test', 'remote') AND created_at > :since", { i: item.id, since: now - DAY }).n;
     if (fails >= MAX_FAILS && !info.test) {
       this.disarm(userId, item.id);
       return skip('too_many_failures', 'Arm it again to keep trying.');
@@ -227,13 +270,90 @@ export class Aco {
     return run ? { run } : { error: "Auto-checkout didn't start" };
   }
 
+  /**
+   * Discord's ⚡ Buy (routes/discord.js), or "Send to my computer" on the buy page: check this item
+   * out now in the member's checkout browser, wherever they pressed it. With Auto-checkout on (and
+   * set to place orders), it places the order within their limits — the most it may cost being the
+   * item's max price, or else the price they were shown. Otherwise (Auto-checkout off, a limit
+   * reached, no price to check against) it fills checkout in and stops at the final button.
+   * price: what the alert said. Returns { run, mode, why, device, listening } — or { error }.
+   */
+  async remote(userId, itemId, { price = null } = {}) {
+    const user = this.repo.userById(userId);
+    if (!user || user.disabled) return { error: 'Your account is suspended — contact support.' };
+    if (!entitlement(user, this.now()).active) return { error: `⚡ Buy needs an active membership: ${this.cfg.baseUrl}/app#membership` };
+    const item = this.repo.getItem(userId, itemId);
+    if (!item) return { error: 'That SKU isn\'t on your watchlist.' };
+    const r = this.retailers.get(item.store);
+    if (!r || !r.flow) return { error: `Mugibot doesn't have a checkout for ${r ? r.name : 'that store'} yet.` };
+    if (!item.url) return { error: `The product page for SKU ${item.sku} hasn't been found yet.` };
+    const s = this.settings(userId);
+    if (!s.remoteBuy) return { error: `⚡ Buy from Discord on your computer is switched off — switch it on at ${this.cfg.baseUrl}/app#aco, or open the product in the browser with the extension.` };
+    const device = this.checkoutDevice(userId);
+    if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension, and ⚡ Buy runs there from anywhere.` };
+    if (this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return { error: `It's already checking out in ${device.name}.` };
+    if (r.account && r.account.required && this.loginStatus(userId, item.store) === 'out') return { error: `${r.name} only sells to signed-in customers — sign in there in ${device.name} first.` };
+
+    // Place the order, or fill checkout in and stop at the final button (and why).
+    const known = [price, item.lastPrice, item.price].find((p) => typeof p === 'number' && p > 0);
+    const shown = known === undefined ? null : known;
+    const cap = item.maxPrice ?? shown;
+    const day = this.today(userId);
+    const why = !s.enabled ? 'Auto-checkout is off, so it stops at the final button for you'
+      : s.mode !== 'place' ? 'Auto-checkout is set to stop at the final button'
+        : cap === null ? 'there\'s no price to check the total against, so it stops at the final button'
+          : shown !== null && item.maxPrice !== null && item.maxPrice !== undefined && shown > item.maxPrice ? `${money(shown)} is over your max of ${money(item.maxPrice)}, so it stops at the final button`
+            : cap > s.maxOrder ? `${money(cap)} is over your limit of ${money(s.maxOrder)} an order, so it stops at the final button`
+              : day.orders >= s.perDay ? `you've placed your ${s.perDay} orders for today, so it stops at the final button`
+                : day.spent + cap > s.spendPerDay ? `that would go over your ${money(s.spendPerDay)} a day, so it stops at the final button`
+                  : '';
+    const mode = why ? 'fill' : 'place';
+    const run = this.create({ userId, item, price: shown, maxPrice: mode === 'place' ? cap : (item.maxPrice ?? null), mode, trigger: 'remote' }, 'queued', '',
+      `⚡ Buy pressed in Discord — waiting for ${device.name} to check out.`);
+    this.wake(userId);
+    await this.notifier.notify(userId, {
+      type: 'aco', level: 'urgent',
+      title: `⚡ Buy from Discord: ${item.name}`,
+      message: `${r.name}${shown !== null ? ` · ${money(shown)}` : ''} — checking out in ${device.name}${mode === 'place' ? ', placing the order' : ', stopping at the final button'}.`,
+    });
+    return { run: toRun(run), mode, why, device: { id: device.id, name: device.name }, listening: this.isListening(device.id) };
+  }
+
+  /** What Discord's ⚡ Buy reply says: where the run is (kept up to date as it goes, for 15 minutes). */
+  remoteText(run, deviceName = 'your checkout browser') {
+    const where = this.retailers.name(run.store);
+    const total = run.total ?? run.price;
+    const lines = {
+      queued: `⏳ Sent to **${deviceName}** — waiting for it to open ${where}.`,
+      sent: `🛒 **${deviceName}** is opening ${where}…`,
+      started: `🛒 Adding it to the bag at ${where} in **${deviceName}**…`,
+      checkout: `🛒 At ${where}'s checkout in **${deviceName}** — filling it in…`,
+      placing: `💳 Placing the order at ${where}…`,
+      placed: `✅ **Order placed** at ${where}${total ? ` — ${money(total)}` : ''}. The store emails you the confirmation.`,
+      ready: `🛒 **Checkout's ready** in ${deviceName} — press ${where}'s final button there to buy.`,
+      needs_you: `⚠️ **It needs you** in ${deviceName}: ${run.message || run.reasonText}`,
+      failed: `❌ **Didn't buy it**: ${run.message || run.reasonText}`,
+      expired: `❌ **Didn't start**: ${run.reason === 'no_browser' ? `${deviceName} didn't pick it up within 2 minutes — is it open, with the extension connected?` : run.message || run.reasonText}`,
+      skipped: `⏭️ **Didn't start**: ${run.message || run.reasonText}`,
+    };
+    return `**${run.name}**\n${lines[run.status] || run.statusText}`;
+  }
+
+  /** Keep a Discord ⚡ Buy reply up to date with its run (the interaction's token lasts 15 minutes). */
+  follow(runId, token, deviceName, note = '') {
+    if (!token) return;
+    this.follows.set(runId, { token, deviceName, note, until: this.now() + FOLLOW_MS, last: '' });
+    // (The oldest go once Discord's 15 minutes are up.)
+    for (const [id, f] of this.follows) if (this.now() > f.until) this.follows.delete(id);
+  }
+
   create(base, status, reason, message) {
     const now = this.now();
     const id = newId('acr');
     const { item } = base;
     this.db.run(`INSERT INTO aco_runs (id, user_id, item_id, store, sku, name, url, price, max_price, mode, trigger, status, reason, message, steps, created_at, updated_at)
       VALUES (:id, :u, :i, :store, :sku, :name, :url, :price, :max, :mode, :trig, :st, :reason, :msg, :steps, :t, :t)`, {
-      id, u: base.userId, i: item.id, store: item.store, sku: item.sku, name: item.name, url: item.url || '', price: base.price, max: item.maxPrice ?? null,
+      id, u: base.userId, i: item.id, store: item.store, sku: item.sku, name: item.name, url: item.url || '', price: base.price, max: base.maxPrice !== undefined ? base.maxPrice : (item.maxPrice ?? null),
       mode: base.mode, trig: base.trigger, st: status, reason: reason || '', msg: message || '', steps: JSON.stringify([{ at: now, status, message: message || REASONS[reason] || '' }]), t: now,
     });
     const run = this.db.get('SELECT * FROM aco_runs WHERE id = :id', { id });
@@ -251,7 +371,7 @@ export class Aco {
       title: `🤖 Auto-checkout didn't start: ${base.item.name}`,
       message: `${r ? r.name : base.item.store}${base.price !== null ? ` · ${money(base.price)}` : ''}\n${message}`,
       name: base.item.name, sku: base.item.sku, url: base.item.url || null,
-      buttons: [base.item.url ? { label: '⚡ Buy', url: this.notifier.buyLink(base.userId, base.item) } : null, { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }].filter(Boolean),
+      buttons: [base.item.url ? { label: '⚡ Buy', url: this.notifier.buyLink(base.userId, base.item), action: buyAction('i', base.item.id) } : null, { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }].filter(Boolean),
     });
     return toRun(run);
   }
@@ -278,6 +398,7 @@ export class Aco {
    */
   async next(user, device, { waitMs = 0, alive = () => true } = {}) {
     this.expire();
+    this.listening.set(device.id, this.now());
     let runs = this.take(user, device, alive);
     if (runs.length || !waitMs) return runs;
     await new Promise((resolve) => {
@@ -287,20 +408,24 @@ export class Aco {
       const timer = setTimeout(done, waitMs);
       set.add(done);
     });
+    this.listening.set(device.id, this.now());
     runs = this.take(user, device, alive);
     return runs;
   }
 
   take(user, device, alive) {
+    // Only the checkout browser starts runs: the member's other browsers never race it.
+    const checkout = this.checkoutDevice(user.id);
+    if (checkout && checkout.id !== device.id) return [];
     const now = this.now();
-    // Sent to a browser that never opened it (closed mid-way): another of their browsers may take it.
+    // Sent to a browser that never opened it (closed mid-way): it may take it again.
     this.db.run(`UPDATE aco_runs SET status = 'queued', device_id = NULL WHERE user_id = :u AND status = 'sent' AND updated_at < :t`, { u: user.id, t: now - RESEND_MS });
     const rows = this.db.all("SELECT * FROM aco_runs WHERE user_id = :u AND status = 'queued' ORDER BY created_at LIMIT 3", { u: user.id });
     const out = [];
     for (const row of rows) {
       if (!alive()) break;
       const item = row.item_id ? this.repo.getItem(user.id, row.item_id) : null;
-      if (!item || (!item.aco && row.trigger !== 'test') || !item.url) {
+      if (!item || (!item.aco && row.trigger !== 'test' && row.trigger !== 'remote') || !item.url) {
         // Switched off (or removed) before a browser picked it up: it didn't start, and isn't a failure.
         this.finish(user.id, row, 'expired', 'disarmed', '').catch(() => null);
         continue;
@@ -319,7 +444,8 @@ export class Aco {
     const row = this.get(userId, runId);
     if (!row || !['sent', 'queued'].includes(row.status)) return null;
     const s = this.settings(userId);
-    if (!s.enabled) {
+    // (Discord's ⚡ Buy that only fills checkout in doesn't need Auto-checkout on: the member presses the button.)
+    if (!s.enabled && !(row.trigger === 'remote' && row.mode === 'fill')) {
       this.finish(userId, row, 'expired', 'stopped', 'Auto-checkout was switched off before the store opened').catch(() => null);
       return null;
     }
@@ -363,11 +489,13 @@ export class Aco {
     const run = this.publish(userId, row.id);
     const storeName = this.retailers.name(row.store);
     const total = run.total ?? run.price;
+    // Discord's ⚡ Buy: the member pressed it, and its reply in Discord says how it went too.
+    const remote = row.trigger === 'remote';
     const ev = {
-      placed: { level: 'success', title: `✅ Auto-checkout placed your order: ${row.name}`, message: `${storeName}${total ? ` · ${money(total)}` : ''}\nThe store emails you the confirmation. To buy it again, arm it again in Mugibot.` },
+      placed: { level: 'success', title: `✅ Auto-checkout placed your order: ${row.name}`, message: `${storeName}${total ? ` · ${money(total)}` : ''}\nThe store emails you the confirmation.${remote ? '' : ' To buy it again, arm it again in Mugibot.'}` },
       ready: { level: 'urgent', title: `🛒 Checkout ready: ${row.name}`, message: `${storeName}\nYour browser filled checkout in and stopped at the final button — press it to buy.` },
       needs_you: { level: 'urgent', title: `⚠️ Auto-checkout needs you: ${row.name}`, message: `${storeName}\n${text}${pressed ? '' : ' Finish it in the tab that opened.'}` },
-      failed: { level: 'warn', title: `❌ Auto-checkout didn't buy ${row.name}`, message: `${storeName}\n${text}${pressed ? '' : ' It stays armed for the next drop.'}` },
+      failed: { level: 'warn', title: `❌ Auto-checkout didn't buy ${row.name}`, message: `${storeName}\n${text}${pressed || remote ? '' : ' It stays armed for the next drop.'}` },
       expired: { level: 'warn', title: `❌ Auto-checkout didn't start: ${row.name}`, message: `${storeName}\n${text}` },
     }[status];
     if (ev && reason !== 'disarmed') {
@@ -390,7 +518,20 @@ export class Aco {
   publish(userId, id) {
     const run = toRun(this.db.get('SELECT * FROM aco_runs WHERE id = :id', { id }));
     if (run) this.hub.publish(userId, 'aco', run);
+    if (run) this.followUp(run);
     return run;
+  }
+
+  /** The run moved on: its Discord ⚡ Buy reply says so (only that member sees it). */
+  followUp(run) {
+    const f = this.follows.get(run.id);
+    if (!f) return;
+    if (this.now() > f.until) { this.follows.delete(run.id); return; }
+    const content = `${this.remoteText(run, f.deviceName)}${run.active && f.note ? `\n${f.note}` : ''}`;
+    if (content === f.last) return;
+    f.last = content;
+    if (!run.active) this.follows.delete(run.id);
+    if (this.ctx.discord) this.ctx.discord.editReply(f.token, { content, allowed_mentions: { parse: [] } }).catch(() => null);
   }
 
   /** Runs nobody picked up, or that never finished. */

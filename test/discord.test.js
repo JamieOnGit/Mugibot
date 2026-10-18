@@ -141,11 +141,13 @@ test('restock DMs carry a signed ⚡ Buy button that goes straight to the store;
   assert.equal(buttons[0].label, '⚡ Buy');
   assert.match(msg.embeds[0].description, /Press ⚡ Buy to go straight to checkout/);
   assert.doesNotMatch(msg.embeds[0].description, /Quantity/);
-  assert.equal(buttons[0].style, 5, 'a link button');
+  // A button Discord tells Mugibot about when it's pressed (her checkout browser checks it out: the remote buy test).
+  assert.equal(buttons[0].style, 1, 'a button, not a link');
+  assert.equal(buttons[0].custom_id, `buy:i:${it.id}`);
   assert.equal(buttons[1].url, it.url);
 
-  // The link: logged in as Erika → a one-time code, straight to Kmart.
-  const link = new URL(buttons[0].url);
+  // Its link (in emails, webhooks and older messages): logged in as Erika → a one-time code, straight to Kmart.
+  const link = new URL(env.app.notifier.buyLink(erika.user.id, it));
   const go = await erika.get(link.pathname + link.search);
   assert.equal(go.status, 302);
   assert.match(go.headers.get('location'), /^https:\/\/www\.kmart\.com\.au\/product\/.*-43818648\/#mgb-go=[\w-]{20,}$/);
@@ -220,7 +222,8 @@ test('slash commands: only signed requests; /watch, /watchlist, /buy, /unwatch, 
 
   r = await slash('d-sabrina', 'buy', [{ name: 'sku', value: '43818648' }]);
   assert.equal(r.body.data.components[0].components[0].label, '⚡ Buy');
-  assert.match(r.body.data.embeds[0].description, /straight to checkout with it in your bag/);
+  assert.match(r.body.data.components[0].components[0].custom_id, /^buy:i:itm_/, 'pressed: her checkout browser checks it out');
+  assert.match(r.body.data.embeds[0].description, /your checkout browser .* opens the store and checks out/);
 
   r = await slash('d-sabrina', 'unwatch', [{ name: 'sku', value: '312345' }]);
   assert.match(r.body.data.content, /Stopped watching/);
@@ -257,7 +260,7 @@ test('/restock (admin) and the admin restock ping: everyone watching gets a DM, 
   assert.equal(post.length, 1);
   assert.equal(post[0].body.content, '<@&role-restock-pings>');
   assert.deepEqual(post[0].body.allowed_mentions.roles, ['role-restock-pings']);
-  assert.match(post[0].body.components[0].components[0].url, /\/buy\?store=kmart&sku=43818587/);
+  assert.match(post[0].body.components[0].components[0].custom_id, /^buy:a:\d+$/, '⚡ Buy with Mugibot: whoever presses it checks out in their checkout browser');
 });
 
 test('admin setup check reads the bot, server, role order and channel', async () => {

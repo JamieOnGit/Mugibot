@@ -16,6 +16,12 @@ const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
 // What a channel ⚡ Buy link signs: the same, trimmed, when it's made and when it comes back.
 const alertBuyParts = (store, sku, url, name) => [str(store, 40), str(sku, 60), str(url, 1000), str(name, 120)];
 
+/**
+ * Discord's ⚡ Buy button (custom_id): 'buy:a:<alert id>' for a Monitor alert in a channel (whoever
+ * presses it), 'buy:i:<item id>' for a member's own item (their DM). routes/discord.js reads it.
+ */
+export const buyAction = (kind, id) => `buy:${kind}:${id}`;
+
 export class Notifier {
   constructor({ cfg, repo, retailers, hub, mailer, discord, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
     Object.assign(this, { cfg, repo, retailers, hub, mailer, discord, fetch: fetchImpl, now });
@@ -86,11 +92,18 @@ export class Notifier {
     return { event: saved, sent };
   }
 
-  /** A Discord message (embed + link buttons) for an event. */
+  /**
+   * A Discord message (embed + buttons) for an event. A button with an `action` (Discord's ⚡ Buy:
+   * routes/discord.js) is one Discord tells Mugibot about when it's pressed — who pressed it
+   * included, so it works on a phone with no browser — once Discord's interactions are set up;
+   * until then, and in emails and webhooks, it's its link.
+   */
   message(ev, { mention = '' } = {}) {
-    const buttons = (ev.buttons || []).filter((b) => b && b.url).slice(0, 5);
-    const useButtons = this.cfg.discord.linkButtons && buttons.every((b) => /^https?:\/\//.test(b.url));
-    const linkText = !useButtons && buttons.length ? `\n\n${buttons.map((b) => `**${b.label}:** ${b.url}`).join('\n')}` : '';
+    const acts = !!(this.discord && this.discord.interactionsReady);
+    const pressable = (b) => acts && b.action;
+    const buttons = (ev.buttons || []).filter((b) => b && (b.url || pressable(b))).slice(0, 5);
+    const useButtons = this.cfg.discord.linkButtons && buttons.every((b) => pressable(b) || /^https?:\/\//.test(b.url));
+    const linkText = !useButtons && buttons.length ? `\n\n${buttons.filter((b) => b.url).map((b) => `**${b.label}:** ${b.url}`).join('\n')}` : '';
     const msg = {
       content: mention || undefined,
       allowed_mentions: { parse: [], roles: mention ? [...mention.matchAll(/<@&([\w-]+)>/g)].map((m) => m[1]) : [], users: mention ? [...mention.matchAll(/<@!?([\w-]+)>/g)].map((m) => m[1]) : [] },
@@ -106,7 +119,12 @@ export class Notifier {
       }],
     };
     if (useButtons && buttons.length) {
-      msg.components = [{ type: 1, components: buttons.map((b) => ({ type: 2, style: 5, label: String(b.label).slice(0, 80), url: b.url })) }];
+      msg.components = [{
+        type: 1,
+        components: buttons.map((b) => (pressable(b)
+          ? { type: 2, style: 1, label: String(b.label).slice(0, 80), custom_id: String(b.action).slice(0, 100) }
+          : { type: 2, style: 5, label: String(b.label).slice(0, 80), url: b.url })),
+      }];
     }
     return msg;
   }
@@ -138,7 +156,7 @@ export class Notifier {
     const price = info.price ?? item.last_price ?? item.price;
     const meta = [storeName, `SKU ${item.sku}`, money(price)].filter(Boolean).join(' · ');
     const buttons = [];
-    if (item.url) buttons.push({ label: '⚡ Buy', url: this.buyLink(userId, item) });
+    if (item.url) buttons.push({ label: '⚡ Buy', url: this.buyLink(userId, item), action: buyAction('i', item.id) });
     if (item.url) buttons.push({ label: 'Open product', url: item.url });
     buttons.push({ label: 'Watchlist', url: `${this.cfg.baseUrl}/app#watch` });
     if (kind === 'listed') {

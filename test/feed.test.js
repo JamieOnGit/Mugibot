@@ -117,12 +117,19 @@ test('a restock alerts once: live feed + Discord embed with image, store, price,
   assert.equal(field('Category'), 'One Piece');
   assert.ok(e.timestamp);
   const buttons = msg.components[0].components;
-  assert.match(buttons[0].url, /\/buy\?store=demo-ebgames&sku=312345&.*&t=\d+\.[\w-]+$/, '⚡ Buy runs the member\'s own checkout');
+  // ⚡ Buy with Mugibot: a button (whoever presses it checks out in their own checkout browser —
+  // discord.test.js), its link the same thing for emails and stores without Discord's interactions.
+  assert.equal(buttons[0].label, '⚡ Buy with Mugibot');
+  const alertId = buttons[0].custom_id.match(/^buy:a:(\d+)$/)[1];
+  const posted = env.app.catalog.alertById(alertId);
+  assert.equal(posted.sku, '312345');
+  const signed = env.app.notifier.alertBuyLink(posted);
+  assert.match(signed, /\/buy\?store=demo-ebgames&sku=312345&.*&t=\d+\.[\w-]+$/, '⚡ Buy runs the member\'s own checkout');
   assert.equal(buttons[1].label, 'Open product');
 
-  // One click: the ⚡ Buy in the channel goes straight to the store, with whoever presses it's own
+  // One click: the ⚡ Buy link goes straight to the store, with whoever presses it's own
   // checkout (the product is added to their watchlist) — no buy page in between.
-  const link = buttons[0].url.slice(env.url.length);
+  const link = signed.slice(env.url.length);
   const go = await ash.get(link);
   assert.equal(go.status, 302);
   assert.match(go.headers.get('location'), new RegExp(`^${store.url}/ebgames/product/.+#mgb-go=[\\w-]+$`));
