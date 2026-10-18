@@ -1000,6 +1000,12 @@ test('🎯 Drop watches: one box for a link or words — the form shows where to
   assert.equal(await page.inputValue('#dw-mine .dw-row.shared form.dw-edit select[aria-label$="post in"]'), general);
   await page.selectOption('#dw-mine .dw-row.shared form.dw-edit select[aria-label$="post in"]', '');
   await page.selectOption('#dw-mine .dw-row.shared form.dw-edit select[aria-label$="ping"]', '');
+  // (The list refreshing underneath — a live update — keeps what's chosen in the open editor.)
+  const reloaded = page.waitForResponse((res) => res.url().endsWith('/api/drops') && res.request().method() === 'GET');
+  env.app.hub.publish(env.app.repo.userByUsername('owner').id, 'drop', { id: linkWatch.id });
+  await reloaded;
+  await page.waitForTimeout(200);
+  assert.deepEqual(await page.$$eval('#dw-mine .dw-row.shared form.dw-edit select', (els) => els.map((x) => x.value)), ['', '']);
   await page.click('#dw-mine .dw-row.shared form.dw-edit button[type=submit]');
   await page.waitForFunction(() => /Link · JB Hi-Fi · 📣 for everyone in #non-tcg-alerts/.test(document.querySelector('#dw-mine .dw-row.shared').textContent) && !document.querySelector('#dw-mine form.dw-edit'));
   assert.deepEqual([env.app.drops.get(linkWatch.id).channelId, env.app.drops.get(linkWatch.id).roleId], ['', '']);

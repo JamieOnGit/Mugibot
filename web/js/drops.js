@@ -13,7 +13,8 @@ const ARM = { armed: '🤖 armed', pending: '🤖 armed if it isn\'t on sale yet
 const OTHER = 'other';
 
 export function setupDrops({ isAdmin = () => false, watching = () => null, watch = null, buyUrl }) {
-  const d = { data: null, timer: null, dest: null, editing: null };
+  // (draft: what's chosen in an open ✎ editor — kept when the list refreshes underneath it.)
+  const d = { data: null, timer: null, dest: null, editing: null, draft: null };
 
   // ---------------------------------------------------------------------------
   // The form: one box for a link or words; where to look appears for words
@@ -212,7 +213,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const acts = [];
     if (w.canChange) {
       // (An admin's watch for everyone: where it posts, and who it pings.)
-      if (admin && w.shared) acts.push(h('button', { class: 'btn small', type: 'button', title: 'Where it posts, and who it pings', 'aria-label': `Where ${title} posts`, 'aria-expanded': d.editing === w.id ? 'true' : 'false', onclick: () => { d.editing = d.editing === w.id ? null : w.id; render(); } }, '✎'));
+      if (admin && w.shared) acts.push(h('button', { class: 'btn small', type: 'button', title: 'Where it posts, and who it pings', 'aria-label': `Where ${title} posts`, 'aria-expanded': d.editing === w.id ? 'true' : 'false', onclick: () => { d.editing = d.editing === w.id ? null : w.id; d.draft = null; render(); } }, '✎'));
       acts.push(h('button', { class: 'btn small', type: 'button', title: 'Look again now', 'aria-label': `Check ${title} now`, onclick: (e) => check(w, e.currentTarget) }, '↻'));
       acts.push(h('button', {
         class: 'btn small danger', type: 'button', 'aria-label': `Remove ${title}`,
@@ -236,11 +237,15 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
   function editor(w, title) {
     const post = h('select', { 'aria-label': `${title}: post in` });
     const ping = h('select', { 'aria-label': `${title}: ping` });
-    fillDest(post, ping, { channelId: w.channelId, roleId: w.roleId, category: w.category });
+    const draft = d.draft && d.draft.id === w.id ? d.draft : { id: w.id, channelId: w.channelId, roleId: w.roleId };
+    fillDest(post, ping, { channelId: draft.channelId, roleId: draft.roleId, category: w.category });
+    const keep = () => { d.draft = { id: w.id, channelId: post.value, roleId: ping.value }; };
+    post.addEventListener('change', keep);
+    ping.addEventListener('change', keep);
     const save = h('button', { class: 'btn small primary', type: 'submit' }, 'Save');
     const form = h('form', { class: 'dw-edit' },
       h('label', {}, 'Post its drops and restocks in', post), h('label', {}, 'Ping', ping),
-      h('div', { class: 'form-actions' }, save, h('button', { class: 'btn small ghost', type: 'button', onclick: () => { d.editing = null; render(); } }, 'Cancel')),
+      h('div', { class: 'form-actions' }, save, h('button', { class: 'btn small ghost', type: 'button', onclick: () => { d.editing = null; d.draft = null; render(); } }, 'Cancel')),
       d.dest && !d.dest.ready ? h('p', { class: 'small muted' }, d.dest.error) : null);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -249,6 +254,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
         const r = await api('PUT', `/api/drops/${w.id}`, { channelId: post.value, roleId: ping.value });
         d.data = { ...d.data, ...r };
         d.editing = null;
+        d.draft = null;
         render();
         toast('Saved', `"${title}" posts its drops and restocks ${postsIn(r.watch)}.`, 'success');
       } catch (err) {
