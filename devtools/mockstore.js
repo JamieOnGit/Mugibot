@@ -108,6 +108,8 @@ export function defaultShops() {
       bagViews: [],
       // Its checkpoint (Shopify's hCaptcha page) and its virtual queue: see the top of this file.
       checkpoint: { on: false, shown: 0, solved: 0, botClicks: 0, passes: [] },
+      // A notice across the top of its product pages ("Big launches use a virtual queue…").
+      banner: '',
       // (log: every request while it's on — { id, at, path, what } — to show nothing asked again too soon.)
       queue: { on: false, admitAfterMs: 4000, refreshMs: 1500, tooSoonMs: 700, wait: 23, lateMs: 0, places: {}, admittedIds: [], kicks: 0, shown: 0, admitted: 0, cookieless: 0, log: [] },
     };
@@ -247,7 +249,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     const orderable = p.status === 'in_stock' || p.status === 'preorder';
     if (SHOPIFY.has(shop)) {
-      return page(shop, `${p.name} | ${SHOPS[shop].name}`, `<div class="product-detail"><h1>${esc(p.name)}</h1><div class="price">$${p.price.toFixed(2)}</div>
+      return page(shop, `${p.name} | ${SHOPS[shop].name}`, `${shopOf(shop).banner ? `<div class="site-banner" role="note">${esc(shopOf(shop).banner)}</div>` : ''}<div class="product-detail"><h1>${esc(p.name)}</h1><div class="price">$${p.price.toFixed(2)}</div>
         <form action="/${shop}/cart/add" method="get"><input type="hidden" name="id" value="${p.id}">${qtyControl(p)}
         <button type="submit" name="add" ${orderable ? '' : 'disabled'}>${labels[p.status]}</button></form></div>`, { head: ldFor(p, shop) });
     }
@@ -272,7 +274,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <button type="button" id="obt-add">Add ${upsellItems.length} Items To Basket</button>
       </div>`,
     }[shop];
-    return page(shop, `${p.name} | ${SHOPS[shop].name}`, `
+    return page(shop, `${p.name} | ${SHOPS[shop].name}`, `${shopOf(shop).banner ? `<div class="site-banner" role="note">${esc(shopOf(shop).banner)}</div>` : ''}
       <div class="product-detail">
         <h1>${esc(p.name)}</h1>
         <div class="price">$${p.price.toFixed(2)}</div>

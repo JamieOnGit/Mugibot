@@ -304,6 +304,10 @@ looks never send cookies, so they can't touch anyone's place in line. A browser
 that **got through** the queue sees the store as normal. That only means it was
 let in, not that the queue came down, so it never counts as "down".
 
+**A queue's page is told apart from the store's own**: it has a handful of
+links at most, and no Add button, bag or checkout. A store page with a banner
+about its queue (its menus, its products) is still the store.
+
 **Not seen for 30 minutes** while something was looking for it (or for 3 hours
 at all), a gate counts as down. A store nothing checks by itself, like Toys"R"Us,
 is down 30 minutes after anyone last saw its checkpoint.

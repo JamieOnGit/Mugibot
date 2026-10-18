@@ -112,7 +112,7 @@
   // Why a run stopped short of checkout (core.js): failed, unless it's something for you to do (sign in).
   // (The store's queue, drawn by its page's code after Mugibot looked: not a failure — it waits there, see go().)
   const acoWhy = (reason, message, status) => {
-    if (!aco || (claimed && MGBFlows.gateHere(retailer, document, location))) return;
+    if (!aco || (claimed && seenGate())) return;
     acoReport(status || 'failed', reason, message || null);
   };
 
@@ -388,7 +388,7 @@
       const product = extra.product || MGBQuick.productForPage(items, retailer) || (flow ? items.find((p) => p.sku === flow.sku) : null) || null;
       const result = await MGBQuick.run({ fresh, retailer, product, products: items, store, setStatus: panel.setStatus, report, probe, why: acoWhy, ...extra });
       // Stopped short on what turned out to be the store's queue (or checkpoint), drawn late: wait there.
-      const late = (result === 'error' || result === 'timeout') && claimed ? MGBFlows.gateHere(retailer, document, location) : null;
+      const late = (result === 'error' || result === 'timeout') && claimed ? seenGate() : null;
       if (late) {
         holdStore.save({ ...claimed, kind: late.kind, at: Date.now() });
         ask({ type: 'gate', store: retailer.id, on: true, kind: retailer.gate.kind, wait: late.wait });
@@ -460,7 +460,7 @@
     panel.setNote(aco ? `🤖 Auto-checkout${aco.mode === 'place' ? ' — places the order within your limits' : ' — stops at the final button for you'}` : 'Started from ⚡ Buy');
     // Kept for this tab until the ⚡ Buy gets going (go() clears it): a store's queue page drawn by its own
     // code, or reloading itself, before Mugibot could tell it was one — then it waits there, not lost.
-    holdStore.save({ ...claimed, kind: null, provisional: true, at: Date.now() });
+    holdStore.save({ ...claimed, kind: null, provisional: true, page: location.pathname + location.search, at: Date.now() });
     // The buy box can take a few seconds to appear on a fresh page load.
     const waitMs = (MGBFlows.part(retailer, 'product').waitMs) || 12000;
     go(true, { product, waitForButtonMs: waitMs });
@@ -469,7 +469,13 @@
   // ---------------------------------------------------------------------------
   // Checkpoints and virtual queues
   // ---------------------------------------------------------------------------
-  const gate = MGBFlows.gateHere(retailer, document, location);
+  /** The store's queue (or checkpoint) on this page? (A queue page never has the store's Add button, bag or checkout.) */
+  function seenGate() {
+    const g = MGBFlows.gateHere(retailer, document, location);
+    if (g && g.kind === 'queue' && (MGBQuick.onCheckoutPage(retailer) || MGBQuick.onBagPage(retailer) || MGBQuick.findAddToBag(retailer))) return null;
+    return g;
+  }
+  const gate = seenGate();
   // (The extension keeps track of which tabs are in a queue: it never refreshes them, and nothing
   // else of yours asks that store for anything until you're through.)
   if (retailer.gate) ask({ type: 'gate', store: retailer.id, on: !!gate, kind: retailer.gate.kind, wait: gate ? gate.wait : null });
@@ -513,7 +519,7 @@
     // A checkpoint needs you: this tab comes forward (once), and the panel keeps clear of the check.
     if (!queue) { ask({ type: 'focusTab' }); panel.moveAside(); }
     setInterval(() => {
-      const now = MGBFlows.gateHere(retailer, document, location);
+      const now = seenGate();
       if (now) beat(now);
     }, queue ? 30000 : 15000);
   }
@@ -548,6 +554,8 @@
   // A ⚡ Buy that waited in the store's queue (or at its checkpoint) in this tab. (One that had got going —
   // its progress kept by the flow — carries on as that, below.)
   if (!goCode && held && store.read()) { holdStore.clear(); held = null; }
+  // (Kept only in case its page reloaded: anywhere else, it's not carried on — you went somewhere else.)
+  if (!goCode && held && held.provisional && !gate && held.page !== location.pathname + location.search) { holdStore.clear(); held = null; }
   if (!goCode && held) {
     aco = (await ask({ type: 'acoInfo' })) || held.claim.aco || null;
     if (gate) {
@@ -585,7 +593,7 @@
     if (gate.kind === 'checkpoint') panel.moveAside();
     panel.setNote(gate.kind === 'queue' ? `🚦 In ${retailer.name}'s virtual queue` : `🛡️ ${retailer.name}'s checkpoint`);
     panel.setStatus(gateStatus(gate, false));
-    setInterval(() => { const now = MGBFlows.gateHere(retailer, document, location); if (now) panel.setStatus(gateStatus(now, false)); }, 30000);
+    setInterval(() => { const now = seenGate(); if (now) panel.setStatus(gateStatus(now, false)); }, 30000);
     return;
   }
   if (store.read()) go(false);

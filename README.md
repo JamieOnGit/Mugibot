@@ -213,7 +213,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 257 tests in about ten minutes:
+the 258 tests in about ten minutes:
 
 ```bash
 npm install

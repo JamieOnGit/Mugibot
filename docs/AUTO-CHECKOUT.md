@@ -151,6 +151,11 @@ like you would.
   - **From Discord**: **📥 Join the queue on my computer** on the
     `#virtual-queue-detection` post does the same for anyone, armed or not.
     Your checkout browser must be open, with "⚡ Buy from your phone" on.
+- **Only the wait is at a person's pace.** Everything else is as fast as
+  ever: before the queue or checkpoint, and from the moment you're through
+  (add, checkout, your details and card, the final button). A store page that
+  only mentions its queue (a launch banner) is the store, not the queue:
+  ⚡ Buy goes straight through it.
 - Needs **extension 1.16.0** or later (the Auto-checkout tab says when yours
   is older). Older ones get no checks or searches at a store while its queue
   is up, and their runs there don't wait in line.

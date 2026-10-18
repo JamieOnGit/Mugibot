@@ -111,6 +111,14 @@ test('reading a gate: the checkpoint is its own address with the hCaptcha on it;
   assert.equal(classify(eb, { status: 403, url: 'https://www.ebgames.com.au/', html: '' }), null);
   assert.equal(gateOnPage(pc, { url: 'https://www.pokemoncenter.com/?queue', html: '<html></html>' }).kind, 'queue', "Pokémon Center's ?queue");
   assert.equal(gateOnPage(pc, { url: 'https://www.pokemoncenter.com/en-au/product/x', html: '<html>Pikachu plush</html>' }), null);
+  // A store page that mentions its queue (a launch banner) is still the store: its menus and products give it away.
+  const storePage = `<html><body><div class="banner">Big launches use a virtual queue — you're in the queue when you see our waiting page.</div>${'<a href="/en-au/category/x">x</a>'.repeat(60)}</body></html>`;
+  assert.equal(gateOnPage(pc, { url: 'https://www.pokemoncenter.com/en-au/product/x', html: storePage }), null);
+  assert.equal(gateOnPage(eb, { url: 'https://www.ebgames.com.au/product/x', html: storePage }), null);
+  assert.equal(classify(eb, { status: 200, url: 'https://www.ebgames.com.au/', html: storePage.padEnd(3000, ' ') }), 'down');
+  assert.equal(gateOnPage(pc, { url: 'https://www.pokemoncenter.com/?queue', html: storePage }), null, 'let in at ?queue: the store itself');
+  // The queue's words with the page's own entities: still read.
+  assert.deepEqual(gateOnPage(eb, { url: 'https://www.ebgames.com.au/', html: '<html><body><h1>You&#39;re in the queue!</h1><p>Your estimated wait time is 9 minutes.</p></body></html>' }), { kind: 'queue', wait: 9 });
 });
 
 test("🛡️ JB Hi-Fi's checkpoint: the server looks (honestly itself), a change seen twice counts; up and disabled are posted in #virtual-queue-detection like the monitor's embed; members watching JB hear it", async () => {

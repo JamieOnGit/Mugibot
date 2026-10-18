@@ -940,10 +940,13 @@ async function acoLoop() {
         continue;
       }
       quiet = 0;
-      if (Array.isArray(res.body.gates)) await noteGatesUp(res.body.gates);
-      // A store's queue went up where you have something armed (or you pressed "Join the queue"): get in line.
-      for (const l of res.body.lobbies || []) await joinLobby(l).catch(() => null);
+      // Runs first: every moment counts in a drop.
       for (const run of res.body.runs || []) await startRun(run).catch(() => null);
+      if (Array.isArray(res.body.gates)) await noteGatesUp(res.body.gates);
+      // A store's queue went up where you have something armed (or you pressed "Join the queue"): get in line —
+      // unless a run just opened that store (its tab gets in line itself: never two tabs into one queue).
+      const opened = new Set((res.body.runs || []).map((r) => r.store));
+      for (const l of res.body.lobbies || []) if (!opened.has(l.store)) await joinLobby(l).catch(() => null);
       if (!acoWanted(res.body)) break;
       if (Date.now() - started < 1000) await new Promise((r) => setTimeout(r, 1000));
     }

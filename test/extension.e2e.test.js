@@ -1846,6 +1846,21 @@ test("🚦 a queue page drawn by its own code after it opens (and reloading itse
   S.queue.on = false;
 });
 
+test("🚦 a store page that only mentions its queue (a launch banner) is the store: ⚡ Buy goes straight through, as fast as ever", async () => {
+  await useItems([{ url: store.productUrl('pokemoncenter', '10-10447-108'), name: 'PC ETB banner' }]);
+  const S = store.shop('pokemoncenter');
+  S.banner = "Big launches use a virtual queue: you're in the queue when you see our waiting room page. Thanks for your patience!";
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'PC ETB banner');
+  await waitReady(shop, 'Place Order');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['10-10447-108', 1]]);
+  assert.doesNotMatch(await panel(shop).textContent(), /virtual queue|in line/);
+  assert.ok(!env.app.db.get("SELECT 1 FROM gates WHERE store = 'demo-pokemoncenter' AND status = 'up'"), 'no queue reported');
+  assert.equal(ordersPlaced(), 0);
+  await shop.close();
+  await dash.close();
+});
+
 test("🚦 a queue goes up where you're armed: your checkout browser gets in line by itself (one tab, in the background); a drop meanwhile waits for it — no second tab into the queue — then opens the store from there and places the order", async () => {
   await browserApi('PUT', '/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
   await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'ACO EB lobby', aco: true, maxPrice: 120 }]);

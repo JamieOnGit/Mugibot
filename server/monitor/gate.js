@@ -38,8 +38,16 @@ export function textOf(html) {
     .trim();
 }
 
+// A store's own page (its menus, its products) has lots of links; a queue page has a handful. A
+// store page that mentions its queue (a banner about a launch) is still the store.
+export const STORE_PAGE_LINKS = 40;
+const linksIn = (html) => (String(html || '').match(/<a\s[^>]*href\s*=/gi) || []).length;
+// Words any queue's page has some of: looked for in the page's code first (cheap), so a page with
+// none of them is never read word by word.
+const QUEUE_WORDS = /queue|in (the )?line|waiting room/i;
+
 /**
- * Is this page the store's gate? { url, text, html } (any of them) → { kind, wait } or null.
+ * Is this page the store's gate? { url, text, html, links } (any of them) → { kind, wait } or null.
  * wait: the estimated wait in minutes, when the page says.
  */
 export function gateOnPage(gate, page) {
@@ -48,15 +56,21 @@ export function gateOnPage(gate, page) {
   const url = String(page.url || '');
   let path = '';
   try { path = new URL(url).pathname; } catch { path = url; }
-  const text = page.text !== undefined ? String(page.text) : textOf(page.html);
   const html = String(page.html || '');
   const where = (rx(p.path) && rx(p.path).test(path)) || (rx(p.url) && rx(p.url).test(url));
-  const hit = where || list(p.text).some((re) => re.test(text)) || list(p.markers).some((re) => re.test(html));
-  if (!hit) return null;
-  // A checkpoint is its own address with its check on it (not a 404 page there, nor a page elsewhere
-  // that happens to load the same captcha).
-  if (gate.kind === 'checkpoint' && (!where || (list(p.markers).length && html && !list(p.markers).some((re) => re.test(html))))) return null;
-  const w = rx(p.wait) && text.match(rx(p.wait));
+  let text = page.text !== undefined ? String(page.text) : null;
+  const words = () => (text === null ? (text = textOf(html)) : text);
+  if (gate.kind === 'checkpoint') {
+    // A checkpoint is its own address with its check on it (not a 404 page there, nor a page elsewhere
+    // that happens to load the same captcha).
+    if (!where) return null;
+    if (list(p.markers).length && html && !list(p.markers).some((re) => re.test(html))) return null;
+  } else {
+    const said = where || ((text !== null || QUEUE_WORDS.test(html)) && list(p.text).some((re) => re.test(words())));
+    if (!said) return null;
+    if ((page.links !== undefined ? page.links : linksIn(html)) >= STORE_PAGE_LINKS) return null;
+  }
+  const w = rx(p.wait) && words().match(rx(p.wait));
   const wait = w ? Math.min(24 * 60, Math.max(0, parseInt(w[1], 10))) : null;
   return { kind: gate.kind, wait: Number.isFinite(wait) ? wait : null };
 }

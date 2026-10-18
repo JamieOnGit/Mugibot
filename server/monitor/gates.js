@@ -123,9 +123,12 @@ export class Gates {
     return this.stores().map((r) => ({ ...this.get(r.id), name: r.name, label: r.gate.label, url: this.link(r), demo: !!r.demo }));
   }
 
-  /** The ones up now. */
+  /** The ones up now (one quick look: it rides along on every Auto-checkout answer to a browser). */
   upList() {
-    return this.list().filter((g) => g.status === 'up');
+    return this.db.all("SELECT * FROM gates WHERE status = 'up'").map((row) => {
+      const r = this.retailers.get(row.store);
+      return r && r.gate && this.retailers.enabled(r) ? { ...toGate(row), name: r.name, label: r.gate.label, url: this.link(r), demo: !!r.demo } : null;
+    }).filter(Boolean);
   }
 
   // ---------------------------------------------------------------------------
