@@ -158,6 +158,38 @@ browser:
   never go over them ("2 of 2 today (2 checking out now)"). One that stops
   short frees its place again.
 
+### Clear cart: your bags, emptied before a drop
+
+Auto-checkout only ever buys the one item, so a bag with something else in it
+stops it there ("your bag already had 1 item in it"). The Auto-checkout tab's
+**🧹 Your bags at each store** card empties a store's bag in your checkout
+browser — from anywhere, your phone too — so a drop goes through:
+
+- **Clear cart** (one store) or **Clear all** (every store, one at a time). Both
+  ask first.
+- Your checkout browser opens the store's bag in a tab, presses each thing's
+  own **Remove** (or Delete, or its bin or ×) one at a time, answers the store's
+  "Are you sure?" with yes, opens the bag once more to check it's empty, then
+  closes the tab. Shopify stores (JB Hi-Fi, Toys"R"Us, Gamerholic, Trainer
+  Town): the store's own "empty the cart" (`/cart/clear.js`), checked the same
+  way. Each store takes a second or two; Clear all goes through them in one tab.
+- **Nothing else is pressed**: not "Save for later", not "Undo", not a promo
+  code's or gift card's remove, and nothing in a "Saved for later" or wish list
+  (Amazon's is right under its cart: it's left alone).
+- **A store where a checkout of yours is going is left alone** — its bag is that
+  checkout's (the card says so: "Left alone"). Empty it once that's done. A drop
+  that comes in while a bag is being emptied waits a moment ("next in line: your
+  bag there is being emptied"), then goes, its own item alone in the order. So is
+  a store whose virtual queue you're in (asking it for a page could lose your
+  place).
+- **Each store says how it went**: "Emptied — 2 items removed", "Already empty",
+  "Left alone: …" or "Couldn't empty it: …" with why. A bag it couldn't empty
+  (a Remove that did nothing, a layout it doesn't know) stays open in its tab,
+  for you to finish. A store whose page doesn't load says so in seconds.
+- It needs the extension **1.18.0** or newer in your checkout browser (the card
+  says so if it's older). Not open right now? It empties them when it next is
+  (within a few minutes), or says it didn't start.
+
 ### Checkpoints and virtual queues
 
 Before a big drop, JB Hi-Fi can switch on its **checkpoint** (an hCaptcha
@@ -424,6 +456,15 @@ the monitor sees an armed item drop (live sweep, page check or a browser's check
   - Final button pressed with no outcome in 5 minutes: "needs you".
 - **Another member's browser** can't see, start or report your runs. A run's
   code only works for your account.
+- **Clear cart** (`server/bags.js`): `POST /api/bags/clear` (a store, or
+  `stores: 'all'`) makes a request per store for your checkout browser, handed
+  over with `GET /api/ext/aco/next` (it answers at once with them). The
+  extension (`extension/background.js`, "Clear cart") takes the store's turn
+  like a checkout (`c:<id>` in the line), opens the bag, and `extension/bag.js`
+  on the page empties it; how it went comes back with `POST /api/ext/bags/:id`
+  and shows on the dashboard as it happens. Not picked up in 4 minutes: "didn't
+  start"; quiet for 3 minutes: "lost touch". The page's own `confirm()` boxes
+  answer yes in that tab only.
 - **The extension listens** with one long-poll at a time: in your checkout
   browser all the time (for ⚡ Buy from your phone, unless that's switched off),
   and in any browser while something is armed or a test run is waiting. The
@@ -438,6 +479,8 @@ the monitor sees an armed item drop (live sweep, page check or a browser's check
 Files:
 
 - `server/aco.js`: runs, limits, reasons and notifications.
+- `server/bags.js`: Clear cart (`/api/bags`, `/api/bags/clear`, `/api/ext/bags/:id`).
+- `extension/bag.js`: emptying a store's bag, on its bag page.
 - `server/routes/user.js`: `/api/aco` (settings, your browsers), `/api/aco/test/:id`
   (Trigger ACO) and `/api/aco/remote/:id` (Send to my computer).
 - `server/routes/discord.js`: the ⚡ Buy button, pressed.
@@ -450,6 +493,8 @@ Files:
 Tests:
 
 - `test/aco.test.js`: server.
+- `test/bags.test.js`: Clear cart on the server; `test/extension.e2e.test.js` has
+  it emptying every dummy store's bag, each its own way.
 - `test/remote.test.js`: ⚡ Buy from your phone and the checkout browser.
 - `test/extension.e2e.test.js`: the real extension on the dummy stores
   (several at once included).

@@ -4,6 +4,7 @@
 
 import { discordBotConfigured, discordOAuthConfigured } from '../config.js';
 import { entitlement } from '../entitlement.js';
+import { BAGS_EXTENSION_VERSION } from '../bags.js';
 import { ACO_EXTENSION_VERSION, EXTENSION_VERSION, REMOTE_EXTENSION_VERSION, storeUrl } from '../extension.js';
 import { DUMMY_PRODUCTS, STARTER_ITEMS, dummyProductPath } from '../presets.js';
 import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, cardBackupInfo, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
@@ -220,6 +221,27 @@ export function register(router, ctx) {
     if (out.error === 'not_found') throw notFound('SKU');
     if (out.error) throw new HttpError(409, out.error);
     return { run: out.run };
+  }, { entitled: true });
+
+  // Clear cart (server/bags.js): each store's bag in your checkout browser — emptying now, or how it went
+  // last time — and emptying one, or all of them (stores: 'all'), from wherever you are.
+  router.get('/api/bags', async (req) => {
+    const device = ctx.aco.checkoutDevice(req.user.id);
+    return {
+      stores: ctx.bags.list(req.user.id),
+      device: device ? { id: device.id, name: device.name, version: device.version || '', listening: ctx.aco.isListening(device.id) } : null,
+      extensionVersion: BAGS_EXTENSION_VERSION,
+    };
+  });
+
+  router.post('/api/bags/clear', async (req) => {
+    if (!limiter.hit(`bags-clear:${req.user.id}`, 20, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const body = req.body || {};
+    const stores = body.stores === 'all' ? 'all' : (Array.isArray(body.stores) ? body.stores : [body.store]).map((s) => str(s, 40)).filter(Boolean).slice(0, 40);
+    if (stores !== 'all' && !stores.length) throw bad('Which store? (store, or stores: "all")');
+    const out = ctx.bags.clear(req.user.id, stores);
+    if (out.error) throw new HttpError(409, out.error);
+    return out;
   }, { entitled: true });
 
   // --- Connected browsers (the extension) -----------------------------------

@@ -51,7 +51,8 @@ export default {
     product: { add: [/^add to cart$/i], buyNow: [/^buy now$/i], waitMs: 12000 },
     added: { checkout: [/\bproceed to (checkout|buy)\b/i], viewBag: [/^go to cart$/i] },
     // (url: the cart's own page, for when nothing on the product page leads there.)
-    bag: { path: /\/(gp\/cart|cart)/i, url: '/gp/cart/view.html', checkout: [/\bproceed to (checkout|buy)\b/i] },
+    // (Clear cart: only what's in the cart itself — its "Saved for later" list, right under it, is left alone.)
+    bag: { path: /\/(gp\/cart|cart)/i, url: '/gp/cart/view.html', checkout: [/\bproceed to (checkout|buy)\b/i], clear: { scope: '#sc-active-cart' } },
     checkout: {
       path: /\/(gp\/buy|checkout)\//i,
       // Amazon's "Try Prime free for 30 days" on the way (a page or a pop-up): "No thanks".

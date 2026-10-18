@@ -134,7 +134,12 @@ export default {
     bag: {                          // the cart page
       path: /\/cart(\/|$)/i,
       checkout: [/^proceed to checkout$/i],
-      // url: '/gp/cart/view.html',  // optional: its address, when it isn't /cart (opened when nothing on the page leads there)
+      // url: '/gp/cart/view.html',  // optional: its address, when it isn't /cart (opened when nothing on the page leads there,
+      //                             //   and by Clear cart)
+      // clear: {                    // optional, for Clear cart (extension/bag.js):
+      //   scope: '#sc-active-cart', //   only what's in here is the bag (Amazon: not its "Saved for later" below)
+      //   remove: [/^bin it$/i],    //   a line's Remove, when it's called something other than Remove / Delete / a bin / ×
+      // },
     },
     checkout: {
       path: /\/checkout(\/|$)/i,
@@ -219,6 +224,18 @@ stores. Some rules always apply, whatever a flow says:
     checkout. With neither, it stops and says so (not 30 s later).
   - Shopify's cart link landing anywhere but the cart or checkout (the product
     page again): its Add button, like any store.
+
+Clear cart (the Auto-checkout tab's 🧹 card; docs/AUTO-CHECKOUT.md) empties a
+store's bag with the same flow: its bag page (`bag.url`, else `/cart`; a page not
+found there: the store's own bag link, from its header), then each line's own
+Remove, one at a time — by its words ("Remove", "Delete", "Remove item"), what
+it's called for a screen reader ("Remove <name> from cart"), or an icon the store
+marks as remove (a bin, ×) — and the store's "Are you sure?" answered yes (its
+pop-up's Yes / OK / Remove, or the browser's own `confirm()` box). Never "Save for
+later", "Undo", a promo code's or gift card's remove, nor anything in a saved
+or wish list. A quantity drop-down with a 0 in it ("0 (Delete)") is the last
+resort. Shopify stores (`platform: 'shopify'`): the store's own `/cart/clear.js`
+first. Then the bag's opened once more, to check it's empty.
 
 Field names for `fields`: `email`, `phone`, `firstName`, `lastName`,
 `fullName`, `address1`, `address2`, `suburb`, `state`, `postcode`, `country`,

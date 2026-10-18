@@ -1061,17 +1061,80 @@ async function saveRemote(patch, done) {
   }
 }
 
+// --- Clear cart: your bag at each store, emptied in your checkout browser (server/bags.js) ----------
+async function loadBags() {
+  state.bags = await api('GET', '/api/bags');
+  return state.bags;
+}
+
+const BAG_TONE = { cleared: 'ok', empty: 'ok', busy: 'warn', failed: 'err', expired: 'err' };
+
+/** How a store's bag is: being emptied now, or how it went last time. */
+function bagMeta(s, deviceName) {
+  if (s.active) return s.status === 'queued' ? `⏳ Waiting for ${s.device || deviceName || 'your checkout browser'}…` : `🧹 Emptying it…${s.removed ? ` ${s.removed} removed so far` : ''}`;
+  if (!s.status) return 'Not emptied from here yet';
+  const at = s.at ? ` · ${ago(s.at)}` : '';
+  if (s.status === 'cleared') return `✓ Emptied — ${s.removed} item${s.removed === 1 ? '' : 's'} removed${at}`;
+  if (s.status === 'empty') return `✓ Already empty${at}`;
+  if (s.status === 'busy') return `Left alone: ${s.message}${at}`;
+  return `✗ ${s.statusText}: ${s.message}${at}`;
+}
+
+function renderBags() {
+  const d = state.bags;
+  const list = $('#bags');
+  if (!d || !list) return;
+  list.textContent = '';
+  const device = d.device;
+  const old = !!device && versionBelow(device.version, d.extensionVersion);
+  $('#bags-sum').textContent = !device ? "Connect the extension in the browser you check out with (Extension tab), and its bags can be emptied from here."
+    : old ? `Update the extension in ${device.name} to ${d.extensionVersion} or newer to empty its bags from here (it has ${device.version || 'an older one'}).`
+      : `Emptied in ${device.name}, your checkout browser${device.listening ? ' (open now)' : " — it isn't open right now: it empties them when it next is"}.`;
+  $('#bags-all').disabled = !device || old;
+  for (const s of d.stores) {
+    const btn = h('button', { class: 'btn small', type: 'button', disabled: !device || old || s.active, 'aria-label': `Clear cart at ${s.name}` }, s.active ? 'Emptying…' : 'Clear cart');
+    btn.addEventListener('click', () => clearBags(s.id, `Empty your ${s.name} bag in ${device.name}?\n\nEverything in it is removed.`));
+    list.append(h('li', { class: `bag ${s.active ? 'active' : BAG_TONE[s.status] || 'none'}`, dataset: { store: s.id } },
+      h('span', { class: 'dot', 'aria-hidden': 'true' }),
+      h('div', { class: 'info' }, h('div', { class: 'name' }, s.name), h('div', { class: 'meta', title: s.message || '' }, bagMeta(s, device && device.name))),
+      btn));
+  }
+}
+
+/** Clear cart (a store) or Clear all ('all'), after asking. */
+async function clearBags(stores, question) {
+  if (!confirm(question)) return;
+  const msg = $('#bags-msg');
+  try {
+    const r = await api('POST', '/api/bags/clear', stores === 'all' ? { stores: 'all' } : { store: stores });
+    setMsg(msg, `${r.device.name} is emptying ${stores === 'all' ? 'your bags, one store at a time' : 'it'}${r.listening ? '.' : " — it isn't open right now: it does it when it next is (within a few minutes)."}`, true);
+    // (This browser, if it's the checkout browser, starts now rather than at its next check.)
+    askExtension('acoListen', {}, 4000);
+  } catch (e) {
+    setMsg(msg, e.message);
+  }
+  await loadBags().catch(() => null);
+  renderBags();
+}
+
+$('#bags-all').addEventListener('click', () => {
+  const d = state.bags;
+  if (!d || !d.device) return;
+  clearBags('all', `Empty your bags at all ${d.stores.length} stores in ${d.device.name}?\n\nEverything in them is removed — one store at a time. A store where a checkout of yours is going is left alone.`);
+});
+
 function renderAco() {
   if (!state.aco) return;
   renderAcoStats();
   renderAcoSettings();
   renderAcoRemote();
+  renderBags();
   renderAcoItems();
   renderAcoRuns();
 }
 
 loaders.aco = async () => {
-  await Promise.all([loadAco(), loadRetailers(), loadItems(), loadLogins().catch(() => null)]);
+  await Promise.all([loadAco(), loadRetailers(), loadItems(), loadLogins().catch(() => null), loadBags().catch(() => null)]);
   renderAco();
   renderAcoChecks().catch(() => null);
 };
@@ -1363,6 +1426,13 @@ function connectStream() {
     if ($('[data-panel="aco"]').hidden) return;
     clearTimeout(acoTimer);
     acoTimer = setTimeout(() => Promise.all([loadAco(), loadItems()]).then(renderAco).catch(() => null), 250);
+  });
+  // Clear cart: a bag being emptied, or done.
+  let bagsTimer = null;
+  es.addEventListener('bags', () => {
+    if ($('[data-panel="aco"]').hidden) return;
+    clearTimeout(bagsTimer);
+    bagsTimer = setTimeout(() => loadBags().then(renderBags).catch(() => null), 200);
   });
   es.addEventListener('monitor-feed', (e) => { monitorUI.onFeed(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });
   es.addEventListener('monitor-product', (e) => { monitorUI.onProduct(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });

@@ -3,6 +3,7 @@
 
 import http from 'node:http';
 import { Aco } from './aco.js';
+import { Bags } from './bags.js';
 import { Drops } from './monitor/drops.js';
 import { Vip } from './monitor/vip.js';
 import { Catalog } from './catalog.js';
@@ -80,6 +81,9 @@ export async function createApp(options = {}) {
   ctx.aco = aco;
   monitor.aco = aco;
   gates.aco = aco;
+  // Clear cart: the member's bags, emptied in their checkout browser (from the dashboard, anywhere).
+  const bags = new Bags({ ...ctx, now });
+  ctx.bags = bags;
 
   const router = new Router();
   auth.register(router, ctx);
@@ -233,6 +237,7 @@ export async function createApp(options = {}) {
     gates,
     drops,
     aco,
+    bags,
     catalog,
     feed,
     discord,
@@ -254,6 +259,7 @@ export async function createApp(options = {}) {
       gates.start();
       drops.start();
       aco.start();
+      bags.start();
       startJobs();
       return app.url;
     },
@@ -263,6 +269,7 @@ export async function createApp(options = {}) {
       gates.stop();
       drops.stop();
       aco.stop();
+      bags.stop();
       timers.forEach(clearInterval);
       hub.close();
       await new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections?.(); });

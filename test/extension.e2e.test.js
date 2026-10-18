@@ -1943,6 +1943,263 @@ test("🤖 Trigger ACO on the Auto-checkout page: a test run now, for an item th
   await useItems([]);
 });
 
+// --- 🧹 Clear cart (server/bags.js, extension/bag.js): each store's bag, emptied from the dashboard -------
+/** Things already in a dummy store's bag: [sku, qty] each. */
+function fillBag(shopId, lines) {
+  const S = store.shop(shopId);
+  S.cart = lines.map(([sku, qty = 1]) => { const p = S.products.find((x) => x.sku === sku); return { sku, qty, price: p.price, name: p.name }; });
+}
+const bagOf = async (shopId) => (await browserApi('GET', '/api/bags')).body.stores.find((s) => s.id === `demo-${shopId}`);
+/** How emptying a store's bag ended (the one asked for since `since`). */
+async function bagDone(shopId, since, timeout = 45000) {
+  try {
+    return await waitFor(async () => { const s = await bagOf(shopId); return s && !s.active && s.status && s.at >= since ? s : null; }, { timeout, message: `${shopId}'s bag emptied` });
+  } catch (e) {
+    const tabs = ctx.pages().filter((pg) => pg.url().startsWith(`${store.url}/${shopId}`));
+    const said = tabs.length ? await tabs[0].locator('#mugibot-qc').textContent().catch(() => '?') : 'no tab';
+    throw new Error(`${e.message} — ${JSON.stringify(await bagOf(shopId))} — the panel said: ${said}`);
+  }
+}
+async function openBags() {
+  const dash = await ctx.newPage();
+  await dash.goto(`${env.url}/app#aco`);
+  await dash.locator('#bags li[data-store="demo-kmart"] button').waitFor();
+  return dash;
+}
+/** Clear cart pressed on the dashboard (and its "Empty your … bag?" answered yes). */
+async function pressClear(dash, shopId) {
+  const since = Date.now();
+  dash.once('dialog', (d) => d.accept());
+  await dash.locator(`#bags li[data-store="demo-${shopId}"] button`).click();
+  return since;
+}
+const bagTabs = (shopId) => ctx.pages().filter((pg) => pg.url().startsWith(`${store.url}/${shopId}/`));
+/** Every dashboard page left open (a test that failed part-way): each holds a connection to the site, and Chrome has six. */
+const closeDashboards = async () => { for (const pg of ctx.pages()) if (pg.url().startsWith(env.url)) await pg.close().catch(() => null); };
+
+// Each dummy store's bag empties its own way (devtools/mockstore.js cartPage) — two things in each, one of them twice.
+const BAGS = [
+  ['kmart', ['43818587', '43818556'], 'a "Remove" button per line, the list drawn again each time'],
+  ['bigw', ['6012345', '6012346'], '"Remove" → "Remove … from your cart?" → Remove'],
+  ['ebgames', ['312345', '312346'], 'a bin icon with no words, posting a form (a new page each time)'],
+  ['jbhifi', ['pokemon-tcg-30th-celebration-upc', 'pokemon-tcg-30th-celebration-etb'], "Shopify's own cart emptied at once (/cart/clear.js)"],
+  ['gamerholic', ['pokemon-tcg-mega-evolution-elite-trainer-box', 'preorder-one-piece-card-game-op-15-booster-box'], "Shopify's own cart emptied at once"],
+  ['toysrus', ['pokemon-tcg-scarlet-violet-151-ultra-premium-collection', 'pokemon-tcg-mega-evolution-booster-bundle'], 'Shopify (Dawn) icon links "Remove <name>", without its cart API', { noAjaxCart: true }],
+  ['trainertown', ['pokemon-tcg-ascended-heroes-elite-trainer-box', 'one-piece-tcg-op-14-booster-box'], '✕ buttons asking /cart/change.js, without its cart API', { noAjaxCart: true }],
+  ['thegamescube', ['729233', '731931'], 'a "Remove" link asking the browser\'s own "Are you sure?" box'],
+  ['pokemoncenter', ['10-10447-108', '10-10450-101'], '"Remove" → "Removing…" (greyed out a moment) → gone'],
+  ['pbandai', ['N2903432001', 'N2863373001'], '"Delete" → "Are you sure you want to delete this item…?" → OK'],
+  ['target', ['71234567', '71234568'], '"Remove" → "… has been removed" with "Undo" (never pressed)'],
+  ['amazon', ['B0MGBTEST1', 'B0MGBTEST2'], '"Delete" — never "Save for later" — with its "Saved for later" list left alone'],
+  ['citybeach', ['20424049-01', '20499999-01'], '× "Remove product …" → "Remove Product? Are you sure…" → Yes'],
+];
+
+for (const [shopId, skus, how, opts = {}] of BAGS) {
+  test(`🧹 Clear cart at ${shopId}: ${how} — emptied from the dashboard, checked empty, its tab closed`, async (t) => {
+    const S = store.shop(shopId);
+    const products = S.products.map((x) => x.sku);
+    assert.ok(skus.every((x) => products.includes(x)), `the dummy ${shopId} sells ${skus.join(', ')} (${products.join(', ')})`);
+    fillBag(shopId, [[skus[0], 2], [skus[1], 1]]);
+    Object.assign(S, opts);
+    if (shopId === 'amazon') S.saved = [{ sku: 'B0MGBSAVED', name: 'Pikachu Plush (saved for later)', price: 30 }];
+    // (The dashboard closed whatever happens: each open one holds a connection to the site, and Chrome has six.)
+    const dash = await openBags();
+    t.after(() => dash.close());
+    const since = await pressClear(dash, shopId);
+    const s = await bagDone(shopId, since);
+    assert.equal(s.status, 'cleared', JSON.stringify(s));
+    assert.equal(s.removed, 3, 'two of one, one of the other');
+    assert.equal(S.cart.length, 0, 'the bag is empty');
+    if (opts.noAjaxCart || !SHOPIFY_SHOPS.has(shopId)) assert.ok(S.removed >= 2, `taken out with its own Remove buttons (${S.removed})`);
+    else assert.equal(S.cleared, 1, "Shopify's own /cart/clear.js");
+    if (shopId === 'target') assert.equal(S.undos, 0, '"Undo" never pressed');
+    if (shopId === 'amazon') {
+      assert.deepEqual(S.saved.map((x) => x.sku), ['B0MGBSAVED'], '"Saved for later" left alone');
+      assert.equal(S.savedMoves, 0, '"Save for later" never pressed');
+      assert.equal(S.savedDeletes, 0);
+    }
+    // Opened once more at the end, to check it's empty.
+    assert.equal(S.bagViews.at(-1), 0, `its bag page last showed it empty (${S.bagViews.join(', ')})`);
+    await waitFor(() => !bagTabs(shopId).length, { message: 'its tab closed' });
+    await dash.waitForFunction((id) => /Emptied — 3 items removed/.test(document.querySelector(`#bags li[data-store="demo-${id}"]`)?.textContent || ''), shopId, { timeout: 10000 });
+  });
+}
+const SHOPIFY_SHOPS = new Set(['jbhifi', 'gamerholic', 'toysrus', 'trainertown']);
+
+test('🧹 Clear all: every store\'s bag in turn, in one tab — the ones with things in them emptied, the rest "already empty" — pressed where there\'s no extension (your phone), the checkout browser does it', async (t) => {
+  t.after(closeDashboards);
+  fillBag('kmart', [['43818587', 1]]);
+  fillBag('ebgames', [['312346', 1]]);
+  fillBag('jbhifi', [['pokemon-tcg-30th-celebration-etb', 1]]);
+  fillBag('citybeach', [['20424049-01', 3]]);
+  const opened = [];
+  const onPage = (pg) => opened.push(pg);
+  ctx.on('page', onPage);
+  const before = Date.now();
+  // (From the server, as from a phone: nothing asks this browser directly.)
+  const r = await browserApi('POST', '/api/bags/clear', { stores: BAGS.map(([id]) => `demo-${id}`) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  for (const [id] of BAGS) await bagDone(id, before, 90000);
+  ctx.off('page', onPage);
+  const result = Object.fromEntries(await Promise.all(BAGS.map(async ([id]) => [id, await bagOf(id)])));
+  for (const id of ['kmart', 'ebgames', 'jbhifi', 'citybeach']) {
+    assert.equal(result[id].status, 'cleared', `${id}: ${JSON.stringify(result[id])}`);
+    assert.equal(store.shop(id).cart.length, 0);
+  }
+  assert.equal(result.citybeach.removed, 3);
+  for (const [id] of BAGS.filter(([x]) => !['kmart', 'ebgames', 'jbhifi', 'citybeach'].includes(x))) assert.equal(result[id].status, 'empty', `${id}: ${JSON.stringify(result[id])}`);
+  assert.equal(opened.length, 1, 'one tab, going from store to store');
+  await waitFor(() => !BAGS.some(([id]) => bagTabs(id).length), { message: 'the tab closed at the end' });
+  // The dashboard's own Clear all: "Empty your bags at all … stores?" — answered no, nothing happens.
+  const dash = await openBags();
+  dash.once('dialog', (d) => { assert.match(d.message(), /Empty your bags at all \d+ stores in .+\?/); d.dismiss(); });
+  await dash.locator('#bags-all').click();
+  await new Promise((res) => setTimeout(res, 500));
+  assert.ok((await browserApi('GET', '/api/bags')).body.stores.every((s) => !s.active), 'nothing asked');
+  await dash.close();
+});
+
+test("🧹 a store where a checkout of yours is going: its bag is left alone (it's that checkout's) and the dashboard says why — once that checkout's done, Clear cart empties it", async (t) => {
+  t.after(closeDashboards);
+  await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Knock Out by hand' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Knock Out by hand');
+  await reach(shop, /\/kmart\/checkout$/);
+  await waitReady(shop, 'Checkout securely');
+  assert.equal(store.shop('kmart').cart.length, 1, 'its item in the bag, at checkout for you');
+  const bags = await openBags();
+  let since = await pressClear(bags, 'kmart');
+  let s = await bagDone('kmart', since);
+  assert.equal(s.status, 'busy');
+  assert.match(s.message, /Your checkout of Knock Out by hand at Kmart \(dummy store\) is going in this browser — its bag was left alone/);
+  assert.equal(store.shop('kmart').cart.length, 1, 'untouched');
+  assert.equal(store.shop('kmart').removed, 0);
+  await bags.waitForFunction(() => /Left alone: Your checkout of Knock Out by hand/.test(document.querySelector('#bags li[data-store="demo-kmart"]')?.textContent || ''));
+  // Done with it (its tab closed): now it's emptied.
+  await shop.close();
+  since = await pressClear(bags, 'kmart');
+  s = await bagDone('kmart', since);
+  assert.equal(s.status, 'cleared', JSON.stringify(s));
+  assert.equal(store.shop('kmart').cart.length, 0);
+  await bags.close();
+  await dash.close();
+  await useItems([]);
+});
+
+test('🧹 → 🤖 what it\'s for: Auto-checkout stops at a bag with something else in it ("only buys the one item"); Clear cart empties it from the dashboard, and the next drop is bought — its own item alone in the order', async (t) => {
+  t.after(closeDashboards);
+  freshDay();
+  await browserApi('PUT', '/api/aco', { enabled: true, mode: 'place' });
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO after Clear cart', aco: true, maxPrice: 120 }]);
+  fillBag('kmart', [['43818556', 1]]);
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await runFor('ACO after Clear cart') || {}).reason === 'wrong_item', { timeout: 45000, message: 'stopped: the bag had something else in it' });
+  assert.equal(store.shop('kmart').orders.length, 0);
+  await closeStorePages('kmart');
+  const dash = await openBags();
+  const since = await pressClear(dash, 'kmart');
+  const s = await bagDone('kmart', since);
+  assert.equal(s.status, 'cleared', JSON.stringify(s));
+  assert.equal(s.removed, 1);
+  assert.deepEqual(store.shop('kmart').cart, []);
+  await dash.close();
+  // It drops again (still armed: nothing was bought): bought, its own item alone.
+  assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO after Clear cart').aco, true);
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(() => store.shop('kmart').orders.length === 1, { timeout: 45000, message: 'the order placed' });
+  assert.deepEqual(store.shop('kmart').orders[0].cart.map((c) => [c.sku, c.qty]), [['43818587', 1]]);
+  await waitFor(async () => (await runFor('ACO after Clear cart')).status === 'placed', { message: 'the run placed' });
+  await closeStorePages('kmart');
+  await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
+  await useItems([]);
+});
+
+test("🧹 a drop while a bag is being emptied: the run is next in line at that store (its bag's being emptied), then goes — its own item alone in the order, never mixed with what was taken out", async (t) => {
+  t.after(closeDashboards);
+  freshDay();
+  await browserApi('PUT', '/api/aco', { enabled: true, mode: 'place' });
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO during Clear cart', aco: true, maxPrice: 120 }]);
+  // Each Remove at this Kmart takes a while: five things to take out.
+  const S = store.shop('kmart');
+  S.removeDelayMs = 1200;
+  S.cart = [1, 2, 3, 4, 5].map((n) => ({ sku: `4381900${n}`, qty: 1, price: 10, name: `Booster pack ${n}` }));
+  await acoListen();
+  const dash = await openBags();
+  const since = await pressClear(dash, 'kmart');
+  await waitFor(() => S.removed >= 1, { timeout: 30000, message: 'emptying under way' });
+  await drop('kmart', '43818587');
+  await waitFor(async () => /bag there is being emptied \(Clear cart\)/.test(((await runFor('ACO during Clear cart')) || {}).message || ''), { timeout: 20000, message: 'the run next in line behind Clear cart' });
+  assert.equal((await runFor('ACO during Clear cart')).statusText, 'Next in line');
+  const s = await bagDone('kmart', since, 60000);
+  assert.equal(s.status, 'cleared', JSON.stringify(s));
+  assert.equal(s.removed, 5);
+  await waitFor(() => S.orders.length === 1, { timeout: 60000, message: 'the order placed after' });
+  assert.deepEqual(S.orders[0].cart.map((c) => [c.sku, c.qty]), [['43818587', 1]], 'its own item alone');
+  await waitFor(async () => (await runFor('ACO during Clear cart')).status === 'placed', { message: 'the run placed' });
+  await closeStorePages('kmart');
+  await dash.close();
+  await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
+  await useItems([]);
+});
+
+test("🧹 when it can't: a Remove that does nothing — it says so, and leaves the bag open in its tab for you; a store's virtual queue where the bag should be — left alone, the tab closed; a page that won't load — said in seconds", async (t) => {
+  t.after(closeDashboards);
+  // A Remove that does nothing.
+  fillBag('bigw', [['6012346', 1]]);
+  store.shop('bigw').removeFails = true;
+  const dash = await openBags();
+  let since = await pressClear(dash, 'bigw');
+  let s = await bagDone('bigw', since);
+  assert.equal(s.status, 'failed');
+  assert.match(s.message, /BIG W \(dummy store\) didn't take "Pokémon TCG: Scarlet & Violet Booster Bundle" out when its Remove button was pressed — empty it yourself in this tab/);
+  assert.equal(store.shop('bigw').cart.length, 1);
+  assert.equal(bagTabs('bigw').length, 1, 'left open, for you');
+  assert.match(await bagTabs('bigw')[0].locator('#mugibot-qc').textContent(), /empty it yourself in this tab/);
+  await closeStorePages('bigw');
+  // Its virtual queue where the bag should be (EB Games): left alone.
+  fillBag('ebgames', [['312346', 1]]);
+  store.shop('ebgames').queue.on = true;
+  since = await pressClear(dash, 'ebgames');
+  s = await bagDone('ebgames', since);
+  assert.equal(s.status, 'failed');
+  assert.match(s.message, /EB Games \(dummy store\)'s virtual queue came up instead of the bag — try again once it's down/);
+  assert.equal(store.shop('ebgames').cart.length, 1, 'untouched');
+  await waitFor(() => !bagTabs('ebgames').length, { message: 'the tab closed (out of line)' });
+  store.shop('ebgames').queue.on = false;
+  // A page that won't load (here: an address nothing answers on).
+  const realUrl = env.app.bags.bagUrl;
+  env.app.bags.bagUrl = (r) => (r.id === 'demo-target' ? 'http://127.0.0.1:9/target/basket' : realUrl.call(env.app.bags, r));
+  try {
+    since = await pressClear(dash, 'target');
+    s = await bagDone('target', since, 40000);
+    assert.equal(s.status, 'failed');
+    assert.match(s.message, /Couldn't open your Target \(dummy store\) bag in this browser — the page didn't load/);
+    assert.ok(Date.now() - since < 30000, `said in seconds (${Date.now() - since} ms)`);
+  } finally {
+    env.app.bags.bagUrl = realUrl;
+  }
+  await dash.close();
+});
+
+test("🧹 the bag's address isn't the bag (a page not found): the store's own bag link, from its header", async (t) => {
+  t.after(closeDashboards);
+  fillBag('kmart', [['43818556', 1]]);
+  const realUrl = env.app.bags.bagUrl;
+  env.app.bags.bagUrl = (r) => (r.id === 'demo-kmart' ? `${r.base}/shopping-bag` : realUrl.call(env.app.bags, r));
+  try {
+    const dash = await openBags();
+    const since = await pressClear(dash, 'kmart');
+    const s = await bagDone('kmart', since);
+    assert.equal(s.status, 'cleared', JSON.stringify(s));
+    assert.equal(store.shop('kmart').cart.length, 0);
+    await dash.close();
+  } finally {
+    env.app.bags.bagUrl = realUrl;
+  }
+});
+
 // --- 🎯 Drop watches (server/monitor/drops.js): what isn't trading cards, the same checkout ------------
 // A product that isn't a trading card at every store: ⚡ Buy runs the store's own checkout, to its final button.
 const NON_TCG = [

@@ -815,8 +815,8 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   // …and when it can't start, why: Day UPC at $360 is over the $250 an order limit.
   page.once('dialog', (d) => d.accept());
   await day.locator('.aco-test').click();
-  await page.waitForFunction(() => /didn't start/.test(document.querySelector('#toasts')?.textContent || ''));
-  assert.match(await page.textContent('#toasts'), /over your limit of \$250\.00 an order/);
+  // (Its own words: an earlier "didn't start" — this test's Day UPC drop, above — can still be showing.)
+  await page.waitForFunction(() => /over your limit of \$250\.00 an order/.test(document.querySelector('#toasts')?.textContent || ''));
   // A test run already going: not twice.
   page.once('dialog', (d) => d.accept());
   await ko.locator('.aco-test').click();
@@ -875,6 +875,63 @@ test("Auto-checkout tab: ⚡ Buy from your phone — its switch, and the checkou
   // (Leave it as it was: no browsers.)
   for (const d of (await me.get('/api/devices')).body.devices) await me.del(`/api/devices/${d.id}`);
   await me.put('/api/aco', { deviceId: '' });
+});
+
+test('Auto-checkout tab: 🧹 your bags at each store — Clear cart and Clear all, sent to your checkout browser (asked first), each store saying how it went; an old extension there: update it first', async () => {
+  const me = new Client(env.url);
+  await me.post('/api/auth/login', { username: 'owner', password: PASSWORD });
+  await page.goto(`${env.url}/app#aco`);
+  await page.reload(); // (already on this tab: what it shows now, not what it loaded then)
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #bags li[data-store="kmart"]');
+  // No browser connected yet.
+  assert.match(await page.textContent('#bags-sum'), /Connect the extension in the browser you check out with/);
+  assert.equal(await page.locator('#bags li[data-store="kmart"] button').isDisabled(), true);
+  assert.equal(await page.isDisabled('#bags-all'), true);
+  assert.match(await page.textContent('#bags li[data-store="kmart"]'), /Not emptied from here yet/);
+  // An extension too old to do it there.
+  const pc = await Device.pair(env.url, me, 'Chrome on Home PC');
+  await pc.call('GET', '/api/ext/me?v=1.17.0');
+  await page.reload();
+  await page.waitForFunction(() => /Update the extension in Chrome on Home PC to 1\.18\.0 or newer to empty its bags from here \(it has 1\.17\.0\)/.test(document.querySelector('#bags-sum').textContent));
+  assert.equal(await page.locator('#bags li[data-store="kmart"] button').isDisabled(), true);
+  // Up to date, and open.
+  await pc.call('GET', '/api/ext/me?v=1.18.0');
+  await pc.call('GET', '/api/ext/aco/next');
+  await page.reload();
+  await page.waitForFunction(() => /Emptied in Chrome on Home PC, your checkout browser \(open now\)/.test(document.querySelector('#bags-sum').textContent));
+  // Clear cart at one store: asked first — "no" asks nothing of the browser…
+  page.once('dialog', (d) => d.dismiss());
+  await page.click('#bags li[data-store="kmart"] button');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await pc.call('GET', '/api/ext/aco/next')).body.clears.length, 0);
+  // …"yes" sends it there, and the card follows how it goes by itself.
+  page.once('dialog', (d) => { assert.match(d.message(), /Empty your Kmart bag in Chrome on Home PC\?/); d.accept(); });
+  await page.click('#bags li[data-store="kmart"] button');
+  await page.waitForFunction(() => /Waiting for Chrome on Home PC/.test(document.querySelector('#bags li[data-store="kmart"]').textContent));
+  assert.match(await page.textContent('#bags-msg'), /Chrome on Home PC is emptying it\./);
+  assert.equal(await page.locator('#bags li[data-store="kmart"] button').isDisabled(), true, 'once at a time');
+  const job = (await pc.call('GET', '/api/ext/aco/next')).body.clears[0];
+  await pc.call('POST', `/api/ext/bags/${job.id}`, { status: 'clearing', removed: 1 });
+  await page.waitForFunction(() => /Emptying it… 1 removed so far/.test(document.querySelector('#bags li[data-store="kmart"]').textContent));
+  await pc.call('POST', `/api/ext/bags/${job.id}`, { status: 'cleared', removed: 2 });
+  await page.waitForFunction(() => /✓ Emptied — 2 items removed/.test(document.querySelector('#bags li[data-store="kmart"]').textContent));
+  // Clear all: every store, one at a time — each one's end shows on its own.
+  page.once('dialog', (d) => { assert.match(d.message(), /Empty your bags at all \d+ stores in Chrome on Home PC\?/); d.accept(); });
+  await page.click('#bags-all');
+  await page.waitForFunction(() => document.querySelectorAll('#bags li.active').length > 5);
+  assert.match(await page.textContent('#bags-msg'), /emptying your bags, one store at a time/);
+  for (const j of (await pc.call('GET', '/api/ext/aco/next')).body.clears) {
+    await pc.call('POST', `/api/ext/bags/${j.id}`, j.store === 'target' ? { status: 'failed', message: "Target didn't take it out when its Remove button was pressed" }
+      : j.store === 'bigw' ? { status: 'busy', message: 'Your checkout of ETB at BIG W is going in this browser — its bag was left alone.' } : { status: 'empty' });
+  }
+  await page.waitForFunction(() => !document.querySelector('#bags li.active'));
+  assert.match(await page.textContent('#bags li[data-store="target"]'), /✗ Couldn't empty it: Target didn't take it out/);
+  assert.match(await page.getAttribute('#bags li[data-store="target"]', 'class'), /\berr\b/);
+  assert.match(await page.textContent('#bags li[data-store="bigw"]'), /Left alone: Your checkout of ETB at BIG W is going/);
+  assert.match(await page.textContent('#bags li[data-store="ebgames"]'), /✓ Already empty/);
+  if (shots) await page.locator('#bags-card').screenshot({ path: path.join(shots, 'bags.png') });
+  // (Leave it as it was: no browsers.)
+  for (const d of (await me.get('/api/devices')).body.devices) await me.del(`/api/devices/${d.id}`);
 });
 
 test("Monitor page for a member: each store's switch (hidden just for them), ☆ Watch on a tracked product, and never where the searches come from", async () => {

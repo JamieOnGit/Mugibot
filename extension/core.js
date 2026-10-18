@@ -285,6 +285,8 @@ var MGBQuick = (function () {
       if (inAnyPanel(el) || !isVisible(el)) return;
       var label = labelOf(el);
       if (label.length > 60 || /add to|check ?out|continue/i.test(label)) return;
+      // (A line's own Remove on the bag page — "Remove Scarlet & Violet 151 …" — isn't the bag's count.)
+      if (/^(remove|delete)\b/i.test(label)) return;
       var href = el.getAttribute('href') || '';
       var isBag = /\/(cart|bag|basket|trolley)(\/|$|\?|#)/i.test(href)
         || (!!el.closest('header, nav') && /\b(bag|cart|basket|trolley)\b/i.test(label));
@@ -1075,5 +1077,10 @@ var MGBQuick = (function () {
     run: run,
     makePanel: makePanel,
     sessionStore: sessionStore,
+    // For Clear cart (bag.js), on the store's bag page.
+    helpers: {
+      toArray: toArray, isVisible: isVisible, isDisabled: isDisabled, labelParts: labelParts, textOf: textOf, inAnyPanel: inAnyPanel,
+      dismissUpsell: dismissUpsell, bagLooksEmpty: bagLooksEmpty, bagUrl: bagUrl, storePath: storePath, EMPTY_RE: EMPTY_RE,
+    },
   };
 })();

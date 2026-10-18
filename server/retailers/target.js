@@ -36,7 +36,8 @@ export default {
     product: { add: [/\badd to (cart|basket|bag)\b/i, /\bpre-?order\b/i], waitMs: 12000 },
     // upsell: the "Often Bought Together" pop-up after Add to basket — closed with its ✕, never accepted.
     added: { checkout: [/^(secure )?check ?out( now)?$/i], viewBag: [/\bview (basket|cart|bag)\b/i], upsell: [/often bought together/i] },
-    bag: { path: /\/(basket|cart)(\/|$)/i, checkout: [/^(secure )?check ?out( now)?$/i, /^proceed to checkout$/i] },
+    // (Its bag is the basket: /basket.)
+    bag: { path: /\/(basket|cart)(\/|$)/i, url: '/basket', checkout: [/^(secure )?check ?out( now)?$/i, /^proceed to checkout$/i] },
     checkout: {
       // target.com.au/checkout opens its one-page checkout at /spc/order.
       path: /\/(checkout|spc\/order)(\/|$)/i,

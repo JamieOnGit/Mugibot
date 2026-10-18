@@ -79,8 +79,29 @@
   const items = (state && state.items) || [];
   const retailers = MGBFlows.revive((state && state.flows) || []);
   const retailer = MGBFlows.forLocation(retailers, location);
+  // (A tab emptying a bag — Clear cart — sent somewhere that isn't the store: said, and left as it is.)
+  if (!retailer && state && state.clear) { ask({ type: 'clearReport', id: state.clear.id, status: 'failed', removed: 0, message: `The tab went to ${location.host}${location.pathname}, not your ${state.clear.storeName || ''} bag`.slice(0, 300) }); return; }
   if (!retailer) return; // not a store Mugibot has a flow for (or a page outside it)
   const checkoutFlow = MGBFlows.part(retailer, 'checkout');
+
+  // Clear cart (bag.js): this tab is your checkout browser emptying your bag here, pressed on your dashboard.
+  if (state && state.clear) {
+    const job = state.clear;
+    const panel = MGBQuick.makePanel({ retailer, products: [], note: '🧹 Clear cart — from your dashboard' });
+    panel.startButton.parentElement.style.display = 'none';
+    // (keep: a bag it couldn't empty stays open in this tab, for you.)
+    const tell = (status, removed, message, keep = true) => ask({ type: 'clearReport', id: job.id, status, removed, message: message || '', keep });
+    // The store's queue (or checkpoint) where its bag should be: left alone (the tab's closed: out of line).
+    const g = MGBFlows.gateHere(retailer, document, location);
+    if (g) {
+      panel.setStatus(`🧹 ${retailer.name}'s ${g.kind === 'queue' ? 'virtual queue' : 'checkpoint'} came up — your bag there was left alone.`);
+      tell('failed', 0, `${retailer.name}'s ${g.kind === 'queue' ? 'virtual queue' : 'checkpoint'} came up instead of the bag — try again once it's down`, false);
+      return;
+    }
+    MGBBag.run({ retailer, job, setStatus: panel.setStatus, report: tell, sayYes: () => ask({ type: 'clearSayYes' }) })
+      .catch(() => tell('failed', 0, 'Something went wrong on the page — have a look in this tab'));
+    return;
+  }
 
   // The store login monitor (logins.js): are you signed in here? Read from the page as it settles
   // (headers often fill in a moment after the page loads); nothing is clicked.
@@ -437,7 +458,8 @@
       const turn = await ask({ type: 'turn', name: item && item.name });
       if (turn && turn.go === false) {
         ask({ type: 'turnEnd' });
-        panel.setStatus(`Your checkout of ${turn.name || 'another item'} at ${retailer.name} is going — ${retailer.name} keeps one bag for this browser. Press this again once it's done.`);
+        panel.setStatus(turn.clearing ? `Your ${retailer.name} bag is being emptied (Clear cart) — press this again in a moment.`
+          : `Your checkout of ${turn.name || 'another item'} at ${retailer.name} is going — ${retailer.name} keeps one bag for this browser. Press this again once it's done.`);
         return;
       }
       const ok = await ask({ type: 'startFill' });
@@ -499,8 +521,10 @@
   async function waitTurn(claim, product, turn) {
     holdStore.save({ code: goCode, claim, product, kind: 'turn', at: Date.now() });
     panel.setNote(`⏳ Next in line at ${retailer.name}${aco ? ' — 🤖 Auto-checkout' : ''}`);
-    const say = (t) => panel.setStatus(`Your checkout of ${t.name || 'another item'} at ${retailer.name} goes first — ${retailer.name} keeps one bag for this browser. This one goes the moment that's done.`);
-    const tell = (t) => { if (aco) acoReport('waiting', 'turn', `Next in line at ${retailer.name}: your checkout of ${t.name || 'another item'} there goes first`); };
+    // (Clear cart emptying the bag here first: a moment, then this one.)
+    const say = (t) => panel.setStatus(t.clearing ? `Your ${retailer.name} bag is being emptied (Clear cart) — this one goes the moment that's done.`
+      : `Your checkout of ${t.name || 'another item'} at ${retailer.name} goes first — ${retailer.name} keeps one bag for this browser. This one goes the moment that's done.`);
+    const tell = (t) => { if (aco) acoReport('waiting', 'turn', t.clearing ? `Next in line at ${retailer.name}: your bag there is being emptied (Clear cart)` : `Next in line at ${retailer.name}: your checkout of ${t.name || 'another item'} there goes first`); };
     say(turn);
     tell(turn);
     let beat = Date.now();

@@ -25,7 +25,9 @@ community. Built on TCGCopBot's working Kmart flow.
   It works within their limits (per order, orders and spending a day) and buys
   **once per arming**. It stops at a bank's or a bot check, a declined card,
   another item in the bag or a total over the limit. Every attempt is logged on
-  the Auto-checkout tab with each step and why it ended, and DM'd. See
+  the Auto-checkout tab with each step and why it ended, and DM'd. **Clear
+  cart** empties a store's bag in the checkout browser (or **Clear all**, every
+  store in turn), from anywhere, so nothing else in a bag stops a drop. See
   [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md).
 - **⚡ Buy from your phone.** Press ⚡ Buy on a Discord alert or DM anywhere,
   your phone included, with nothing signed in there: Discord says who pressed
@@ -319,6 +321,15 @@ npm test
     checkout browser alone, a picked one or the newest. Also covered: someone
     else's button, an unconnected Discord, no membership and "Send to my
     computer" on the buy page.
+  - Clear cart: every dummy store's bag emptied its own way — Remove buttons,
+    a bin icon posting a form, Shopify's `/cart/clear.js` and its Remove links,
+    "Are you sure?" pop-ups and the browser's own confirm box, a "Removing…"
+    button, Target's "Undo" and Amazon's "Save for later" never pressed (its
+    saved list left alone) — then checked empty; Clear all in one tab; a store
+    with a checkout going left alone; a drop while a bag's being emptied going
+    next in line; a bag with something else in it stopping Auto-checkout, emptied,
+    and the next drop bought; a Remove that does nothing, a queue where the bag
+    should be, a page that won't load, and a bag address that's a page not found.
 - **Checkpoints and virtual queues** (dummy JB Hi-Fi checkpoint that only a
   person's click solves; dummy EB Games and Pokémon Center queues that refresh
   themselves and lose your place if anything asks again too soon):

@@ -662,6 +662,24 @@ details.menu[open] > summary { background: var(--surface-2); }
 .aco-grid > .card + .card { margin-top: 0; }
 .aco-switch-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
 /* ⚡ Buy from your phone: the checkout browser picker. */
+/* Clear cart: each store's bag in the checkout browser */
+.bags-sum { font-weight: 600; margin: 12px 0 0; }
+.bags { list-style: none; margin: 10px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.bag { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); min-width: 0; }
+.bag .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); flex: none; }
+.bag.ok .dot { background: var(--ok); }
+.bag.warn .dot, .bag.active .dot { background: var(--warn); }
+.bag.err { border-color: color-mix(in srgb, var(--err) 40%, var(--line)); background: var(--err-bg); }
+.bag.err .dot { background: var(--err); }
+.bag .info { flex: 1 1 auto; min-width: 0; }
+.bag .name { font-weight: 600; font-size: 14px; }
+.bag .meta { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bag.ok .meta { color: var(--ok); }
+.bag.warn .meta, .bag.active .meta { color: var(--warn); }
+.bag.err .meta { color: var(--err); }
+/* (Why it couldn't, or why it was left alone: all of it, not cut off.) */
+.bag.err .meta, .bag.warn .meta { white-space: normal; }
+.bag .btn { flex: none; white-space: nowrap; }
 #aco-remote .aco-device-row { margin-top: 12px; }
 #aco-remote .aco-device-pick { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #aco-remote .aco-device-pick select { flex: 1 1 260px; min-width: 0; }

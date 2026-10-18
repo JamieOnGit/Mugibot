@@ -111,6 +111,12 @@ export function defaultShops() {
       addNeedsLoad: 0,
       // What the bag page showed each time it was opened (number of items in it).
       bagViews: [],
+      // Clear cart: how many things were taken out of the bag (by its own Remove buttons, or Shopify's
+      // /cart/clear.js: cleared), "Undo" pressed (Target), and Amazon's "Saved for later" list (saved —
+      // moved there: savedMoves; deleted from it: savedDeletes). removeFails: its Remove does nothing;
+      // noAjaxCart: a Shopify shop without its cart API (/cart.js, /cart/clear.js).
+      // removeDelayMs: each Remove takes this long.
+      removed: 0, cleared: 0, undos: 0, saved: [], savedMoves: 0, savedDeletes: 0, removeFails: false, noAjaxCart: false, removeDelayMs: 0,
       // Its checkpoint (Shopify's hCaptcha page) and its virtual queue: see the top of this file.
       checkpoint: { on: false, shown: 0, solved: 0, botClicks: 0, passes: [] },
       // A notice across the top of its product pages ("Big launches use a virtual queue…").
@@ -168,7 +174,9 @@ function bagLink(shop, count) {
   const label = count == null ? word : `${word}, ${count} item${count === 1 ? '' : 's'}`;
   // CrystalCommerce: the cart is at /checkout/cart, its count in .cart-count (0 included).
   if (shop === 'thegamescube') return `<a href="/thegamescube/checkout/cart" id="bag-link" class="cart-details">Cart <span class="cart-count">${count || 0}</span></a>`;
-  return `<a href="${shop ? `/${shop}` : ''}/cart" id="bag-link" aria-label="${label}">${word}${count ? ` <span class="bag-count">${count}</span>` : ''}</a>`;
+  // (Target's bag is its basket; Amazon's at /gp/cart/view.html.)
+  const at = shop === 'target' ? '/basket' : shop === 'amazon' ? '/gp/cart/view.html' : '/cart';
+  return `<a href="${shop ? `/${shop}` : ''}${at}" id="bag-link" aria-label="${label}">${word}${count ? ` <span class="bag-count">${count}</span>` : ''}</a>`;
 }
 
 function parseBody(req) {
@@ -469,14 +477,196 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       </script>`);
   }
 
+  // Each shop's bag, emptied the way its real one is (Clear cart's tests — each a different layout):
+  //   kmart          a "Remove" button per line; its page's code draws the list again (no new page)
+  //   bigw           "Remove" → "Remove … from your cart?" → Remove
+  //   ebgames        a bin icon with no words ("Remove item" for screen readers) posting a form: a new page
+  //   jbhifi, gamerholic  Shopify's "Remove" link (/cart/change?line=1&quantity=0) — and its cart API (/cart.js, /cart/clear.js)
+  //   toysrus        Shopify (Dawn): an icon link, "Remove <name>" for screen readers
+  //   trainertown    an ✕ button "Remove <name>"; the page's code asks /cart/change.js
+  //   thegamescube   a "Remove" link with the browser's own "Are you sure?" box (confirm())
+  //   pokemoncenter  "Remove" → "Removing…" (the button greyed out a moment) → gone, "Item removed"
+  //   pbandai        "Delete" → "Are you sure you want to delete this item from your cart?" → OK
+  //   target         "Remove" → the line says it's been removed, with "Undo" (never pressed)
+  //   amazon         "Delete" (and "Save for later", never pressed), with its "Saved for later" list below (left alone)
+  //   citybeach      an × "Remove product <name>" → "Remove Product? Are you sure…" → Yes
+  // A shop's removeFails: its Remove does nothing (Clear cart says so).
+  function bagLine(shop, c, i, qty) {
+    const p = find(shop, c.sku);
+    const name = esc(c.name);
+    const sku = esc(c.sku);
+    const link = `<a href="${p ? pathFor(shop, p) : '#'}">${name}</a>`;
+    const vid = p ? p.id : 0;
+    const li = (extra) => `<li class="line-item" data-sku="${sku}"><div class="line-name">${link}</div><div class="line-qty">Qty ${qty}</div>${extra}</li>`;
+    switch (shop) {
+      case 'kmart': return li(`<button type="button" class="remove-line" data-remove="${sku}" aria-label="Remove ${name} from bag">Remove</button>`);
+      case 'bigw': return li(`<button type="button" class="link-btn" data-remove="${sku}" data-name="${name}">Remove</button>`);
+      case 'ebgames': return li(`<form method="post" action="/ebgames/cart/remove" class="remove-form"><input type="hidden" name="sku" value="${sku}"><button type="submit" class="remove-item" aria-label="Remove item" title="Remove item" style="background:none;color:#d22;padding:4px"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 5h12M7 5V3h4v2M5 5l1 11h6l1-11" stroke="currentColor" fill="none"/></svg></button></form>`);
+      case 'jbhifi': case 'gamerholic': return li(`<a href="/${shop}/cart/change?line=${i + 1}&amp;quantity=0" class="cart__remove">Remove</a>`);
+      case 'toysrus': return li(`<cart-remove-button id="Remove-${i + 1}" data-index="${i + 1}"><a href="/toysrus/cart/change?id=${vid}&amp;quantity=0" class="button button--tertiary" aria-label="Remove ${name}" style="display:inline-block;padding:4px"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10" stroke="currentColor" fill="none"/></svg></a></cart-remove-button>`);
+      case 'trainertown': return li(`<button type="button" class="cart-item__remove" data-variant="${vid}" aria-label="Remove ${name}">✕</button>`);
+      case 'thegamescube': return `<tr class="line-item" data-sku="${sku}"><td>${link}</td><td>Qty ${qty}</td><td><a href="/thegamescube/checkout/cart/remove/${vid}" class="remove" data-confirm="Are you sure you want to remove this item from your cart?">Remove</a></td></tr>`;
+      case 'pokemoncenter': return li(`<button type="button" class="remove-button" data-remove="${sku}">Remove</button>`);
+      case 'pbandai': return li(`<button type="button" class="cart-item__delete" data-remove="${sku}">Delete</button>`);
+      case 'target': return li(`<a href="#" role="button" class="basket-item__remove" data-remove="${sku}" data-name="${name}">Remove</a>`);
+      case 'citybeach': return li(`<button type="button" class="remove-btn remove-product btn btn-light" data-toggle="modal" data-target="#removeProductModal" data-remove="${sku}" data-name="${name}" aria-label="Remove product ${name}" title="Remove"><span aria-hidden="true">×</span></button>`);
+      default: return li('');
+    }
+  }
+
+  // The bag's own code (each shop's way of taking a thing out), and the confirm boxes some ask first.
+  function bagScript(shop) {
+    const word = shop === 'kmart' ? 'Bag' : 'Cart';
+    const common = `
+      const word = ${JSON.stringify(word)};
+      // The header's bag link shows how many are in it.
+      function setCount(n) {
+        const b = document.getElementById('bag-link');
+        if (!b) return;
+        b.setAttribute('aria-label', word + ', ' + n + ' item' + (n === 1 ? '' : 's'));
+        b.innerHTML = word + (n ? ' <span class="bag-count">' + n + '</span>' : '');
+      }
+      async function removeLine(sku) {
+        const r = await fetch('/${shop}/api/cart/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku }) });
+        return r.json();
+      }
+      // The line gone; nothing left: the bag says it's empty.
+      function gone(sku, d, emptyText) {
+        document.querySelector('.line-item[data-sku="' + CSS.escape(sku) + '"]')?.remove();
+        setCount(d.items);
+        if (!document.querySelector('.line-item')) {
+          document.querySelector('ul.lines').innerHTML = '<li class="empty-msg">' + emptyText + '</li>';
+          document.querySelectorAll('.bag-checkout').forEach((x) => x.remove());
+        }
+      }`;
+    const per = {
+      // React-style: the whole list drawn again from what the cart says (every line a new element).
+      kmart: `
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (!b) return;
+          await new Promise((r) => setTimeout(r, 300));
+          const d = await removeLine(b.dataset.remove);
+          if (!d.ok) return;
+          setCount(d.items);
+          const ul = document.querySelector('ul.lines');
+          ul.innerHTML = d.cart.length ? d.cart.map((c) => '<li class="line-item" data-sku="' + c.sku + '"><div class="line-name"><a href="#">' + c.name.replace(/</g, '&lt;') + '</a></div><div class="line-qty">Qty ' + c.qty + '</div><button type="button" class="remove-line" data-remove="' + c.sku + '" aria-label="Remove ' + c.name.replace(/"/g, '&quot;') + ' from bag">Remove</button></li>').join('') : '<li class="empty-msg">Your bag is empty</li>';
+          if (!d.cart.length) document.querySelectorAll('.bag-checkout').forEach((x) => x.remove());
+        });`,
+      bigw: `
+        let pending = null;
+        const modal = document.getElementById('confirm-remove');
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (b) { pending = b.dataset.remove; modal.querySelector('.what').textContent = 'Remove ' + b.dataset.name + ' from your cart?'; modal.style.display = 'block'; return; }
+          if (e.target.closest('#cr-cancel')) { modal.style.display = 'none'; pending = null; return; }
+          if (e.target.closest('#cr-yes') && pending) {
+            const sku = pending; pending = null;
+            modal.style.display = 'none';
+            const d = await removeLine(sku);
+            if (d.ok) gone(sku, d, 'Your cart is empty');
+          }
+        });`,
+      trainertown: `
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('.cart-item__remove');
+          if (!b) return;
+          const r = await fetch('/trainertown/cart/change.js', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: Number(b.dataset.variant), quantity: 0 }) });
+          const d = await r.json();
+          if (d.item_count === undefined) return;
+          gone(b.closest('.line-item').dataset.sku, { items: d.item_count }, 'Your cart is empty');
+        });`,
+      // Rails-style: a link with data-confirm asks the browser's own confirm() box first.
+      thegamescube: `
+        document.addEventListener('click', (e) => {
+          const a = e.target.closest('a[data-confirm]');
+          if (a && !window.confirm(a.dataset.confirm)) { e.preventDefault(); window.__declined = (window.__declined || 0) + 1; }
+        });`,
+      pokemoncenter: `
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (!b || b.disabled) return;
+          b.disabled = true; b.textContent = 'Removing…';
+          await new Promise((r) => setTimeout(r, 700));
+          const d = await removeLine(b.dataset.remove);
+          if (!d.ok) { b.disabled = false; b.textContent = 'Remove'; return; }
+          gone(b.dataset.remove, d, 'Your cart is empty');
+          const t = document.createElement('div'); t.setAttribute('role', 'status'); t.textContent = 'Item removed from your cart'; document.querySelector('main').append(t);
+        });`,
+      pbandai: `
+        let pending = null;
+        const modal = document.getElementById('pb-confirm');
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (b) { pending = b.dataset.remove; modal.style.display = 'flex'; return; }
+          if (e.target.closest('#pb-cancel')) { modal.style.display = 'none'; pending = null; return; }
+          if (e.target.closest('#pb-ok') && pending) {
+            const sku = pending; pending = null;
+            modal.style.display = 'none';
+            await new Promise((r) => setTimeout(r, 250));
+            const d = await removeLine(sku);
+            if (d.ok) gone(sku, d, 'There are no items in your cart.');
+          }
+        });`,
+      // The line stays, saying it's been removed — with "Undo" (the basket says it's empty on its next page).
+      target: `
+        document.addEventListener('click', async (e) => {
+          const u = e.target.closest('[data-undo]');
+          if (u) {
+            const r = await fetch('/target/api/cart/undo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: u.dataset.undo }) });
+            const d = await r.json();
+            setCount(d.items);
+            return;
+          }
+          const b = e.target.closest('[data-remove]');
+          if (!b) return;
+          e.preventDefault();
+          const d = await removeLine(b.dataset.remove);
+          if (!d.ok) return;
+          const line = b.closest('.line-item');
+          line.className = 'line-removed';
+          line.innerHTML = '<span>' + b.dataset.name + ' has been removed from your basket.</span> <button type="button" data-undo="' + b.dataset.remove + '">Undo</button>';
+          setCount(d.items);
+        });`,
+      citybeach: `
+        let pending = null;
+        const modal = document.getElementById('removeProductModal');
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (b) { pending = b.dataset.remove; modal.querySelector('.product-to-remove').textContent = b.dataset.name; modal.style.display = 'block'; return; }
+          if (e.target.closest('[data-dismiss="modal"]')) { modal.style.display = 'none'; pending = null; return; }
+          if (e.target.closest('.cart-delete-confirmation-btn') && pending) {
+            const sku = pending; pending = null;
+            modal.style.display = 'none';
+            const d = await removeLine(sku);
+            if (d.ok) gone(sku, d, 'Your Shopping Bag is Empty');
+          }
+        });`,
+    };
+    return common + (per[shop] || '');
+  }
+
+  // The confirm boxes (hidden until a Remove asks).
+  const BAG_MODALS = {
+    bigw: '<div class="drawer modal" id="confirm-remove" role="dialog" aria-modal="true" aria-labelledby="cr-title" style="display:none"><h3 id="cr-title">Remove item</h3><p class="what"></p><button type="button" id="cr-cancel">Cancel</button> <button type="button" id="cr-yes">Remove</button></div>',
+    pbandai: '<div class="modal-overlay" id="pb-confirm" role="dialog" aria-modal="true" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center"><div class="modal" style="background:#fff;padding:20px"><p>Are you sure you want to delete this item from your cart?</p><button type="button" id="pb-cancel">Cancel</button> <button type="button" id="pb-ok">OK</button></div></div>',
+    citybeach: '<div class="modal fade" id="removeProductModal" role="dialog" style="display:none;position:fixed;top:20%;left:20%;right:20%;background:#fff;padding:20px;box-shadow:0 4px 20px rgba(0,0,0,.3)"><div class="modal-content"><h2 class="modal-title">Remove Product?</h2><p>Are you sure you want to remove the following product from the cart?</p><p class="product-to-remove"></p><button type="button" class="btn btn-outline-primary" data-dismiss="modal">Cancel</button> <button type="button" class="btn btn-primary cart-delete-confirmation-btn">Yes</button></div></div>',
+  };
+  const EMPTY_BAG = {
+    kmart: 'Your bag is empty', ebgames: 'Your cart is currently empty.', pbandai: 'There are no items in your cart.', target: 'Your basket is empty',
+    citybeach: 'Your Shopping Bag is Empty',
+  };
+
   function cartPage(shop) {
-    const cart = shopOf(shop).cart;
-    const rows = cart.map((c) => {
+    if (shop === 'amazon') return amazonCart();
+    const S = shopOf(shop);
+    const cart = S.cart;
+    const rows = cart.map((c, i) => {
       const p = find(shop, c.sku);
       const max = Number(p && p.maxQty) || 10;
-      const opts = Array.from({ length: max }, (_, i) => `<option value="${i + 1}" ${i + 1 === c.qty ? 'selected' : ''}>${i + 1}</option>`).join('');
-      const qty = SHOPIFY.has(shop) ? `<input type="number" name="updates[]" aria-label="Quantity" data-sku="${c.sku}" value="${c.qty}" min="1" style="width:60px">` : `<select aria-label="Quantity" data-sku="${c.sku}">${opts}</select>`;
-      return `<li class="line-item"><div class="line-name"><a href="${p ? pathFor(shop, p) : '#'}">${esc(c.name)}</a></div><div class="line-qty">Qty ${qty}</div></li>`;
+      const opts = Array.from({ length: max }, (_, j) => `<option value="${j + 1}" ${j + 1 === c.qty ? 'selected' : ''}>${j + 1}</option>`).join('');
+      const qty = SHOPIFY.has(shop) ? `<input type="number" name="updates[]" aria-label="Quantity" data-qty="${c.sku}" value="${c.qty}" min="1" style="width:60px">` : `<select aria-label="Quantity" data-qty="${c.sku}">${opts}</select>`;
+      return bagLine(shop, c, i, qty);
     }).join('');
     let go = {
       kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>',
@@ -484,12 +674,64 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       target: '<a class="btn" href="/target/checkout">Checkout</a>', citybeach: '<a class="btn checkout-btn" href="/citybeach/checkout">Checkout</a>',
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     // (Its Checkout button in other words: bagButton.)
-    if (go && shopOf(shop).bagButton) go = go.replace(/>([^<]*)<\/(a|button)>$/, `>${esc(shopOf(shop).bagButton)}</$2>`);
-    return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || `<li>Your ${shop === 'kmart' ? 'bag' : 'cart'} is empty</li>`}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
+    if (go && S.bagButton) go = go.replace(/>([^<]*)<\/(a|button)>$/, `>${esc(S.bagButton)}</$2>`);
+    const title = shop === 'kmart' ? 'Your bag' : shop === 'target' ? 'Your basket' : 'Your cart';
+    const emptyText = EMPTY_BAG[shop] || 'Your cart is empty';
+    const list = shop === 'thegamescube'
+      ? (cart.length ? `<table class="cart-table"><tbody>${rows}</tbody></table>` : `<ul class="lines"><li class="empty-msg">${emptyText}</li></ul>`)
+      : `<ul class="lines">${rows || `<li class="empty-msg">${emptyText}</li>`}</ul>`;
+    return page(shop, title, `<h1>${title}</h1>${list}<a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length && go ? `<span class="bag-checkout">${go}</span>` : ''}
+      ${BAG_MODALS[shop] || ''}
       <script>
-        for (const s of document.querySelectorAll('[data-sku]')) s.addEventListener('change', () => fetch('/${shop}/api/cart/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: s.dataset.sku, qty: Number(s.value) }) }));
+        for (const s of document.querySelectorAll('[data-qty]')) s.addEventListener('change', () => fetch('/${shop}/api/cart/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: s.dataset.qty, qty: Number(s.value) }) }));
         document.getElementById('to-checkout')?.addEventListener('click', () => { location.href = '${SHOPIFY.has(shop) ? `/${shop}/checkouts/c/abc123` : `/${shop}/checkout`}'; });
-      </script>`);
+        ${bagScript(shop)}
+      </script>`, { bagCount: bagCount(shop) });
+  }
+
+  // Amazon's cart (/gp/cart/view.html): what's in it, each with "Delete" and "Save for later" — and the
+  // "Saved for later" list under it (Clear cart leaves that alone).
+  function amazonCart() {
+    const S = shopOf('amazon');
+    const qtySel = (c) => `<select name="quantity" aria-label="Quantity" data-asin="${esc(c.sku)}"><option value="0">0 (Delete)</option>${Array.from({ length: 10 }, (_, j) => `<option value="${j + 1}" ${j + 1 === c.qty ? 'selected' : ''}>${j + 1}</option>`).join('')}</select>`;
+    const line = (c) => `<div class="sc-list-item" data-asin="${esc(c.sku)}" data-itemtype="active"><a class="sc-product-link" href="/amazon/dp/${esc(c.sku)}">${esc(c.name)}</a> <span class="sc-price">$${c.price.toFixed(2)}</span>
+      ${qtySel(c)} <span class="a-declarative"><input type="submit" value="Delete" data-action="delete" aria-label="Delete ${esc(c.name)}" class="a-color-link" data-asin="${esc(c.sku)}"></span>
+      <span class="a-declarative"><input type="submit" value="Save for later" data-action="save-for-later" aria-label="Save for later ${esc(c.name)}" data-asin="${esc(c.sku)}"></span></div>`;
+    const saved = (x) => `<div class="sc-list-item" data-asin="${esc(x.sku)}" data-itemtype="saved"><a class="sc-product-link" href="/amazon/dp/${esc(x.sku)}">${esc(x.name)}</a>
+      <span class="a-declarative"><input type="submit" value="Delete" data-action="delete-saved" aria-label="Delete ${esc(x.name)}" data-asin="${esc(x.sku)}"></span>
+      <span class="a-declarative"><input type="submit" value="Move to cart" data-action="move-to-cart" data-asin="${esc(x.sku)}"></span></div>`;
+    return page('amazon', 'Amazon.com.au Shopping Cart', `<div id="sc-active-cart" data-name="Active Items" class="sc-cart"><h1>Shopping Cart</h1>
+      <div id="sc-lines">${S.cart.map(line).join('') || '<h2 class="sc-empty">Your Amazon Cart is empty.</h2>'}</div>
+      <div class="sc-subtotal" id="sc-subtotal">Subtotal (${bagCount('amazon')} items): $${total('amazon').toFixed(2)}</div>
+      ${S.cart.length ? '<a class="a-button" id="sc-buy-box-ptc-button" href="/amazon/checkout/p/p-123/spc">Proceed to checkout</a>' : ''}</div>
+      <div id="sc-saved-cart" data-name="Saved Items"><h2>Saved for later (${S.saved.length} item${S.saved.length === 1 ? '' : 's'})</h2>${S.saved.map(saved).join('')}</div>
+      <script>
+        async function post(path, sku) { const r = await fetch('/amazon/gp/cart/' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku }) }); return r.json(); }
+        function after(d) {
+          const b = document.getElementById('bag-link');
+          if (b) { b.setAttribute('aria-label', 'Cart, ' + d.items + ' items'); b.innerHTML = 'Cart' + (d.items ? ' <span class="bag-count">' + d.items + '</span>' : ''); }
+          document.getElementById('sc-subtotal').textContent = 'Subtotal (' + d.items + ' items): $' + d.total.toFixed(2);
+          if (!document.querySelector('#sc-lines [data-itemtype="active"]')) { document.getElementById('sc-lines').insertAdjacentHTML('beforeend', '<h2 class="sc-empty">Your Amazon Cart is empty.</h2>'); document.getElementById('sc-buy-box-ptc-button')?.remove(); }
+        }
+        async function del(sku) {
+          const line = document.querySelector('#sc-lines [data-asin="' + CSS.escape(sku) + '"]');
+          const name = line.querySelector('.sc-product-link').textContent;
+          const d = await post('ajax-delete', sku);
+          if (!d.ok) return;
+          line.outerHTML = '<div class="sc-list-item-removed-msg" role="status">' + name.replace(/</g, '&lt;') + ' was removed from Shopping Cart.</div>';
+          after(d);
+        }
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('input[data-action]');
+          if (!b) return;
+          e.preventDefault();
+          if (b.dataset.action === 'delete') return del(b.dataset.asin);
+          if (b.dataset.action === 'save-for-later') { await post('save-for-later', b.dataset.asin); location.reload(); return; }
+          if (b.dataset.action === 'delete-saved') { await post('delete-saved', b.dataset.asin); b.closest('.sc-list-item').remove(); return; }
+          if (b.dataset.action === 'move-to-cart') { await post('move-to-cart', b.dataset.asin); location.reload(); }
+        });
+        for (const s of document.querySelectorAll('#sc-lines select[name=quantity]')) s.addEventListener('change', () => { if (s.value === '0') del(s.dataset.asin); });
+      </script>`, { bagCount: bagCount('amazon') });
   }
 
   // -------------------------------------------------------------------- checkouts
@@ -1570,6 +1812,78 @@ ${body}
       if (typeof S.refuseAdds === 'number' && S.refuseAdds > 0) S.refuseAdds -= 1;
       const r = refuse ? { ok: false, said: S.quiet ? 'Something went wrong. Please try again.' : undefined } : addToCart(shop, b.sku, b.qty);
       return json(r.ok ? 200 : 409, r);
+    }
+    // ---------------- Clear cart: each shop's own way of taking a thing out of its bag (see cartPage)
+    const takeOut = (sku) => {
+      const i = S.cart.findIndex((c) => c.sku === sku);
+      if (i === -1 || S.removeFails) return false;
+      S.cart.splice(i, 1);
+      S.removed += 1;
+      return true;
+    };
+    const cartJson = () => ({ ok: true, items: bagCount(shop), total: total(shop), cart: S.cart.map((c) => ({ sku: c.sku, name: c.name, qty: c.qty })) });
+    const variantOf = (c) => String((find(shop, c.sku) || {}).id);
+    const shopifyCart = () => ({ token: 'dummy', item_count: bagCount(shop), total_price: Math.round(total(shop) * 100), items: S.cart.map((c) => ({ id: Number(variantOf(c)), quantity: c.qty, title: c.name, handle: c.sku, price: Math.round(c.price * 100) })) });
+    if (sub === '/api/cart/remove' && req.method === 'POST') {
+      const sku = String((await parseBody(req)).sku || '');
+      if (S.removeDelayMs) await new Promise((r) => setTimeout(r, S.removeDelayMs));
+      const ok = takeOut(sku);
+      return json(ok ? 200 : 409, ok ? cartJson() : { ok: false });
+    }
+    if (shop === 'target' && sub === '/api/cart/undo' && req.method === 'POST') {
+      const prod = find(shop, String((await parseBody(req)).sku || ''));
+      S.undos += 1;
+      if (prod) addToCart(shop, prod.sku, 1);
+      return json(200, cartJson());
+    }
+    if (shop === 'ebgames' && sub === '/cart/remove' && req.method === 'POST') {
+      takeOut(String((await parseBody(req)).sku || ''));
+      return redirect('/ebgames/cart');
+    }
+    if (SHOPIFY.has(shop) && sub === '/cart/change') {
+      const line = Number(u.searchParams.get('line'));
+      const c = line ? S.cart[line - 1] : S.cart.find((x) => variantOf(x) === u.searchParams.get('id'));
+      if (c && Number(u.searchParams.get('quantity')) === 0) takeOut(c.sku);
+      return redirect(`/${shop}/cart`);
+    }
+    if (SHOPIFY.has(shop) && sub === '/cart/change.js' && req.method === 'POST') {
+      const b = await parseBody(req);
+      const c = S.cart.find((x) => variantOf(x) === String(b.id));
+      if (c && Number(b.quantity) === 0) takeOut(c.sku);
+      return json(200, shopifyCart());
+    }
+    if (SHOPIFY.has(shop) && (sub === '/cart.js' || sub === '/cart/clear.js')) {
+      if (S.noAjaxCart) return json(404, { status: 404, message: 'Not Found' });
+      if (sub === '/cart/clear.js' && req.method === 'POST') {
+        S.cleared += 1;
+        if (!S.removeFails) { S.removed += S.cart.length; S.cart = []; }
+      }
+      return json(200, shopifyCart());
+    }
+    if (shop === 'thegamescube' && sub.startsWith('/checkout/cart/remove/')) {
+      const c = S.cart.find((x) => variantOf(x) === sub.split('/').pop());
+      if (c) takeOut(c.sku);
+      return redirect('/thegamescube/checkout/cart');
+    }
+    if (shop === 'amazon' && sub.startsWith('/gp/cart/') && req.method === 'POST') {
+      const sku = String((await parseBody(req)).sku || '');
+      if (sub === '/gp/cart/ajax-delete') { const ok = takeOut(sku); return json(ok ? 200 : 409, ok ? cartJson() : { ok: false }); }
+      if (sub === '/gp/cart/save-for-later') {
+        const c = S.cart.find((x) => x.sku === sku);
+        if (c) { S.cart = S.cart.filter((x) => x !== c); S.saved.push({ sku: c.sku, name: c.name, price: c.price }); }
+        S.savedMoves += 1;
+        return json(200, cartJson());
+      }
+      if (sub === '/gp/cart/delete-saved') { S.saved = S.saved.filter((x) => x.sku !== sku); S.savedDeletes += 1; return json(200, cartJson()); }
+      if (sub === '/gp/cart/move-to-cart') {
+        const x = S.saved.find((y) => y.sku === sku);
+        if (x) { S.saved = S.saved.filter((y) => y !== x); S.cart.push({ sku: x.sku, qty: 1, price: x.price, name: x.name }); }
+        return json(200, cartJson());
+      }
+    }
+    if ((shop === 'amazon' && sub === '/gp/cart/view.html') || (shop === 'target' && (sub === '/basket' || sub === '/basket/'))) {
+      S.bagViews.push(bagCount(shop));
+      return html(200, cartPage(shop));
     }
     // Shopify cart links: /cart/<variant>:<quantity> puts the product in the cart and opens checkout.
     const permalink = SHOPIFY.has(shop) && sub.match(/^\/cart\/(\d+):(\d+)$/);
