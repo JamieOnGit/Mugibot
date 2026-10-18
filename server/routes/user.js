@@ -17,9 +17,12 @@ export function register(router, ctx) {
   const withStore = (it) => {
     if (!it) return it;
     const r = retailers.get(it.store);
-    // acoPlaces: Auto-checkout can press this store's final button (a checkout in another site's frame: it stops there).
+    // acoPlaces: Auto-checkout can press this store's final button (not in another site's frame it doesn't know,
+    // nor at a store that only takes PayPal: it stops there). acoStops: why not, for the dashboard.
     const C = r && r.flow && r.flow.checkout;
-    return { ...it, storeName: r ? r.name : it.store, flowStatus: r ? r.flowStatus : 'none', acoCan: !!(r && r.flow), acoPlaces: !!(C && !C.inFrame) };
+    const places = !!(C && (!C.inFrame || (C.frames && C.frames.length)) && C.payment !== 'paypal');
+    const acoStops = !C || places ? null : C.payment === 'paypal' ? 'paypal' : 'frame';
+    return { ...it, storeName: r ? r.name : it.store, flowStatus: r ? r.flowStatus : 'none', acoCan: !!(r && r.flow), acoPlaces: places, acoStops };
   };
   const isAdmin = (req) => req.user.role === 'admin';
 
@@ -214,7 +217,8 @@ export function register(router, ctx) {
       }
       return {
         id: r.id, name: r.name, demo: !!r.demo, signInUrl: `${r.base}${r.account.signIn || ''}`,
-        checked: !!r.account.check, status: best ? best.status : null, at: best ? best.at : null, how: best ? best.how : null, device: best ? best.device : null,
+        // required: the store only sells to signed-in customers (Amazon: no guest checkout).
+        required: !!r.account.required, checked: !!r.account.check, status: best ? best.status : null, at: best ? best.at : null, how: best ? best.how : null, device: best ? best.device : null,
       };
     });
     return { stores, browsers: devices.length };

@@ -70,7 +70,7 @@ Description:
   - `storage`: Keeps the connection to the user's Mugibot account, their watchlist and their encrypted card in this browser.
   - `alarms`: Runs the user's own restock checks about once a minute, the update check, and keeps listening for the items the user armed for Auto-checkout.
   - Host permissions (the store sites): Fills in checkout on the supported stores' pages when the user presses ⚡ Buy (or an item they armed for Auto-checkout drops), and checks the user's own watchlist items there.
-  - Host permissions (payment provider sites): The card boxes on those stores' checkout pages are hosted by payment providers; the extension types the user's saved card into them.
+  - Host permissions (payment provider sites): The card boxes on those stores' checkout pages are hosted by payment providers (Adyen for Kmart, Shopify's card fields at checkout.pci.shopifyinc.com for JB Hi-Fi, Toys"R"Us and Gamerholic, Paydock and the Mastercard gateway for Target, Global-e for Premium Bandai); the extension types the user's saved card into them, only during a checkout the user started on that store.
   - Host permissions (mugibot.com): Connects the extension to the user's Mugibot account.
 - **Remote code:** "No, I am not using remote code." (The store steps it downloads are data, not code.)
 - **Data usage:** tick

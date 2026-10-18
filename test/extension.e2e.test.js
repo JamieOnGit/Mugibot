@@ -103,11 +103,32 @@ async function buyFromDashboard(page, name) {
   return shop;
 }
 
+/** Wait for the tab to reach an address (with what the panel said, if it doesn't). */
+async function reach(shop, re, timeout = 30000) {
+  try {
+    await shop.waitForURL(re, { timeout });
+  } catch (e) {
+    const said = await shop.locator('#mugibot-qc').textContent().catch(() => '?');
+    throw new Error(`Didn't reach ${re} (at ${shop.url()}) — the panel said: ${said}`);
+  }
+}
+
 async function waitReady(shop, label) {
-  await shop.waitForFunction((re) => new RegExp(re).test(document.querySelector('#mugibot-qc')?.textContent || ''), readyFor(label).source, { timeout: 40000 });
+  try {
+    await shop.waitForFunction((re) => new RegExp(re).test(document.querySelector('#mugibot-qc')?.textContent || ''), readyFor(label).source, { timeout: 40000 });
+  } catch (e) {
+    // (What the panel said, and where it got to: the reason in the test's output.)
+    const said = await shop.locator('#mugibot-qc').textContent().catch(() => '?');
+    throw new Error(`Not ready for "${label}" at ${shop.url()} — the panel said: ${said}`);
+  }
 }
 
 const cardFrame = (shop) => shop.frames().find((f) => f.url().includes('/card-frame'));
+// Shopify's card fields: one frame per box (checkout.pci.shopifyinc.com's, on the real stores).
+const shopifyBox = (shop, field) => shop.frames().find((f) => f.url().includes(`/shopify-card?field=${field}`));
+const shopifyCard = async (shop) => Object.fromEntries(await Promise.all(['number', 'expiry', 'verification_value', 'name']
+  .map(async (f) => [f, shopifyBox(shop, f) ? await shopifyBox(shop, f).evaluate(() => typed) : null])));
+const EXPECT_SHOPIFY_CARD = { number: '4242 4242 4242 4242', expiry: '07 / 29', verification_value: '123', name: 'Ash Ketchum' };
 
 test('sign up, install, connect the extension with one click', async () => {
   const page = await ctx.newPage();
@@ -384,9 +405,9 @@ test("when the store won't add it, Mugibot says so and doesn't open an empty bag
   await dash.close();
 });
 
-test("Kmart showing nothing after Add, and not taking the first press: checkout sends the empty bag back, so Add is pressed again, then on to checkout", async () => {
+test("Kmart showing nothing after Add, and turning the first press away: Mugibot sees its cart refuse it, presses Add again once the page has loaded, then on to checkout", async () => {
   // What happened at kmart.com.au: no count on the bag link and no "Added" message — the page only
-  // looked busy — and the add hadn't gone through, so Kmart's checkout opened the bag, empty.
+  // looked busy — and the add hadn't gone through (Kmart's cart had said no).
   const S = store.shop('kmart');
   S.quiet = true;
   S.refuseAdds = 1;
@@ -396,9 +417,35 @@ test("Kmart showing nothing after Add, and not taking the first press: checkout 
   await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 60000 });
   await waitReady(shop, 'Checkout securely');
   assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['43818587', 1]], 'in the bag, once');
-  assert.deepEqual(S.bagViews, [0], 'the empty bag Kmart showed, once — then back to the product');
+  assert.deepEqual(S.bagViews, [], 'no trip to an empty bag: the refusal was seen on the product page');
   const userId = env.app.repo.userByUsername('ash').id;
-  assert.ok(env.app.repo.listEvents(userId).some((e) => /the bag was empty — pressing Add again/.test(e.message)));
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /turned the add away \(HTTP 409\) — pressing "Add to bag" again/.test(e.message)));
+  assert.equal(ordersPlaced(), 0);
+  await shop.close();
+  await dash.close();
+});
+
+test("Kmart signed out (a guest): its cart turns the first add away until its page has started up — Add again once loaded, then the same flow as signed in: your details, delivery, card → stops at \"Checkout securely\"", async () => {
+  store.state.account = null; // not signed in at Kmart: the details step is empty
+  const S = store.shop('kmart');
+  // Kmart's React page takes Add early (pressed then), long before the page has finished loading — and
+  // its cart only takes adds once the page has started up (a moment after it loads).
+  S.reactMs = 400;
+  S.slowLoadMs = 2500;
+  S.addNeedsLoad = 1200;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 60000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.ok(S.refusedEarly >= 1, 'the first add was turned away (403)');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['43818587', 1]], 'then added, once');
+  assert.deepEqual(S.steps.map((x) => x.step), ['summary', 'details', 'delivery'], 'the same steps as signed in');
+  assert.deepEqual([S.data.details.email, S.data.details.firstName, S.data.details.lastName, S.data.details.mobile], [PROFILE_A.email, 'Ash', 'Ketchum', PROFILE_A.phone], 'your details, typed in');
+  assert.equal(S.data.delivery.method, 'home');
+  assert.equal(await shop.inputValue('input[name=cardNumber]'), '4242 4242 4242 4242');
+  assert.equal(await shop.inputValue('input[name=cardExpiry]'), '07/29');
+  assert.equal(await shop.inputValue('input[name=cardCvv]'), '123');
   assert.equal(ordersPlaced(), 0);
   await shop.close();
   await dash.close();
@@ -452,6 +499,22 @@ test('Kmart with card boxes that only take key presses: typed key by key', async
   await waitFor(async () => (await box('number').evaluate(() => typed)) === '4242 4242 4242 4242', { timeout: 20000, message: 'card number typed key by key' });
   await waitFor(async () => (await box('cvc').evaluate(() => typed)) === '123', { timeout: 10000, message: 'CVV typed key by key' });
   assert.equal(await box('expiry').evaluate(() => typed), '07/29');
+  assert.equal(ordersPlaced(), 0);
+  await shop.close();
+  await dash.close();
+});
+
+test("Kmart with Adyen-style boxes that are slow to take what's typed: each waits its turn for the focus (none typed without it), and every box keeps the card", async () => {
+  store.state.cardInIframe = 'slow';
+  await useItems([{ url: store.productUrl('kmart', '43818556'), name: 'Kmart KO' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart KO');
+  await waitReady(shop, 'Checkout securely');
+  const box = (field) => shop.frames().find((f) => f.url().includes(`field=${field}`));
+  await waitFor(async () => (await box('cvc').evaluate(() => typed)) === '123', { timeout: 30000, message: 'CVV typed (the last in the queue)' });
+  for (const [field, want] of [['number', '4242 4242 4242 4242'], ['expiry', '07/29'], ['cvc', '123']]) {
+    assert.equal(await box(field).evaluate(() => typed), want, `${field}: real typing, kept`);
+  }
   assert.equal(ordersPlaced(), 0);
   await shop.close();
   await dash.close();
@@ -514,29 +577,47 @@ test('BIG W flow (beta): add → drawer "View cart" → "Proceed to checkout" �
   await dash.close();
 });
 
-test('EB Games flow (beta): mini-cart Checkout → "Continue as Guest" → address lookup → manual → delivery → payment + terms → stops at "Place Order"', async () => {
+test('EB Games (beta, as its real checkout goes): fast to checkout → Click & Collect switched to "Home Delivery" → Australia → the address picked from EB\'s suggestions → its shipping method → Pay Now: "Credit / Debit card" → card number, MM/YY, CVV, name on card → "Done" → stops at "CONFIRM & PAY"', async () => {
   await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'EB ETB' }]);
   const dash = await ctx.newPage();
   const shop = await buyFromDashboard(dash, 'EB ETB');
-  await shop.waitForURL(/\/ebgames\/checkout\/payment$/, { timeout: 30000 });
-  await waitReady(shop, 'Place Order');
+  await shop.waitForURL(/\/ebgames\/checkout$/, { timeout: 30000 });
+  await waitReady(shop, 'CONFIRM & PAY');
   const S = store.shop('ebgames');
-  assert.equal(S.data.shipping.email, PROFILE_A.email);
-  assert.equal(S.data.shipping.street, PROFILE_A.address1);
-  assert.equal(S.data.shipping.state, 'NSW');
-  assert.equal(S.data.shipping.news, undefined, 'never ticks "news and offers"');
-  assert.equal(S.data.delivery, 'standard', 'home delivery, not click & collect');
-  assert.equal(await shop.isChecked('input[name=method][value=card]'), true);
-  assert.equal(await shop.isChecked('input[name=terms]'), true, 'terms ticked');
-  assert.equal(await shop.isChecked('input[name=marketing]'), false, 'newsletter not ticked');
-  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=cardnumber]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['312346', 1]]);
+  assert.equal(S.data.fulfilment.fulfilment, 'home', 'Home Delivery, not the Click & Collect EB chose');
+  assert.equal(S.data.country.country, 'AU');
+  assert.equal(S.data.address.address, '1 Pallet Town Rd, SYDNEY NSW 2000', 'your address, picked from the suggestions (not the QLD one)');
+  assert.deepEqual([S.data.address.email, S.data.address.firstName, S.data.address.lastName, S.data.address.phone], [PROFILE_A.email, 'Ash', 'Ketchum', PROFILE_A.phone]);
+  assert.equal(await shop.isChecked('input[name=shipping][value=standard]'), true, "EB's shipping method, left as it was");
+  assert.equal(S.data.payment.method, 'card', '"Credit / Debit card"');
+  assert.deepEqual(S.data.card, { last4: '4242', expiry: '07 / 29', name: 'Ash Ketchum' }, 'the card went in, then "Done"');
+  assert.equal(await shop.isChecked('input[name=billingSame]'), true, 'billing address left as the delivery one');
+  assert.equal(await shop.isChecked('input[name=news]'), false, 'never ticks "news and offers"');
+  assert.equal(await shop.isChecked('input[name=marketing]'), false);
   await shop.waitForTimeout(800);
+  assert.equal(ordersPlaced(), 0, '"CONFIRM & PAY" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('EB Games signed in: everything already in (delivery, address, your saved card) — straight to "CONFIRM & PAY", nothing changed', async () => {
+  store.state.signedIn.ebgames = true;
+  await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'EB ETB' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'EB ETB');
+  await waitReady(shop, 'CONFIRM & PAY');
+  const S = store.shop('ebgames');
+  assert.equal(S.data.fulfilment, undefined, 'delivery left as EB had it');
+  assert.equal(S.data.address, undefined, 'your EB address left as it was');
+  assert.equal(await shop.inputValue('#eb-addr'), '1 Pallet Town Rd, Sydney NSW 2000');
+  assert.equal(await shop.inputValue('input[name=email]'), 'ash.eb@example.com', "your EB account's email, not overwritten");
   assert.equal(ordersPlaced(), 0);
   await shop.close();
   await dash.close();
 });
 
-test('JB Hi-Fi flow (beta, Shopify): the product page → Shopify\'s cart link → one-page checkout → stops at "Pay now"', async () => {
+test('JB Hi-Fi flow (beta, Shopify): the product page → Shopify\'s cart link → one-page checkout → your card typed into Shopify\'s card fields (a frame per box) → stops at "Pay now"', async () => {
   const handle = 'pokemon-tcg-30th-celebration-etb';
   await useItems([{ store: 'demo-jbhifi', sku: handle, name: 'JB ETB' }]);
   // Mugibot doesn't know the product's Shopify option yet: the store page looks it up.
@@ -547,16 +628,17 @@ test('JB Hi-Fi flow (beta, Shopify): the product page → Shopify\'s cart link �
   await shop.waitForURL(/\/jbhifi\/checkouts\/c\/abc123$/, { timeout: 30000 });
   await waitReady(shop, 'Pay now');
   const S = store.shop('jbhifi');
-  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [[handle, 1]], 'one of it (the cart link\'s :1)');
   assert.ok(store.state.requests.some((r) => r.path === `/jbhifi/products/${handle}.js`), 'looked up the option to buy');
+  assert.ok(store.state.requests.some((r) => /^\/jbhifi\/cart\/\d+:1$/.test(r.path)), "Shopify's cart link, quantity 1");
   assert.ok(!store.state.requests.some((r) => r.path === '/jbhifi/cart' || r.path === '/jbhifi/cart/add'), 'no Add to cart press, no cart page');
   assert.equal(await shop.inputValue('input[name=email]'), PROFILE_A.email);
-  assert.equal(await shop.inputValue('input[name=address1]'), PROFILE_A.address1);
+  assert.equal(await shop.inputValue('input[name=address1]'), PROFILE_A.address1, 'the street box (with suburb and postcode boxes next to it), typed — not a one-line lookup');
   assert.equal(await shop.inputValue('input[name=city]'), 'Sydney');
   assert.equal(await shop.inputValue('select[name=zone]'), 'NSW');
   assert.equal(await shop.inputValue('input[name=postalCode]'), '2000');
-  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=number]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
-  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=name]')) === 'Ash Ketchum', { message: 'name on card in the frame' });
+  await waitFor(async () => JSON.stringify(await shopifyCard(shop)) === JSON.stringify(EXPECT_SHOPIFY_CARD), { timeout: 20000, message: 'card number, expiry, security code and name on card, each in its own frame (real typing)' });
+  assert.equal(await shop.inputValue('input[name=card_number]'), '4242 4242 4242 4242', 'and Shopify has it');
   await shop.waitForTimeout(800);
   assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
   await shop.close();
@@ -578,36 +660,33 @@ test('Trainer Town flow (draft, Shopify): ⚡ Buy opens Shopify\'s cart link str
   assert.ok(!store.state.requests.some((r) => r.path === `/trainertown/products/${handle}`), 'the product page was never opened');
   assert.equal(await shop.inputValue('input[name=email]'), PROFILE_A.email);
   assert.equal(await shop.inputValue('input[name=postalCode]'), '2000');
-  await waitFor(async () => (await cardFrame(shop).inputValue('input[name=number]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
+  await waitFor(async () => (await shopifyCard(shop)).number === '4242 4242 4242 4242', { message: "card in Shopify's card fields" });
   await shop.waitForTimeout(800);
   assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
   await shop.close();
   await dash.close();
 });
 
-test('The Games Cube (draft, CrystalCommerce): its icon-only cart button → straight to checkout → "Checkout as a guest" → address → delivery and card → stops at "Place Order"', async () => {
+test('The Games Cube (CrystalCommerce, as its real checkout goes): its icon-only cart button → straight to checkout → "Checkout as a guest" → shipping address (first and last name, lines 1 and 2, city, state, zip, country, phone) → the first "Parcel Post" option → stops at "Checkout with PayPal" (its only payment)', async () => {
   await useItems([{ url: store.productUrl('thegamescube', '729233'), name: 'GC OP-17' }]);
   const dash = await ctx.newPage();
   const shop = await buyFromDashboard(dash, 'GC OP-17');
-  await waitReady(shop, 'Place Order');
+  await waitReady(shop, 'Checkout with PayPal');
   const S = store.shop('thegamescube');
   assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['729233', 1]], 'one of it, in the cart');
   assert.deepEqual(S.bagViews, [], 'straight to checkout, never the cart page');
   assert.deepEqual(S.data.contact, { name: 'Ash Ketchum', email: PROFILE_A.email }, 'a guest, with your name and email');
-  assert.equal(S.data.address['address[street]'], PROFILE_A.address1);
-  assert.equal(S.data.address['address[city]'], 'Sydney');
-  assert.equal(S.data.address['address[state]'], 'NSW');
-  assert.equal(S.data.address['address[postcode]'], '2000');
-  assert.equal(await shop.isChecked('input[name=shipping][value=auspost]'), true, 'delivery, not pick up in store');
-  assert.match(await shop.inputValue('input[name=cc_number]'), /^4242 ?4242 ?4242 ?4242$/);
-  assert.equal(await shop.inputValue('input[name=cc_cvv]'), '123');
-  await shop.waitForTimeout(800);
-  assert.equal(ordersPlaced(), 0, '"Place Order" was NOT pressed');
+  const A = (k) => S.data.address[`address[${k}]`];
+  assert.deepEqual(['first_name', 'last_name', 'street', 'street2', 'city', 'state', 'postcode', 'country', 'phone'].map(A),
+    ['Ash', 'Ketchum', PROFILE_A.address1, 'Unit 2', 'Sydney', 'NSW', '2000', 'AU', PROFILE_A.phone], 'every box in its place (the state abbreviated)');
+  assert.equal(await shop.isChecked('input[name=shipping][value=parcel]'), true, 'the first option under "Parcel Post"');
+  assert.notEqual(await shop.title(), 'paypal', '"Checkout with PayPal" was NOT pressed');
+  assert.equal(ordersPlaced(), 0);
   await shop.close();
   await dash.close();
 });
 
-test('Gamerholic (draft, Shopify): ⚡ Buy → Shopify\'s cart link → one-page checkout → stops at "Pay now"', async () => {
+test('Gamerholic (Shopify, as its real checkout goes): ⚡ Buy → Shopify\'s cart link → your details → "Standard Shipping" chosen → card number, expiry and security code (no name box) → stops at "Pay now"', async () => {
   const handle = 'pokemon-tcg-mega-evolution-elite-trainer-box';
   await useItems([{ store: 'demo-gamerholic', sku: handle, name: 'GH ETB' }]);
   const dash = await ctx.newPage();
@@ -617,6 +696,31 @@ test('Gamerholic (draft, Shopify): ⚡ Buy → Shopify\'s cart link → one-page
   assert.deepEqual(store.shop('gamerholic').cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
   assert.equal(await shop.inputValue('input[name=email]'), PROFILE_A.email);
   assert.equal(await shop.inputValue('input[name=postalCode]'), '2000');
+  assert.equal(await shop.isChecked('input[name=shipping][value=standard]'), true, '"Standard Shipping" (nothing was chosen)');
+  await waitFor(async () => { const c = await shopifyCard(shop); return c.number === '4242 4242 4242 4242' && c.expiry === '07 / 29' && c.verification_value === '123'; }, { timeout: 20000, message: 'the card in its boxes' });
+  assert.equal(shopifyBox(shop, 'name'), undefined, 'no name box at Gamerholic');
+  await shop.waitForTimeout(500);
+  assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('Toys"R"Us (Shopify, at toysrus.com.au): ⚡ Buy → its cart link → your details → "Standard Shipping - AusPost" → Authority to leave and "use shipping address as billing" left ticked → card in Shopify\'s card fields → stops at "Pay now"', async () => {
+  const handle = 'pokemon-tcg-scarlet-violet-151-ultra-premium-collection';
+  await useItems([{ store: 'demo-toysrus', sku: handle, name: 'TRU UPC' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'TRU UPC');
+  await shop.waitForURL(/\/toysrus\/checkouts\/c\/abc123$/, { timeout: 30000 });
+  await waitReady(shop, 'Pay now');
+  assert.deepEqual(store.shop('toysrus').cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+  assert.deepEqual(await Promise.all(['email', 'firstName', 'lastName', 'address1', 'city', 'postalCode', 'phone'].map((n) => shop.inputValue(`input[name=${n}]`))),
+    [PROFILE_A.email, 'Ash', 'Ketchum', PROFILE_A.address1, 'Sydney', '2000', PROFILE_A.phone]);
+  assert.equal(await shop.inputValue('select[name=countryCode]'), 'AU');
+  assert.equal(await shop.inputValue('select[name=zone]'), 'NSW');
+  assert.equal(await shop.isChecked('input[name=shipping][value=standard]'), true, '"Standard Shipping - AusPost"');
+  assert.equal(await shop.isChecked('input[name=atl]'), true, 'Authority to leave: still ticked');
+  assert.equal(await shop.isChecked('input[name=billingSame]'), true, 'shipping address as billing address: still ticked');
+  await waitFor(async () => JSON.stringify(await shopifyCard(shop)) === JSON.stringify(EXPECT_SHOPIFY_CARD), { timeout: 20000, message: 'card number, expiry, security code, name on card' });
   await shop.waitForTimeout(500);
   assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
   await shop.close();
@@ -639,22 +743,42 @@ test('Pokémon Center (draft): "Add to Cart" → "View Cart" → "Checkout" → 
   await dash.close();
 });
 
-test('Target (draft): "Add to basket" → the "Often Bought Together" pop-up closed with its ✕ → "Checkout" → guest → home delivery → card → stops at "Place order"', async () => {
+test('Target (beta, as its real checkout goes): "Add to basket" → the "Often Bought Together" pop-up closed with its ✕ → checkout → "Home Delivery" (a tile) → your details → your address picked from Target\'s suggestions → "Credit Card" (a tile) → card holder\'s name, number, MM/YY, CVV in Paydock\'s form → stops at "Place order"', async () => {
   await useItems([{ url: store.productUrl('target', '71234568'), name: 'Target Bundle' }]);
   const dash = await ctx.newPage();
   const shop = await buyFromDashboard(dash, 'Target Bundle');
   await waitReady(shop, 'Place order');
   const S = store.shop('target');
   assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['71234568', 1]], 'none of the pop-up\'s clothes');
-  assert.deepEqual(S.steps.map((x) => x.step), ['contact', 'delivery']);
-  assert.equal(S.data.contact.email, PROFILE_A.email);
-  assert.equal(S.data.delivery.method, 'home', 'never Click & Collect');
-  assert.deepEqual([S.data.delivery.firstName, S.data.delivery.address1, S.data.delivery.postcode], ['Ash', PROFILE_A.address1, '2000']);
-  assert.match(await shop.inputValue('input[name=cardNumber]'), /^4242 ?4242 ?4242 ?4242$/);
+  assert.equal(await shop.getAttribute('.DeliveryOption[data-mode=home]', 'aria-checked'), 'true', '"Home Delivery"');
+  assert.equal(await shop.getAttribute('.DeliveryOption[data-mode=cnc]', 'aria-checked'), 'false', 'never Click & Collect');
+  const d = S.data.delivery;
+  assert.deepEqual([d.mode, d.firstName, d.lastName, d.contactNumber, d.email], ['home', 'Ash', 'Ketchum', PROFILE_A.phone, PROFILE_A.email], 'your details');
+  assert.equal(d.address, '1 Pallet Town Rd, SYDNEY NSW 2000', "your address, picked from Target's suggestions (not the look-alikes)");
+  assert.equal(await shop.getAttribute('.PaymentTile[data-pay=card]', 'aria-checked'), 'true', '"Credit Card"');
+  const pd = () => shop.frames().find((f) => f.url().includes('/paydock-widget'));
+  await waitFor(async () => !!pd() && (await pd().inputValue('input[name=card_ccv]')) === '123', { timeout: 20000, message: "the card in Paydock's form" });
+  assert.deepEqual(await Promise.all(['card_name', 'card_number', 'expire'].map((n) => pd().inputValue(`input[name=${n}]`))), ['Ash Ketchum', '4242 4242 4242 4242', '07/29']);
+  assert.equal(await shop.isEnabled('#t-place'), true, '"Place order" ready to press');
   const userId = env.app.repo.userByUsername('ash').id;
   assert.ok(env.app.repo.listEvents(userId).some((e) => /Closed the "Often Bought Together" pop-up/.test(e.message)), 'the pop-up closed');
   await shop.waitForTimeout(800);
   assert.equal(ordersPlaced(), 0, '"Place order" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('Target signed in: your details already there (left as they are) — the rest the same: "Home Delivery", your address from the suggestions, "Credit Card", the card → stops at "Place order"', async () => {
+  store.state.signedIn.target = true;
+  await useItems([{ url: store.productUrl('target', '71234568'), name: 'Target Bundle' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Target Bundle');
+  await waitReady(shop, 'Place order');
+  const d = store.shop('target').data.delivery;
+  assert.equal(d.email, 'ash.target@example.com', "your Target account's email, not overwritten");
+  assert.equal(d.address, '1 Pallet Town Rd, SYDNEY NSW 2000');
+  assert.equal(await shop.isEnabled('#t-place'), true);
+  assert.equal(ordersPlaced(), 0);
   await shop.close();
   await dash.close();
 });
@@ -682,25 +806,64 @@ test('City Beach (draft): "Add To Bag" with its newsletter pop-up over the page 
   await dash.close();
 });
 
-test("Premium Bandai (draft): Add pressed once its Vue page has wired it up → \"Go to Cart\" → \"Proceed to checkout\" → the whole checkout in a Global-e-style frame: your details and card go in there, and it's left for you to place", async () => {
+test('Premium Bandai (as its real checkout goes): "PLACE PRE-ORDER" once its Vue page has wired it up → "View Cart" → "Proceed to Checkout" → Global-e\'s checkout in a frame: your details (area Australia, state, phone after its +61), CREDIT CARD with the expiry month and year drop-downs, the purchase agreement ticked → stops at "Pay and Place Order"', async () => {
+  store.set('pbandai', 'N2903432001', { status: 'preorder' });
   await useItems([{ url: store.productUrl('pbandai', 'N2903432001'), name: 'PB PCC' }]);
   const S = store.shop('pbandai');
   const dash = await ctx.newPage();
   const shop = await buyFromDashboard(dash, 'PB PCC');
-  await shop.waitForURL(/\/pbandai\/checkout$/, { timeout: 30000 });
+  await reach(shop, /\/pbandai\/checkout$/);
   assert.ok(S.addedAt - S.servedAt >= S.vueMs, 'not pressed before the page could take it');
   assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['N2903432001', 1]], 'pressed once');
+  assert.ok(S.bagViews.length >= 1, '"View Cart" → the cart → "Proceed to Checkout"');
   const ge = () => shop.frames().find((f) => f.url().includes('/ge-checkout'));
-  await waitFor(async () => !!ge() && (await ge().inputValue('input[name=address1]')) === PROFILE_A.address1, { timeout: 20000, message: 'delivery details in the checkout frame' });
-  assert.equal(await ge().inputValue('input[name=email]'), PROFILE_A.email);
-  assert.equal(await ge().inputValue('input[name=firstName]'), 'Ash');
-  assert.equal(await ge().inputValue('input[name=city]'), 'Sydney');
-  assert.equal(await ge().inputValue('select[name=state]'), 'NSW');
-  assert.equal(await ge().inputValue('input[name=zip]'), '2000');
-  await waitFor(async () => (await ge().inputValue('input[name=cardNumber]')).replace(/\s/g, '') === '4242424242424242', { timeout: 20000, message: 'card in the checkout frame' });
-  assert.match(await panel(shop).textContent(), /checkout is in the form on this page/);
+  const card = () => shop.frames().find((f) => f.url().includes('/ge-card'));
+  await waitFor(async () => !!ge() && (await ge().inputValue('input[name=Address1]')) === PROFILE_A.address1, { timeout: 20000, message: 'delivery details in the checkout frame' });
+  assert.deepEqual(await Promise.all(['FirstName', 'LastName', 'Email', 'Address2', 'City', 'Zip'].map((n) => ge().inputValue(`input[name=${n}]`))),
+    ['Ash', 'Ketchum', PROFILE_A.email, 'Unit 2', 'Sydney', '2000']);
+  assert.equal(await ge().inputValue('select[name=CountryID]'), '12', 'Area: Australia');
+  assert.equal(await ge().inputValue('select[name=StateOrProvinceID]'), 'NSW');
+  assert.equal(await ge().inputValue('input[name=Phone1]'), '412345678', 'the number after the +61 already shown');
+  await waitFor(async () => !!card() && (await card().inputValue('input[name=cvv]')) === '123', { timeout: 20000, message: 'the card in its frame' });
+  assert.deepEqual(await Promise.all(['input[name=cardNumber]', 'select[name=expMonth]', 'select[name=expYear]'].map((q) => card().inputValue(q))), ['4242 4242 4242 4242', '07', '2029'], 'card number, and the expiry month and year from their drop-downs');
+  assert.equal(await ge().isChecked('input[name=PaymentMethod][value=cc]'), true, 'CREDIT CARD');
+  await waitFor(() => ge().isChecked('input[name=Terms]'), { message: 'the purchase agreement ticked' });
+  assert.equal(await ge().isChecked('input[name=Newsletter]'), false, 'never the newsletter');
+  await shop.waitForFunction(() => /Ready — review everything and press "Pay and Place Order" yourself/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 30000 });
   await shop.waitForTimeout(800);
-  assert.notEqual(await ge().title(), 'placed', '"Place Order" in the frame was NOT pressed');
+  assert.equal(S.orders.length, 0, '"Pay and Place Order" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('Amazon signed out: ⚡ Buy says to sign in first (Amazon has no guest checkout) and presses nothing', async () => {
+  await useItems([{ url: store.productUrl('amazon', 'B0MGBTEST1'), name: 'AMZ Bundle' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'AMZ Bundle');
+  await shop.waitForFunction(() => /only sells to signed-in customers — sign in to Amazon AU \(dummy store\) in this browser first/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 20000 });
+  await shop.waitForTimeout(1500);
+  assert.deepEqual(store.shop('amazon').steps, [], '"Buy Now" was not pressed');
+  assert.match(shop.url(), /\/amazon\/dp\//, 'still on the product page');
+  await shop.close();
+  await dash.close();
+});
+
+test('Amazon signed in: "Buy Now" → Amazon\'s "Try Prime FREE" offer: "No thanks" → checkout with your Amazon address and card → stops at "Place your order"', async () => {
+  store.state.signedIn.amazon = true;
+  const S = store.shop('amazon');
+  S.primeOffer = true;
+  await useItems([{ url: store.productUrl('amazon', 'B0MGBTEST1'), name: 'AMZ Bundle' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'AMZ Bundle');
+  await shop.waitForURL(/\/amazon\/checkout\/p\/p-123\/spc$/, { timeout: 30000 });
+  await waitReady(shop, 'Place your order');
+  assert.deepEqual(S.steps.map((x) => x.step), ['buynow', 'prime-declined'], '"Buy Now", then "No thanks" to Prime');
+  assert.notEqual(S.joinedPrime, true, 'never "Start your free trial"');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [['B0MGBTEST1', 1]]);
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /AMZ Bundle: Clicked "Buy Now"/.test(e.message)));
+  await shop.waitForTimeout(800);
+  assert.equal(S.orders.length, 0, '"Place your order" was NOT pressed');
   await shop.close();
   await dash.close();
 });
@@ -1039,7 +1202,9 @@ test("store login monitor: the extension sees where you're signed in (its checks
   assert.equal(await pb.count(), 1);
   assert.equal(await pb.locator('a', { hasText: 'Sign in' }).getAttribute('href'), `${store.url}/pbandai`);
   assert.equal(await page.locator('#logins li.login.in a', { hasText: 'Sign in' }).count(), 0, 'no Sign in where you are signed in');
-  assert.match(await page.textContent('#logins-sum'), /^Signed in at 3 of \d+ stores\. Signed out at .*Trainer Town \(dummy store\)/);
+  // (The ⚡ Buy tests before this one were signed in at some stores too — Target's page said so — so count these.)
+  for (const id of ['demo-jbhifi', 'demo-thegamescube']) assert.equal(await page.locator(`#logins li.login.in[data-store="${id}"]`).count(), 1, id);
+  assert.match(await page.textContent('#logins-sum'), /^Signed in at \d+ of \d+ stores\. Signed out at .*Trainer Town \(dummy store\)/);
   assert.doesNotMatch(await page.textContent('#logins-sum'), /JB Hi-Fi,|JB Hi-Fi\.$/, 'the real stores were never reached');
   assert.equal(await page.getAttribute('#logins li.login:first-child', 'class'), 'login out', 'signed out first');
   // "Check now" asks the extension to look again now.
@@ -1241,8 +1406,9 @@ test('🤖 Auto-checkout at Target: the "Often Bought Together" pop-up is closed
   await waitFor(() => store.shop('target').orders.length === 1, { timeout: 45000, message: 'the order placed at the dummy Target' });
   const order = store.shop('target').orders[0];
   assert.deepEqual(order.cart.map((c) => [c.sku, c.qty]), [['71234567', 1]], 'one of the item — none of the "Often Bought Together" clothes');
-  assert.deepEqual(store.shop('target').steps.map((x) => x.step), ['contact', 'delivery']);
-  assert.equal(store.shop('target').data.delivery.method, 'home');
+  assert.equal(store.shop('target').data.delivery.mode, 'home', '"Home Delivery"');
+  assert.equal(store.shop('target').data.delivery.address, '1 Pallet Town Rd, SYDNEY NSW 2000', 'the address from the suggestions');
+  assert.deepEqual([order.form.cardName, order.form.cardNumber, order.form.cardExpiry, order.form.cardCvv], ['Ash Ketchum', '4242 4242 4242 4242', '07/29', '123'], "the card, from Paydock's form");
   const userId = env.app.repo.userByUsername('ash').id;
   assert.ok(env.app.repo.listEvents(userId).some((e) => /Closed the "Often Bought Together" pop-up/.test(e.message)), 'the pop-up closed');
   await waitFor(async () => (await lastRun()).status === 'placed', { message: 'placed' });
@@ -1280,6 +1446,161 @@ test('🤖 Auto-checkout at City Beach with a last "place order" stage (?stage=p
   assert.ok(env.app.repo.listEvents(userId).some((e) => /pressed "Confirm & pay" on the last step/.test(e.message)), 'the place-order stage\'s button, pressed');
   assert.equal(store.shop('citybeach').orders.length, 1, 'once');
   await closeStorePages('citybeach');
+});
+
+/** Trigger ACO (a test run now) for one of your items: this browser checks it out like a drop. */
+async function testRun(name) {
+  // (Each of these tests a day of its own: the orders the tests before it placed count as yesterday's.)
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
+  const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === name);
+  const r = await browserApi('POST', `/api/aco/test/${it.id}`);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  // (The browser picks the run up as it asks: nothing's armed, so it asks once, now — with what your account
+  // says now, as the dashboard's Trigger ACO has it do, not what it last heard: it'd wait for its next alarm.)
+  await sw.evaluate(async () => {
+    const all = await chrome.storage.local.get(null);
+    await chrome.storage.local.remove(Object.keys(all).filter((k) => k.startsWith('state:')));
+    globalThis.mugibotAcoLoop();
+    return true;
+  });
+  return r.body.run;
+}
+/** Signed in at a store, and the extension has seen it (its 10-minute check, now): the account knows. */
+async function seenSignedIn(shop) {
+  store.state.signedIn[shop] = true;
+  await sw.evaluate(() => globalThis.mugibotCheckLogins({ force: true }));
+  await waitFor(async () => (await browserApi('GET', '/api/logins')).body.stores.find((x) => x.id === `demo-${shop}`).status === 'in', { message: `signed in at ${shop}, seen by the extension` });
+}
+const runOver = async (message) => {
+  try {
+    await waitFor(async () => ['placed', 'needs_you', 'failed', 'ready', 'skipped', 'expired'].includes((await lastRun()).status), { timeout: 60000, message });
+  } catch (e) {
+    // (Where it got to: the run's last step, and what each store tab's panel said.)
+    const run = await lastRun();
+    const said = await Promise.all(ctx.pages().filter((pg) => pg.url().startsWith(store.url)).map(async (pg) => `${pg.url()}: ${await pg.locator('#mugibot-qc').textContent().catch(() => '-')}`));
+    throw new Error(`${message}: the run is "${run.status}" (${JSON.stringify(run.steps.at(-1))}) — ${said.join(' | ')}`);
+  }
+  return lastRun();
+};
+
+test('🤖 Auto-checkout at EB Games: Home Delivery (not the Click & Collect EB chose), your address from its suggestions, Credit / Debit card, "Done" once the card is in, the total checked → "CONFIRM & PAY" — placed', async () => {
+  await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'ACO EB ETB', maxPrice: 120 }]);
+  await testRun('ACO EB ETB');
+  const run = await runOver('the EB Games run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const S = store.shop('ebgames');
+  assert.equal(S.orders.length, 1, 'placed once');
+  assert.deepEqual(S.orders[0].cart.map((c) => [c.sku, c.qty]), [['312346', 1]]);
+  assert.equal(S.orders[0].form.fulfilment, 'home');
+  assert.equal(S.orders[0].form.address, '1 Pallet Town Rd, SYDNEY NSW 2000');
+  assert.equal(S.orders[0].form.cardDone, '4242', 'the card went in, then "Done"');
+  assert.equal(run.total, 109.9, '$99.95 + $9.95 delivery, read from the checkout');
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /Auto-checkout pressed "CONFIRM & PAY"/.test(e.message)));
+  await closeStorePages('ebgames');
+});
+
+test('🤖 Auto-checkout at EB Games signed in: it\'s all in already (your saved card included) — straight to "CONFIRM & PAY", placed', async () => {
+  store.state.signedIn.ebgames = true;
+  await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'ACO EB ETB', maxPrice: 120 }]);
+  await testRun('ACO EB ETB');
+  const run = await runOver('the EB Games run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  assert.equal(store.shop('ebgames').orders[0].form.cardDone, 'saved', "EB's saved card");
+  assert.equal(store.shop('ebgames').data.card, undefined, 'no card typed (EB had it)');
+  await closeStorePages('ebgames');
+});
+
+test('🤖 Auto-checkout at JB Hi-Fi: Shopify\'s cart link → your details → the card typed into Shopify\'s card fields → "Pay now" — placed', async () => {
+  const handle = 'pokemon-tcg-30th-celebration-etb';
+  await useItems([{ store: 'demo-jbhifi', sku: handle, name: 'ACO JB ETB', maxPrice: 120 }]);
+  await testRun('ACO JB ETB');
+  const run = await runOver('the JB Hi-Fi run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('jbhifi').orders[0];
+  assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+  assert.deepEqual([o.form.card_number, o.form.card_expiry, o.form.card_cvv, o.form.card_name], ['4242 4242 4242 4242', '07 / 29', '123', 'Ash Ketchum']);
+  assert.equal(o.form.shipping, 'standard');
+  assert.equal(run.total, 109, '$99 + $10 shipping');
+  await closeStorePages('jbhifi');
+});
+
+test('🤖 Auto-checkout at Toys"R"Us signed in with Shop: Shop Pay has your details and card (no card boxes) → "Pay now" — placed', async () => {
+  store.state.signedIn.toysrus = 'shop';
+  const handle = 'pokemon-tcg-scarlet-violet-151-ultra-premium-collection';
+  await useItems([{ store: 'demo-toysrus', sku: handle, name: 'ACO TRU UPC', maxPrice: 200 }]);
+  await testRun('ACO TRU UPC');
+  const run = await runOver('the Toys"R"Us run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('toysrus').orders[0];
+  assert.equal(o.shopPay, true, 'paid with Shop Pay\'s saved card');
+  assert.equal(o.form.shipping, 'standard', '"Standard Shipping - AusPost"');
+  assert.equal(o.form.atl, 'on', 'Authority to leave, still ticked');
+  assert.equal(o.form.email, 'ash.shop@example.com', 'your Shop details, not overwritten');
+  await closeStorePages('toysrus');
+});
+
+test('🤖 Auto-checkout at Amazon (signed in): "Buy Now" → "No thanks" to Prime → your Amazon address and card → the total checked → "Place your order" — placed', async () => {
+  // (Amazon only sells signed in: a browser last seen signed out there — the login monitor's test — is skipped.)
+  await seenSignedIn('amazon');
+  store.shop('amazon').primeOffer = true;
+  await useItems([{ url: store.productUrl('amazon', 'B0MGBTEST1'), name: 'ACO AMZ Bundle', maxPrice: 70 }]);
+  await testRun('ACO AMZ Bundle');
+  const run = await runOver('the Amazon run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const S = store.shop('amazon');
+  assert.deepEqual(S.steps.map((x) => x.step), ['buynow', 'prime-declined']);
+  assert.notEqual(S.joinedPrime, true, 'never joined Prime');
+  assert.equal(S.orders.length, 1);
+  assert.equal(run.total, 59);
+  await closeStorePages('amazon');
+});
+
+test("🤖 Auto-checkout at Amazon's quick checkout (a window over the product page): filled in and placed in its frame", async () => {
+  await seenSignedIn('amazon');
+  store.shop('amazon').turbo = true;
+  await useItems([{ url: store.productUrl('amazon', 'B0MGBTEST1'), name: 'ACO AMZ Bundle', maxPrice: 70 }]);
+  await testRun('ACO AMZ Bundle');
+  const run = await runOver('the Amazon quick-checkout run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const S = store.shop('amazon');
+  assert.equal(S.orders.length, 1);
+  assert.equal(S.orders[0].turbo, true, 'placed in the quick checkout');
+  assert.equal(run.total, 59);
+  await closeStorePages('amazon');
+});
+
+test('🤖 Auto-checkout at Premium Bandai (signed in): "PLACE PRE-ORDER" → "View Cart" → "Proceed to Checkout" → Global-e\'s frame: "Default (same as billing address)", the card, the agreement ticked, the total checked → "Pay and Place Order" — placed', async () => {
+  store.state.signedIn.pbandai = true;
+  store.set('pbandai', 'N2903432001', { status: 'preorder' });
+  await useItems([{ url: store.productUrl('pbandai', 'N2903432001'), name: 'ACO PB PCC', maxPrice: 40 }]);
+  await testRun('ACO PB PCC');
+  const run = await runOver('the Premium Bandai run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('pbandai').orders[0];
+  assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [['N2903432001', 1]]);
+  assert.equal(o.form.DeliveryAddress, 'default', '"Default (same as billing address)"');
+  assert.equal(o.form.Terms, true, 'the purchase agreement ticked');
+  assert.equal(o.form.Newsletter, undefined, 'never the newsletter');
+  assert.deepEqual([o.form.card.cardNumber, o.form.card.expMonth, o.form.card.expYear, o.form.card.cvv], ['4242 4242 4242 4242', '07', '2029', '123']);
+  assert.equal(o.form.Email, 'ash.bandai@example.com', 'your Bandai billing details, not overwritten');
+  assert.equal(run.total, 40, '$25 + $15 shipping, read in the frame');
+  await waitFor(() => ctx.pages().some((pg) => /\/pbandai\/checkout\/confirmation$/.test(pg.url())), { message: 'Premium Bandai\'s confirmation' });
+  await closeStorePages('pbandai');
+});
+
+test('🤖 Auto-checkout at The Games Cube: fills everything in, then stops at "Checkout with PayPal" (it only takes PayPal) and says so — nothing paid', async () => {
+  await useItems([{ url: store.productUrl('thegamescube', '729233'), name: 'ACO GC OP-17', maxPrice: 200 }]);
+  await testRun('ACO GC OP-17');
+  const run = await runOver('the Games Cube run over');
+  assert.equal(run.status, 'needs_you');
+  assert.equal(run.reason, 'paypal_only');
+  assert.match(run.message, /only takes PayPal/);
+  const page = ctx.pages().find((pg) => /\/thegamescube\/checkout\/index$/.test(pg.url()));
+  assert.ok(page, 'the checkout left open for you');
+  assert.notEqual(await page.title(), 'paypal', 'PayPal not pressed');
+  assert.equal(await page.isChecked('input[name=shipping][value=parcel]'), true);
+  await closeStorePages('thegamescube');
 });
 
 test('🤖 Auto-checkout set to stop at the final button: fills checkout in and leaves the button to you', async () => {

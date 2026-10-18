@@ -1,11 +1,13 @@
-// EB Games — BETA. Tested against the EB Games-style dummy store, not yet on
-// ebgames.com.au.
+// EB Games — the checkout as EB Games' real one goes (from a member's walk-through, Oct 2026),
+// tested on the EB Games-style dummy store; not run end to end on ebgames.com.au yet.
 //
-// Product page: "Add to Cart" / "Pre-order Now"
-//   → mini-cart drawer → "Checkout"
-//   → sign in or "Continue as Guest" → shipping details (address lookup or
-//     "Enter address manually") → "Continue to delivery" → delivery option
-//     → "Continue to payment" → card frame + terms → STOP at "Place Order".
+// Product page: "Add to Cart" / "Pre-order Now" → mini-cart → "Checkout" (fast)
+//   → your email (or signed in: everything's already in) → Delivery: EB picks Click & Collect for
+//   you, so "Home Delivery" is chosen → country Australia → your address, one line, picked from EB's
+//   suggestions as it's typed → the shipping method EB picked (left as it is) → "How would you like
+//   to pay?": "Pay Now", then "Credit / Debit card" → card number, MM/YY, CVV and name on card (the
+//   billing address left as the delivery one) → "Done" (once the card is in) → STOP at
+//   "CONFIRM & PAY". Signed in: only "CONFIRM & PAY" (the card EB has for you, if it shows one).
 
 export default {
   id: 'ebgames',
@@ -14,7 +16,7 @@ export default {
   hosts: ['www.ebgames.com.au'],
   devPath: '/ebgames',
   flowStatus: 'beta',
-  flowNote: 'Tested on the EB Games-style dummy store only. Pre-orders may need you to be signed in to EB.',
+  flowNote: 'Built from a walk-through of EB Games\' real checkout; tested on the EB Games-style dummy store. Home Delivery (not Click & Collect), your address from EB\'s suggestions, Credit / Debit card, then CONFIRM & PAY.',
   skuLabel: 'Product code',
   skuHint: 'The number in the link, e.g. …/product/toys-and-collectibles/312345-…',
   skuFromPath: /\/product\/[^/]+\/(\d+)/,
@@ -48,8 +50,16 @@ export default {
     checkout: {
       path: /\/checkout(\/|$)/i,
       guest: [/^continue as (a )?guest$/i, /^check ?out as (a )?guest$/i],
-      steps: [/^continue to delivery$/i, /^continue to payment$/i],
-      final: [/\bplace (my |your )?order\b/i],
+      // EB chooses Click & Collect for you: "Home Delivery". Then "Credit / Debit card" under Pay Now.
+      choose: [/^home delivery$/i, /^credit ?\/ ?debit card$/i],
+      steps: [/^continue to delivery$/i, /^continue to payment$/i, /^continue$/i, /^done$/i],
+      // "Done" under the card boxes: only once the card is in them.
+      afterCard: [/^done$/i],
+      // The delivery address is one line, picked from EB's suggestions as you type.
+      addressLookup: true,
+      final: [/^confirm (&|and) pay$/i, /\bplace (my |your )?order\b/i],
+      // "Pay Now" is EB's kind of payment (vs Pay Later), not its final button.
+      notFinal: [/^pay now$/i, /^pay later$/i],
       delivery: 'home',
       payment: 'card',
       done: /confirmation|thank-?you|order-?(complete|success)/i,

@@ -27,10 +27,12 @@ community. Built on TCGCopBot's working Kmart flow.
   another item in the bag or a total over the limit. Every attempt is logged on
   the Auto-checkout tab with each step and why it ended, and DM'd. See
   [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md).
-- **Every store has its own flow.** Kmart is verified. BIG W, EB Games and
-  JB Hi-Fi are beta (tested on dummy copies of those stores). Target, Zing,
-  Toys"R"Us, Trainer Town, Amazon, The Games Cube, Gamerholic, Pokémon Center
-  (Australia) and Premium Bandai (Australia) are drafts. Flows live on the server, so fixing one
+- **Every store has its own flow.** Kmart is verified. BIG W, EB Games,
+  JB Hi-Fi, Target, Toys"R"Us, Amazon, The Games Cube, Gamerholic and Premium
+  Bandai (Australia) are beta (built from walk-throughs of their real checkouts
+  and tested on dummy copies of those stores). Zing, Trainer Town and Pokémon
+  Center (Australia) are drafts. Amazon sells signed in only; The Games Cube
+  takes PayPal only, so it always stops there for you. Flows live on the server, so fixing one
   reaches everyone without reinstalling the extension. See
   [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md).
 - **Memberships on Whop (A$19.99/month).** Members pay through Whop, and their
@@ -189,7 +191,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 212 tests in about seven minutes:
+the 227 tests in about eight minutes:
 
 ```bash
 npm install
@@ -220,11 +222,18 @@ npm test
   history, check log and health; pause, resume and intervals; Shopify cart
   links; blocked stores keep their last status; admins' browsers for stores
   that refuse servers; `/monitor` and `/restocks`.
-- **The real extension in Chromium:** Kmart (verified), BIG W, EB Games,
-  JB Hi-Fi, Trainer Town, The Games Cube, Gamerholic, Target (its "Often
-  Bought Together" pop-up closed), Pokémon Center and
-  Premium Bandai (its checkout in a Global-e-style frame) flows each stop at
-  their final button with nothing pressed, plus the
+- **The real extension in Chromium:** Kmart (verified; signed in and as a
+  guest, whose cart turns an early add away), BIG W, EB Games (Click & Collect
+  switched to Home Delivery, the address from its suggestions, "Credit / Debit
+  card", "Done"; and signed in), JB Hi-Fi, Trainer Town, Toys"R"Us and
+  Gamerholic (the card in Shopify's per-box card frames), The Games Cube
+  (stops at PayPal), Target (its "Often Bought Together" pop-up closed, Home
+  Delivery and Credit Card tiles, the address from its suggestions, Paydock's
+  card form; and signed in), Amazon (Buy Now, "No thanks" to Prime; and
+  signed out), Pokémon Center and Premium Bandai (its checkout in a
+  Global-e-style frame: +61 phone, state and card-expiry drop-downs, the
+  purchase agreement) flows each stop at their final button with nothing
+  pressed, plus the
   card saved without a passphrase and still ready after the browser restarts,
   a card from an older version moving over, the card in a payment frame, card
   boxes in separate frames that only take real typing or key presses (like
@@ -243,6 +252,10 @@ npm test
   - runs that stall, and other members' browsers kept out;
   - at the dummy Kmart and Target: Target's upsell pop-up closed, the total
     over the limit, another item in the bag, a declined card and a bank's check;
+  - orders placed at the dummy EB Games (guest and signed in), JB Hi-Fi,
+    Toys"R"Us (Shop Pay), Amazon (its checkout page and its quick checkout)
+    and Premium Bandai (inside Global-e's frame), and The Games Cube stopping
+    at PayPal for you;
   - an add the store didn't take (the empty bag noticed, Add pressed once more,
     then it says why);
   - Trigger ACO (a test run now, from the dashboard), and stores that only sell
@@ -278,9 +291,9 @@ server/
   routes/           auth, user, ext (extension API), membership, discord (+ slash commands), monitor, admin, web
 web/                landing, sign-in, dashboard, ⚡ Buy page, admin console, terms, privacy
 extension/          the browser extension (built per server by server/extension.js)
-devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, Shopify- (JB Hi-Fi, Trainer Town, Gamerholic),
-                    CrystalCommerce- (The Games Cube), Target- (with its upsell pop-up), Pokémon Center- and
-                    Premium Bandai-style)
+devtools/           the dummy stores (Kmart-, BIG W-, EB Games-, Shopify- (JB Hi-Fi, Trainer Town, Gamerholic,
+                    Toys"R"Us), CrystalCommerce- (The Games Cube), Target- (with its upsell pop-up), Amazon-,
+                    Pokémon Center- and Premium Bandai-style)
 scripts/            demo, mockstore, discord-commands, make-admin, reset-link, backup, build-extension, publish-extension,
                     make-icons.py (the site's and the extension's icons, from the logo)
 brand/              the logo (the straw-hat robot); after changing it: python3 scripts/make-icons.py

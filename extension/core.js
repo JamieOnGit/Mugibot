@@ -66,9 +66,16 @@ var MGBQuick = (function () {
     return el.disabled || el.getAttribute('aria-disabled') === 'true';
   }
 
+  /** Each thing a button is called by: its words, aria-label, title, value, and what it's labelled by. */
+  function labelParts(el) {
+    // (aria-labelledby: Amazon's "Buy Now" is a bare button, its words in a separate span.)
+    var by = (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(function (id) { var x = document.getElementById(id); return x ? x.textContent : ''; }).join(' ');
+    return [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'), el.value, by]
+      .filter(Boolean).map(function (t) { return String(t).trim().replace(/\s+/g, ' '); }).filter(Boolean);
+  }
+
   function labelOf(el) {
-    return [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'), el.value]
-      .filter(Boolean).join(' ').trim().replace(/\s+/g, ' ');
+    return labelParts(el).join(' ');
   }
 
   function textOf(el) {
@@ -150,6 +157,36 @@ var MGBQuick = (function () {
         var path = u.pathname.replace(/\/+$/, '');
         return u.host === location.host && path !== here && /\/(product|products|p)\//i.test(path);
       } catch (e) { return false; }
+    });
+  }
+
+  /**
+   * A store whose product page goes straight to checkout with its own button (Amazon's "Buy Now",
+   * product.buyNow): that button, or null. It's not the final button — that's at checkout.
+   */
+  function findBuyNow(R) {
+    var P = part(R, 'product');
+    if (!P.buyNow || !P.buyNow.length) return null;
+    return controls().find(function (el) {
+      return labelParts(el).some(function (t) { return t.length < 40 && any(P.buyNow, t); }) && !el.closest('header, nav') && !el.closest(RECOMMENDATIONS) && !inOtherProductTile(el);
+    }) || null;
+  }
+
+  /** The store's sign-in page (Amazon sends you there from "Buy Now" when you're signed out). */
+  function onSignInPage(R) {
+    var check = R && R.account && R.account.check;
+    var re = check && check.signedOutUrl;
+    return (re && re.test && re.test(location.href)) || /\/(ap\/signin|signin|sign-in|login|log-in)(\/|$|\?)/i.test(location.pathname);
+  }
+
+  /** A checkout running in a frame of its own on this page (checkout.frames: Amazon's quick checkout). */
+  function checkoutFrameShown(R) {
+    var frames = part(R, 'checkout').frames || [];
+    if (!frames.length) return false;
+    return toArray(document.querySelectorAll('iframe')).some(function (f) {
+      var src = f.src || '';
+      try { src = new URL(src, location.href).href; } catch (e) { /* keep */ }
+      return isVisible(f) && frames.some(function (re) { return re && re.test && re.test(src); });
     });
   }
 
@@ -334,6 +371,32 @@ var MGBQuick = (function () {
     });
   }
 
+  /**
+   * A request to the store's cart, made by the page after `since`, that the store refused: its HTTP
+   * status (e.g. 403, 409), or 0. (Kmart's add can be turned away while its page is still starting.)
+   */
+  function cartRequestFailed(since) {
+    if (!performance.getEntriesByType) return 0;
+    var t0 = since - (performance.timeOrigin || 0);
+    var bad = 0;
+    performance.getEntriesByType('resource').forEach(function (e) {
+      if ((e.initiatorType !== 'fetch' && e.initiatorType !== 'xmlhttprequest') || e.startTime < t0 || !e.responseEnd) return;
+      if (!e.responseStatus || (e.responseStatus >= 200 && e.responseStatus < 400)) return;
+      try {
+        var u = new URL(e.name);
+        if (sameSite(u.hostname) && /cart|basket|bag|trolley/i.test(u.pathname + u.search)) bad = e.responseStatus;
+      } catch (x) { /* ignore */ }
+    });
+    return bad;
+  }
+
+  /** Until the page has finished loading (at most 10 s), and the flow's settleMs after. */
+  async function untilLoaded(R) {
+    for (var end = Date.now() + 10000; document.readyState !== 'complete' && Date.now() < end;) await wait(100);
+    var ms = part(R, 'product').settleMs;
+    await wait(ms == null ? 400 : ms);
+  }
+
   /** A path on this store (the dummy store keeps each store under its own folder). */
   function storePath(R, p) {
     return ((R && R.pathPrefix) || '') + p;
@@ -401,9 +464,11 @@ var MGBQuick = (function () {
    *   setStatus(text), report(type, message, product),
    *   waitForButtonMs: how long to wait for Add to bag to appear (slow-loading pages),
    *   probe(addButton): resolves to {ready, framework} — has the store's own code wired the button up yet?
-   *   why(reason): told why it stopped short of checkout ('sold_out', 'not_added', 'no_checkout', 'timeout')
+   *   why(reason, message, status): told why it stopped short of checkout ('sold_out', 'not_added', 'no_checkout',
+   *     'timeout'; 'signed_out', with status 'needs_you': the store wants you signed in first)
    * }
-   * Resolves to 'checkout' | 'navigating' (to checkout, on a new page) | 'error' | 'stopped' | 'timeout'.
+   * Resolves to 'checkout' | 'checkout-frame' (the store's quick checkout, in a frame on this page: frame.js
+   * runs it) | 'navigating' (to checkout, on a new page) | 'error' | 'stopped' | 'timeout'.
    */
   async function run(opts) {
     var page = { before: null, watch: null }; // what was on the page before Add was pressed, and changes since
@@ -480,13 +545,17 @@ var MGBQuick = (function () {
       return notAdded(flow.said || '');
     }
 
-    /** The add didn't go through (nothing to show for it, or the store sent an empty bag back). */
-    function notAdded(said) {
+    /**
+     * The add didn't go through (nothing to show for it, the store turned it away, or it sent an
+     * empty bag back). said: what the page said; status: what the store's cart answered (403…).
+     */
+    function notAdded(said, status) {
       store.clear();
       var name = (R && R.name) || 'The store';
-      setStatus(name + ' didn\'t add it to your bag' + (said ? ' — the page said: "' + said + '"' : '') + '. Press Add to bag yourself, then Checkout.');
-      report('error', name + ' did not add it to the bag' + (said ? ' (the page said: "' + said + '")' : ''), product);
-      why('not_added', said ? 'The page said: "' + said + '"' : '');
+      var answered = status ? ' (the store answered HTTP ' + status + ')' : '';
+      setStatus(name + ' didn\'t add it to your bag' + (said ? ' — the page said: "' + said + '"' : '') + answered + '. Press Add to bag yourself, then Checkout.');
+      report('error', name + ' did not add it to the bag' + (said ? ' (the page said: "' + said + '")' : '') + answered, product);
+      why('not_added', (said ? 'The page said: "' + said + '"' : '') + (status ? (said ? ' — ' : '') + 'the store answered HTTP ' + status : ''));
       return 'error';
     }
 
@@ -518,8 +587,24 @@ var MGBQuick = (function () {
           return 'navigating';
         }
       }
-      setStatus('Looking for the Add button…');
       var waitMs = opts.waitForButtonMs == null ? 1500 : opts.waitForButtonMs;
+      // A store whose product page goes straight to checkout (Amazon's "Buy Now"): that, if it's there.
+      if (part(R, 'product').buyNow) {
+        setStatus('Looking for "Buy Now"…');
+        var buy = await waitForEl(function () { skipUpsell(); return findBuyNow(R); }, Math.min(waitMs, 6000));
+        if (buy) {
+          buy = await whenReady(R, buy, opts.probe, setStatus);
+          buy = findBuyNow(R) || buy;
+          store.save({ stage: 'buy-now', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, productUrl: location.href.split('#')[0] });
+          var said = (labelParts(buy).find(function (t) { return any(part(R, 'product').buyNow, t); }) || 'Buy Now').slice(0, 40);
+          setStatus('Pressing "' + said + '" — straight to checkout…');
+          report('add', 'Clicked "' + said + '"', product);
+          buy.click();
+        }
+      }
+    }
+    if (opts.fresh && !(store.read() || {}).stage) {
+      setStatus('Looking for the Add button…');
       var add = await waitForEl(function () { skipUpsell(); return findAddToBag(R); }, waitMs);
       if (!add) {
         setStatus("Add to bag isn't available — sold out, or the page is still loading.");
@@ -556,7 +641,24 @@ var MGBQuick = (function () {
         report('checkout', 'Reached checkout', product);
         return 'checkout';
       }
-      if (flow.stage === 'to-checkout') {
+      if (flow.stage === 'buy-now') {
+        // "Buy Now" pressed: the store's checkout opens (above), or its quick checkout in a frame on
+        // this page (frame.js runs that one), or its sign-in page when you're signed out.
+        if (checkoutFrameShown(R)) {
+          store.clear();
+          setStatus('At checkout — filling it in…');
+          report('checkout', 'Reached checkout (in the page\'s quick-checkout window)', product);
+          return 'checkout-frame';
+        }
+        if (onSignInPage(R)) {
+          store.clear();
+          var who = (R && R.name) || 'The store';
+          setStatus(who + ' wants you to sign in first — it only sells to signed-in customers. Sign in, then ⚡ Buy again.');
+          report('error', who + ' asked you to sign in before checkout', product);
+          why('signed_out', 'You\'re signed out at ' + who + ', and it only sells to signed-in customers — sign in there, then try again.', 'needs_you');
+          return 'error';
+        }
+      } else if (flow.stage === 'to-checkout') {
         // On the way to checkout, and the store opened its bag instead: with the item in it, its
         // Checkout button; empty, the add didn't go through — back to the product to press Add once
         // more, or say so.
@@ -606,6 +708,23 @@ var MGBQuick = (function () {
         // Anything the store says after the press (an error, a pop-up) — kept, for "why it wasn't added".
         var said = flow.added ? '' : pageSays();
         if (said && said !== page.saidBefore && said !== flow.said) { flow = Object.assign({}, flow, { said: said }); store.save(flow); }
+        // The store turned the add away (its cart answered with an error — Kmart's can, for a visitor
+        // whose page is still starting up): once the page has finished loading, press Add once more.
+        // Turned away again: say so, with what the store answered.
+        var refused = flow.added ? 0 : cartRequestFailed(flow.clickedAt);
+        if (refused) {
+          var again3 = flow.retried ? null : findAddToBag(R);
+          if (!again3) return notAdded(flow.said || '', refused);
+          setStatus('The store turned the add away (HTTP ' + refused + ') — pressing "' + textOf(again3).slice(0, 30) + '" again once the page has loaded…');
+          report('add', 'The store turned the add away (HTTP ' + refused + ') — pressing "' + textOf(again3).slice(0, 40) + '" again once its page had loaded', product);
+          await untilLoaded(R);
+          again3 = findAddToBag(R) || again3;
+          flow = Object.assign({}, flow, { retried: true, clickedAt: Date.now(), refused: refused });
+          store.save(flow);
+          pressAdd(page, again3);
+          await wait(POLL_MS);
+          continue;
+        }
         // Only leave the page once the store shows it was added: its bag count went up, an
         // "Added to bag" message, or (where no count shows) its cart answered the add. Leaving
         // sooner can leave the page before the add finishes.
@@ -648,6 +767,14 @@ var MGBQuick = (function () {
         if (onBagPage(R) && Date.now() - arrived > 4000) {
           var empty2 = emptyBag(flow, 'Opened the bag');
           if (empty2) return empty2;
+          // The item's in the bag, but no Checkout button Mugibot knows: the store's checkout page, once.
+          if (C.url && !flow.urlTried) {
+            store.save(Object.assign({}, flow, { stage: 'to-checkout', urlTried: true, leftAt: Date.now() }));
+            setStatus('Opening checkout…');
+            report('checkout', 'Opening checkout (no Checkout button on the bag page)', product);
+            location.assign(storePath(R, C.url));
+            return 'navigating';
+          }
         }
       }
       await wait(POLL_MS);

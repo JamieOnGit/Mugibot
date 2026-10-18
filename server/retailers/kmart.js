@@ -1,10 +1,16 @@
-// Kmart — the reference flow. Tested end to end on kmart.com.au.
+// Kmart — the reference flow. Tested end to end on kmart.com.au, signed in.
 //
 // Product page: "Add to bag" (pressed as soon as Kmart's page has wired it up)
 //   → as soon as it's in the bag: straight to /checkout
-//   → one-page checkout: Order summary → "Continue to details" → Details →
-//     "Continue to delivery" → Home delivery + address → "Continue to payment"
-//     → card (Adyen frame) → STOP at "Checkout securely".
+//   → one-page checkout: Order summary → "Continue to details" → Details (signed in: already
+//     there; as a guest: your email, name and mobile, or "Continue as guest" first if Kmart asks)
+//     → "Continue to delivery" → Home delivery + address → "Continue to payment"
+//     → "Credit or debit card" (already chosen): card number, expiry (MM/YY) and CVV, each in its
+//     own Adyen frame → STOP at "Checkout securely".
+//
+// Signed out, Kmart can turn the first add away while its page is still starting up (a member saw
+// nothing added, Oct 2026): Mugibot sees its cart refuse it, waits for the page to finish loading,
+// and presses Add once more — the same flow as signed in from there.
 
 export default {
   id: 'kmart',
@@ -62,6 +68,7 @@ export default {
       path: /\/checkout(\/|$)/i,
       // Straight here once it's in the bag (no popup or bag page on the way).
       url: '/checkout',
+      guest: [/^continue as (a )?guest$/i, /^guest checkout$/i, /^check ?out as (a )?guest$/i],
       steps: [/^continue to details$/i, /^continue to delivery$/i, /^continue to payment$/i],
       final: [/\bcheck ?out securely\b/i],
       delivery: 'home',

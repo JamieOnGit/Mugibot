@@ -41,7 +41,15 @@ export const PAYMENT_HOSTS = [
   'https://*.windcave.com/*',
   'https://*.eway.io/*',
   'https://*.securepay.com.au/*',
+  // Shopify's card fields (JB Hi-Fi, Toys"R"Us, Gamerholic, Trainer Town): checkout.pci.shopifyinc.com
+  // since 2024 — one frame per box; checkout.shopifycs.com before that.
+  'https://checkout.pci.shopifyinc.com/*',
   'https://checkout.shopifycs.com/*',
+  // Paydock (Target's card form), with the Mastercard gateway behind it (its card boxes can come from there).
+  'https://*.paydock.com/*',
+  'https://ap-gateway.mastercard.com/*',
+  // Fat Zebra (an Australian payment provider).
+  'https://*.pmnts.io/*',
   // Global-e (Premium Bandai's checkout): the whole checkout is in its frame, delivery details too.
   'https://*.global-e.com/*',
 ];
@@ -63,6 +71,9 @@ function demoCopy(def, demoUrl) {
     base,
     // A search provider (Kmart's Constructor.io): the dummy store has its own copy.
     ...(def.sweep && def.sweep.apiBase ? { sweep: { ...def.sweep, apiBase: `${base}/cnstrc` } } : {}),
+    // A checkout in a frame of its own (Global-e's, Amazon's quick checkout): the dummy store's copy of it too.
+    ...(def.devFrames && def.flow && def.flow.checkout
+      ? { flow: { ...def.flow, checkout: { ...def.flow.checkout, frames: [...(def.flow.checkout.frames || []), ...def.devFrames] } } } : {}),
     hosts,
     pathPrefix: def.devPath,
     demo: true,
