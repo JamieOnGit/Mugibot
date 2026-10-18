@@ -30,6 +30,8 @@ const toItem = (r) => r && ({
   lastPrice: r.last_price, error: r.error || '', lastAlertAt: r.last_alert_at, createdAt: r.created_at,
   // Auto-checkout: armed to be bought by itself when it drops (once; then armed again by you).
   aco: !!r.aco, acoAt: r.aco_at || null,
+  // Put there by one of your drop watches (monitor/drops.js): it goes when the watch does.
+  dropWatch: r.drop_watch || null,
 });
 const parseLogins = (v) => { try { const o = JSON.parse(v || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
 const toDevice = (r) => r && ({

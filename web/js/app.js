@@ -1,5 +1,6 @@
 // The dashboard. Everything here is the signed-in member's own data.
 import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, money, renderPager, setMsg, toast, when } from './common.js';
+import { setupDrops } from './drops.js';
 import { setupMonitor } from './monitor.js';
 
 const STATUS = {
@@ -16,10 +17,10 @@ const state = { me: null, items: [], retailers: [], profiles: null, editing: nul
 const TABS = ['monitor', 'monitor-settings', 'monitor-log', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account'];
 // The Monitor's own pages (Settings and Check log are for admins): the sidebar's Monitor stays lit.
 const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
-// The lists on the Monitor page (tracked products, your watchlist, your activity). #watch and
-// #activity — the old tabs, still in links and DMs — open the Monitor page at that list.
-const LISTS = ['tracked', 'watch', 'activity'];
-const LIST_HASH = { watch: 'watch', activity: 'activity' };
+// The lists on the Monitor page (tracked products, your watchlist, your drop watches, your activity).
+// #watch and #activity — the old tabs, still in links and DMs — and #drops open the Monitor page at that list.
+const LISTS = ['tracked', 'watch', 'drops', 'activity'];
+const LIST_HASH = { watch: 'watch', drops: 'drops', activity: 'activity' };
 const LIST_KEY = 'mgb-list';
 const loaders = {};
 
@@ -46,11 +47,19 @@ function showTab() {
 }
 window.addEventListener('hashchange', showTab);
 
+// The tracked products (and the admins' drop watches' finds) know which are on your watchlist (☆ Watch adds one).
+const onWatchlist = (p) => state.items.find((it) => it.store === p.store && String(it.sku).toLowerCase() === String(p.sku).toLowerCase()) || null;
 const monitorUI = setupMonitor({
   showError: (e) => showError(e),
-  // The tracked products know which are on your watchlist (☆ Watch adds one).
-  watching: (p) => state.items.find((it) => it.store === p.store && String(it.sku).toLowerCase() === String(p.sku).toLowerCase()) || null,
+  watching: onWatchlist,
   watch: (p) => watchProduct(p),
+});
+// 🎯 Drop watches: anything outside the card keywords (drops.js).
+const dropsUI = setupDrops({
+  isAdmin: () => !!state.me && state.me.user.role === 'admin',
+  watching: onWatchlist,
+  watch: (p) => watchProduct(p),
+  buyUrl: (p) => `/buy?${new URLSearchParams(Object.entries({ store: p.store, sku: p.sku, url: p.url, name: p.name }).filter(([, v]) => v))}`,
 });
 
 // --- The lists on the Monitor page --------------------------------------------
@@ -63,7 +72,7 @@ async function showList(name, { load = true } = {}) {
   const member = state.me.entitlement.active;
   // (No choice yet: what the monitor tracks — or, before a membership, your watchlist.)
   let list = LISTS.includes(name) ? name : savedList() || (member ? 'tracked' : 'watch');
-  if (list === 'tracked' && !member) list = 'watch';
+  if ((list === 'tracked' || list === 'drops') && !member) list = 'watch';
   state.list = list;
   for (const b of $$('.mon-ptab')) {
     const on = b.dataset.ptab === list;
@@ -75,6 +84,7 @@ async function showList(name, { load = true } = {}) {
   $('#w-add-toggle').hidden = list !== 'watch';
   if (!load) return;
   if (list === 'watch') await loadWatch();
+  else if (list === 'drops') await dropsUI.load();
   else if (list === 'activity') await loadFeed(state.feedPage);
 }
 const listOpen = (name) => !$('[data-panel="monitor"]').hidden && state.list === name;
@@ -100,6 +110,7 @@ loaders.monitor = async () => {
   // Your watchlist first: the tracked products show which ones are on it.
   await Promise.all([loadItems(), loadRetailers()]);
   $('#pt-tracked').hidden = !state.me.entitlement.active;
+  $('#pt-drops').hidden = !state.me.entitlement.active;
   await Promise.all([monitorUI.load(), showList(state.list)]);
 };
 loaders['monitor-settings'] = () => monitorUI.loadSettings();
@@ -413,10 +424,11 @@ function statusOf(it) {
 
 function itemRow(it, i) {
   const st = statusOf(it);
-  const buy = h('button', { class: 'btn primary small', type: 'button', disabled: !it.url, title: it.url ? '' : 'The product page hasn\'t been found yet' }, '⚡ Buy');
+  // (Another website: no ⚡ Buy — Mugibot checks out at the stores it knows. Its page is the way in.)
+  const buy = it.acoCan ? h('button', { class: 'btn primary small', type: 'button', disabled: !it.url, title: it.url ? '' : 'The product page hasn\'t been found yet' }, '⚡ Buy') : null;
   // The one-time ⚡ Buy code is asked for as the button goes down, so the store opens the moment it's clicked.
-  buy.addEventListener('pointerdown', () => primeBuy(it));
-  buy.addEventListener('click', () => goBuy(it));
+  buy?.addEventListener('pointerdown', () => primeBuy(it));
+  buy?.addEventListener('click', () => goBuy(it));
   const move = async (dir) => {
     const ids = state.items.map((x) => x.id);
     const j = i + dir;
@@ -428,12 +440,14 @@ function itemRow(it, i) {
   };
   const price = it.lastPrice ?? it.price;
   const checked = it.checkedAt ? `checked ${ago(it.checkedAt)}${it.statusSource === 'browser' ? ' by your browser' : ''}` : '';
-  const meta = [it.storeName, `SKU ${it.sku}`, money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', checked].filter(Boolean).join(' · ');
+  // (Another website's product goes by its address: its made-up code isn't one anyone uses.)
+  const meta = [it.storeName, it.acoCan ? `SKU ${it.sku}` : '', money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', checked].filter(Boolean).join(' · ');
   const isAdmin = state.me.user.role === 'admin';
   return h('li', { class: it.monitor ? '' : 'off', dataset: { id: it.id } },
     h('div', { class: 'info' },
       h('div', { class: 'name' }, `${i + 1}. ${it.name}`, it.announce ? h('span', { class: 'pill info', title: 'Restocks are posted in the members\' Discord channel' }, '📣') : null,
-        it.aco ? h('a', { class: 'pill aco-pill', href: '#aco', title: 'Bought by itself when it drops (Auto-checkout)' }, '🤖 Armed') : null),
+        it.aco ? h('a', { class: 'pill aco-pill', href: '#aco', title: 'Bought by itself when it drops (Auto-checkout)' }, '🤖 Armed') : null,
+        it.dropWatch ? h('a', { class: 'pill info', href: '#drops', title: 'Found by one of your drop watches (it goes when the watch does)' }, '🎯') : null),
       h('div', { class: 'meta' }, meta, ' ', h('span', { class: `flow flow-${it.flowStatus}` }, FLOW[it.flowStatus] || '')),
       it.error ? h('div', { class: 'meta warn-text' }, it.error) : null,
       !it.url ? h('div', { class: 'meta' }, 'Waiting for the product page to be listed — it\'s found automatically from the SKU.') : null),
@@ -1335,7 +1349,10 @@ function connectStream() {
     }
     if (ev.type === 'billing' || ev.type === 'account') loadMe().catch(() => null);
   });
+  // A drop watch looked, or found something (drops.js).
+  es.addEventListener('drop', () => { if (listOpen('drops')) dropsUI.refreshSoon(); });
   es.addEventListener('watch', () => {
+    if (listOpen('drops')) dropsUI.refreshSoon();
     if ($('[data-panel="monitor"]').hidden && $('[data-panel="aco"]').hidden) return;
     clearTimeout(watchTimer);
     watchTimer = setTimeout(() => loadItems().catch(() => null), 300);
@@ -1347,8 +1364,8 @@ function connectStream() {
     clearTimeout(acoTimer);
     acoTimer = setTimeout(() => Promise.all([loadAco(), loadItems()]).then(renderAco).catch(() => null), 250);
   });
-  es.addEventListener('monitor-feed', (e) => monitorUI.onFeed(JSON.parse(e.data)));
-  es.addEventListener('monitor-product', (e) => monitorUI.onProduct(JSON.parse(e.data)));
+  es.addEventListener('monitor-feed', (e) => { monitorUI.onFeed(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });
+  es.addEventListener('monitor-product', (e) => { monitorUI.onProduct(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });
   es.addEventListener('monitor-sweep', (e) => monitorUI.onSweep(JSON.parse(e.data)));
   // A checkpoint or virtual queue went up, or came down.
   es.addEventListener('monitor-gate', (e) => {

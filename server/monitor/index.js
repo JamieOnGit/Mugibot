@@ -179,7 +179,8 @@ export class Monitor {
             };
           }
         }
-        if (res.status === 404) return { status: STATUS.NOT_FOUND };
+        // (A Shopify store's product that's gone. At another website it may just not be Shopify: its page says.)
+        if (res.status === 404 && retailer && retailer.id !== 'other') return { status: STATUS.NOT_FOUND };
       } catch (e) {
         if (e instanceof BlockedUrlError) throw e;
         /* fall back to the page */
@@ -259,8 +260,9 @@ export class Monitor {
       if (prev.kind === 'search' && r.foundUrl) continue;
       // What this check really saw: the feed keeps the last confirmed status itself.
       await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
-      // A VIP watch waiting to see whether this is on sale yet (monitor/vip.js).
+      // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js).
       if (this.vip) this.vip.checked(this.catalog.productById(product.id));
+      if (this.drops) this.drops.checked(this.catalog.productById(product.id));
     }
     if (prev.kind === 'search' && r.foundUrl) {
       this.resolveSku(prev.store, prev.sku, r.foundUrl);
@@ -301,6 +303,10 @@ export class Monitor {
     }
     let status = r.status;
     if (source === 'browser' && failed && prev && !FAILED.has(prev) && prev !== 'pending' && item.browser_fails < 2) status = prev;
+    // A drop watch's find whose stock wasn't known (monitor/drops.js): its first read is how it is,
+    // not a change — and a failed read leaves it not known.
+    const firstRead = prev === STATUS.UNKNOWN && !!item.drop_watch;
+    if (firstRead && failed) status = prev;
     const changed = status !== prev;
     const error = r.error || '';
     this.db.run(`UPDATE items SET status = :st, status_source = :src, status_at = CASE WHEN :changed = 1 THEN :now ELSE status_at END, checked_at = :now,
@@ -311,6 +317,10 @@ export class Monitor {
     }
     if (!changed) return status;
     const fresh = { ...item, status, last_price: r.price ?? item.last_price, title: r.title || item.title };
+    if (firstRead) {
+      if (this.drops) this.drops.firstRead(fresh, status);
+      return status;
+    }
     if (isOrderable(status) && !isOrderable(prev)) {
       await this.alertRestock(fresh, { status, price: r.price ?? item.last_price, source, wasListed: prev !== STATUS.NOT_LISTED });
     } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.BLOCKED, STATUS.ERROR, STATUS.NOT_FOUND, 'pending'].includes(status)) {

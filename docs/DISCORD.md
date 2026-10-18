@@ -257,6 +257,7 @@ channels** → **Set up store channels** makes them in one go:
 | `bigw-…`, `target-…`, `jbhifi-…`, `ebgames-…`, `zing-…`, `toysrus-…` | The same for BIG W, Target, JB Hi-Fi, EB Games, Zing and Toys"R"Us |
 | `premium-bandai` | Everything from Premium Bandai |
 | `pokemon-center` | Everything from Pokémon Center |
+| `non-tcg-alerts` | What isn't trading cards, from every store and website: the admins' 🎯 drop watches (an Xbox at JB Hi-Fi, a figure at any shop — docs/MONITORING.md → Drop watches). Only there, not in the store's own channel |
 | `misc-retailers` | Everything no other channel takes: other stores (Trainer Town, Amazon AU, The Games Cube, Gamerholic…) and other games (Gundam, Dragon Ball, Riftbound…) at the split stores |
 | `virtual-queue-detection` | JB Hi-Fi's hCaptcha checkpoint and EB Games' and Pokémon Center's virtual queues going up and coming down (docs/MONITORING.md → Checkpoints and virtual queues), with **📥 Join the queue on my computer** on a queue's post |
 
@@ -274,6 +275,11 @@ channels** → **Set up store channels** makes them in one go:
   Leave it unticked to keep them (an alert then also goes to those).
 - `misc-retailers` is a **catch-all** rule: it only gets an alert no other rule
   took. Any rule can be a catch-all (tick **Catch-all** on it).
+- `non-tcg-alerts` is made the same way, or on its own with **Make
+  #non-tcg-alerts** on the Monitor page's 🎯 Drop watches tab. Made before it
+  existed? Press either. Until there's one, drop watches' alerts go to
+  `misc-retailers`. A member's own drop watch is never posted anywhere: they get
+  a DM.
 - `virtual-queue-detection` has no rule: no product alerts go there, only the
   checkpoints and queues. It pings the same role. Made before this channel
   existed? Press **Set up store channels** again. Until then, the bot finds a

@@ -107,6 +107,8 @@ export function loadConfig(overrides = {}, env = process.env) {
       items: o.maxItems ?? int(env.MAX_ITEMS, 50),
       profiles: o.maxProfiles ?? int(env.MAX_PROFILES, 5),
       devices: o.maxDevices ?? int(env.MAX_DEVICES, 5),
+      // Drop watches (monitor/drops.js) each member can have (admins: three times as many).
+      dropWatches: o.maxDropWatches ?? int(env.MAX_DROP_WATCHES, 10),
       // New accounts per hour from one IP address.
       signupsPerHour: o.signupsPerHour ?? int(env.SIGNUPS_PER_HOUR, 10),
     },
@@ -140,6 +142,10 @@ export function loadConfig(overrides = {}, env = process.env) {
       gateCheckSeconds: o.gateCheckSeconds ?? int(env.GATE_CHECK_SECONDS, 0),
       // (A queue's down when a new visitor gets the store twice, this far apart.)
       gateDownGapSeconds: o.gateDownGapSeconds ?? int(env.GATE_DOWN_GAP_SECONDS, 45),
+      // Drop watches (monitor/drops.js): a watch's words searched at a store at most this often (in
+      // the live sweeps' turn, one search in three at most); another website read this often.
+      dropSweepSeconds: o.dropSweepSeconds ?? int(env.DROP_SWEEP_SECONDS, 30),
+      dropSiteSeconds: o.dropSiteSeconds ?? int(env.DROP_SITE_SECONDS, 120),
       alertCooldownSeconds: o.alertCooldownSeconds ?? int(env.MONITOR_ALERT_COOLDOWN, 600),
       priceChangePercent: o.priceChangePercent ?? Number(env.MONITOR_PRICE_CHANGE_PERCENT || 1),
       logDays: o.logDays ?? int(env.MONITOR_LOG_DAYS, 7),

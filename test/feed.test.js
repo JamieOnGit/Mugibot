@@ -390,25 +390,27 @@ test('🗂 store channels: the bot makes kmart-pokemon … misc-retailers (using
   assert.equal(r.status, 200, r.text);
   const names = r.body.channels.map((c) => c.name);
   assert.deepEqual(names.slice(0, 4), ['kmart-pokemon', 'kmart-one-piece', 'bigw-pokemon', 'bigw-one-piece']);
-  for (const n of ['target-pokemon', 'jbhifi-one-piece', 'ebgames-pokemon', 'zing-one-piece', 'toysrus-pokemon', 'premium-bandai', 'pokemon-center', 'misc-retailers']) assert.ok(names.includes(n), n);
+  for (const n of ['target-pokemon', 'jbhifi-one-piece', 'ebgames-pokemon', 'zing-one-piece', 'toysrus-pokemon', 'premium-bandai', 'pokemon-center', 'non-tcg-alerts', 'misc-retailers']) assert.ok(names.includes(n), n);
   // …and #virtual-queue-detection, for the stores' checkpoints and queues (no alert rule: no products go there).
   assert.equal(names.at(-1), 'virtual-queue-detection');
-  assert.equal(names.length, 18);
-  assert.equal(r.body.made, 17, 'kmart-pokemon was there already');
+  assert.equal(names.length, 19);
+  assert.equal(r.body.made, 18, 'kmart-pokemon was there already');
   assert.equal(r.body.channels[0].id, '700000000000000900');
   const category = discord.state.channels.find((c) => c.type === 4);
   assert.equal(category.name, 'Mugibot alerts');
-  assert.equal(discord.state.channels.filter((c) => c.parent_id === category.id).length, 17);
-  assert.equal(r.body.routes.length, 17, 'the earlier rules were replaced');
+  assert.equal(discord.state.channels.filter((c) => c.parent_id === category.id).length, 18);
+  assert.equal(r.body.routes.length, 18, 'the earlier rules were replaced');
   assert.equal(env.app.repo.getSetting('gateChannel').channelId, r.body.channels.at(-1).id);
   const chan = (n) => r.body.channels.find((c) => c.name === n).id;
   const rule = (n) => r.body.routes.find((x) => x.channelId === chan(n));
   assert.deepEqual([rule('bigw-one-piece').stores, rule('bigw-one-piece').categories, rule('bigw-one-piece').name], [['bigw'], ['onepiece'], '#bigw-one-piece']);
   assert.equal(rule('misc-retailers').fallback, true);
   assert.equal(rule('premium-bandai').fallback, false);
+  // #non-tcg-alerts: what isn't trading cards (the drop watches': monitor/drops.js), from every store.
+  assert.deepEqual([rule('non-tcg-alerts').stores, rule('non-tcg-alerts').categories], [[], ['nontcg']]);
   // Again: nothing new made, nothing doubled.
   const again = await boss.post('/api/monitor/routes/setup', {});
-  assert.deepEqual([again.body.made, again.body.added, again.body.routes.length], [0, 0, 17]);
+  assert.deepEqual([again.body.made, again.body.added, again.body.routes.length], [0, 0, 18]);
 
   // Each alert goes to its own channel only; anything else to misc-retailers.
   const to = (a) => env.app.feed.routesFor({ kind: 'restock', ...a }).map((x) => x.channelId);
@@ -418,6 +420,7 @@ test('🗂 store channels: the bot makes kmart-pokemon … misc-retailers (using
   assert.deepEqual(to({ store: 'pokemoncenter', category: 'pokemon', name: 'Pokémon Center Elite Trainer Box' }), [chan('pokemon-center')]);
   assert.deepEqual(to({ store: 'kmart', category: 'other', name: 'Gundam Card Game Booster Box' }), [chan('misc-retailers')], 'another game: misc-retailers');
   assert.deepEqual(to({ store: 'amazon', category: 'pokemon', name: 'Pokémon booster bundle' }), [chan('misc-retailers')], 'another store: misc-retailers');
+  assert.deepEqual(to({ store: 'pokemoncenter', category: 'nontcg', name: 'Pikachu Plush' }), [chan('non-tcg-alerts')], 'not trading cards: #non-tcg-alerts only');
   // End to end: a real alert posts in its channel.
   const n = posts(chan('ebgames-one-piece')).length;
   await env.app.feed.post({ kind: 'restock', store: 'demo-ebgames', sku: '312345', name: 'One Piece Card Game OP-18 Booster Box', category: 'onepiece', status: 'in_stock', price: 159, url: '', image: '' }, {});

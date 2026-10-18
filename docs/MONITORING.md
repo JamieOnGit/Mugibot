@@ -284,6 +284,76 @@ before the drop, add that as well: its page is read directly.
 Settings (environment variables): `VIP_FAST_SECONDS` (5), `VIP_SLOW_SECONDS`
 (15), `VIP_SWEEP_SECONDS` (4).
 
+### 🎯 Drop watches: anything that isn't the card keywords
+
+**Monitor → 🎯 Drop watches** (the tab next to My watchlist, for everyone with
+a membership) watches anything outside the card keywords: a console, a
+collectible, a product at any shop. One box takes either:
+
+- **A product's link.** At a store Mugibot knows (JB Hi-Fi, Kmart, any of
+  them) its page is checked like any monitored product, and ⚡ Buy and
+  Auto-checkout work there exactly as they do for cards. At **another
+  website** its page is read for its stock every minute (Shopify's product
+  data where the site is a Shopify shop, else the page itself): you're told
+  when it's back in stock, and buy it there yourself. There's no ⚡ Buy and no
+  Auto-checkout at other websites.
+- **The words in its name**, and where to look:
+  - **A store Mugibot searches** (JB Hi-Fi, Kmart, Target, EB Games…): the
+    words are searched at that store as typed (no "tcg" added), in the live
+    sweeps' turn — **one search in three at most**, each watch's words about
+    every **30 seconds** — so the card keywords keep most of each store's
+    searches and nothing at the store is asked more often than before. A new
+    watch's first search goes first.
+  - **Another website** (its address, or a page of it): read from the server
+    every **2 minutes**, as `Mugibot/1.0`, one website at a time. Mugibot tries
+    the site's Shopify search suggestions, then its search page
+    (`/search?q=…`), then the page itself; it remembers what worked. Give a
+    listing page (a "new arrivals" or a search page) and only that page is
+    read. A site that turns Mugibot away is asked again later, waiting longer
+    each time.
+
+  Anything whose name has **every** word counts, trading cards or not.
+  Mugibot's first look is the "before" picture: what's there already isn't a
+  drop. What shows up after it is.
+
+**An admin's drop watch is for everyone** (the 📣 box, on unless you untick it):
+- What it finds is a monitored product in everyone's **Tracked products**, in
+  category **Non-TCG**, posted in **`#non-tcg-alerts`** (🆕 a new listing, 🟢 in
+  stock again) with ⚡ Buy where Mugibot checks out, and in every dashboard's live
+  feed.
+- Members ☆ Watch it from the drop watch (or Tracked products) for their own DM,
+  and arm 🤖 Auto-checkout on it from their watchlist, as with any product.
+- **`#non-tcg-alerts`**: **Set up store channels** makes it (or press **Make
+  #non-tcg-alerts** on the drop watches tab). What isn't trading cards goes there,
+  not to the store's own channels. Until there's one, it goes to `#misc-retailers`.
+- Pick another category (Pokémon, One Piece) to send a watch's finds to the store
+  channels instead.
+
+**Anyone's own drop watch is theirs alone** (members' always are):
+- What it finds goes on **their watchlist** (marked 🎯), up to 10 products a
+  watch. Only they're told: their DM, webhook or email, as they've set it.
+- What was there at its first look goes on quietly; anything new is a DM the
+  moment it's found, and anything coming back in stock is a DM as usual.
+- Nobody else sees it, nor its words in the live searches.
+- Removing it removes what it put on the watchlist.
+
+**🤖 Auto-checkout** (stores Mugibot checks out at), up to a max price (Auto-checkout
+switched on, Chrome open with the extension, your limits apply):
+- **A link** is armed like a watchlist item: bought as soon as it's on sale —
+  now, if it already is.
+- **Words** arm only what **drops** after the first look: a new listing (bought
+  the moment it's found, if it's on sale), or something listed but not on sale yet
+  (bought when it goes on sale). What was already on sale is never bought — a
+  broad watch would otherwise buy everything that matches. (The same rule as VIP
+  drops.)
+
+Each watch shows what it found, with its stock, price, ⚡ Buy (where there's
+one) and whether it's armed; **↻** looks again now. Members can have 10 drop
+watches, admins 30 (`MAX_DROP_WATCHES`).
+
+Settings (environment variables): `DROP_SWEEP_SECONDS` (30), `DROP_SITE_SECONDS`
+(120), `MAX_DROP_WATCHES` (10).
+
 ### 🚦 Checkpoints and virtual queues
 
 Before a big drop some stores put up a gate. Mugibot watches for each one going
@@ -461,6 +531,9 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | `GATE_CONFIRM_SECONDS` | 10 | How soon it looks again to be sure of a change |
 | `GATE_CHECK_SECONDS` | 0 (180; 60 while up) | How often an admin's browser looks at EB Games' and Pokémon Center's queues as a new visitor |
 | `GATE_DOWN_GAP_SECONDS` | 45 | A queue's down when a new visitor gets the store twice, at least this far apart |
+| `DROP_SWEEP_SECONDS` | 30 | A drop watch's words searched at a store at most this often (in the sweeps' turn, one search in three at most) |
+| `DROP_SITE_SECONDS` | 120 | How often another website is read for a drop watch's words |
+| `MAX_DROP_WATCHES` | 10 | Drop watches each member can have (admins: three times as many) |
 
 ## 6. Troubleshooting
 
@@ -483,6 +556,9 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Clothes or toys in the list | MugiWatch's card words include "pack" and "sleeve", so "3 Pack Socks" looks like cards. Add the word (e.g. "onesie") to **Not trading cards**; products that no longer count leave the list when you save. |
 | A store shows **In queue** on the live monitor | Its virtual queue is up, so the admin's browser isn't searching it until it's through the queue or the queue's down. That's on purpose: a search could cost the admin their place in line. Nothing to do. |
 | `#virtual-queue-detection` got nothing | Press **Set up store channels** again (it makes the channel), and check the bot can post there. EB Games' and Pokémon Center's queues need an admin's browser with the extension (1.16.0 or later) open, or members' browsers landing in the queue. |
+| A drop watch at another website says **refused Mugibot (HTTP 403)** or **a bot check** | That site turns servers away. It's asked again later on its own (waiting longer each time); if it keeps refusing, watch the product's link at a store Mugibot knows instead, if it sells there. |
+| A drop watch at another website finds **nothing** though the site has it | Mugibot reads product links (`/products/…`, `/product/…`, `/p/…`) and the product data in the page. Give the site's own search page for those words (search there, copy the address), or watch the product's link. |
+| A drop watch's alerts went to `#misc-retailers` | There's no `#non-tcg-alerts` rule yet: press **Make #non-tcg-alerts** on the drop watches tab (or **Set up store channels**). |
 | A queue still shows **up** after it's gone | An admin's browser confirms it's down. Without one, it counts as down 30 minutes after anyone last saw it (3 hours at most). |
 | No sound | Press **🔔 Arm alerts** (browsers only play sound after a click on the page), and check **Sound** is on under **⚙**. |
 | No desktop notifications | Allow notifications for mugibot.com in the browser (the icon left of the address), then **Arm alerts** again. |
@@ -504,6 +580,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
 | Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
 | What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
+| 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find); `drop_watches`, `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11); `GET/POST /api/drops`, `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |

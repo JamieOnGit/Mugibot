@@ -34,6 +34,14 @@ is bought for an item until they **arm** it, and each arming buys **once**.
    the price is over it. The live searches, the store switches and the watchlist
    all live on the Monitor page; this tab is only for what Auto-checkout does
    with your armed items.
+   - **Not trading cards too:** a console, a collectible — any product at a
+     store Mugibot checks out at is bought the same way. On the Monitor page's
+     **🎯 Drop watches** tab, paste its link (or the words in its name and the
+     store) and tick **🤖 Auto-checkout it when it drops, up to …**: what it
+     finds goes on your watchlist, armed. A link is bought as soon as it's on
+     sale; words buy only what drops after the watch has looked (never what was
+     on sale already). At other websites drop watches only alert you
+     (docs/MONITORING.md → Drop watches).
 5. **Keep Chrome open** with the extension connected. The "Ready to check out?"
    list shows what's missing:
    - an active membership;

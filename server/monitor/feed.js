@@ -159,12 +159,16 @@ export class Feed {
    * gets what no other rule took. With no rules, the restock channel gets restocks and listings.
    * A rule for a store also takes its dummy-store copy's alerts. A VIP drop goes to the VIP rules
    * (#vip-drop) only — to the others only while there's no VIP rule — and nothing else goes there.
+   * Something that isn't trading cards (category nontcg: the drop watches') goes to the rules that
+   * ask for that category by name (#non-tcg-alerts) — not a store's channel — while there is one.
    */
   routesFor(alert) {
     const enabled = this.catalog.listRoutes().filter((r) => r.enabled);
     const vip = enabled.filter((r) => r.vip);
     if (alert.vip && vip.length) return vip.filter((r) => r.kinds.includes(alert.kind));
     let routes = enabled.filter((r) => !r.vip);
+    const named = routes.filter((r) => r.categories.includes('nontcg'));
+    if (alert.category === 'nontcg' && named.length) routes = named;
     if (!routes.length && this.cfg.discord.restockChannelId) {
       routes = [{ id: 'default', name: 'Restock channel', channelId: this.cfg.discord.restockChannelId, roleId: this.cfg.discord.restockRoleId || '', categories: [], stores: [], kinds: ['restock', 'listed'], keywords: '' }];
     }
@@ -192,12 +196,13 @@ export class Feed {
   /** The Discord embed: image, store, price, stock, SKU, category, time; ⚡ Buy and quick links. */
   message(alert, product = {}, { mention = '' } = {}) {
     const k = alert.kind === 'restock' && alert.status === STATUS.PREORDER ? KIND.preorder : KIND[alert.kind] || KIND.restock;
-    const storeName = this.retailers.name(alert.store);
+    const storeName = this.retailers.siteName(alert.store, alert.url);
     const buttons = [];
     // Whoever presses it checks out in their own checkout browser, wherever they pressed it — their
     // phone included (routes/discord.js). As a link (no Discord interactions set up): one click to the
-    // store, with their own checkout (signed: see Notifier.alertBuyLink).
-    if (alert.kind !== 'sold_out') buttons.push({ label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(alert), action: alert.id ? buyAction('a', alert.id) : null });
+    // store, with their own checkout (signed: see Notifier.alertBuyLink). Only where Mugibot has a
+    // checkout: another website's drop (monitor/drops.js) is "Open product".
+    if (alert.kind !== 'sold_out' && this.retailers.canBuy(alert.store)) buttons.push({ label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(alert), action: alert.id ? buyAction('a', alert.id) : null });
     if (alert.url) buttons.push({ label: 'Open product', url: alert.url });
     const cart = alert.kind !== 'sold_out' && this.retailers.cartUrl(alert.store, { sku: alert.sku, variantId: product.variant_id || product.variantId });
     if (cart) buttons.push({ label: 'Add to cart', url: cart });

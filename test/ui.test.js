@@ -938,6 +938,114 @@ test('🚦 a checkpoint or virtual queue going up shows on every dashboard strai
   await fan.close();
 });
 
+test('🎯 Drop watches: one box for a link or words — the form shows where to look, Auto-checkout only where Mugibot checks out; for everyone (admins) or just for you', async () => {
+  const XBOX = 'https://www.jbhifi.com.au/products/xbox-series-x25-limited-edition-console-1tb';
+  await page.goto(`${env.url}/app#drops`);
+  await page.waitForSelector('#pp-drops:not([hidden]) #dw-form');
+  assert.equal(await page.getAttribute('#pt-drops', 'aria-selected'), 'true');
+  assert.match(await page.textContent('#dw-mine'), /No drop watches yet/);
+  // An admin: where drops for everyone go (#non-tcg-alerts: made with the store channels, earlier) —
+  // and, without it, one click makes it.
+  assert.match(await page.textContent('#dw-channel'), /Drops for everyone are posted in #non-tcg-alerts/);
+  const rule = env.app.catalog.listRoutes().find((r) => r.categories.includes('nontcg'));
+  env.app.catalog.deleteRoute(rule.id);
+  await page.reload();
+  await page.waitForFunction(() => /No #non-tcg-alerts channel yet/.test(document.querySelector('#dw-channel').textContent));
+  await page.click('#dw-channel button');
+  await page.waitForFunction(() => /posted in #non-tcg-alerts/.test(document.querySelector('#dw-channel').textContent));
+  assert.equal(discord.state.channels.filter((c) => c.name === 'non-tcg-alerts').length, 1, 'found by name, not made twice');
+  assert.deepEqual(env.app.catalog.listRoutes().find((r) => r.categories.includes('nontcg')).channelId, rule.channelId);
+
+  // A link at a store Mugibot knows: ⚡ Buy and Auto-checkout there; for everyone, with its category.
+  await page.fill('#dw-input', XBOX);
+  await page.waitForFunction(() => /JB Hi-Fi — .*⚡ Buy and Auto-checkout work here/.test(document.querySelector('#dw-hint').textContent));
+  assert.equal(await page.isVisible('#dw-where'), false, 'no "where to look" for a link');
+  assert.equal(await page.isVisible('#dw-aco-wrap'), true);
+  assert.equal(await page.isChecked('#dw-share'), true, 'an admin\'s is for everyone unless they say');
+  assert.equal(await page.inputValue('#dw-category'), 'nontcg');
+  await page.click('#dw-add');
+  await page.waitForSelector('#dw-mine .dw-row.shared');
+  assert.match(await page.textContent('#dw-mine .dw-row.shared'), /Link · JB Hi-Fi · 📣 for everyone/);
+  assert.match(await page.textContent('#dw-msg'), /Watching — its page is being read now/);
+  const p = env.app.catalog.productFor('jbhifi', 'xbox-series-x25-limited-edition-console-1tb');
+  assert.equal(p.category, 'nontcg');
+  assert.ok(env.app.catalog.monitorForProduct(p.id).drop_watch);
+  assert.equal(await page.inputValue('#dw-input'), '', 'the box is ready for the next one');
+
+  // Words at another website: where to look, then its address; alerts only (no Auto-checkout); just for me.
+  await page.fill('#dw-input', 'Nintendo Switch 2');
+  await page.waitForSelector('#dw-where:not([hidden])');
+  assert.match(await page.textContent('#dw-hint'), /choose where to look/);
+  const options = await page.locator('#dw-store option').allTextContents();
+  assert.ok(options.includes('JB Hi-Fi') && options.includes('Another website…'), options.join('|'));
+  await page.selectOption('#dw-store', 'other');
+  await page.waitForSelector('#dw-site-wrap:not([hidden])');
+  assert.equal(await page.isVisible('#dw-aco-wrap'), false, 'no Auto-checkout at another website');
+  await page.fill('#dw-site', 'https://shop.example.com');
+  await page.uncheck('#dw-share');
+  assert.equal(await page.isVisible('#dw-cat-wrap'), false);
+  await page.click('#dw-add');
+  await page.waitForFunction(() => /"nintendo switch 2"/.test(document.querySelector('#dw-mine').textContent));
+  const own = page.locator('#dw-mine .dw-row', { hasText: '"nintendo switch 2"' });
+  assert.match(await own.textContent(), /Words "nintendo switch 2" · shop\.example\.com · 🔒 just for you · Looking in a few seconds/);
+  // Words at a store it searches: Auto-checkout's offered there.
+  await page.fill('#dw-input', 'playstation 5 pro');
+  await page.selectOption('#dw-store', 'jbhifi');
+  await page.waitForSelector('#dw-aco-wrap:not([hidden])');
+  assert.match(await page.textContent('#dw-hint'), /Anything at JB Hi-Fi whose name has "playstation 5 pro"/);
+  await page.check('#dw-aco');
+  await page.waitForSelector('#dw-aco-note:not([hidden])');
+  assert.match(await page.textContent('#dw-aco-note'), /only what drops/);
+  await page.click('#dw-add');
+  await page.waitForFunction(() => /max price/.test(document.querySelector('#dw-msg').textContent), null, { timeout: 5000 }); // (Auto-checkout needs one)
+  await page.fill('#dw-max', '1300');
+  await page.click('#dw-add');
+  await page.waitForFunction(() => /"playstation 5 pro"/.test(document.querySelector('#dw-mine').textContent));
+  assert.match(await page.textContent('#dw-mine'), /🤖 auto-checkout up to \$1300\.00/);
+
+  // A member: the admins' watches for everyone (with ☆ Watch), never an admin's own.
+  const c = await Client.signup(env.url, 'dropfan');
+  env.app.repo.updateUser(c.user.id, { plan: 'comped' });
+  const fan = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  fan.on('pageerror', (e) => errors.push(e.message));
+  await fan.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
+  await fan.goto(`${env.url}/app#drops`);
+  await fan.waitForSelector('#dw-shared-box:not([hidden]) .dw-row');
+  assert.match(await fan.textContent('#dw-shared'), /Link · JB Hi-Fi · 📣 for everyone · by owner/);
+  assert.doesNotMatch(await fan.textContent('#pp-drops'), /nintendo switch 2/, 'an admin\'s own watch is theirs');
+  assert.equal(await fan.locator('#dw-shared .dw-row button', { hasText: 'Remove' }).count(), 0, 'not theirs to remove');
+  assert.equal(await fan.isVisible('#dw-share-wrap'), false, 'members\' watches are their own');
+  assert.equal(await fan.isVisible('#dw-channel'), false);
+  await fan.locator('#dw-shared .dw-found li').first().getByRole('button', { name: /Watch/ }).click();
+  await waitFor(() => env.app.repo.listItems(c.user.id).some((x) => x.sku === 'xbox-series-x25-limited-edition-console-1tb'), { message: 'on their watchlist' });
+  // Their own link at another website.
+  await fan.fill('#dw-input', 'https://shop.example.com/products/luffy-figure');
+  await fan.waitForFunction(() => /Another website \(shop\.example\.com\)/.test(document.querySelector('#dw-hint').textContent));
+  assert.equal(await fan.isVisible('#dw-aco-wrap'), false);
+  await fan.click('#dw-add');
+  await fan.waitForSelector('#dw-mine .dw-row');
+  assert.match(await fan.textContent('#dw-mine'), /Luffy Figure.*Link · shop\.example\.com · 🔒 just for you/s);
+  const it = env.app.repo.listItems(c.user.id).find((x) => x.store === 'other');
+  assert.equal(it.sku, 'shop.example.com/luffy-figure');
+  // Its find on the watchlist: no ⚡ Buy (another website), Open instead.
+  await fan.click('#pt-watch');
+  const wrow = fan.locator('#w-list li', { hasText: 'Luffy Figure' });
+  await wrow.waitFor();
+  assert.equal(await wrow.getByRole('button', { name: '⚡ Buy' }).count(), 0);
+  assert.match(await wrow.textContent(), /Luffy Figure🎯shop\.example\.com alerts only/, 'found by a drop watch; its website, no SKU');
+  await fan.close();
+
+  // Removed (asked first): gone, and what it put on the watchlist with it.
+  await page.reload();
+  await page.waitForSelector('#pp-drops:not([hidden]) #dw-mine .dw-row');
+  page.once('dialog', (d) => d.accept());
+  await page.locator('#dw-mine .dw-row', { hasText: '"nintendo switch 2"' }).getByRole('button', { name: /Remove/ }).click();
+  await page.waitForFunction(() => !/"nintendo switch 2"/.test(document.querySelector('#dw-mine').textContent));
+  for (const w of (await page.evaluate(() => fetch('/api/drops').then((r) => r.json()))).watches.filter((x) => x.mine)) {
+    await env.app.drops.remove(w.id, env.app.repo.userByUsername('owner'));
+  }
+});
+
 test('Auto-checkout run history in pages; the card backup on Checkout details', async () => {
   const owner = env.app.repo.userByUsername('owner');
   const it = env.app.repo.listItems(owner.id)[0];
@@ -979,10 +1087,10 @@ test('phone-sized screens: no sideways scrolling', async () => {
   }
   const c = await Client.signup(env.url, 'phoneuser');
   await phone.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
-  for (const tab of ['watch', 'activity', 'monitor', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account']) {
+  for (const tab of ['watch', 'drops', 'activity', 'monitor', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account']) {
     await phone.goto(`${env.url}/app#${tab}`);
-    // (#watch and #activity: lists on the Monitor page.)
-    await phone.waitForSelector(`[data-panel="${['watch', 'activity'].includes(tab) ? 'monitor' : tab}"]:not([hidden])`);
+    // (#watch, #drops and #activity: lists on the Monitor page.)
+    await phone.waitForSelector(`[data-panel="${['watch', 'drops', 'activity'].includes(tab) ? 'monitor' : tab}"]:not([hidden])`);
     await phone.waitForTimeout(150);
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(overflow <= 1, `#${tab} overflows by ${overflow}px`);

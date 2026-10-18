@@ -22,7 +22,7 @@ export function register(router, ctx) {
     const C = r && r.flow && r.flow.checkout;
     const places = !!(C && (!C.inFrame || (C.frames && C.frames.length)) && C.payment !== 'paypal');
     const acoStops = !C || places ? null : C.payment === 'paypal' ? 'paypal' : 'frame';
-    return { ...it, storeName: r ? r.name : it.store, flowStatus: r ? r.flowStatus : 'none', acoCan: !!(r && r.flow), acoPlaces: places, acoStops };
+    return { ...it, storeName: r ? retailers.siteName(it.store, it.url) : it.store, flowStatus: r ? r.flowStatus : 'none', acoCan: !!(r && r.flow), acoPlaces: places, acoStops };
   };
   const isAdmin = (req) => req.user.role === 'admin';
 

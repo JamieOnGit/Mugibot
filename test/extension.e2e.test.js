@@ -1693,6 +1693,92 @@ test("🤖 Trigger ACO on the Auto-checkout page: a test run now, for an item th
   await useItems([]);
 });
 
+// --- 🎯 Drop watches (server/monitor/drops.js): what isn't trading cards, the same checkout ------------
+// A product that isn't a trading card at every store: ⚡ Buy runs the store's own checkout, to its final button.
+const NON_TCG = [
+  ['kmart', { sku: '43899001', name: 'Xbox Wireless Controller Carbon Black', price: 79 }, 'Checkout securely'],
+  ['bigw', { sku: '6099001', name: 'Nintendo Switch 2 Console', price: 699 }, 'Place order'],
+  ['ebgames', { sku: '312399', name: 'Xbox Series X Console 1TB', price: 799 }, 'CONFIRM & PAY'],
+  ['jbhifi', { sku: 'xbox-series-x25-limited-edition-console-1tb', name: 'Xbox Series X|25 Limited Edition Console 1TB', price: 899 }, 'Pay now'],
+  ['trainertown', { sku: 'funko-pop-luffy-gear-5', name: 'Funko Pop! One Piece Luffy Gear 5', price: 34.95 }, 'Pay now'],
+  ['gamerholic', { sku: 'nintendo-switch-pro-controller', name: 'Nintendo Switch Pro Controller', price: 99.95 }, 'Pay now'],
+  ['toysrus', { sku: 'lego-technic-mclaren-p1', name: 'LEGO Technic McLaren P1', price: 649.99 }, 'Pay now'],
+  ['thegamescube', { sku: '729299', name: 'Catan Board Game 5th Edition', price: 69.95, category: 'board_games' }, 'Checkout with PayPal'],
+  ['pokemoncenter', { sku: '10-10999-101', name: 'Pikachu Sitting Cuties Plush', price: 24.95 }, 'Place Order'],
+  ['target', { sku: '71299999', name: 'Nintendo Switch 2 Mario Kart World Bundle', price: 749 }, 'Place order'],
+  ['citybeach', { sku: '20499998-01', name: 'Pikachu Bucket Hat', price: 39.99 }, 'Confirm & pay'],
+  ['pbandai', { sku: 'N2999999001', name: 'ONE PIECE Thousand Sunny Model Kit', price: 59, status: 'preorder' }, 'Pay and Place Order'],
+  ['amazon', { sku: 'B0MGBXBOX1', name: 'Xbox Series X 1TB Console', price: 799 }, 'Place your order'],
+];
+
+test('🎯 not a trading card — a console, a controller, a plush, a model kit — at every store: ⚡ Buy runs that store\'s own checkout the same way, to its final button', async () => {
+  store.state.signedIn.amazon = true; // (Amazon only sells signed in.)
+  for (const [shopId, p, label] of NON_TCG) {
+    const url = store.addProduct(shopId, { status: 'in_stock', ...p });
+    const name = `NT ${shopId}`;
+    await useItems([{ url, sku: p.sku, name }]);
+    const dash = await ctx.newPage();
+    const shop = await buyFromDashboard(dash, name);
+    try {
+      await waitReady(shop, label);
+    } catch (e) {
+      throw new Error(`${shopId}: ${e.message}`);
+    }
+    assert.deepEqual(store.shop(shopId).cart.map((c) => [c.sku, c.qty]), [[p.sku, 1]], `${shopId}: one of it in the cart`);
+    assert.equal(store.shop(shopId).orders.length, 0, `${shopId}: "${label}" was NOT pressed`);
+    await shop.close();
+    await dash.close();
+  }
+});
+
+test('🎯 a drop watch on a console at JB Hi-Fi, armed: it comes back in stock → your own DM, and this browser checks out by itself — the order placed; ⚡ Buy on the drop watch goes straight to checkout too', async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const [, p] = NON_TCG.find(([s]) => s === 'jbhifi');
+  const url = store.addProduct('jbhifi', { ...p, status: 'out_of_stock' });
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: userId });
+  if (!env.app.repo.userByUsername('ash').discord_id) {
+    // (Running on its own: connect Discord for the DMs, like the ⚡ Buy DM test does.)
+    const page = await ctx.newPage();
+    discord.state.nextUser = 'd-ash';
+    await page.goto(`${env.url}/auth/discord`);
+    await page.waitForURL(/discord=linked/);
+    await page.close();
+  }
+  assert.equal((await browserApi('PUT', '/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 1000, perDay: 6, spendPerDay: 2000 })).status, 200);
+  await useItems([]);
+  const r = await browserApi('POST', '/api/drops', { url, aco: true, maxPrice: 950 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const item = (await browserApi('GET', '/api/items')).body.items.find((x) => x.sku === p.sku);
+  assert.ok(item, 'on the watchlist');
+  assert.equal(item.aco, true, 'armed');
+  assert.equal(item.dropWatch, r.body.watch.id);
+  assert.equal(item.acoPlaces, true);
+  const dmsBefore = discord.dmsTo('d-ash').length;
+  await acoListen();
+  await drop('jbhifi', p.sku);
+  await waitFor(() => store.shop('jbhifi').orders.length === 1, { timeout: 45000, message: 'the console ordered at the dummy JB Hi-Fi' });
+  assert.deepEqual(store.shop('jbhifi').orders[0].cart.map((c) => [c.sku, c.qty]), [[p.sku, 1]]);
+  await waitFor(async () => (await lastRun()).status === 'placed', { message: 'the run says placed' });
+  assert.equal((await lastRun()).total, 909, '$899 + $10 shipping, read at checkout');
+  assert.ok(discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /🟢 In stock: Xbox Series X25 Limited Edition Console 1tb/i.test(m.body.embeds[0].title)), 'your own DM');
+  await closeStorePages('jbhifi');
+
+  // ⚡ Buy on the drop watch (Monitor → 🎯 Drop watches): straight to JB's checkout, the final button left to you.
+  await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
+  const dash = await ctx.newPage();
+  await dash.goto(`${env.url}/app#drops`);
+  const row = dash.locator('#dw-mine .dw-found li', { hasText: 'Xbox Series X25' });
+  await row.waitFor();
+  const [shop] = await Promise.all([ctx.waitForEvent('page'), row.getByRole('link', { name: '⚡ Buy' }).click()]);
+  await reach(shop, /\/jbhifi\/checkouts\/c\/abc123$/);
+  await waitReady(shop, 'Pay now');
+  assert.equal(store.shop('jbhifi').orders.length, 1, '"Pay now" was NOT pressed this time');
+  await shop.close();
+  await dash.close();
+  assert.equal((await browserApi('DELETE', `/api/drops/${r.body.watch.id}`)).status, 200);
+  assert.ok(!(await browserApi('GET', '/api/items')).body.items.some((x) => x.sku === p.sku), 'gone with its watch');
+});
+
 // --- Checkpoints and virtual queues (server/monitor/gates.js) -------------------------------------
 /** The gaps between each visitor's requests while they were in the queue: nothing but the queue page's own refreshes. */
 function queueGaps(q) {

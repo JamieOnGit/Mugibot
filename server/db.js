@@ -443,6 +443,37 @@ const MIGRATIONS = [
     posted_at INTEGER
   );
   `,
+  // 11 — drop watches (server/monitor/drops.js): anything outside the card keywords, by its link or
+  //      the words in its name, at a store Mugibot knows or any other website. An admin's are for
+  //      everyone (#non-tcg-alerts); a member's are their own (their watchlist and DMs).
+  `
+  CREATE TABLE drop_watches (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shared INTEGER NOT NULL DEFAULT 0,   -- an admin's, for everyone: #non-tcg-alerts and every dashboard
+    store TEXT NOT NULL DEFAULT '',      -- the store ('jbhifi', …), or 'other' (another website)
+    site TEXT NOT NULL DEFAULT '',       -- words at another website: where they're looked for
+    words TEXT NOT NULL DEFAULT '',      -- a words watch: every word in the product's name
+    url TEXT NOT NULL DEFAULT '',        -- a link watch: the product page
+    label TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'nontcg',
+    aco INTEGER NOT NULL DEFAULT 0,      -- Auto-checkout it (stores Mugibot checks out at), up to max_price
+    max_price REAL,
+    found TEXT NOT NULL DEFAULT '[]',    -- what it found: [{ productId | itemId, sku, at, arm }]
+    how TEXT NOT NULL DEFAULT '',        -- words at another website: how its products are read
+    seen INTEGER NOT NULL DEFAULT 0,     -- products on the page (or in the search) its last look read
+    baseline_at INTEGER,                 -- its first look (what was there then was there already)
+    next_at INTEGER NOT NULL DEFAULT 0,
+    last_at INTEGER,
+    last_ok_at INTEGER,
+    fails INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX drop_watches_user ON drop_watches (user_id);
+  ALTER TABLE items ADD COLUMN drop_watch TEXT;     -- put on the watchlist by this drop watch
+  ALTER TABLE monitors ADD COLUMN drop_watch TEXT;  -- made by this (shared) drop watch
+  `,
 ];
 
 export class Db {

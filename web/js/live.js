@@ -37,7 +37,7 @@ function loadPrefs() {
   try { return { ...def, ...(JSON.parse(localStorage.getItem(PREFS_KEY)) || {}) }; } catch { return def; }
 }
 
-export function setupLive({ storeName, buyUrl, openProduct, panelOpen, sampleProduct, onSettings, resetStore, setMode, onStores = () => {} }) {
+export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct, panelOpen, sampleProduct, onSettings, resetStore, setMode, onStores = () => {} }) {
   const L = {
     // Stores this member switched off: hidden from their live feed, products and this browser's alerts.
     hidden: new Set(),
@@ -576,7 +576,8 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
 
   function actions(p) {
     const out = [];
-    out.push(h('a', { class: 'btn small primary', href: buyUrl(p), target: '_blank', rel: 'noopener', title: 'Adds it to your watchlist and runs your checkout with the extension' }, '⚡ Buy'));
+    // (Only where Mugibot checks out: another website's drop is "Open ↗".)
+    if (canBuy(p.store)) out.push(h('a', { class: 'btn small primary', href: buyUrl(p), target: '_blank', rel: 'noopener', title: 'Adds it to your watchlist and runs your checkout with the extension' }, '⚡ Buy'));
     if (p.url) out.push(h('a', { class: 'btn small', href: p.url, target: '_blank', rel: 'noopener', 'aria-label': `Open ${p.name} at the store` }, '↗'));
     return h('div', { class: 'acts' }, ...out);
   }
@@ -591,7 +592,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     const was = typeof a.previousPrice === 'number' && a.previousPrice !== a.price ? h('s', {}, money(a.previousPrice)) : null;
     const body = [
       thumb(a.image, a.name),
-      h('span', { class: 'm' }, swatch(a.store), ' ', `${storeName(a.store)} · `, nameButton(a), ' — ', h('b', {}, money(a.price) || '—'), was ? ' ' : '', was,
+      h('span', { class: 'm' }, swatch(a.store), ' ', `${storeName(a.store, a.url)} · `, nameButton(a), ' — ', h('b', {}, money(a.price) || '—'), was ? ' ' : '', was,
         a.note ? ` · ${a.note}` : '', a.manual ? ' · reported by an admin' : '', a.test ? ' · test (this browser only)' : ''),
     ];
     const extra = typeof a.ttnMs === 'number' ? `alerted in ${msText(a.ttnMs)}` : '';
@@ -709,7 +710,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     if (!prefs.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
     try {
       const n = new Notification(`${label}: ${a.name}`, {
-        body: `${storeName(a.store)} · ${money(a.price) || 'price not shown'}${a.test ? ' (test)' : ''}`, icon: a.image || '/img/icon-192.png', tag: `mugibot-${a.id}`,
+        body: `${storeName(a.store, a.url)} · ${money(a.price) || 'price not shown'}${a.test ? ' (test)' : ''}`, icon: a.image || '/img/icon-192.png', tag: `mugibot-${a.id}`,
       });
       n.onclick = () => { window.focus(); n.close(); };
     } catch { /* some browsers only allow notifications from a service worker */ }
@@ -731,7 +732,7 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     chirp(a.kind);
     desktop(a, label);
     titleFlash(`${label}: ${a.name}`);
-    $('#sn-announce').textContent = `${label}: ${a.name}, ${money(a.price) || ''} at ${storeName(a.store)}`;
+    $('#sn-announce').textContent = `${label}: ${a.name}, ${money(a.price) || ''} at ${storeName(a.store, a.url)}`;
     if (prefs.popup) {
       L.queue.push(a);
       if (!L.showing) nextPop();
@@ -750,16 +751,17 @@ export function setupLive({ storeName, buyUrl, openProduct, panelOpen, samplePro
     $('#sn-ov-type').textContent = `${a.test ? 'Test · ' : ''}${a.kind === 'restock' ? (a.status === 'preorder' ? 'Pre-order open' : 'Restock') : 'New drop'}`;
     const st = $('#sn-ov-store');
     st.textContent = '';
-    st.append(swatch(a.store), storeName(a.store));
+    st.append(swatch(a.store), storeName(a.store, a.url));
     $('#sn-ov-title').textContent = a.name;
     $('#sn-ov-price').textContent = money(a.price) || 'Price not shown';
     $('#sn-ov-was').textContent = typeof a.previousPrice === 'number' && a.previousPrice !== a.price ? `was ${money(a.previousPrice)}` : '';
     $('#sn-ov-sku').textContent = a.sku;
-    $('#sn-ov-ttn').textContent = typeof a.ttnMs === 'number' ? `alerted ${msText(a.ttnMs)} after ${storeName(a.store)} answered` : '';
+    $('#sn-ov-ttn').textContent = typeof a.ttnMs === 'number' ? `alerted ${msText(a.ttnMs)} after ${storeName(a.store, a.url)} answered` : '';
     const img = $('#sn-ov-img');
     img.hidden = !a.image;
     if (a.image) img.src = a.image;
     $('#sn-ov-buy').href = buyUrl(a);
+    $('#sn-ov-buy').hidden = !canBuy(a.store);
     const open = $('#sn-ov-open');
     open.hidden = !a.url;
     if (a.url) open.href = a.url;

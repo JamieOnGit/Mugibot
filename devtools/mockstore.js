@@ -117,6 +117,18 @@ export function defaultShops() {
   return out;
 }
 
+// Acme Collectibles (a website Mugibot doesn't know): a console and a figure; a limited edition drops later.
+export function defaultAcme() {
+  return {
+    shopify: false, refuse: false,
+    products: [
+      { handle: 'xbox-series-x-console-1tb', name: 'Xbox Series X Console 1TB', price: 799, status: 'out_of_stock', listed: true },
+      { handle: 'luffy-gear-5-figure', name: 'One Piece Luffy Gear 5 Figure', price: 89.95, status: 'in_stock', listed: true },
+      { handle: 'xbox-series-x-25th-anniversary-edition', name: 'Xbox Series X 25th Anniversary Limited Edition Console', price: 999, status: 'in_stock', listed: false },
+    ],
+  };
+}
+
 function page(shop, title, body, { head = '', bagCount = null } = {}) {
   const s = SHOPS[shop] || { name: 'Dummy store', color: '#444' };
   const base = shop ? `/${shop}` : '';
@@ -189,6 +201,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     // Shops answering 429 with Retry-After: shop → seconds.
     tooMany: {},
     requests: [],
+    // Acme Collectibles: another website (see acme() below).
+    acme: defaultAcme(),
   };
   let cardOrigin = '';
 
@@ -1206,6 +1220,45 @@ ${body}
       </script>`);
   }
 
+  // -------------------------------------------------------------------- Acme Collectibles
+  // A shop on no retailer's address (another website for Mugibot: alerts only, no checkout). Its
+  // product pages (with Shopify's product JSON when acme.shopify is on), a search page of product
+  // tiles, its "new arrivals" listing, and Shopify's search suggestions (only with acme.shopify).
+  // acme.refuse: every page answers 403 (a website that turns servers away).
+  function acmeTile(x) {
+    const stock = x.status === 'in_stock' ? '<button>Add to cart</button>' : x.status === 'preorder' ? '<button>Pre-order</button>' : '<span class="sold">Sold out</span>';
+    return `<li class="product-card"><a href="/acme/products/${esc(x.handle)}">${esc(x.name)}</a> <span class="price">$${x.price.toFixed(2)}</span> ${stock}</li>`;
+  }
+  function acme(sub, u, req, res, { html, json }) {
+    const A = state.acme;
+    if (A.refuse) return html(403, '<html><head><title>Forbidden</title></head><body>Forbidden</body></html>');
+    const listed = A.products.filter((x) => x.listed);
+    const shell = (title, body) => `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)} — Acme Collectibles</title></head><body><header><a href="/acme/">Acme Collectibles</a> · <a href="/acme/collections/new">New arrivals</a></header><main>${body}</main></body></html>`;
+    if (sub === '/' || sub === '') return html(200, shell('Home', `<h1>Acme Collectibles</h1><p>Consoles, figures and more. <a href="/acme/collections/new">New arrivals</a></p>`));
+    if (sub === '/collections/new') return html(200, shell('New arrivals', `<h1>New arrivals</h1><ul>${listed.map(acmeTile).join('')}</ul>`));
+    if (sub === '/search') {
+      const q = String(u.searchParams.get('q') || '').toLowerCase().split(/\s+/).filter(Boolean);
+      const hits = listed.filter((x) => q.every((w) => x.name.toLowerCase().includes(w)));
+      return html(200, shell('Search', `<h1>Search</h1>${hits.length ? `<ul>${hits.map(acmeTile).join('')}</ul>` : '<p>No results</p>'}`));
+    }
+    if (sub === '/search/suggest.json') {
+      if (!A.shopify) return html(404, shell('Not found', '<h1>Page not found</h1>'));
+      const q = String(u.searchParams.get('q') || '').toLowerCase().split(/\s+/).filter(Boolean);
+      const hits = listed.filter((x) => q.every((w) => x.name.toLowerCase().includes(w)));
+      return json(200, { resources: { results: { products: hits.map((x) => ({ handle: x.handle, title: x.name, url: `/acme/products/${x.handle}`, price: x.price.toFixed(2), available: x.status === 'in_stock' || x.status === 'preorder' })) } } });
+    }
+    const m = sub.match(/^\/products\/([a-z0-9-]+)(\.js)?$/);
+    const x = m && A.products.find((y) => y.handle === m[1]);
+    if (!x || !x.listed) return html(404, shell('Not found', '<h1>Page not found</h1>'));
+    if (m[2]) {
+      if (!A.shopify) return html(404, shell('Not found', '<h1>Page not found</h1>'));
+      return json(200, { title: x.name, variants: [{ id: 9900 + A.products.indexOf(x), available: x.status === 'in_stock' || x.status === 'preorder', price: Math.round(x.price * 100) }] });
+    }
+    const ld = { '@context': 'https://schema.org', '@type': 'Product', name: x.name, offers: { '@type': 'Offer', price: x.price.toFixed(2), priceCurrency: 'AUD', availability: `https://schema.org/${LD_AVAIL[x.status] || 'OutOfStock'}` } };
+    const buy = x.status === 'in_stock' ? '<button type="button" name="add">Add to cart</button>' : x.status === 'preorder' ? '<button type="button" name="add">Pre-order now</button>' : '<button type="button" disabled>Sold out</button>';
+    return html(200, shell(x.name, `<script type="application/ld+json">${JSON.stringify(ld)}</script><div class="product"><h1>${esc(x.name)}</h1><p class="price">$${x.price.toFixed(2)}</p>${buy}</div>`));
+  }
+
   // -------------------------------------------------------------------- store server
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
@@ -1240,6 +1293,9 @@ ${body}
     if (state.blockNonBrowsers && !/Mozilla|Chrome/i.test(req.headers['user-agent'] || '') && !p.startsWith('/__admin')) {
       return html(403, '<html><head><title>Access Denied</title></head><body>Access Denied. Reference #18.abc123.1700000000</body></html>');
     }
+
+    // ---------------- Acme: a website Mugibot doesn't know (drop watches: monitor/drops.js)
+    if (p === '/acme' || p.startsWith('/acme/')) return acme(p.slice('/acme'.length) || '/', u, req, res, { html, json });
 
     // ---------------- control panel
     if (p === '/__admin/state') return json(200, { ...state, requests: undefined });
@@ -1765,9 +1821,20 @@ ${body}
     shop: (id) => state.shops[id],
     productUrl: (shop, sku) => url + pathFor(shop, find(shop, sku)),
     set(shop, sku, fields) { Object.assign(find(shop, sku), fields); },
+    /** Another product at a shop (gone again at reset): { sku, name, price, status, listed }. */
+    addProduct(shop, p) {
+      const list = shopOf(shop).products;
+      const prod = { listed: true, maxQty: 0, qtyStyle: shop === 'bigw' ? 'select' : 'input', lateMs: 0, id: 4400000 + list.length + 50, ...p };
+      list.push(prod);
+      return url + pathFor(shop, prod);
+    },
+    /** Acme Collectibles (another website): its address, and a product's page. */
+    acmeUrl: (handle = '') => `${url}/acme${handle ? `/products/${handle}` : ''}`,
+    setAcme(handle, fields) { Object.assign(state.acme.products.find((x) => x.handle === handle), fields); },
     reset() {
       const fresh = defaultShops();
       for (const id of Object.keys(fresh)) state.shops[id] = fresh[id];
+      state.acme = defaultAcme();
       state.account = null;
       state.cardInIframe = false;
       state.blockNonBrowsers = false;

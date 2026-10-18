@@ -44,6 +44,15 @@ community. Built on TCGCopBot's working Kmart flow.
   gets their checkout browser in line by itself, and anyone can from Discord
   (📥 Join the queue on my computer). See
   [docs/MONITORING.md](docs/MONITORING.md#-checkpoints-and-virtual-queues).
+- **🎯 Drop watches: anything that isn't the card keywords.** A console at
+  JB Hi-Fi, a figure at any shop: paste its link, or type the words in its name
+  and where to look (a store Mugibot searches, or any other website). An admin's
+  are for everyone: posted in `#non-tcg-alerts` and every dashboard, with ⚡ Buy,
+  and members arm Auto-checkout on them as on anything else. A member's own are
+  theirs alone: what they find goes on their watchlist, DM'd. ⚡ Buy and
+  Auto-checkout work at every store Mugibot knows, the same way as for cards;
+  other websites get the alert only. See
+  [docs/MONITORING.md](docs/MONITORING.md#-drop-watches-anything-that-isnt-the-card-keywords).
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games,
   JB Hi-Fi, Target, Toys"R"Us, Amazon, The Games Cube, Gamerholic and Premium
   Bandai (Australia) are beta (built from walk-throughs of their real checkouts
@@ -213,7 +222,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 258 tests in about ten minutes:
+the 269 tests in about ten minutes:
 
 ```bash
 npm install
@@ -309,6 +318,23 @@ npm test
   - an admin's sweep tab left alone in the queue, the queue seen up and down
     as a new visitor;
   - 📥 Join the queue from Discord, and runs not waiting forever.
+- **🎯 Drop watches** (dummy stores, a dummy "other website", fake Discord):
+  - `#non-tcg-alerts` made with the store channels (or on its own), and what
+    isn't trading cards going only there;
+  - an admin's link (an Xbox at JB Hi-Fi): monitored for everyone, posted with
+    ⚡ Buy, a member arming it and their Auto-checkout starting;
+  - an admin's words at a store: searched as typed in the sweeps' turn (one
+    search in three at most), the first look the scene, a new drop posted and
+    bought for the admin;
+  - a member's own words: on their watchlist only, DM'd and bought when it
+    drops, never posted, its words hidden from others;
+  - a link and words at another website: read as Mugibot, alerts with no
+    ⚡ Buy, a site that refuses backing off;
+  - with the real extension: ⚡ Buy for a product that isn't a trading card at
+    every one of the 13 stores, to its final button; a drop watch on a console
+    at JB Hi-Fi bought by Auto-checkout; the 🎯 tab's ⚡ Buy;
+  - the dashboard's 🎯 tab: link or words, where to look, Auto-checkout only
+    where Mugibot checks out, for everyone or just for you.
 - **Amazon sweeps from an admin's browser:** its search page asked for from inside
   an Amazon page (the dummy Amazon gives servers HTTP 503, like the real one).
 - **Dashboard round:** the card backup (only a locked copy reaches the server,
@@ -332,7 +358,8 @@ server/
   monitor/          sweep.js (live sweeps), listing.js (search results), http.js (store requests),
                     SKU page checks and in-browser check results, feed.js (alerts),
                     public.js (what members see of the sweeps), gates.js and gate.js
-                    (checkpoints and virtual queues: up, down, #virtual-queue-detection)
+                    (checkpoints and virtual queues: up, down, #virtual-queue-detection),
+                    drops.js (drop watches: anything outside the card keywords, #non-tcg-alerts)
   catalog.js        the Monitor's products, monitors, price history, check log, alert rules
   discord.js        Discord OAuth, server roles, DMs, channel posts
   whop.js           Whop checkout links, webhooks, membership sync

@@ -151,12 +151,15 @@ export class Notifier {
    * info: { status, price, source, manual, note }
    */
   async itemAlert(userId, item, kind, info = {}) {
-    const storeName = this.retailers.name(item.store);
+    const storeName = this.retailers.siteName(item.store, item.url);
     const label = STATUS_LABEL[info.status] || info.status;
     const price = info.price ?? item.last_price ?? item.price;
-    const meta = [storeName, `SKU ${item.sku}`, money(price)].filter(Boolean).join(' · ');
+    // (Another website's product: its address is the "store", and its code isn't a SKU anyone uses.)
+    const buyable = this.retailers.canBuy(item.store);
+    const meta = [storeName, buyable ? `SKU ${item.sku}` : '', money(price)].filter(Boolean).join(' · ');
     const buttons = [];
-    if (item.url) buttons.push({ label: '⚡ Buy', url: this.buyLink(userId, item), action: buyAction('i', item.id) });
+    // ⚡ Buy where Mugibot checks out; at another website, the product page is the way in.
+    if (item.url && buyable) buttons.push({ label: '⚡ Buy', url: this.buyLink(userId, item), action: buyAction('i', item.id) });
     if (item.url) buttons.push({ label: 'Open product', url: item.url });
     buttons.push({ label: 'Watchlist', url: `${this.cfg.baseUrl}/app#watch` });
     if (kind === 'listed') {
@@ -170,7 +173,7 @@ export class Notifier {
     return this.notify(userId, {
       type: 'restock', level: 'urgent', channel: 'restock',
       title: `${info.status === 'preorder' ? '🟣' : '🟢'} ${label}: ${item.name}`,
-      message: `${meta}${info.note ? `\n${info.note}` : ''}\n${who}. Press ⚡ Buy to go straight to checkout.`,
+      message: `${meta}${info.note ? `\n${info.note}` : ''}\n${who}. ${buyable ? 'Press ⚡ Buy to go straight to checkout.' : 'Open the product to buy it there.'}`,
       name: item.name, sku: item.sku, url: item.url || null, buttons,
     });
   }

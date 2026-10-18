@@ -3,6 +3,7 @@
 
 import http from 'node:http';
 import { Aco } from './aco.js';
+import { Drops } from './monitor/drops.js';
 import { Vip } from './monitor/vip.js';
 import { Catalog } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -66,7 +67,13 @@ export async function createApp(options = {}) {
   gates.sweeper = sweeper;
   sweeper.gates = gates;
   monitor.gates = gates;
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, limiter, pageCache: new Map() };
+  // Drop watches: anything outside the card keywords, by link or words, at any store or website.
+  const drops = new Drops({ cfg, db, repo, catalog, retailers, hub, notifier, fetchImpl: storeFetchImpl, now });
+  Object.assign(drops, { monitor, sweeper });
+  monitor.drops = drops;
+  sweeper.drops = drops;
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, limiter, pageCache: new Map() };
+  drops.ctx = ctx;
   // Auto-checkout: started by the monitor when an armed item drops.
   const aco = new Aco({ ...ctx, now });
   ctx.aco = aco;
@@ -223,6 +230,7 @@ export async function createApp(options = {}) {
     monitor,
     sweeper,
     gates,
+    drops,
     aco,
     catalog,
     feed,
@@ -243,6 +251,7 @@ export async function createApp(options = {}) {
       monitor.start();
       sweeper.start();
       gates.start();
+      drops.start();
       aco.start();
       startJobs();
       return app.url;
@@ -251,6 +260,7 @@ export async function createApp(options = {}) {
       monitor.stop();
       sweeper.stop();
       gates.stop();
+      drops.stop();
       aco.stop();
       timers.forEach(clearInterval);
       hub.close();

@@ -157,6 +157,20 @@ export class Retailers {
     return r ? r.name : storeId;
   }
 
+  /** A store's name — or, for another website, its address ("shop.example.com"). */
+  siteName(storeId, url = '') {
+    if (storeId === 'other' && url) {
+      try { return new URL(url).host.replace(/^www\./, ''); } catch { /* not a link */ }
+    }
+    return this.name(storeId);
+  }
+
+  /** Does Mugibot check out at this store (⚡ Buy, Auto-checkout)? Not at another website. */
+  canBuy(storeId) {
+    const r = this.get(storeId);
+    return !!(r && r.flow);
+  }
+
   /** Stores whose product links are built from the code alone (Amazon's ASIN, a Shopify handle). */
   productUrlFromSku(r, sku) {
     if (!r || !r.base || !sku || !r.productPathFromSku) return null;

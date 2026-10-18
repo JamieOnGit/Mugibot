@@ -334,10 +334,11 @@ export class Sweeper {
     return named.length && named[0].count <= max ? named[0].handle : null;
   }
 
+  /** vip: a VIP or drop watch's words (monitor/vip.js, monitor/drops.js) — searched as they are, never "+ tcg". */
   urlFor(r, keyword, page = 1, { vip = false } = {}) {
     const collection = !vip && this.collectionFor(r, keyword);
     if (collection) return `${r.base}${r.sweep.collectionPath.replace('{collection}', encodeURIComponent(collection))}`;
-    // (A VIP watch's words are searched as they are.)
+    // (A VIP or drop watch's words are searched as they are.)
     let p = r.sweep.path.replace('{q}', encodeURIComponent(vip ? keyword : this.query(r, keyword)));
     if (page > 1 && r.sweep.pagePath) p += r.sweep.pagePath.replace('{page}', String(page));
     // (A store whose search is answered by its search provider: Kmart's, at Constructor.io. Or by
@@ -371,6 +372,9 @@ export class Sweeper {
         return { keyword: w.words, page: 1, vip: w.id };
       }
     }
+    // Drop watches' words at this store (monitor/drops.js): one search in three at most.
+    const drop = this.drops ? this.drops.nextTerm(r, st) : null;
+    if (drop) return drop;
     const kws = this.settings.keywords;
     const pages = Math.max(1, Math.min(10, r.sweep.pages || 1));
     const deep = [];
@@ -398,7 +402,7 @@ export class Sweeper {
   /** One search from the server: fetch, read, compare, alert. */
   async sweepTerm(r, term) {
     await this.refreshCollections(r);
-    const url = this.urlFor(r, term.keyword, term.page, { vip: !!term.vip });
+    const url = this.urlFor(r, term.keyword, term.page, { vip: !!(term.vip || term.drop) });
     const started = Date.now();
     let res;
     let text = '';
@@ -476,15 +480,32 @@ export class Sweeper {
         const known = this.catalog.productFor(r.id, p.sku);
         if (known && known.seller) p.marketplace = true;
       }
+      const title = p.title || p.name;
+      const mkt = s.skipMarketplace && p.marketplace;
+      // Someone's own drop watch's words in the name (monitor/drops.js): on their watchlist, theirs
+      // alone. (Found by another search, it was listed already as far as that watch knows.)
+      if (this.drops && !mkt) {
+        for (const w of this.drops.ownFor(r.id, title)) {
+          await this.drops.foundOwn(w, r, p, status, { baseline: baseline || !w.baselineAt || term.keyword !== w.words }).catch((e) => this.cfg.log('[drops]', e.message));
+        }
+      }
       // A VIP watch's words in the name (monitor/vip.js): it counts, trading cards or not.
-      const watch = this.vip ? this.vip.matchFor(r.id, p.title || p.name, term.vip || null) : null;
-      const counted = term.vip ? !!watch && !(s.skipMarketplace && p.marketplace) : counts_(p, term.keyword) || (!!watch && !(s.skipMarketplace && p.marketplace));
+      const watch = this.vip ? this.vip.matchFor(r.id, title, term.vip || null) : null;
+      // An admin's drop watch for everyone (monitor/drops.js): it counts too, in #non-tcg-alerts.
+      const drop = this.drops && !term.vip ? this.drops.sharedFor(r.id, title, term.drop ? term.keyword : null) : null;
+      const cards = !term.vip && !term.drop && counts_(p, term.keyword);
+      const counted = cards || ((!!watch || !!drop) && !mkt);
       if (!counted || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
       counts.kept += 1;
-      const ev = await this.track(r, p, { status, keyword: term.keyword, baseline, now, vip: !!watch });
+      // (Only a drop watch's: listed already, unless its own words' search found it after its first look.)
+      const dropBaseline = !!drop && (baseline || !drop.baselineAt || term.keyword !== drop.words);
+      const dropOnly = !!drop && !cards && !watch;
+      const ev = await this.track(r, p, { status, keyword: term.keyword, baseline: dropOnly ? dropBaseline : baseline, now, vip: !!watch, drop: dropOnly, category: drop && !cards ? drop.category : null });
       for (const k of ev) counts[k] += 1;
+      const product = () => [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
       // (Found in the watch's first search: listed already, so armed only if it isn't on sale yet.)
-      if (watch) this.vip.found(watch, [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean), { baseline });
+      if (watch) this.vip.found(watch, product(), { baseline });
+      if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, status }).catch((e) => this.cfg.log('[drops]', e.message));
     }
     const out = this.record(r, term, { ok: true, url, source, ms, baseline, total: parsed.total ?? null, ...counts, error: parsed.problem === 'empty' ? 'No products on the page' : '' });
     out.gone = await this.markGone(r, term.keyword, now);
@@ -522,12 +543,15 @@ export class Sweeper {
     return gone.length;
   }
 
-  /** One product in the shared catalogue: update it, and alert what changed. Returns what it alerted. */
-  async track(r, p, { status, keyword, baseline, now, vip = false }) {
+  /**
+   * One product in the shared catalogue: update it, and alert what changed. Returns what it alerted.
+   * drop: counted only for an admin's drop watch (monitor/drops.js), whose category it gets (Non-TCG).
+   */
+  async track(r, p, { status, keyword, baseline, now, vip = false, drop = false, category = null }) {
     const s = this.settings;
     const found = [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
     const before = found ? { ...found } : null;
-    const product = found || this.catalog.upsertProduct({ store: r.id, sku: p.sku, url: p.url, name: p.title, image: p.image });
+    const product = found || this.catalog.upsertProduct({ store: r.id, sku: p.sku, url: p.url, name: p.title, image: p.image, category: category || '' });
     const monitor = this.catalog.monitorForProduct(product.id);
     const set = { sweep_seen_at: now, checked_at: now, last_ok_at: now, confirmed: 1, fail_count: 0, error: '' };
     if (!product.sweep_first_at) Object.assign(set, { sweep_first_at: now, sweep_keyword: keyword });
@@ -547,7 +571,7 @@ export class Sweeper {
     if (p.image && p.image !== product.image) set.image = p.image.slice(0, 1000);
     if (p.variantId && p.variantId !== product.variant_id) set.variant_id = String(p.variantId).slice(0, 40);
     if (product.category === 'other') {
-      const c = categoryFor(p.title);
+      const c = category || categoryFor(p.title);
       if (c !== 'other') set.category = c;
     }
     const price = typeof p.price === 'number' && p.price > 0 ? Math.round(p.price * 100) / 100 : null;
@@ -575,7 +599,7 @@ export class Sweeper {
       if (await this.sellerOf(r, fresh)) return sent;
     }
     if (isNew) {
-      if (!baseline && (s.newAlerts || vip) && this.noteAlert(await this.feed.alert(fresh, 'listed', { sweep: true, vip, detectedAt: now, note: `New in "${keyword}" at ${r.name}.` }))) sent.push('new');
+      if (!baseline && (s.newAlerts || vip || drop) && this.noteAlert(await this.feed.alert(fresh, 'listed', { sweep: true, vip, detectedAt: now, note: `New in "${keyword}" at ${r.name}.` }))) sent.push('new');
     } else {
       if (s.restockAlerts && isOrderable(fresh.status) && ORDERABLE_FROM.has(before.status) && before.confirmed) {
         const today = sydneyDay.format(now);
@@ -689,7 +713,10 @@ export class Sweeper {
       isOk: info.ok ? 1 : 0, wasBaseline: info.baseline ? 1 : 0,
     });
     const out = { store: r.id, keyword: term.keyword, page: term.page, ok: info.ok, blocked: !!info.blocked, error: info.error || '', found: info.found || 0, kept: info.kept || 0, new: info.new || 0, restock: info.restock || 0, price: info.price || 0, baseline: !!info.baseline, ms: info.ms ?? null };
-    this.emit({ type: info.ok ? 'hb' : 'err', storeName: r.name, source: info.source || '', ...out });
+    // A drop watch's words (monitor/drops.js): how it went shows on the watch. ('private': someone's own
+    // watch's words — members never see them in the live log: monitor/public.js.)
+    if (term.drop && this.drops) this.drops.searched(r.id, term.keyword, info);
+    this.emit({ type: info.ok ? 'hb' : 'err', storeName: r.name, source: info.source || '', ...out, ...(term.drop ? { drop: term.drop } : {}) });
     if (info.ok && failedBefore >= 2) this.sys(`${r.name} is answering again after ${failedBefore} failed searches`, { store: r.id });
     if (info.blocked && !wasSlow) this.sys(`${r.name} refused a search — searching it at a third of the pace for 10 minutes`, { store: r.id, level: 'warn' });
     return out;
@@ -854,11 +881,13 @@ export class Sweeper {
       if (st.browserNext > now) { next = Math.min(next ?? Infinity, st.browserNext); continue; }
       this.refreshCollections(r).catch(() => {});
       const term = this.nextTerm(r);
+      // (A VIP or drop watch's words: searched as they are.)
+      const raw = !!(term.vip || term.drop);
       st.browserNext = now + this.waitFor(st, this.paceFor(r, true));
       st.nextAt = st.browserNext;
       next = Math.min(next ?? Infinity, st.browserNext);
       terms.push(serialize({
-        store: r.id, keyword: term.keyword, page: term.page, url: this.urlFor(r, term.keyword, term.page), parser: r.sweep.parser,
+        store: r.id, keyword: term.keyword, page: term.page, url: this.urlFor(r, term.keyword, term.page, { vip: raw }), parser: r.sweep.parser,
         productPath: r.productPath || null, skuFromPath: r.skuFromPath || null, storeName: r.name, storeBase: r.base,
         // Pages that build their product list once they're open (BIG W): the browser opens them and waits.
         render: !!r.sweep.render,
@@ -867,7 +896,7 @@ export class Sweeper {
         // What the store answers with: 'html' (Amazon's search page) — else JSON.
         expect: r.sweep.expect || 'json',
         // (Which page: openPath, '' for the store's front page. None: the site's address.)
-        pageUrl: typeof r.sweep.openPath === 'string' ? `${r.base}${r.sweep.openPath.replace('{q}', encodeURIComponent(this.query(r, term.keyword)))}` : null,
+        pageUrl: typeof r.sweep.openPath === 'string' ? `${r.base}${r.sweep.openPath.replace('{q}', encodeURIComponent(raw ? term.keyword : this.query(r, term.keyword)))}` : null,
         // The headers the store's own code sends with it (Premium Bandai's region: x-g1-area-code).
         headers: r.sweep.headers || null,
         // Reset by an admin: the store's tab is closed and opened again at its front page first.
@@ -908,10 +937,9 @@ export class Sweeper {
       if (!res || typeof res !== 'object') continue;
       const r = this.retailers.get(str(res.store, 40));
       if (!r || this.modeFor(r) !== 'browser') continue;
-      const keyword = this.settings.keywords.find((k) => k === res.keyword);
-      if (!keyword) continue;
-      const term = { keyword, page: num(res.page, { min: 1, max: 10, int: true, def: 1 }) };
-      const url = this.urlFor(r, term.keyword, term.page);
+      const term = this.termOf(r, res);
+      if (!term) continue;
+      const url = this.urlFor(r, term.keyword, term.page, { vip: !!(term.vip || term.drop) });
       const ms = num(res.ms, { min: 0, max: 120000, int: true, def: null });
       const st = this.stat(r.id);
       // The search ran into the store's virtual queue (or checkpoint): it's up, and the search waits —
@@ -937,6 +965,21 @@ export class Sweeper {
       out.push(await this.ingest(r, term, { products, total: null, problem }, { source: 'browser', url, ms }));
     }
     return out;
+  }
+
+  /**
+   * Which search an admin's browser says it did: a keyword's page, or a VIP or drop watch's words at
+   * that store (monitor/vip.js, monitor/drops.js) — null for anything Mugibot didn't ask for.
+   */
+  termOf(r, res) {
+    const words = str(res.keyword, 60);
+    const keyword = this.settings.keywords.find((k) => k === words);
+    if (keyword) return { keyword, page: num(res.page, { min: 1, max: 10, int: true, def: 1 }) };
+    const vip = this.vip ? this.vip.termsFor(r.id).find((w) => w.words === words) : null;
+    if (vip) return { keyword: vip.words, page: 1, vip: vip.id };
+    const drop = this.drops ? this.drops.wordsAt(r.id).find((w) => w.words === words) : null;
+    if (drop) return { keyword: drop.words, page: 1, drop: this.drops.kindOf(r.id, drop.words) };
+    return null;
   }
 
   cleanProduct(r, p) {

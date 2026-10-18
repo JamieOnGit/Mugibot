@@ -31,7 +31,8 @@ export function register(router, ctx) {
     overview: overview(),
     alerts: catalog.recentAlerts({ limit: 30 }),
     categories: CATEGORIES,
-    stores: retailers.publicList().filter((r) => !r.demo || cfg.demoStoreUrl).map((r) => ({ id: r.id, name: r.name })),
+    // (buy: Mugibot checks out there — ⚡ Buy. Another website's drops aren't one of these: no ⚡ Buy.)
+    stores: retailers.publicList().filter((r) => !r.demo || cfg.demoStoreUrl).map((r) => ({ id: r.id, name: r.name, buy: retailers.canBuy(r.id) })),
     admin: isAdmin(req),
   }), member);
 
@@ -210,6 +211,29 @@ export function register(router, ctx) {
     return { ...out, ...vipView() };
   }, admin);
   router.delete('/api/monitor/routes/:id', async (req) => ({ ok: catalog.deleteRoute(req.params.id) }), admin);
+
+  // --- Drop watches (monitor/drops.js): anything outside the card keywords, for everyone with a membership.
+  // An admin's can be for everyone (#non-tcg-alerts); anyone's own are theirs alone (their watchlist, their DMs).
+  router.get('/api/drops', async (req) => ctx.drops.viewFor(req.user), member);
+  router.post('/api/drops', async (req) => {
+    if (!limiter.hit(`dropadd:${req.user.id}`, 30, 10 * 60 * 1000)) throw new HttpError(429, 'Slow down a little — try again in a few minutes');
+    const watch = await ctx.drops.add(req.body || {}, req.user);
+    return { watch, ...ctx.drops.viewFor(req.user) };
+  }, member);
+  router.post('/api/drops/channel', async (req) => {
+    if (!limiter.hit(`nontcgsetup:${req.user.id}`, 5, 10 * 60 * 1000)) throw new HttpError(429, 'Try again in a few minutes');
+    const out = await manage.setupNonTcg({ roleId: req.body.roleId }, req.user);
+    return { ...out, ...ctx.drops.viewFor(req.user) };
+  }, admin);
+  router.post('/api/drops/:id/check', async (req) => {
+    if (!limiter.hit(`dropcheck:${req.user.id}`, 20, 10 * 60 * 1000)) throw new HttpError(429, 'You can ask for 20 checks every 10 minutes');
+    if (!ctx.drops.checkNow(req.params.id, req.user)) throw new HttpError(404, 'That drop watch no longer exists');
+    return { ok: true };
+  }, member);
+  router.delete('/api/drops/:id', async (req) => {
+    if (!ctx.drops.remove(req.params.id, req.user)) throw new HttpError(404, 'That drop watch no longer exists');
+    return ctx.drops.viewFor(req.user);
+  }, member);
 
   router.post('/api/monitor/routes/:id/test', async (req) => {
     if (!limiter.hit(`rtest:${req.user.id}`, 10, 10 * 60 * 1000)) throw new HttpError(429, 'Try again in a few minutes');
