@@ -1,7 +1,9 @@
 // Mugibot — runs only on your Mugibot dashboard (the server in config.js).
 // Lets the dashboard see that the extension is installed, which account it's
 // connected to and whether a card is saved (brand and last 4 digits only),
-// connect it with one click, and open the extension's card settings.
+// connect it with one click, and open the extension's card settings. And (from
+// 1.20) hands the extension the dashboard's restore key: the key, kept in this
+// browser, that locks the copy of your card your account keeps for updates.
 
 (() => {
   'use strict';
@@ -47,6 +49,7 @@
     else if (d.type === 'checkNow') reply = await ask({ type: 'checkNow' });
     else if (d.type === 'checkLogins') reply = await ask({ type: 'checkLogins' });
     else if (d.type === 'acoListen') reply = await ask({ type: 'acoListen' });
+    else if (d.type === 'cardKey') reply = await ask({ type: 'cardKey', key: d.key || null, has: typeof d.has === 'boolean' ? d.has : undefined, off: !!d.off, host: location.host });
     else return;
     window.postMessage({ source: 'mugibot-ext', type: d.type, id: d.id, reply }, location.origin);
   });

@@ -235,9 +235,10 @@
 
   /** The card is in — every box of it: on the page, or in the payment provider's boxes (up to 15 s for those). */
   async function cardIn() {
-    for (let i = 0; i < 15; i++) {
+    // (Looked at four times a second: the final button is pressed the moment the card's in.)
+    for (let i = 0; i < 60; i++) {
       if (await cardReady(true)) return true;
-      await MGBFlows.wait(1000);
+      await MGBFlows.wait(250);
     }
     return false;
   }

@@ -138,9 +138,11 @@ test('⚡ Buy without the extension still opens the product (with a one-time cod
   await tab.close();
 });
 
-test('Checkout → Delivery & card: several addresses, a default, validated; the card stays in the extension', async () => {
-  await page.click('a[data-tab="aco"]');
+test('Setup → Delivery & card: several addresses, a default, validated; the card stays in the extension', async () => {
+  await page.click('a[data-tab="setup"]');
   await page.waitForSelector('#p-list fieldset.profile');
+  // (On Setup now, after the extension's parts: its row has a chip for it.)
+  assert.equal(await page.isVisible('.jump[data-for="setup"] button:has-text("Delivery & card")'), true);
   await page.fill('#p-0-label', 'Home');
   await page.fill('#p-0-firstName', 'Jamie');
   await page.fill('#p-0-address1', '1 George St');
@@ -715,27 +717,39 @@ test('admin console: members and memberships, not personal details; SKU totals a
   if (shots) await page.screenshot({ path: path.join(shots, 'admin.png'), fullPage: true });
 });
 
-test('Auto-checkout tab: switched on only with the agreement; limits; arming needs a max price; every attempt shows up with why', async () => {
+test('Auto-checkout: switched on only with the agreement; limits; arming (on the Drops page\'s 🤖 Armed list) needs a max price, each item\'s checks say what it needs; every attempt shows up with why', async () => {
   const owner = env.app.repo.userByUsername('owner');
   // More than a page of items (10 to a page).
   for (let i = 0; i < 6; i += 1) env.app.repo.addItem(owner.id, { store: 'kmart', sku: `4390000${i}`, name: `Extra box ${i + 1}`, url: `https://www.kmart.com.au/product/extra-box-${i + 1}-4390000${i}/`, price: 30, maxPrice: null, quantity: 1, profileId: null, monitor: true, announce: false, aco: false });
   const total = env.app.repo.listItems(owner.id).length;
   assert.ok(total > 10, `${total} items`);
-  await page.goto(`${env.url}/app#aco`);
-  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-items tr.aco-item');
-  // A table of 10, and pages.
-  assert.equal(await page.locator('#aco-items tr.aco-item').count(), 10);
+  // The Armed list: on the Drops page, next to My watchlist.
+  await page.goto(`${env.url}/app#armed`);
+  await page.waitForSelector('[data-panel="monitor"]:not([hidden]) #pp-armed:not([hidden]) #aco-items li.ar-row');
+  assert.equal(await page.getAttribute('#pt-armed', 'aria-selected'), 'true');
+  // A list of 10, and pages.
+  assert.equal(await page.locator('#aco-items li.ar-row').count(), 10);
   assert.match(await page.textContent('#aco-pager'), new RegExp(`1–10 of ${total}`));
   await page.click('#aco-pager button[aria-label="Next page"]');
-  assert.equal(await page.locator('#aco-items tr.aco-item').count(), total - 10);
+  assert.equal(await page.locator('#aco-items li.ar-row').count(), total - 10);
   assert.match(await page.textContent('#aco-items'), /Extra box 6/);
   await page.click('#aco-pager button[aria-label="Armed items page 1"]');
   assert.equal(await page.getAttribute('#aco-pager button[aria-label="Armed items page 1"]', 'aria-current'), 'page');
-  // Trigger ACO needs Auto-checkout switched on.
-  assert.equal(await page.isDisabled('#aco-items tr.aco-item >> nth=0 >> .aco-test'), true);
+  // Each item's checks, in the same order on every row: Bag, Sign-in, Card, Address, Browser.
+  const first = page.locator('#aco-items li.ar-row').first();
+  assert.deepEqual(await first.locator('.ck .lb').allTextContents(), ['Bag', 'Sign-in', 'Card', 'Address', 'Browser']);
+  const lefts = await page.$$eval('#aco-items li.ar-row', (rows) => rows.map((r) => [...r.querySelectorAll('.ck')].map((c) => Math.round(c.getBoundingClientRect().left))));
+  assert.ok(lefts.every((l) => JSON.stringify(l) === JSON.stringify(lefts[0])), `the checks line up row to row: ${JSON.stringify(lefts.slice(0, 3))}`);
+  const acts = await page.$$eval('#aco-items li.ar-row .aco-test', (bs) => bs.map((b) => Math.round(b.getBoundingClientRect().left)));
+  assert.ok(acts.every((x) => x === acts[0]), 'the buttons line up in one column');
+  // Trigger ACO needs Auto-checkout switched on — and it says so at the top.
+  assert.equal(await page.isDisabled('#aco-items li.ar-row >> nth=0 >> .aco-test'), true);
+  assert.match(await page.textContent('#ar-state'), /Auto-checkout is off/);
+  // The switch (on the Checkout page) asks for the agreement first.
+  await page.goto(`${env.url}/app#aco`);
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-enabled');
   assert.match(await page.textContent('#aco-state'), /^Off$/);
   assert.match(await page.textContent('#aco-runs'), /Nothing yet/);
-  // The switch asks for the agreement first.
   await page.click('#aco-enabled');
   await page.waitForFunction(() => /agree first/.test(document.querySelector('#aco-msg').textContent));
   assert.equal(env.app.aco.settings(owner.id).enabled, false);
@@ -754,41 +768,56 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   const s = env.app.aco.settings(owner.id);
   assert.deepEqual([s.mode, s.maxOrder, s.perDay], ['fill', 250, 3]);
   assert.match(await page.textContent('#aco-state'), /stops at the final button/);
-  // Ready to check out? No extension in this browser.
+  // Ready to check out? No extension in this browser — and nothing armed yet (the Armed list says what each needs).
   await page.waitForFunction(() => /Install the extension/.test(document.querySelector('#aco-checks').textContent));
+  assert.match(await page.textContent('#aco-checks'), /Nothing armed yet/);
+  assert.equal(await page.isVisible('.jump[data-for="aco"] a.jump-link[href="#armed"]'), true, 'the Checkout page\'s row goes to the Armed list');
 
-  // Arming: not without a max price.
-  const day = page.locator('#aco-items tr.aco-item', { hasText: 'Day UPC' });
+  // Arming, on the Armed list: not without a max price.
+  await page.goto(`${env.url}/app#armed`);
+  await page.waitForSelector('#pp-armed:not([hidden]) #aco-items li.ar-row');
+  assert.match(await page.textContent('#ar-state'), /Auto-checkout is on — it stops at the final button/);
+  const day = page.locator('#aco-items li.ar-row', { hasText: 'Day UPC' });
   await day.locator('.sn-sw').click();
   await page.waitForFunction(() => /Set a max price/.test(document.querySelector('#toasts')?.textContent || ''));
   const dayItem = env.app.db.get("SELECT * FROM items WHERE user_id = :u AND name = 'Day UPC'", { u: owner.id });
   assert.equal(dayItem.aco, 0);
   await day.locator('input.aco-max').fill('380');
   await day.locator('.sn-sw').click();
-  await page.waitForSelector('#aco-items tr.aco-item.armed');
-  assert.match(await page.textContent('#aco-armed-count'), /1 armed/);
+  await page.waitForSelector('#aco-items li.ar-row.armed');
+  assert.equal(await page.textContent('#aco-armed-count'), '1');
+  // Armed, but not ready: no browser with the extension, so it says what to fix — under the item and at the top.
+  await page.waitForFunction(() => /To fix:/.test(document.querySelector('#aco-items li.ar-row.armed').textContent));
+  const armedRow = page.locator('#aco-items li.ar-row.armed');
+  assert.match(await armedRow.textContent(), /Armed · \d to fix/);
+  assert.match(await armedRow.locator('[data-check="browser"]').getAttribute('title'), /No browser connected/);
+  assert.equal(await armedRow.locator('[data-check="browser"]').getAttribute('class'), 'ck no');
+  assert.match(await page.textContent('#ar-state'), /1 armed, 0 ready/);
   // Armed only.
   await page.selectOption('#aco-show', 'armed');
-  assert.equal(await page.locator('#aco-items tr.aco-item').count(), 1);
+  assert.equal(await page.locator('#aco-items li.ar-row').count(), 1);
   assert.equal(await page.isHidden('#aco-pager'), true, 'one page');
   await page.selectOption('#aco-show', '');
   assert.equal(env.app.db.get('SELECT aco, max_price FROM items WHERE id = :id', { id: dayItem.id }).max_price, 380);
 
   // It drops at $360, over the $250 an order limit: kept as "didn't start", with why — live.
+  await page.goto(`${env.url}/app#aco`);
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-runs');
   await env.app.monitor.alertRestock(env.app.db.get('SELECT * FROM items WHERE id = :id', { id: dayItem.id }), { status: 'in_stock', price: 360, source: 'sweep' });
   await page.waitForSelector('#aco-runs li.aco-run.st-skipped');
   assert.match(await page.textContent('#aco-runs li.aco-run.st-skipped'), /Day UPC.*Kmart · \$360\.00 · seen by the live monitor.*Skipped.*\$360\.00 is over your limit of \$250\.00 an order/s);
-  // An order placed for another item (as the extension reports it).
+  // An order placed for another item (as the extension reports it): how fast it was, too.
   const etb = env.app.repo.getItem(owner.id, env.app.db.get("SELECT id FROM items WHERE user_id = :u AND name = 'Elite Trainer Box'", { u: owner.id }).id);
   const run = env.app.aco.create({ userId: owner.id, item: etb, price: 100, mode: 'place', trigger: 'sweep' }, 'queued', '', 'Dropped at Kmart for $100.00');
   env.app.db.run("UPDATE aco_runs SET status = 'started' WHERE id = :id", { id: run.id });
   await env.app.aco.report(owner.id, run.id, { status: 'placing', total: 110, message: 'Pressing "Checkout securely" — total $110.00' });
   await env.app.aco.report(owner.id, run.id, { status: 'placed', message: 'Order confirmed at Kmart' });
   await page.waitForSelector('#aco-runs li.aco-run.st-placed');
-  assert.match(await page.textContent('#aco-runs li.aco-run.st-placed'), /Elite Trainer Box.*\$110\.00 total.*Order placed.*Order confirmed at Kmart/s);
+  assert.match(await page.textContent('#aco-runs li.aco-run.st-placed'), /Elite Trainer Box.*\$110\.00 total.*⏱ \d+ ms drop to order.*Order placed.*Order confirmed at Kmart/s);
   await page.click('#aco-runs li.aco-run.st-placed summary');
-  assert.match(await page.textContent('#aco-runs li.aco-run.st-placed .aco-steps'), /Final button pressed — Pressing "Checkout securely".*Order placed — Order confirmed at Kmart/s);
-  assert.match(await page.textContent('#aco-stats'), /Orders placed\s*1\s*\$110\.00 spent/);
+  assert.match(await page.textContent('#aco-runs li.aco-run.st-placed .aco-steps'), /Final button pressed — Pressing "Checkout securely".*\+\d+ ms\s*Order placed — Order confirmed at Kmart/s);
+  await page.waitForFunction(() => /typically/.test(document.querySelector('#aco-stats').textContent));
+  assert.match(await page.textContent('#aco-stats'), /Orders placed\s*1\s*\$110\.00 spent · typically \d+ ms from drop to order/);
   // The filter.
   await page.selectOption('#aco-filter', 'placed');
   assert.equal(await page.locator('#aco-runs li.aco-run').count(), 1);
@@ -799,10 +828,12 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   assert.match(await page.textContent('#aco-runs'), /Nothing here/);
   await page.selectOption('#aco-filter', '');
 
-  // Trigger ACO: a test run now, as if it had dropped — it says what it will do first. (A browser
-  // with the extension is connected to the account, to pick it up.)
+  // Trigger ACO (the Armed list): a test run now, as if it had dropped — it says what it will do first. (A
+  // browser with the extension is connected to the account, to pick it up.)
   const { device } = env.app.repo.addDevice(owner.id, 'Chrome on Mac', '1.11.0');
-  const ko = page.locator('#aco-items tr.aco-item', { hasText: 'Knock Out Collection' });
+  await page.goto(`${env.url}/app#armed`);
+  await page.waitForSelector('#pp-armed:not([hidden]) #aco-items li.ar-row');
+  const ko = page.locator('#aco-items li.ar-row', { hasText: 'Knock Out Collection' });
   await ko.locator('input.aco-max').fill('30');
   page.once('dialog', (d) => { assert.match(d.message(), /Trigger ACO for Knock Out Collection\?.*checks out as if it had just dropped.*stops at the final button/s); d.accept(); });
   await ko.locator('.aco-test').click();
@@ -810,24 +841,31 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   const koItem = env.app.db.get("SELECT * FROM items WHERE user_id = :u AND name = 'Knock Out Collection'", { u: owner.id });
   assert.equal(koItem.max_price, 30, 'the max price typed in was saved first');
   assert.equal(koItem.aco, 0, "a test doesn't arm it");
-  await page.waitForFunction(() => /test run \(Trigger ACO\)/.test(document.querySelector('#aco-runs').textContent));
+  await page.waitForFunction(() => /test run \(Trigger ACO\)/.test(document.querySelector('#aco-items li.ar-row:not(.armed) .aco-last')?.textContent + document.querySelector('#aco-runs').textContent));
   assert.match(await page.textContent('#aco-runs li.aco-run.active'), /Knock Out Collection.*test run \(Trigger ACO\).*Waiting for your browser/s);
   // …and when it can't start, why: Day UPC at $360 is over the $250 an order limit.
+  const dayNow = page.locator('#aco-items li.ar-row', { hasText: 'Day UPC' });
   page.once('dialog', (d) => d.accept());
-  await day.locator('.aco-test').click();
+  await dayNow.locator('.aco-test').click();
   // (Its own words: an earlier "didn't start" — this test's Day UPC drop, above — can still be showing.)
   await page.waitForFunction(() => /over your limit of \$250\.00 an order/.test(document.querySelector('#toasts')?.textContent || ''));
   // A test run already going: not twice.
   page.once('dialog', (d) => d.accept());
-  await ko.locator('.aco-test').click();
+  await page.locator('#aco-items li.ar-row', { hasText: 'Knock Out Collection' }).locator('.aco-test').click();
   await page.waitForFunction(() => /already checking out/.test(document.querySelector('#toasts')?.textContent || ''));
+  // Get ready: the bags at the stores with something armed, emptied in the checkout browser.
+  page.once('dialog', (d) => { assert.match(d.message(), /Empty your bag at Kmart in your checkout browser\?/); d.accept(); });
+  await page.click('#ar-ready');
+  await page.waitForFunction(() => /emptying your Kmart bag|update it there/i.test(document.querySelector('#ar-msg').textContent));
   env.app.repo.deleteDevice(owner.id, device.id);
-  // On the watchlist (the Monitor page), an armed item says so.
-  await page.click('a[data-tab="monitor"]');
+  // On the watchlist (the Drops page), an armed item says so.
   await page.click('#pt-watch');
   await page.waitForSelector('#w-list li[data-id]');
   assert.match(await page.textContent(`#w-list li[data-id="${dayItem.id}"]`), /Armed/);
   if (shots) {
+    await page.goto(`${env.url}/app#armed`);
+    await page.waitForSelector('#aco-items li.ar-row');
+    await page.screenshot({ path: path.join(shots, 'armed.png'), fullPage: true });
     await page.goto(`${env.url}/app#aco`);
     await page.waitForSelector('#aco-runs li.aco-run');
     await page.screenshot({ path: path.join(shots, 'auto-checkout.png'), fullPage: true });
@@ -1197,12 +1235,33 @@ test('Auto-checkout run history in pages; the card backup on Checkout details', 
   assert.match(await page.textContent('#card-backup'), /Visa •••• 4242 · expires 12\/31 is backed up in your account, locked with your card passphrase/);
   page.once('dialog', (d) => d.accept());
   await page.click('#card-unbackup');
-  await page.waitForFunction(() => /Not backed up/.test(document.querySelector('#card-backup').textContent));
+  await page.waitForFunction(() => /For another browser or computer/.test(document.querySelector('#card-backup').textContent));
   assert.equal(env.app.repo.getData(owner.id, 'cardBackup', null), null);
+  // Your card through extension updates: on by default — a copy kept for this browser shows, can be
+  // deleted, and the switch turns it off (the copies deleted, and this browser's key with them).
+  await page.waitForSelector('#card-restore #card-restore-on[aria-checked="true"]');
+  assert.match(await page.textContent('#card-restore'), /Keep my card through extension updates — on/);
+  assert.match(await page.textContent('#card-restore'), /Mugibot never has the key, so it can't open the copy/);
+  const keyId = await page.evaluate((u) => { const k = { id: 'browserKeyId_AAAAAAAAAA', k: btoa(String.fromCharCode(...new Uint8Array(32))) }; localStorage.setItem(`mgb-card-key:${u}`, JSON.stringify(k)); return k.id; }, owner.id);
+  env.app.repo.setData(owner.id, 'cardRestore', { off: false, copies: [{ id: keyId, v: 1, iv: 'AAAAAAAAAAAAAAAA', ct: 'A'.repeat(48), last4: '4444', brand: 'Mastercard', expMonth: '01', expYear: '2030', hasCvc: true, host: 'localhost', savedAt: Date.now() }] });
+  await page.reload();
+  await page.waitForFunction(() => /Mastercard •••• 4444 · expires 01\/30 comes back by itself after an extension update in this browser/.test(document.querySelector('#card-restore').textContent));
+  assert.match(await page.textContent('#card-restore'), /1 copy kept/);
+  page.once('dialog', (d) => d.accept());
+  await page.click('#card-restore-delete');
+  await waitFor(() => (env.app.repo.getData(owner.id, 'cardRestore', null) || {}).copies?.length === 0, { message: 'the copies deleted' });
+  await page.click('#card-restore-on');
+  await page.waitForSelector('#card-restore #card-restore-on[aria-checked="false"]');
+  assert.equal(env.app.repo.getData(owner.id, 'cardRestore', null).off, true);
+  assert.equal(await page.evaluate((u) => localStorage.getItem(`mgb-card-key:${u}`), owner.id), null, "this browser's key is gone too");
+  assert.match(await page.textContent('#card-restore'), /off/);
+  await page.click('#card-restore-on');
+  await page.waitForSelector('#card-restore #card-restore-on[aria-checked="true"]');
+  assert.equal(env.app.repo.getData(owner.id, 'cardRestore', null).off, false);
   env.app.db.run("DELETE FROM aco_runs WHERE id LIKE 'acr_page%'");
 });
 
-test('four pages, not seven: Drops, Checkout (Auto-checkout and your delivery details and card), Setup (the extension and Discord), Account (membership and your account) — every old address still lands on its part; your loadout on Drops; on a phone, a tab bar at the bottom', async () => {
+test('four pages, not seven: Drops (with your armed items), Checkout (Auto-checkout), Setup (the extension, your delivery details and card, and Discord), Account (membership and your account) — every old address still lands on its part; your loadout on Drops; on a phone, a tab bar at the bottom', async () => {
   await page.goto(`${env.url}/app#monitor`);
   assert.deepEqual(await page.$$eval('.side a', (as) => as.map((a) => [a.dataset.tab, a.querySelector('.lb').textContent])),
     [['monitor', 'Drops'], ['aco', 'Checkout'], ['setup', 'Setup'], ['account', 'Account']]);
@@ -1212,9 +1271,10 @@ test('four pages, not seven: Drops, Checkout (Auto-checkout and your delivery de
   assert.match(await page.textContent('#loadout'), /Auto-checkout (on|off)/);
   // Each page, the parts it's made of; the old addresses open the page their part is on now, there.
   const shown = () => page.$$eval('[data-panel]', (ps) => ps.filter((p) => !p.hidden).map((p) => p.dataset.panel));
-  for (const [hash, page_, panels] of [['aco', 'aco', ['aco', 'checkout']], ['checkout', 'aco', ['aco', 'checkout']], ['setup', 'setup', ['extension', 'discord']],
-    ['extension', 'setup', ['extension', 'discord']], ['discord', 'setup', ['extension', 'discord']], ['update', 'setup', ['extension', 'discord']],
-    ['account', 'account', ['membership', 'account']], ['membership', 'account', ['membership', 'account']], ['watch', 'monitor', ['monitor']]]) {
+  const setup = ['extension', 'checkout', 'discord'];
+  for (const [hash, page_, panels] of [['aco', 'aco', ['aco']], ['checkout', 'setup', setup], ['setup', 'setup', setup],
+    ['extension', 'setup', setup], ['discord', 'setup', setup], ['update', 'setup', setup],
+    ['account', 'account', ['membership', 'account']], ['membership', 'account', ['membership', 'account']], ['watch', 'monitor', ['monitor']], ['armed', 'monitor', ['monitor']]]) {
     await page.goto(`${env.url}/app#${hash}`);
     await page.waitForFunction((want) => document.querySelector('.side a.active')?.dataset.tab === want, page_);
     assert.deepEqual(await shown(), panels, `#${hash}`);
@@ -1224,8 +1284,13 @@ test('four pages, not seven: Drops, Checkout (Auto-checkout and your delivery de
   // #discord lands on Discord, part way down Setup; the row's chips go to each part.
   await page.goto(`${env.url}/app#discord`);
   await page.waitForFunction(() => window.scrollY > 200);
+  // #checkout (Delivery & card) lands on it, part way down Setup — after the extension's parts.
+  await page.goto(`${env.url}/app#checkout`);
+  await page.waitForFunction(() => window.scrollY > 200 && Math.abs(document.querySelector('[data-panel="checkout"]').getBoundingClientRect().top) < 200);
+  assert.deepEqual(await page.$$eval('.jump[data-for="setup"] button', (bs) => bs.map((b) => b.textContent)), ['🧩 Extension', '🔑 Store sign-ins', '💻 Browsers', '📦 Delivery & card', '💬 Discord & pings']);
   await page.goto(`${env.url}/app#aco`);
-  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-items-card');
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #bags-card');
+  assert.equal(await page.locator('[data-panel="aco"] #aco-items').count(), 0, 'the armed items are on the Drops page now');
   await page.click('.jump[data-for="aco"] [data-jump="#bags-card"]');
   await page.waitForFunction(() => Math.abs(document.querySelector('#bags-card').getBoundingClientRect().top - 120) < 80);
   // A phone: the four pages along the bottom, in reach of a thumb.
@@ -1238,6 +1303,35 @@ test('four pages, not seven: Drops, Checkout (Auto-checkout and your delivery de
   await phone.click('.side a[data-tab="setup"]');
   await phone.waitForSelector('[data-panel="extension"]:not([hidden])');
   await phone.close();
+});
+
+test('Tracked products: the real total, past 600 (it used to stop there), a page at a time — and the last page has the last ones', async () => {
+  const now = Date.now();
+  const { catalog } = env.app;
+  for (let i = 0; i < 640; i += 1) {
+    const p = catalog.upsertProduct({ store: 'demo-kmart', sku: `640${String(i).padStart(4, '0')}`, name: `Pokémon TCG Count Test ${String(i).padStart(3, '0')}` });
+    catalog.updateProduct(p.id, { status: 'in_stock', sweep_seen_at: now, sweep_first_at: now - i * 1000 });
+  }
+  try {
+    const total = (await (await fetch(`${env.url}/api/monitor/products?page=1&size=25`, { headers: { cookie: (await page.context().cookies(env.url)).map((c) => `${c.name}=${c.value}`).join('; ') } })).json()).total;
+    assert.ok(total >= 640, `${total} tracked`);
+    await page.goto(`${env.url}/app#monitor`);
+    await page.click('#pt-tracked');
+    await page.waitForFunction((n) => document.querySelector('#m-count').textContent.replace(/\D/g, '') === String(n), total);
+    assert.equal((await page.textContent('#m-count')).replace(/\D/g, ''), String(total), 'not 600: every one');
+    assert.match(await page.textContent('#m-pager'), new RegExp(`1–25 of ${total.toLocaleString('en-US')}|1–25 of ${total}`));
+    // Searching narrows it, counted by the server.
+    await page.fill('#m-q', 'Count Test');
+    await page.waitForFunction(() => document.querySelector('#m-count').textContent.replace(/\D/g, '') === '640');
+    const pages = Math.ceil(640 / 25);
+    await page.click(`#m-pager button[aria-label="Tracked products page ${pages}"]`);
+    await page.waitForFunction((n) => new RegExp(`${(n - 1) * 25 + 1}–640 of 640`).test(document.querySelector('#m-pager').textContent), pages);
+    assert.equal(await page.locator('#m-products li.product').count(), 640 - (pages - 1) * 25, 'the last page: the last ones');
+    assert.match(await page.textContent('#m-products'), /Count Test/);
+    await page.fill('#m-q', '');
+  } finally {
+    env.app.db.run("DELETE FROM products WHERE name LIKE 'Pokémon TCG Count Test %'");
+  }
 });
 
 test('phone-sized screens: no sideways scrolling', async () => {

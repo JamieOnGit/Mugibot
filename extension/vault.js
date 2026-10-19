@@ -17,7 +17,16 @@
    made here. Mugibot keeps the locked copy and can't open it. A new install
    of the extension — or another browser — restores the card with that
    passphrase. Forget it, and the backup can't be opened by anyone: save the
-   card again. */
+   card again.
+
+   A copy for reinstalls (from 1.20): the card locked with a key your Mugibot
+   dashboard keeps in this browser (its own storage, which outlives the
+   extension). Mugibot keeps the locked copy and never has the key, so it can't
+   open it by itself. Update the extension — even remove it and load a new
+   copy — and press Connect this browser: the dashboard hands the new copy its
+   key, and your card is back, with no passphrase. Clearing the dashboard's
+   site data in this browser loses the key (the card stays saved in the
+   extension: it makes a new copy). */
 
 globalThis.MGBVault = (function () {
   'use strict';
@@ -41,6 +50,7 @@ globalThis.MGBVault = (function () {
   var oldOpenKey = function (userId) { return 'card:' + userId; }; // an old card, unlocked before the update
   var aad = function (userId) { return enc.encode('mugibot-card:' + userId); };
   var backupAad = function (userId) { return enc.encode('mugibot-card-backup:' + userId); };
+  var restoreAad = function (userId, keyId) { return enc.encode('mugibot-card-restore:' + userId + ':' + keyId); };
 
   // --- this browser's own key ------------------------------------------------
   function openDb() {
@@ -218,6 +228,41 @@ globalThis.MGBVault = (function () {
     return status(userId);
   }
 
+  // --- the copy for reinstalls (from 1.20) ---------------------------------------
+  /** A restore key from the dashboard — { id, k }: its name, and 32 random bytes (base64). Throws if it isn't one. */
+  async function restoreKey(k) {
+    var raw = null;
+    try { raw = k && /^[A-Za-z0-9_-]{16,40}$/.test(String(k.id || '')) && typeof k.k === 'string' ? unb64(k.k) : null; } catch (e) { raw = null; }
+    if (!raw || raw.length !== 32) throw new Error('That isn\'t a restore key');
+    return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  }
+
+  /** The card saved here, locked with the dashboard's restore key, for your account — or null (no card ready here). */
+  async function lockForRestore(userId, k) {
+    var c = await card(userId);
+    var rec = await record(userId);
+    if (!c || !rec) return null;
+    var key = await restoreKey(k);
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: restoreAad(userId, k.id) }, key, enc.encode(JSON.stringify(c)));
+    return { v: 1, iv: b64(iv), ct: b64(ct), last4: rec.last4, brand: rec.brand, expMonth: rec.expMonth, expYear: rec.expYear, hasCvc: !!rec.hasCvc };
+  }
+
+  /** Your card from its copy for reinstalls, kept in this browser from now on. A copy this key doesn't open: an Error. */
+  async function unlockRestore(userId, copy, k) {
+    if (!userId) throw new Error('Connect the extension to your account first');
+    var c;
+    try {
+      var key = await restoreKey(k);
+      var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(copy.iv), additionalData: restoreAad(userId, k.id) }, key, unb64(copy.ct));
+      c = JSON.parse(dec.decode(pt));
+    } catch (e) {
+      throw new Error('The copy of your card couldn\'t be opened with this browser\'s key');
+    }
+    await store(userId, normalizeCard({ number: c.number, name: c.name, expMonth: c.expMonth, expYear: c.expYear, cvc: c.cvc }));
+    return status(userId);
+  }
+
   async function remove(userId) {
     await chrome.storage.session.remove(oldOpenKey(userId));
     await chrome.storage.local.remove(vaultKey(userId));
@@ -243,8 +288,12 @@ globalThis.MGBVault = (function () {
       needsPassphrase: !ready && rec.v !== 2,
       unreadable: !ready && rec.v === 2,
       last4: rec.last4, brand: rec.brand, expMonth: rec.expMonth, expYear: rec.expYear, hasCvc: rec.hasCvc,
+      savedAt: rec.savedAt || null,
     };
   }
 
-  return { save: save, upgrade: upgrade, remove: remove, card: card, status: status, normalizeCard: normalizeCard, lock: lock, unlock: unlock };
+  return {
+    save: save, upgrade: upgrade, remove: remove, card: card, status: status, normalizeCard: normalizeCard, lock: lock, unlock: unlock,
+    lockForRestore: lockForRestore, unlockRestore: unlockRestore,
+  };
 })();

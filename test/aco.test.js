@@ -468,3 +468,64 @@ test("several at once never go over the day's limits together: runs still checki
   for (const it of items) await ash.del(`/api/items/${it.id}`);
   await ash.put('/api/aco', { perDay: 10, spendPerDay: 5000 });
 });
+
+test('a drop several members have armed: every member\'s run is made before anyone\'s alerts go out (the last one in doesn\'t wait on the others\' DMs)', async () => {
+  const url = 'https://www.kmart.com.au/product/pokemon-tcg-scarlet-and-violet-prismatic-evolutions-elite-trainer-box-43818648/';
+  const members = [];
+  for (const name of ['drop-brock', 'drop-gary', 'drop-dawn']) {
+    const c = await Client.signup(env.url, name);
+    makeMember(env, c);
+    assert.equal((await c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 400, perDay: 5, spendPerDay: 2000 })).status, 200);
+    env.app.repo.addDevice(c.user.id, 'Chrome on Mac', '1.19.0');
+    for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+    const added = await c.post('/api/items', { url, name: 'Prismatic ETB', maxPrice: 120, aco: name !== 'drop-dawn' });
+    assert.equal(added.status, 200, added.text);
+    members.push({ c, item: added.body });
+  }
+  const rows = members.map((m) => itemRow(m.item.id));
+  const runsNow = () => env.app.db.get(`SELECT COUNT(*) AS n FROM aco_runs WHERE item_id IN (${rows.map((r) => `'${r.id}'`).join(',')})`).n;
+  // (The alerts are slow to send — Discord taking its time, say: what each finds already made.)
+  const notifier = env.app.notifier;
+  const itemAlert = notifier.itemAlert.bind(notifier);
+  const notify = notifier.notify.bind(notifier);
+  const at = [];
+  notifier.itemAlert = async (...a) => { at.push(runsNow()); await new Promise((r) => setTimeout(r, 40)); return itemAlert(...a); };
+  notifier.notify = async (...a) => { if (a[1] && a[1].type === 'aco') at.push(runsNow()); await new Promise((r) => setTimeout(r, 40)); return notify(...a); };
+  try {
+    // Dawn's (not armed) comes first in the list: armed ones go first anyway.
+    await env.app.monitor.applyAll([rows[2], rows[0], rows[1]], { status: 'in_stock', title: 'Prismatic ETB', price: 99, error: '' }, 'sweep');
+  } finally {
+    notifier.itemAlert = itemAlert;
+    notifier.notify = notify;
+  }
+  assert.equal(runsNow(), 2, 'a run for each armed member');
+  assert.ok(at.length >= 5, 'everyone\'s alerts went out: 3 restock DMs and 2 "Auto-checkout started"');
+  assert.ok(at.every((n) => n === 2), `every alert went out with both runs made already (${at.join(', ')})`);
+  for (const m of members) {
+    assert.equal(itemRow(m.item.id).status, 'in_stock');
+    assert.ok((await events(m.c)).some((e) => /In stock|🟢/.test(e.message)), 'and each member heard');
+  }
+});
+
+test('a brand-new listing\'s only option (the search said so) takes its run straight to the store\'s add-to-cart link — before the catalogue knows the product', async () => {
+  const c = await Client.signup(env.url, 'variant-vic');
+  makeMember(env, c);
+  assert.equal((await c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 400, perDay: 5, spendPerDay: 2000 })).status, 200);
+  const device = await Device.pair(env.url, c);
+  for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  const url = 'https://www.gamesworld.com.au/product/one-piece-op-15-booster-box/';
+  const added = await c.post('/api/items', { url, name: 'OP-15 Booster Box', maxPrice: 250, aco: true });
+  assert.equal(added.status, 200, added.text);
+  assert.equal(env.app.catalog.productFor('gamesworld', added.body.sku), null, 'not in the catalogue yet');
+  await env.app.monitor.applyAll([itemRow(added.body.id)], { status: 'in_stock', title: 'OP-15 Booster Box', price: 199, error: '', variantId: '424242' }, 'sweep');
+  const next = await device.call('GET', '/api/ext/aco/next');
+  assert.equal(next.status, 200, next.text);
+  assert.equal(next.body.runs.length, 1);
+  assert.match(next.body.runs[0].url, /^https:\/\/www\.gamesworld\.com\.au\/checkout\/\?add-to-cart=424242&quantity=1#mgb-go=/, 'straight to its add-to-cart link');
+  // Without one (an item whose listing has options): its product page, as before.
+  const other = await c.post('/api/items', { url: 'https://www.gamesworld.com.au/product/one-piece-op-15-booster-case/', name: 'OP-15 Case', maxPrice: 250, aco: true });
+  await env.app.monitor.applyAll([itemRow(other.body.id)], { status: 'in_stock', title: 'OP-15 Case', price: 199, error: '', variantId: null }, 'sweep');
+  const next2 = await device.call('GET', '/api/ext/aco/next');
+  assert.equal(next2.body.runs.length, 1);
+  assert.match(next2.body.runs[0].url, /^https:\/\/www\.gamesworld\.com\.au\/product\/one-piece-op-15-booster-case\/#mgb-go=/);
+});

@@ -1270,19 +1270,30 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       </script>`, { head: ldFor(p, 'gamesmen'), bagCount: bagCount('gamesmen') });
   }
 
-  // Its search page (/catalogsearch/result/?q=…): Luma's tiles — the name linked, the price box, "Add to
-  // Cart" (or "Pre-order"), or "Out of stock".
+  // Its search page (/catalogsearch/result/?q=…): The Gamesmen's own tiles (its Hyvä theme, copied from
+  // its real page, Oct 2026) — a div[data-ga-type="product-list-item"] each, the link round the whole
+  // tile, the name in .product-card-title, the price shown (its data-price leaves GST out), an old one
+  // struck through, "Add to Cart" or "Pre-Order". Like the real one, its data-dimension10 says "Out of
+  // stock" whatever the stock, and every button's data-name/data-price are another product's.
   function magentoSearchPage(q) {
     const hits = searchHits('gamesmen', q);
-    const tile = (x) => {
+    const tile = (x, i) => {
       const orderable = x.status === 'in_stock' || x.status === 'preorder';
-      return `<li class="item product product-item"><div class="product-item-info" data-container="product-grid">
-        <a href="${pathFor('gamesmen', x)}" class="product photo product-item-photo"><img class="product-image-photo" src="${imagePath('gamesmen', x)}" alt="${esc(x.name)}" width="240"></a>
-        <div class="product details product-item-details"><strong class="product name product-item-name"><a class="product-item-link" href="${pathFor('gamesmen', x)}">${esc(x.name)}</a></strong>
-          <div class="price-box price-final_price" data-role="priceBox" data-product-id="${x.id}"><span class="price-container"><span data-price-amount="${x.price}" data-price-type="finalPrice" class="price-wrapper"><span class="price">$${x.price.toFixed(2)}</span></span></span></div>
-          <div class="product-item-actions"><div class="actions-primary">${orderable
-    ? `<form data-role="tocart-form" data-product-sku="${esc(x.code || '')}" action="/gamesmen/checkout/cart/add/" method="post"><button type="submit" title="${x.status === 'preorder' ? 'Pre-order' : 'Add to Cart'}" class="action tocart primary"><span>${x.status === 'preorder' ? 'Pre-order' : 'Add to Cart'}</span></button></form>`
-    : '<div class="stock unavailable"><span>Out of stock</span></div>'}</div></div></div></div></li>`;
+      const pre = x.status === 'preorder';
+      const href = `${url}${pathFor('gamesmen', x)}`;
+      return `<div data-ga-type="product-list-item"><a href="${href}" data-id="POS-${x.id}" data-name="${esc(x.name)}" data-price="${(x.price / 1.1).toFixed(2)}" data-currency="AUD" data-dimension10="Out of stock" data-event="select_item" data-position="${i + 1}">
+        <div class="flex flex-row justify-between w-full h-full p-2 bg-white rounded-lg"><div class="flex flex-col w-2/5 xl:w-1/2 p-2"><div class="relative aspect-1-1">
+          <img class="absolute w-full h-full object-contain" alt="${esc(x.name)} (Image 1)" title="${esc(x.name)}" src="${imagePath('gamesmen', x)}" width="360" height="360" loading="lazy"></div></div>
+        <div class="relative flex flex-col w-3/5 xl:w-1/2 m-2"><h3 class="text-sm font-medium product-card-title max-h-18 md:text-base">${esc(x.name)}</h3>
+          <div class="text-sm mb-2 lg:mb-4"><div>${pre ? '<span class="text-blue-500 font-medium">Pre-Order</span><p class="text-blue-500 text-xs md:text-sm">Due November 2026</p>'
+    : orderable ? '<span class="text-green-500"><span class="font-medium">Delivery</span></span> <span class="text-green-500"><span class="font-medium">In-Store</span></span>'
+      : '<span class="text-neutral-300"><span class="font-medium line-through">Delivery</span></span>'}</div></div>
+          <div><span class="text-base font-medium text-black md:text-xl mr-2">$${x.price.toFixed(2)}</span>${x.was ? `<span class="text-xs md:text-sm line-through text-gray-400 mr-2">$${x.was.toFixed(2)}</span>` : ''}</div>
+          <div class="flex flex-col flex-grow justify-end items-end py-1"><div class="flex flex-wrap justify-end items-center gap-2">${orderable
+    ? `<form method="post" class="product_addtocart_form" action="${url}/gamesmen/checkout/cart/add/uenc/aHR0cHM6Ly93d3cuZ2FtZXNtZW4uY29tLmF1/product/${x.id}/"><input name="form_key" type="hidden" value="wGWd9185HyMzbsTZ"><input type="hidden" name="product" value="${x.id}">
+              <button type="submit" title="${pre ? 'Pre-Order' : 'Add to Cart'}" class="button w-auto h-full shadow-md product-list-addtocart " data-id="POS-256394" data-name="Bandai Pokemon Meowth Quick!! Model Kit" data-price="13.59" data-dimension10="Out of stock" data-event="add_to_cart"><span>${pre ? 'Pre-Order' : 'Add to Cart'}</span></button></form>`
+    : '<span class="text-sm text-neutral-500 font-medium">Out of Stock</span>'}
+            <button type="button" data-add-label="Add to Wish List ${esc(x.name)}" title="Add to Wish List ${esc(x.name)}" class="p-0"><span class="sr-only">Add to Wish List</span></button></div></div></div></div></a></div>`;
     };
     // (searchProvider: its menu's links look like product links — /<name>, like its products — and the
     // results are drawn a moment after the page has loaded, by a search provider's own code, in its
@@ -1298,7 +1309,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <script>setTimeout(() => { document.getElementById('ku-search-results').innerHTML = ${JSON.stringify(hits.length ? `<div class="kuResults">${hits.map(card).join('')}</div>` : '<div class="kuNoResults">No results</div>')}; }, 2500);</script>`, { bagCount: bagCount('gamesmen') });
     }
     return page('gamesmen', `Search results for: '${q}'`, `<h1 class="page-title"><span class="base">Search results for: '${esc(q)}'</span></h1>${hits.length
-      ? `<div class="search results"><div class="products wrapper grid products-grid"><ol class="products list items product-items">${hits.map(tile).join('')}</ol></div></div>`
+      ? `<div class="products wrapper mode-grid products-grid"><div class="mx-auto pt-4 pb-12 grid gap-2 grid-cols-1 xl:grid-cols-2">${hits.map(tile).join('')}</div></div>`
       : '<div class="message notice"><div>Your search returned no results.</div></div>'}`, { bagCount: bagCount('gamesmen') });
   }
 

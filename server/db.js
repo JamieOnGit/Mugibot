@@ -480,6 +480,13 @@ const MIGRATIONS = [
   ALTER TABLE drop_watches ADD COLUMN channel_id TEXT NOT NULL DEFAULT '';
   ALTER TABLE drop_watches ADD COLUMN role_id TEXT NOT NULL DEFAULT '';
   `,
+  // 13 — a drop watch's find going down in price (📉, your own watch's DM — at any store or website):
+  //      when its owner was last told, and at what price (told again only when it goes lower still, or a
+  //      while later).
+  `
+  ALTER TABLE items ADD COLUMN price_alert_at INTEGER;
+  ALTER TABLE items ADD COLUMN price_alert_price REAL;
+  `,
 ];
 
 export class Db {

@@ -2,12 +2,15 @@
 // device token (from pairing) and only ever sees the account it's paired to.
 // Card details are not part of this API: they stay in the extension. (A member can keep a backup of
 // their card in their account, locked in the extension with a passphrase only they know: Mugibot
-// keeps the locked copy and can't open it — a new install restores it with that passphrase.)
+// keeps the locked copy and can't open it — a new install restores it with that passphrase. And from
+// 1.20, a copy for reinstalls: locked in the extension with a key the member's dashboard keeps in their
+// browser — Mugibot keeps the locked copy and never has the key — so a new install, once connected
+// from the dashboard, has the card back with no passphrase.)
 
 import { entitlement } from '../entitlement.js';
 import { EXTENSION_VERSION, appOrigins, storeUrl } from '../extension.js';
 import { REASONS } from '../aco.js';
-import { DEFAULT_ALERTS, HttpError, bad, cardBackup, cardBackupInfo, num, str } from '../schema.js';
+import { DEFAULT_ALERTS, HttpError, MAX_RESTORE_COPIES, RESTORE_KEY_ID, bad, cardBackup, cardBackupInfo, cardRestoreCopy, cardRestoreInfo, num, str } from '../schema.js';
 
 const EVENT_TYPES = { add: 'info', basket: 'info', step: 'info', checkout: 'success', ready: 'success', error: 'warn' };
 
@@ -74,6 +77,44 @@ export function register(router, ctx) {
     return { ok: true };
   }, { auth: 'device' });
 
+  // The card's copy for reinstalls (see the top of this file): the one locked with this browser's key.
+  router.get('/api/ext/card-restore/:id', async (req) => {
+    if (!limiter.hit(`cardrestore-get:${req.device.id}`, 60, 60 * 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const id = str(req.params.id, 40);
+    const doc = repo.getData(req.user.id, 'cardRestore', null);
+    const copy = doc && !doc.off && (doc.copies || []).find((c) => c.id === id);
+    if (!copy) throw new HttpError(404, 'No copy of your card for this browser');
+    return { copy };
+  }, { auth: 'device' });
+  router.put('/api/ext/card-restore/:id', async (req) => {
+    if (!limiter.hit(`cardrestore:${req.user.id}`, 30, 60 * 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const id = str(req.params.id, 40);
+    if (!RESTORE_KEY_ID.test(id)) throw bad("That isn't a browser's key");
+    const doc = repo.getData(req.user.id, 'cardRestore', null) || { off: false, copies: [] };
+    if (doc.off) throw new HttpError(409, 'Keeping your card for extension updates is switched off (Setup → Delivery & card)');
+    const copy = { id, ...cardRestoreCopy(req.body, repo.now()) };
+    const before = (doc.copies || []).find((c) => c.id === id);
+    const copies = [copy, ...(doc.copies || []).filter((c) => c.id !== id)].slice(0, MAX_RESTORE_COPIES);
+    repo.setData(req.user.id, 'cardRestore', { off: false, copies });
+    if (!before || before.last4 !== copy.last4 || before.expMonth !== copy.expMonth || before.expYear !== copy.expYear) {
+      repo.addEvent(req.user.id, { type: 'card', level: 'info', message: `🔁 Your ${copy.brand === 'Card' ? 'card' : `${copy.brand} card`} comes back by itself after an extension update in ${req.device.name}: a copy locked with a key kept in that browser (Mugibot can't open it)` });
+    }
+    const restore = cardRestoreInfo({ off: false, copies });
+    ctx.hub.publish(req.user.id, 'card', { restore });
+    return { ok: true, restore };
+  }, { auth: 'device' });
+  // The card removed in an extension: no copy kept anywhere (another browser with it saved makes its own again).
+  router.delete('/api/ext/card-restore', async (req) => {
+    const doc = repo.getData(req.user.id, 'cardRestore', null);
+    if (doc && (doc.copies || []).length) {
+      repo.setData(req.user.id, 'cardRestore', { off: !!doc.off, copies: [] });
+      repo.addEvent(req.user.id, { type: 'card', level: 'info', message: `Card removed in ${req.device.name}: the copies kept for extension updates are deleted` });
+    }
+    const restore = cardRestoreInfo(repo.getData(req.user.id, 'cardRestore', null));
+    ctx.hub.publish(req.user.id, 'card', { restore });
+    return { ok: true, restore };
+  }, { auth: 'device' });
+
   router.post('/api/ext/unpair', async (req) => {
     repo.deleteDevice(req.user.id, req.device.id);
     ctx.hub.publish(req.user.id, 'devices', {});
@@ -84,6 +125,8 @@ export function register(router, ctx) {
   router.get('/api/ext/items', async (req) => {
     const src = str(req.query.get('src'), 10);
     seen(req, req.device.version, ['store', 'download'].includes(src) ? src : req.device.source);
+    // (Whether its card is ready — never the card: the dashboard's Armed checks, from anywhere.)
+    ctx.aco.noteCard(req.device.id, str(req.query.get('card'), 10));
     const settings = { ...DEFAULT_ALERTS, ...(repo.getData(req.user.id, 'alerts', {}) || {}) };
     return {
       items: repo.listItems(req.user.id).map((it) => ({
@@ -185,6 +228,7 @@ export function register(router, ctx) {
   router.get('/api/ext/aco/next', async (req, res) => {
     if (!limiter.hit(`aco-next:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     const waitMs = num(req.query.get('wait'), { min: 0, max: 25, def: 0 }) * 1000;
+    ctx.aco.noteCard(req.device.id, str(req.query.get('card'), 10));
     let gone = false;
     res.on('close', () => { gone = true; });
     // Bags to empty (Clear cart, server/bags.js): handed over at once — with them, the answer doesn't wait.
@@ -214,7 +258,7 @@ export function register(router, ctx) {
     const reason = str(req.body.reason, 30);
     const run = await ctx.aco.report(req.user.id, str(req.params.id, 40), {
       status: str(req.body.status, 20), reason: !reason || REASONS[reason] ? reason : 'error', message: str(req.body.message, 300),
-      total: num(req.body.total, { min: 0, max: 100000, def: null }),
+      total: num(req.body.total, { min: 0, max: 100000, def: null }), pressed: req.body.pressed === true,
     });
     if (!run) throw new HttpError(404, 'That Auto-checkout run was not found');
     return { ok: true, run };

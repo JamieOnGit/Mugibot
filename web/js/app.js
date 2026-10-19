@@ -14,25 +14,27 @@ const state = { me: null, items: [], retailers: [], profiles: null, editing: nul
 // ---------------------------------------------------------------------------
 // Pages: four in the sidebar (a tab bar at the bottom on phones), each showing a few sections in order
 // ---------------------------------------------------------------------------
-//   🔥 Drops     the live monitor: new drops and restocks, your watchlist, drop watches, your activity
-//   ⚡ Checkout  Auto-checkout (switch, limits, ready?, phone ⚡ Buy, bags, armed items, runs), then the
-//               delivery details and card every checkout uses
-//   🧰 Setup     the extension (install, connect, store sign-ins, browsers), then Discord and pings
+//   🔥 Drops     the live monitor: new drops and restocks, your watchlist, your armed items (and whether
+//               each is ready to check out), drop watches, your activity
+//   ⚡ Checkout  Auto-checkout (switch, limits, ready?, phone ⚡ Buy, bags, runs)
+//   🧰 Setup     the extension (install, connect, store sign-ins, browsers), the delivery details and card
+//               every checkout uses, then Discord and pings
 //   👤 Account   membership, then your account
 // The Monitor's admin pages (Settings, Check log) sit under Drops.
 const PAGES = {
   monitor: ['monitor'], 'monitor-settings': ['monitor-settings'], 'monitor-log': ['monitor-log'],
-  aco: ['aco', 'checkout'], setup: ['extension', 'discord'], account: ['membership', 'account'],
+  aco: ['aco'], setup: ['extension', 'checkout', 'discord'], account: ['membership', 'account'],
 };
 // Addresses from before (in DMs, emails, the extension's Update button): the page each is on now, and where on it.
-const MOVED = { checkout: 'aco', extension: 'setup', discord: 'setup', update: 'setup', membership: 'account' };
+const MOVED = { checkout: 'setup', extension: 'setup', discord: 'setup', update: 'setup', membership: 'account' };
 const SCROLL_TO = { checkout: '[data-panel="checkout"]', discord: '[data-panel="discord"]', update: '#ext-update', membership: '[data-panel="membership"]' };
 // The Monitor's own pages (Settings and Check log are for admins): the sidebar's Drops stays lit.
 const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
-// The lists on the Drops page (tracked products, your watchlist, your drop watches, your activity).
-// #watch and #activity — the old tabs, still in links and DMs — and #drops open the Drops page at that list.
-const LISTS = ['tracked', 'watch', 'drops', 'activity'];
-const LIST_HASH = { watch: 'watch', drops: 'drops', activity: 'activity' };
+// The lists on the Drops page (tracked products, your watchlist, your armed items, your drop watches,
+// your activity). #watch and #activity — the old tabs, still in links and DMs — #armed and #drops open
+// the Drops page at that list.
+const LISTS = ['tracked', 'watch', 'armed', 'drops', 'activity'];
+const LIST_HASH = { watch: 'watch', armed: 'armed', drops: 'drops', activity: 'activity' };
 const LIST_KEY = 'mgb-list';
 const loaders = {};
 
@@ -96,7 +98,7 @@ async function showList(name, { load = true } = {}) {
   const member = state.me.entitlement.active;
   // (No choice yet: what the monitor tracks — or, before a membership, your watchlist.)
   let list = LISTS.includes(name) ? name : savedList() || (member ? 'tracked' : 'watch');
-  if ((list === 'tracked' || list === 'drops') && !member) list = 'watch';
+  if ((list === 'tracked' || list === 'drops' || list === 'armed') && !member) list = 'watch';
   state.list = list;
   for (const b of $$('.mon-ptab')) {
     const on = b.dataset.ptab === list;
@@ -108,6 +110,7 @@ async function showList(name, { load = true } = {}) {
   $('#w-add-toggle').hidden = list !== 'watch';
   if (!load) return;
   if (list === 'watch') await loadWatch();
+  else if (list === 'armed') await loadArmed();
   else if (list === 'drops') await dropsUI.load();
   else if (list === 'activity') await loadFeed(state.feedPage);
 }
@@ -134,6 +137,7 @@ loaders.monitor = async () => {
   // Your watchlist first: the tracked products show which ones are on it.
   await Promise.all([loadItems(), loadRetailers()]);
   $('#pt-tracked').hidden = !state.me.entitlement.active;
+  $('#pt-armed').hidden = !state.me.entitlement.active;
   $('#pt-drops').hidden = !state.me.entitlement.active;
   renderLoadout().catch(() => null);
   await Promise.all([monitorUI.load(), showList(state.list)]);
@@ -350,6 +354,9 @@ async function pairNow() {
   }
   await renderExtStatus();
   loadDevices().catch(() => null);
+  // A new copy of the extension (after an update): your card back from its copy, with no passphrase.
+  const back = await syncCardKey().catch(() => null);
+  if (back && back.restored) setMsg(msg, `Connected — and ${back.card.brand} •••• ${back.card.last4} is back in this browser.`, true);
 }
 $('#pair-now').addEventListener('click', pairNow);
 
@@ -559,6 +566,7 @@ async function loadItems() {
   state.items = r.items;
   state.itemsInactive = !r.active;
   renderItems();
+  if (listOpen('armed')) renderArmed();
   monitorUI.refreshWatched();
 }
 
@@ -788,13 +796,116 @@ $('#p-form').addEventListener('submit', (e) => {
 
 const cardLabel = (c) => `${c.brand} •••• ${c.last4} · expires ${c.expMonth}/${String(c.expYear).slice(-2)}`;
 
+// --- 🔁 Your card through extension updates (from extension 1.20) --------------------------------
+// The extension keeps a copy of your card in your account, locked with a key this dashboard keeps in this
+// browser (its own storage, which outlives the extension: removing the extension, or loading a new copy,
+// doesn't touch it). Mugibot's server keeps the locked copy and never has the key. Connect a new copy of
+// the extension here and it's handed the key: your card is back, with no passphrase.
+const restoreKeyName = () => `mgb-card-key:${state.me.user.id}`;
+
+function storedRestoreKey() {
+  try {
+    const v = JSON.parse(localStorage.getItem(restoreKeyName()) || 'null');
+    return v && typeof v.id === 'string' && typeof v.k === 'string' ? v : null;
+  } catch { return null; }
+}
+
+/** This browser's restore key (made the first time) — or null where nothing can be kept (a private window). */
+function restoreKeyHere() {
+  const have = storedRestoreKey();
+  if (have) return have;
+  const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+  const key = { id: b64(crypto.getRandomValues(new Uint8Array(18))).replace(/\+/g, '-').replace(/\//g, '_'), k: b64(crypto.getRandomValues(new Uint8Array(32))) };
+  try { localStorage.setItem(restoreKeyName(), JSON.stringify(key)); } catch { return null; }
+  // (Only a key that's really kept: a copy under a lost key would be no use.)
+  return storedRestoreKey() && storedRestoreKey().id === key.id ? key : null;
+}
+
+/**
+ * Hand this browser's extension the restore key (once it's connected to your account, 1.20 or newer, and
+ * it's switched on): it makes your card's copy under it — or, with no card in it (a new install), has your
+ * card back from it. The extension's answer, or null.
+ */
+async function syncCardKey({ quiet = false } = {}) {
+  const ext = state.ext && state.ext.installed ? state.ext : await detectExtension();
+  state.ext = ext;
+  if (!ext.installed || !ext.paired || ext.userId !== state.me.user.id) return null;
+  if (!state.cardRestore) await loadCardBackup().catch(() => null);
+  const r = state.cardRestore;
+  if (!r || r.on === false || versionBelow(ext.version, r.extensionVersion || '1.20.0')) return null;
+  const key = restoreKeyHere();
+  if (!key) return null;
+  const reply = await askExtension('cardKey', { key, has: r.copies.some((c) => c.id === key.id) }, 15000);
+  state.restoreReply = reply;
+  if (reply && reply.restored && !quiet) toast('Your card is back', `${reply.card.brand} •••• ${reply.card.last4} is ready in this browser again — no passphrase needed.`, 'success', 9000);
+  if (reply && (reply.restored || reply.ok)) {
+    await loadCardBackup().catch(() => null);
+    if (!$('[data-panel="checkout"]').hidden) { renderCardRestore(); renderCardBackup(); renderCard().catch(() => null); }
+  }
+  return reply;
+}
+
+function renderCardRestore() {
+  const box = $('#card-restore');
+  if (!box) return;
+  const r = state.cardRestore;
+  box.textContent = '';
+  if (!r) return;
+  const key = storedRestoreKey();
+  const mine = key && r.copies.find((c) => c.id === key.id);
+  const others = r.copies.filter((c) => !key || c.id !== key.id).length;
+  const ext = state.ext || {};
+  const old = ext.installed && versionBelow(ext.version, r.extensionVersion || '1.20.0');
+  const sw = h('button', { type: 'button', class: 'sn-sw', role: 'switch', id: 'card-restore-on', 'aria-checked': r.on ? 'true' : 'false', 'aria-label': 'Keep my card through extension updates' });
+  sw.addEventListener('click', () => setCardRestore(!r.on));
+  const status = !r.on ? 'Off: after an extension update you add your card again (or restore your passphrase backup).'
+    : mine ? `${cardLabel(mine)} comes back by itself after an extension update in this browser — even a new copy of it: press Connect this browser (Setup) and it's there.`
+      : old ? `Update the extension to ${r.extensionVersion} or newer, and from then on your card comes back by itself after every update.`
+        : !ext.installed || !ext.paired ? 'Connect the extension in this browser, and save your card in it: it then comes back by itself after every update.'
+          : 'Save your card in the extension, and it comes back by itself after every update (a copy is made in a moment).';
+  box.append(h('div', { class: 'aco-switch-row' }, sw,
+    h('div', {},
+      h('b', {}, r.on ? '🔁 Keep my card through extension updates — on' : '🔁 Keep my card through extension updates — off'),
+      h('div', { class: 'muted small' }, status,
+        r.on ? ' Your account keeps a copy locked with a key that stays in this browser — Mugibot never has the key, so it can\'t open the copy. Clearing this site\'s data in your browser loses the key (the extension then makes a new copy).' : ''),
+      r.on && (mine || others) ? h('div', { class: 'form-actions' },
+        h('span', { class: 'muted small' }, `${r.copies.length} cop${r.copies.length === 1 ? 'y' : 'ies'} kept${others ? ` (${others} for another browser or address of this site)` : ''}.`),
+        h('button', { class: 'btn small danger', type: 'button', id: 'card-restore-delete', onclick: deleteCardRestore }, 'Delete the copies')) : null)));
+}
+
+async function setCardRestore(on) {
+  try {
+    const r = await api('PUT', '/api/card-restore', { on });
+    state.cardRestore = { ...state.cardRestore, ...r.restore };
+    // Off: the key goes too, here and in the extension.
+    if (!on) try { localStorage.removeItem(restoreKeyName()); } catch { /* private window */ }
+    renderCardRestore();
+    if (!on && document.documentElement.dataset.mugibotExtension) await askExtension('cardKey', { off: true }, 4000);
+    if (on) await syncCardKey({ quiet: true });
+    toast(on ? 'On' : 'Off', on ? 'Your card comes back by itself after an extension update.' : 'Your card isn\'t kept for extension updates: the copies are deleted.', 'success');
+  } catch (e) {
+    toast("Couldn't change it", e.message, 'warn');
+  }
+}
+
+async function deleteCardRestore() {
+  if (!confirm('Delete the copies of your card kept for extension updates? The card stays in the extensions it\'s saved in (each makes a new copy the next time you open this dashboard, unless you switch this off).')) return;
+  try {
+    const r = await api('DELETE', '/api/card-restore');
+    state.cardRestore = { ...state.cardRestore, ...r.restore };
+    renderCardRestore();
+  } catch (e) {
+    toast("Couldn't delete them", e.message, 'warn');
+  }
+}
+
 // The card's backup in your account (locked in the extension with your card passphrase).
 function renderCardBackup() {
   const box = $('#card-backup');
   const b = state.cardBackup;
   box.textContent = '';
   if (b) {
-    box.append(h('p', {}, h('span', { class: 'pill ok' }, 'Backed up'), ' ', `${cardLabel(b)} is backed up in your account, locked with your card passphrase. A new install of the extension, or another browser, restores it with that passphrase (Card settings). Mugibot can't open it.`),
+    box.append(h('p', {}, h('span', { class: 'pill ok' }, 'Backed up'), ' ', `${cardLabel(b)} is backed up in your account, locked with your card passphrase. Another browser (or computer) restores it with that passphrase (Card settings). Mugibot can't open it.`),
       h('div', { class: 'form-actions' }, h('button', {
         class: 'btn small danger', type: 'button', id: 'card-unbackup',
         onclick: async () => {
@@ -806,12 +917,14 @@ function renderCardBackup() {
         },
       }, 'Delete the backup')));
   } else {
-    box.append(h('p', { class: 'muted small' }, 'Not backed up. In Card settings you can back it up to your account, locked with a card passphrase only you know, so a new install of the extension doesn\'t need the card typed in again.'));
+    box.append(h('p', { class: 'muted small' }, 'For another browser or computer: in Card settings you can back your card up to your account, locked with a card passphrase only you know, and restore it there with that passphrase.'));
   }
 }
 
 async function loadCardBackup() {
-  state.cardBackup = (await api('GET', '/api/card-backup')).backup;
+  const r = await api('GET', '/api/card-backup');
+  state.cardBackup = r.backup;
+  state.cardRestore = r.restore || null;
 }
 
 async function renderCard() {
@@ -824,6 +937,13 @@ async function renderCard() {
   const c = r && r.card;
   const b = state.cardBackup;
   $('#card-open').textContent = c && c.ready ? 'Card settings' : b ? 'Restore your card' : c && c.saved ? 'Card settings' : 'Add your card';
+  // (A copy for updates that didn't open here: what went wrong.)
+  const failed = state.restoreReply && state.restoreReply.ok === false && state.restoreReply.error;
+  if ((!c || !c.ready) && failed) {
+    box.className = 'notice warn';
+    box.textContent = `Your card couldn't be brought back in this browser by itself (${failed}). Press ${b ? 'Restore your card and enter your card passphrase' : 'Add your card and save it again'}.`;
+    return;
+  }
   if ((!c || !c.ready) && b) {
     box.className = 'notice warn';
     box.textContent = `${cardLabel(b)} is backed up in your account, but not in this browser yet. Press Restore your card and enter your card passphrase.`;
@@ -849,6 +969,7 @@ loaders.checkout = async () => {
   renderProfiles();
   renderCardBackup();
   await renderCard();
+  renderCardRestore();
 };
 
 // ---------------------------------------------------------------------------
@@ -875,13 +996,16 @@ async function loadAco() {
   return state.aco;
 }
 
+/** 11.0 s, 950 ms, 1 min 4 s. */
+const secs = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60000)} min ${Math.round((ms % 60000) / 1000)} s`);
+
 function renderAcoStats() {
   const s = state.aco.stats;
   const box = $('#aco-stats');
   box.textContent = '';
   const tile = (k, v, sub, tone = '') => h('div', { class: `aco-stat${tone ? ` ${tone}` : ''}` }, h('div', { class: 'k' }, k), h('div', { class: 'v' }, v), sub ? h('div', { class: 's' }, sub) : null);
   box.append(
-    tile('Orders placed', String(s.placed), s.spent ? `${money(s.spent)} spent` : 'in the last 30 days', 'ok'),
+    tile('Orders placed', String(s.placed), [s.spent ? `${money(s.spent)} spent` : 'in the last 30 days', typeof s.medianMs === 'number' ? `typically ${secs(s.medianMs)} from drop to order (fastest ${secs(s.fastestMs)})` : ''].filter(Boolean).join(' · '), 'ok'),
     tile('Attempts', String(s.attempts), `${s.drops} drop${s.drops === 1 ? '' : 's'} of armed items`),
     tile('Needed you', String(s.needsYou), 'stopped for you to finish', s.needsYou ? 'warn' : ''),
     tile('Failed or didn\'t start', String(s.failed + s.skipped), s.skipped ? `${s.skipped} didn't start` : 'last 30 days', s.failed ? 'err' : ''),
@@ -906,71 +1030,239 @@ function renderAcoSettings() {
   $('#aco-signedin').checked = !!s.signedInOnly;
 }
 
-/** A store's sign-in status (the store login monitor), for the armed items. */
-function signInPill(store) {
-  const l = state.logins && state.logins.stores.find((x) => x.id === store);
-  if (!l) return null;
-  if (l.status === 'in') return h('span', { class: 'pill ok', title: `Seen ${ago(l.at)}` }, 'Signed in');
-  if (l.status === 'out') return h('a', { class: 'pill warn', href: l.signInUrl, target: '_blank', rel: 'noopener', title: 'Sign in so checkout is faster' }, 'Signed out — sign in ↗');
-  return h('a', { class: 'pill', href: l.signInUrl, target: '_blank', rel: 'noopener', title: 'Open the store once in the browser with the extension' }, 'Sign-in not seen yet');
+// ---------------------------------------------------------------------------
+// 🤖 Armed (a list on the Drops page): your watchlist's items for Auto-checkout, each with its switch,
+// its max price, whether everything its run needs is ready, and its buttons
+// ---------------------------------------------------------------------------
+// The delivery details a checkout fills in (the email: the account's, when the address has none).
+const ADDRESS_NEEDS = { firstName: 'first name', lastName: 'last name', phone: 'mobile', address1: 'street address', suburb: 'suburb', state: 'state', postcode: 'postcode' };
+// A run that got to the store and ended without an order may have left its item in the bag.
+const LEFT_IN_BAG = ['ready', 'needs_you', 'failed'];
+
+async function loadArmed() {
+  await Promise.all([
+    loadAco(), loadLogins().catch(() => null), loadBags().catch(() => null), loadProfiles().catch(() => null), loadCardBackup().catch(() => null),
+    renderExtStatus().catch(() => null),
+  ]);
+  // This browser's card, when it's the one that checks out (another browser's is reported by it).
+  const mine = state.ext && state.ext.installed && state.ext.paired && state.ext.userId === state.me.user.id;
+  state.armedCard = mine ? ((await askExtension('cardStatus')) || {}).card || null : null;
+  renderArmed();
 }
 
-// Armed items: a table, 10 to a page (the page kept while things change).
+/** The browser Auto-checkout's runs go to, and whether it's this one. */
+function checkoutBrowser() {
+  const b = ((state.aco && state.aco.browsers) || []).find((x) => x.checkout) || null;
+  return { b, here: !!(b && state.ext && state.ext.deviceId && b.id === state.ext.deviceId && state.ext.userId === state.me.user.id) };
+}
+
+/**
+ * What one item's run needs, each check { key, label, tone: 'ok' | 'no' | 'warn' | 'na', text, fix }:
+ * its bag at the store, signed in there, the card and the address it checks out with, and the browser
+ * it checks out in. 'no' stops the run (or makes it stop for you); 'warn' slows it; 'na': nothing to do, or
+ * can't tell from here.
+ */
+function readiness(it) {
+  const s = state.aco.settings;
+  const { b: browser, here } = checkoutBrowser();
+  const out = [];
+  // 🧹 The bag: Auto-checkout buys the one item, so anything else in the store's bag stops it there.
+  const bag = state.bags && state.bags.stores.find((x) => x.id === it.store);
+  if (!bag) out.push({ key: 'bag', label: 'Bag', tone: 'na', text: 'No bag to empty from here at this store' });
+  else if (bag.active) out.push({ key: 'bag', label: 'Bag', tone: 'warn', text: 'Being emptied now…' });
+  else if (bag.status === 'cleared' || bag.status === 'empty') {
+    const since = (state.aco.runs || []).find((r) => r.store === it.store && LEFT_IN_BAG.includes(r.status) && r.createdAt > (bag.at || 0));
+    out.push(since
+      ? { key: 'bag', label: 'Bag', tone: 'no', text: `A run at ${new Date(since.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} ended without an order and may have left its item in your bag — empty it`, fix: 'bag' }
+      : { key: 'bag', label: 'Bag', tone: 'ok', text: `Emptied ${ago(bag.at)}` });
+  } else if (bag.status === 'failed' || bag.status === 'expired') out.push({ key: 'bag', label: 'Bag', tone: 'no', text: `Couldn't empty it: ${bag.message || bag.statusText}`, fix: 'bag' });
+  else out.push({ key: 'bag', label: 'Bag', tone: 'warn', text: 'Not emptied from here yet: anything already in it stops the run — press Clear bag to be sure', fix: 'bag' });
+  // 🔑 Signed in at the store: faster (the store fills in your saved details) — or needed, at some.
+  const l = state.logins && state.logins.stores.find((x) => x.id === it.store);
+  if (!l || !l.at) out.push({ key: 'signin', label: 'Sign-in', tone: l && l.required ? 'no' : 'na', text: l && l.required ? `${l.name} only sells signed in: open it once in your checkout browser and sign in` : 'Not seen yet: open the store once in your checkout browser', href: l && l.signInUrl });
+  else if (l.status === 'in') out.push({ key: 'signin', label: 'Sign-in', tone: 'ok', text: `Signed in (${l.how === 'check' ? 'checked' : 'seen'} ${ago(l.at)})` });
+  else if (l.status === 'out') {
+    const must = l.required || s.signedInOnly;
+    out.push({ key: 'signin', label: 'Sign-in', tone: must ? 'no' : 'warn', href: l.signInUrl,
+      text: l.required ? `Signed out — ${l.name} only sells signed in` : s.signedInOnly ? 'Signed out — your settings only check out where you\'re signed in' : 'Signed out — it checks out as a guest, but signed in is faster' });
+  } else out.push({ key: 'signin', label: 'Sign-in', tone: 'na', text: "Couldn't tell whether you're signed in", href: l.signInUrl });
+  // 💳 The card, in the browser that checks out (a store that only takes PayPal stops there: no card needed).
+  const card = here ? state.armedCard : browser ? browser.card : null;
+  const saved = state.cardBackup;
+  if (it.acoStops === 'paypal') out.push({ key: 'card', label: 'Card', tone: 'na', text: 'This store only takes PayPal: it stops there for you' });
+  else if (!browser) out.push({ key: 'card', label: 'Card', tone: 'no', text: 'Connect the extension in the browser you check out with', href: '#extension' });
+  else if (card && card.ready) out.push({ key: 'card', label: 'Card', tone: 'ok', text: card.last4 ? `${card.brand} •••• ${card.last4} ready in ${browser.name}` : `Card ready in ${browser.name}` });
+  else if (card && (card.saved || card.state === 'saved')) out.push({ key: 'card', label: 'Card', tone: 'no', text: `Saved in ${browser.name}, but not ready — open Card settings there`, href: '#checkout' });
+  else if (card) {
+    // (A copy kept for updates comes back by itself once the dashboard's opened there; a passphrase backup, with its passphrase.)
+    const kept = state.cardRestore && state.cardRestore.on && state.cardRestore.copies[0];
+    out.push({ key: 'card', label: 'Card', tone: 'no', href: '#checkout',
+      text: kept ? `Not in ${browser.name} yet — open this dashboard there and ${kept.brand} •••• ${kept.last4} comes back by itself`
+        : saved ? `Not in ${browser.name} yet — restore ${saved.brand} •••• ${saved.last4} there with your card passphrase (Card settings)`
+          : `No card saved in ${browser.name} — add it (Setup → Delivery & card)` });
+  }
+  else out.push({ key: 'card', label: 'Card', tone: 'na', text: `Can't tell from here: ${browser.name} says once it's open with the extension up to date` });
+  // 📦 The address this item is delivered to (its own, else your default).
+  const profiles = (state.profiles && state.profiles.profiles) || [];
+  const p = profiles.find((x) => x.id === it.profileId) || profiles.find((x) => x.id === (state.profiles && state.profiles.defaultId)) || profiles[0];
+  const missing = p ? Object.keys(ADDRESS_NEEDS).filter((k) => !String(p[k] || '').trim()) : Object.keys(ADDRESS_NEEDS);
+  if (p && !p.email && !state.me.user.email) missing.push('email');
+  out.push(!missing.length
+    ? { key: 'addr', label: 'Address', tone: 'ok', text: `Delivers to ${p.label || 'your address'} (${p.suburb} ${p.state})` }
+    : { key: 'addr', label: 'Address', tone: 'no', text: `Delivery details missing: ${missing.map((k) => ADDRESS_NEEDS[k] || k).join(', ')}`, href: '#checkout' });
+  // 🧩 The checkout browser: connected, up to date, open and listening (runs wait 2 minutes for it).
+  const minV = state.aco.extensionVersion || '1.10.0';
+  if (!browser) out.push({ key: 'browser', label: 'Browser', tone: 'no', text: 'No browser connected — install and connect the extension (Setup)', href: '#extension' });
+  else if (versionBelow(browser.version, minV)) out.push({ key: 'browser', label: 'Browser', tone: 'no', text: `Update the extension in ${browser.name} to ${minV} or newer (it has ${browser.version || 'an older one'})`, href: '#update' });
+  else if (browser.listening) out.push({ key: 'browser', label: 'Browser', tone: 'ok', text: `${browser.name} is open and listening` });
+  else if (!it.aco) out.push({ key: 'browser', label: 'Browser', tone: 'na', text: `${browser.name} starts listening once something's armed` });
+  else out.push({ key: 'browser', label: 'Browser', tone: 'no', text: `${browser.name} isn't open right now: keep Chrome open there (a run waits 2 minutes for it)` });
+  return out;
+}
+
+/** What stops this item's run before any check: no checkout at the store, no page yet, no max price… */
+function blockers(it) {
+  const s = state.aco.settings;
+  const price = it.lastPrice ?? it.price;
+  return [
+    !it.acoCan ? 'no checkout for this store yet' : '',
+    it.acoCan && !it.url ? 'its product page hasn\'t been found yet' : '',
+    it.maxPrice == null ? 'set a max price' : '',
+    it.maxPrice != null && typeof price === 'number' && price > it.maxPrice ? `it's ${money(price)} now, over your max` : '',
+    it.maxPrice != null && it.maxPrice > s.maxOrder ? `your max is over your ${money(s.maxOrder)} an order limit` : '',
+  ].filter(Boolean);
+}
+
+/** The line at the top: Auto-checkout on or off, how many are armed, and how many of those are ready. */
+function renderArmedState(armed, ready) {
+  const s = state.aco.settings;
+  const box = $('#ar-state');
+  box.textContent = '';
+  box.className = `ar-state notice ${!s.enabled ? 'warn' : armed && ready < armed ? 'warn' : armed ? 'ok' : ''}`;
+  if (!s.enabled) {
+    box.append(h('b', {}, '🤖 Auto-checkout is off. '), armed ? `${armed} armed, but nothing is bought by itself until you ` : 'Nothing is bought by itself until you ', h('a', { href: '#aco' }, 'switch it on'), '.');
+    return;
+  }
+  box.append(h('b', {}, s.mode === 'place' ? '🤖 Auto-checkout is on — it places the order. ' : '🤖 Auto-checkout is on — it stops at the final button for you. '),
+    !armed ? 'Arm an item below (with its max price) and it\'s bought the moment it drops.'
+      : ready === armed ? `${armed} armed, ${armed === 1 ? 'and it\'s' : 'all'} ready to check out.`
+        : `${armed} armed, ${ready} ready — the ✗ checks below say what to fix.`);
+}
+
+// Armed: 10 to a page (the page kept while things change).
 const ACO_PAGE_SIZE = 10;
-function renderAcoItems() {
-  const body = $('#aco-items');
-  body.textContent = '';
-  const armed = state.items.filter((it) => it.aco).length;
-  $('#aco-armed-count').textContent = `${armed} armed`;
+function renderArmed() {
+  if (!state.aco) return;
+  const list = $('#aco-items');
+  list.textContent = '';
+  const s = state.aco.settings;
+  const armedItems = state.items.filter((it) => it.aco);
+  const isReady = (it) => !blockers(it).length && !readiness(it).some((c) => c.tone === 'no');
+  $('#aco-armed-count').textContent = armedItems.length ? String(armedItems.length) : '';
+  renderArmedState(armedItems.length, armedItems.filter(isReady).length);
   const show = $('#aco-show').value;
   const items = state.items.filter((it) => show !== 'armed' || it.aco);
   const pages = Math.max(1, Math.ceil(items.length / ACO_PAGE_SIZE));
   state.acoPage = Math.min(Math.max(1, state.acoPage || 1), pages);
-  renderPager($('#aco-pager'), { page: state.acoPage, size: ACO_PAGE_SIZE, total: items.length, label: 'Armed items', onPage: (p) => { state.acoPage = p; renderAcoItems(); } });
+  renderPager($('#aco-pager'), { page: state.acoPage, size: ACO_PAGE_SIZE, total: items.length, label: 'Armed items', onPage: (p) => { state.acoPage = p; renderArmed(); } });
+  $('#ar-ready').disabled = !armedItems.length;
   if (!items.length) {
-    body.append(h('tr', { class: 'empty' }, h('td', { colspan: '5' }, show === 'armed'
+    list.append(h('li', { class: 'empty' }, show === 'armed'
       ? 'Nothing armed yet — show every item and switch one on.'
-      : ['Your watchlist is empty — add SKUs on the ', h('a', { href: '#watch' }, 'Drops page (My watchlist)'), ', then arm them here.'])));
+      : ['Your watchlist is empty — add SKUs on ', h('a', { href: '#watch' }, 'My watchlist'), ' (or ☆ Watch a tracked product), then arm them here.']));
     return;
   }
   const lastRun = (id) => (state.aco.runs || []).find((r) => r.itemId === id);
+  const device = state.bags && state.bags.device;
+  const bagsOld = !!device && versionBelow(device.version, state.bags.extensionVersion);
   const from = (state.acoPage - 1) * ACO_PAGE_SIZE;
   for (const it of items.slice(from, from + ACO_PAGE_SIZE)) {
     const can = it.acoCan;
     const toggle = h('button', { type: 'button', class: 'sn-sw', role: 'switch', 'aria-checked': it.aco ? 'true' : 'false', 'aria-label': `Auto-checkout ${it.name}`, disabled: !can });
-    const max = h('input', { type: 'number', min: '0', step: '0.01', value: it.maxPrice ?? '', placeholder: 'Max $', 'aria-label': `Max price for ${it.name}`, class: 'aco-max' });
+    const max = h('input', { type: 'number', min: '0', step: '0.01', value: it.maxPrice ?? '', placeholder: 'Max', 'aria-label': `Max price for ${it.name}`, class: 'aco-max' });
     const save = async (patch) => {
       try {
         await api('PUT', `/api/items/${it.id}`, patch);
         await Promise.all([loadItems(), loadAco()]);
-        renderAco();
-        if (patch.aco) askExtension('acoListen', {}, 4000);
+        renderArmed();
+        if (patch.aco) askExtension('acoListen', {}, 4000).then(() => loadAco()).then(renderArmed).catch(() => null);
       } catch (e) {
         toast("Couldn't change it", e.message, 'warn');
-        renderAcoItems();
+        renderArmed();
       }
     };
     toggle.addEventListener('click', () => save({ aco: !it.aco, maxPrice: max.value }));
     max.addEventListener('change', () => save({ maxPrice: max.value }));
-    const on = state.aco.settings.enabled;
     const test = h('button', {
-      type: 'button', class: 'btn small aco-test', disabled: !can || !on,
-      title: !can ? 'No checkout for this store yet' : !on ? 'Switch Auto-checkout on first (above)' : 'Run Auto-checkout for this item now, as if it had just dropped',
+      type: 'button', class: 'btn small aco-test', disabled: !can || !s.enabled,
+      title: !can ? 'No checkout for this store yet' : !s.enabled ? 'Switch Auto-checkout on first (Checkout page)' : 'Run Auto-checkout for this item now, as if it had just dropped',
     }, 'Trigger ACO');
     test.addEventListener('click', () => triggerAco(it, max, test));
+    const bag = state.bags && state.bags.stores.find((x) => x.id === it.store);
+    const clear = bag ? h('button', {
+      type: 'button', class: 'btn small ar-clear', disabled: !device || bagsOld || bag.active, 'aria-label': `Clear cart at ${bag.name}`,
+      title: !device ? 'Connect the extension in the browser you check out with (Setup)' : bagsOld ? `Update the extension in ${device.name} first` : `Empty your ${bag.name} bag in ${device.name}`,
+    }, bag.active ? 'Emptying…' : 'Clear bag') : null;
+    clear?.addEventListener('click', () => clearBags(bag.id, `Empty your ${bag.name} bag in ${device.name}?\n\nEverything in it is removed.`, $('#ar-msg')));
+    const checks = readiness(it);
+    const stop = blockers(it);
+    const fix = [...stop, ...checks.filter((c) => c.tone === 'no').map((c) => c.text)];
     const run = lastRun(it.id);
-    body.append(h('tr', { class: `aco-item${it.aco ? ' armed' : ''}`, dataset: { id: it.id } },
-      h('td', { class: 'sw' }, toggle),
-      h('td', { class: 'info' },
-        h('div', { class: 'name' }, it.name),
-        h('div', { class: 'meta' }, [it.storeName, `SKU ${it.sku}`, money(it.lastPrice ?? it.price)].filter(Boolean).join(' · '),
-          !can ? ' · no checkout for this store yet' : !it.acoPlaces ? (it.acoStops === 'paypal' ? ' · stops at PayPal here (this store only takes PayPal)' : ' · stops at the final button here (its payment form is another site\'s)') : ''),
-        run ? h('div', { class: `meta aco-last ${ACO_TONE[run.status] || ''}` }, `Last: ${ACO_ICON[run.status] || '⏳'} ${run.statusText}${run.reasonText ? ` — ${run.reasonText}` : ''} · ${ago(run.createdAt)}`) : null),
-      h('td', { class: 'signin' }, signInPill(it.store) || h('span', { class: 'muted' }, '—')),
-      h('td', { class: 'max' }, h('label', { class: 'aco-max-wrap' }, h('span', { 'aria-hidden': 'true' }, '$'), max)),
-      h('td', { class: 'act' }, test)));
+    const ready = !fix.length;
+    const meta = [it.storeName, `SKU ${it.sku}`, money(it.lastPrice ?? it.price)].filter(Boolean).join(' · ')
+      + (!can ? '' : !it.acoPlaces ? (it.acoStops === 'paypal' ? ' · stops at PayPal here' : ' · stops at the final button here (its payment form is another site\'s)') : '');
+    list.append(h('li', { class: `ar-row${it.aco ? ' armed' : ''}${it.aco && !ready ? ' unready' : ''}`, dataset: { id: it.id } },
+      h('div', { class: 'sw' }, toggle),
+      h('div', { class: 'info' },
+        h('div', { class: 'name' }, h('span', { class: 'nm', title: it.name }, it.name),
+          it.aco ? h('span', { class: `pill ${ready && s.enabled ? 'ok' : 'warn'}` }, !s.enabled ? 'Armed · Auto-checkout off' : ready ? 'Armed · ready' : `Armed · ${fix.length} to fix`) : null),
+        h('div', { class: 'meta' }, meta),
+        h('div', { class: 'ar-checks', role: 'list', 'aria-label': `Ready to check out ${it.name}?` }, ...checks.map((c) => {
+          const mark = { ok: '✓', no: '✗', warn: '!', na: '–' }[c.tone];
+          const attrs = { class: `ck ${c.tone}`, title: c.text, role: 'listitem', dataset: { check: c.key } };
+          const body = [h('span', { class: 'mk', 'aria-hidden': 'true' }, mark), h('span', { class: 'lb' }, c.label), h('span', { class: 'sr-only' }, `: ${c.text}`)];
+          return c.href ? h('a', { ...attrs, href: c.href, ...(c.href.startsWith('http') ? { target: '_blank', rel: 'noopener' } : {}) }, ...body) : h('span', attrs, ...body);
+        })),
+        it.aco && fix.length ? h('div', { class: 'ar-fix' }, `To fix: ${fix.join(' · ')}`) : null,
+        run ? h('div', { class: `meta aco-last ${ACO_TONE[run.status] || ''}` }, `Last: ${ACO_ICON[run.status] || '⏳'} ${run.statusText}${run.reasonText ? ` — ${run.reasonText}` : ''}${typeof run.tookMs === 'number' ? ` · ⏱ ${secs(run.tookMs)}` : ''} · ${ago(run.createdAt)}`) : null),
+      h('div', { class: 'max' }, h('label', { class: 'aco-max-wrap' }, h('span', { 'aria-hidden': 'true' }, '$'), max)),
+      h('div', { class: 'acts' }, test, clear)));
   }
 }
+
+/** 🧹 Get ready: empty the bag at every store with something armed (in your checkout browser), and check sign-ins again. */
+async function getReady() {
+  const msg = $('#ar-msg');
+  const stores = [...new Set(state.items.filter((it) => it.aco).map((it) => it.store))].filter((id) => state.bags && state.bags.stores.some((b) => b.id === id));
+  if (!stores.length) { setMsg(msg, 'Nothing armed at a store whose bag can be emptied from here.'); return; }
+  const names = stores.map((id) => state.bags.stores.find((b) => b.id === id).name);
+  if (!confirm(`Empty your bag${stores.length === 1 ? '' : 's'} at ${names.join(', ')} in your checkout browser?\n\nEverything in ${stores.length === 1 ? 'it' : 'them'} is removed, so Auto-checkout finds ${stores.length === 1 ? 'it' : 'them'} empty when your item drops.`)) return;
+  try {
+    const r = await api('POST', '/api/bags/clear', { stores });
+    setMsg(msg, `${r.device.name} is emptying ${stores.length === 1 ? `your ${names[0]} bag` : `your bags at ${names.join(', ')}, one at a time`}${r.listening ? '.' : " — it isn't open right now: it does it when it next is."}`, true);
+    askExtension('acoListen', {}, 4000);
+  } catch (e) {
+    setMsg(msg, e.message);
+  }
+  // (Sign-ins too, where this browser can look.)
+  if (state.ext && state.ext.paired && state.ext.userId === state.me.user.id) askExtension('checkLogins', {}, 30000).then(() => loadLogins()).then(() => listOpen('armed') && renderArmed()).catch(() => null);
+  await loadBags().catch(() => null);
+  renderArmed();
+}
+$('#ar-ready').addEventListener('click', getReady);
+$('#ar-recheck').addEventListener('click', async (e) => {
+  const b = e.currentTarget;
+  b.disabled = true;
+  try {
+    await loadArmed();
+    setMsg($('#ar-msg'), 'Up to date.', true);
+  } catch (err) {
+    showError(err);
+  } finally {
+    b.disabled = false;
+  }
+});
+$('#aco-show').addEventListener('change', () => { state.acoPage = 1; renderArmed(); });
 
 /** Trigger ACO: a test run for one item, now (after saying what it will do). */
 async function triggerAco(it, maxInput, btn) {
@@ -986,11 +1278,11 @@ async function triggerAco(it, maxInput, btn) {
     if (String(maxInput.value) !== String(it.maxPrice ?? '')) await api('PUT', `/api/items/${it.id}`, { maxPrice: maxInput.value });
     const { run } = await api('POST', `/api/aco/test/${it.id}`);
     if (run.status === 'skipped') toast("Auto-checkout didn't start", run.message || run.reasonText, 'warn');
-    else toast('Auto-checkout test started', `Your checkout browser is opening ${it.storeName} — follow it in the run history below.`, 'success');
+    else toast('Auto-checkout test started', `Your checkout browser is opening ${it.storeName} — follow it here, or in the run history (Checkout page).`, 'success');
     // This browser picks it up now (it listens while something waits for it).
     askExtension('acoListen', {}, 4000);
     await Promise.all([loadItems(), loadAco()]);
-    renderAco();
+    renderArmed();
   } catch (e) {
     toast("Couldn't trigger it", e.message, 'warn');
   } finally {
@@ -1016,15 +1308,18 @@ function renderAcoRuns() {
   for (const r of runs.slice(from, from + RUNS_PAGE_SIZE)) {
     const icon = ACO_ICON[r.status] || '⏳';
     const money2 = r.total != null ? `${money(r.total)} total` : r.price != null ? money(r.price) : '';
-    const steps = h('ol', { class: 'aco-steps' }, ...r.steps.map((x) => h('li', {},
+    // (Each step: when, and how long after the drop — the run's first step.)
+    const t0 = r.steps.length ? r.steps[0].at : r.createdAt;
+    const steps = h('ol', { class: 'aco-steps' }, ...r.steps.map((x, i) => h('li', {},
       h('time', { datetime: new Date(x.at).toISOString(), title: when(x.at) }, new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })),
+      i ? h('span', { class: 'aco-dt', title: 'After the drop' }, `+${secs(x.at - t0)}`) : null,
       h('b', {}, ACO_STEP[x.status] || x.status), x.message ? ` — ${x.message}` : '')));
     list.append(h('li', { class: `aco-run st-${r.status}${r.active ? ' active' : ''}`, dataset: { id: r.id } },
       h('div', { class: 'head' },
         h('span', { class: 'ic', 'aria-hidden': 'true' }, icon),
         h('div', { class: 'info' },
           h('div', { class: 'name' }, r.name),
-          h('div', { class: 'meta' }, [state.retailers.find((x) => x.id === r.store)?.name || r.store, money2, TRIGGER[r.trigger] || '', r.mode === 'fill' ? 'stop at the final button' : ''].filter(Boolean).join(' · '))),
+          h('div', { class: 'meta' }, [state.retailers.find((x) => x.id === r.store)?.name || r.store, money2, TRIGGER[r.trigger] || '', r.mode === 'fill' ? 'stop at the final button' : '', typeof r.tookMs === 'number' ? `⏱ ${secs(r.tookMs)} drop to order` : ''].filter(Boolean).join(' · '))),
         h('span', { class: `pill ${ACO_TONE[r.status] || ''}` }, r.statusText),
         h('time', { class: 'muted small', datetime: new Date(r.createdAt).toISOString(), title: when(r.createdAt) }, ago(r.createdAt))),
       r.reasonText || r.message ? h('div', { class: `why ${ACO_TONE[r.status] || ''}` }, r.reasonText && r.message && !r.message.startsWith(r.reasonText) ? `${r.reasonText}: ${r.message}` : (r.message || r.reasonText)) : null,
@@ -1064,11 +1359,13 @@ async function renderAcoChecks() {
   }
   if (s.enabled || (s.remoteBuy && isHere)) {
     rows.push([!!(listening && listening.listening), listening && listening.listening ? (isHere && s.remoteBuy ? 'This browser is listening for runs — your armed items\' drops and Discord\'s ⚡ Buy. Keep Chrome open' : 'This browser is listening for your armed items to drop — keep Chrome open')
-      : state.items.some((it) => it.aco) || isHere ? 'This browser isn\'t listening yet — reload this page, or check the extension is connected (and up to date)' : 'Arm an item below, and this browser starts listening for it', null, null]);
+      : state.items.some((it) => it.aco) || isHere ? 'This browser isn\'t listening yet — reload this page, or check the extension is connected (and up to date)' : 'Arm an item on the Armed tab (Drops page), and this browser starts listening for it', 'Armed', '#armed']);
   }
+  const armed = state.items.filter((it) => it.aco).length;
+  rows.push([!!armed, armed ? `${armed} item${armed === 1 ? '' : 's'} armed — each one's own checks (bag, sign-in, card, address) are on the Armed tab` : 'Nothing armed yet', 'Arm an item', '#armed']);
   list.textContent = '';
   for (const [ok, text, label, href] of rows) {
-    list.append(h('li', {}, h('span', { class: ok ? 'ok-mark' : 'no-mark', 'aria-hidden': 'true' }, ok ? '✓' : '✗'), h('span', {}, text, !ok && href ? [' — ', h('a', { href }, label)] : null)));
+    list.append(h('li', {}, h('span', { class: ok ? 'ok-mark' : 'no-mark', 'aria-hidden': 'true' }, ok ? '✓' : '✗'), h('span', {}, text, !ok && href ? [' — ', h('a', { href }, label)] : ok && href === '#armed' ? [' — ', h('a', { href }, 'see them')] : null)));
   }
 }
 
@@ -1159,9 +1456,8 @@ function renderBags() {
 }
 
 /** Clear cart (a store) or Clear all ('all'), after asking. */
-async function clearBags(stores, question) {
+async function clearBags(stores, question, msg = $('#bags-msg')) {
   if (!confirm(question)) return;
-  const msg = $('#bags-msg');
   try {
     const r = await api('POST', '/api/bags/clear', stores === 'all' ? { stores: 'all' } : { store: stores });
     setMsg(msg, `${r.device.name} is emptying ${stores === 'all' ? 'your bags, one store at a time' : 'it'}${r.listening ? '.' : " — it isn't open right now: it does it when it next is (within a few minutes)."}`, true);
@@ -1172,6 +1468,7 @@ async function clearBags(stores, question) {
   }
   await loadBags().catch(() => null);
   renderBags();
+  if (listOpen('armed')) renderArmed();
 }
 
 $('#bags-all').addEventListener('click', () => {
@@ -1186,7 +1483,6 @@ function renderAco() {
   renderAcoSettings();
   renderAcoRemote();
   renderBags();
-  renderAcoItems();
   renderAcoRuns();
 }
 
@@ -1237,7 +1533,6 @@ $('#aco-device').addEventListener('change', (e) => {
 });
 $('#aco-device-here').addEventListener('click', () => saveRemote({ deviceId: state.ext.deviceId }, ['Checkout browser changed', 'This browser checks out from now on.']));
 $('#aco-filter').addEventListener('change', () => { state.runsPage = 1; renderAcoRuns(); });
-$('#aco-show').addEventListener('change', () => { state.acoPage = 1; renderAcoItems(); });
 $('#aco-recheck').addEventListener('click', async () => {
   // (Which browsers are open now, too.)
   await loadAco().catch(() => null);
@@ -1480,16 +1775,16 @@ function connectStream() {
   // Auto-checkout: a run started, moved on or ended (and the item it was for, disarmed).
   let acoTimer = null;
   es.addEventListener('aco', () => {
-    if ($('[data-panel="aco"]').hidden) return;
+    if ($('[data-panel="aco"]').hidden && !listOpen('armed')) return;
     clearTimeout(acoTimer);
-    acoTimer = setTimeout(() => Promise.all([loadAco(), loadItems()]).then(renderAco).catch(() => null), 250);
+    acoTimer = setTimeout(() => Promise.all([loadAco(), loadItems()]).then(() => { renderAco(); if (listOpen('armed')) renderArmed(); }).catch(() => null), 250);
   });
   // Clear cart: a bag being emptied, or done.
   let bagsTimer = null;
   es.addEventListener('bags', () => {
-    if ($('[data-panel="aco"]').hidden) return;
+    if ($('[data-panel="aco"]').hidden && !listOpen('armed')) return;
     clearTimeout(bagsTimer);
-    bagsTimer = setTimeout(() => loadBags().then(renderBags).catch(() => null), 200);
+    bagsTimer = setTimeout(() => loadBags().then(() => { renderBags(); if (listOpen('armed')) renderArmed(); }).catch(() => null), 200);
   });
   es.addEventListener('monitor-feed', (e) => { monitorUI.onFeed(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });
   es.addEventListener('monitor-product', (e) => { monitorUI.onProduct(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });
@@ -1502,8 +1797,11 @@ function connectStream() {
   });
   // The card's backup changed (made, updated or deleted in an extension).
   es.addEventListener('card', (e) => {
-    state.cardBackup = JSON.parse(e.data).backup;
-    if (!$('[data-panel="checkout"]').hidden) { renderCardBackup(); renderCard().catch(() => null); }
+    const d = JSON.parse(e.data) || {};
+    if ('backup' in d) state.cardBackup = d.backup;
+    if (d.restore) state.cardRestore = { ...state.cardRestore, ...d.restore };
+    if (!$('[data-panel="checkout"]').hidden) { renderCardBackup(); renderCardRestore(); renderCard().catch(() => null); }
+    if (listOpen('armed')) loadArmed().catch(() => null);
   });
   es.addEventListener('devices', () => {
     if (!$('[data-panel="extension"]').hidden) {
@@ -1511,6 +1809,7 @@ function connectStream() {
       loadLogins().then(renderLogins).catch(() => null);
     }
     if (listOpen('watch')) loadLogins().then(renderItems).catch(() => null);
+    if (listOpen('armed')) Promise.all([loadLogins(), loadAco()]).then(renderArmed).catch(() => null);
     renderExtStatus().catch(() => null);
   });
 }
@@ -1519,5 +1818,8 @@ function connectStream() {
 await loadMe();
 showTab();
 connectStream();
+// (Once a page load: the extension here gets this browser's restore key — your card's copy for updates
+// made, or, in a new copy of the extension, your card back.)
+syncCardKey().catch(() => null);
 if (state.me.entitlement.active) loadGates();
 if (new URLSearchParams(location.search).get('welcome')) toast('Welcome!', 'Start with your membership (Account), then Setup: the extension and Discord.', 'success', 10000);

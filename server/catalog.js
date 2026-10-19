@@ -258,25 +258,42 @@ export class Catalog {
    * The products list: everything the live sweeps track (seen lately) and every monitored product,
    * filtered and searched. Members don't see paused monitors that no sweep tracks.
    */
-  listProducts({ q = '', category = '', store = '', status = '', admin = false, limit = 600 } = {}) {
+  listProducts({ limit = 600, offset = 0, ...filters } = {}) {
+    const { where, params } = this.productsWhere(filters);
+    return this.db.all(`SELECT p.*, m.id AS m_id, m.interval_seconds AS m_interval, m.paused AS m_paused, m.kinds AS m_kinds, m.note AS m_note,
+        m.created_at AS m_created
+      FROM products p LEFT JOIN monitors m ON m.product_id = p.id WHERE ${where}
+      ORDER BY CASE WHEN p.status IN ('in_stock', 'preorder') THEN 0 ELSE 1 END, COALESCE(p.status_at, p.sweep_first_at, p.created_at) DESC, p.id DESC
+      LIMIT :limit OFFSET :offset`, { ...params, limit, offset })
+      .map((r) => ({
+        ...toProduct(r),
+        monitor: r.m_id ? { id: r.m_id, intervalSeconds: r.m_interval, paused: !!r.m_paused, kinds: json(r.m_kinds, DEFAULT_KINDS), note: r.m_note, createdAt: r.m_created } : null,
+      }));
+  }
+
+  /** How many products the list has with these filters — all of them, not just a page. */
+  countProducts(filters = {}) {
+    const { where, params } = this.productsWhere(filters);
+    return this.db.get(`SELECT COUNT(*) AS n FROM products p LEFT JOIN monitors m ON m.product_id = p.id WHERE ${where}`, params).n;
+  }
+
+  /** The products list's filters, as SQL. excludeStores: stores left out (a member's own store switches). */
+  productsWhere({ q = '', category = '', store = '', status = '', admin = false, excludeStores = [] } = {}) {
     const where = [`(m.id IS NOT NULL${admin ? '' : ' AND m.paused = 0'} OR p.sweep_seen_at >= :swept)`, unblocked('p')];
-    const params = { limit, swept: this.now() - SWEPT_DAYS * 86400000 };
+    const params = { swept: this.now() - SWEPT_DAYS * 86400000 };
     if (q) { where.push('(p.name LIKE :q OR p.sku LIKE :q)'); params.q = `%${q}%`; }
     if (category) { where.push('p.category = :category'); params.category = category; }
     if (store) { where.push('p.store = :store'); params.store = store; }
+    if (excludeStores.length) {
+      where.push(`p.store NOT IN (${excludeStores.map((_, i) => `:x${i}`).join(', ')})`);
+      excludeStores.forEach((id, i) => { params[`x${i}`] = id; });
+    }
     if (status === 'available') where.push("p.status IN ('in_stock', 'preorder')");
     else if (status === 'unavailable') where.push("p.status NOT IN ('in_stock', 'preorder')");
     else if (status === 'problem') where.push("(p.status IN ('blocked', 'error') OR p.fail_count > 0)");
     else if (status === 'new') { where.push('p.sweep_first_at >= :day'); params.day = this.now() - 86400000; }
     else if (status) { where.push('p.status = :status'); params.status = status; }
-    return this.db.all(`SELECT p.*, m.id AS m_id, m.interval_seconds AS m_interval, m.paused AS m_paused, m.kinds AS m_kinds, m.note AS m_note,
-        m.created_at AS m_created
-      FROM products p LEFT JOIN monitors m ON m.product_id = p.id WHERE ${where.join(' AND ')}
-      ORDER BY CASE WHEN p.status IN ('in_stock', 'preorder') THEN 0 ELSE 1 END, COALESCE(p.status_at, p.sweep_first_at, p.created_at) DESC LIMIT :limit`, params)
-      .map((r) => ({
-        ...toProduct(r),
-        monitor: r.m_id ? { id: r.m_id, intervalSeconds: r.m_interval, paused: !!r.m_paused, kinds: json(r.m_kinds, DEFAULT_KINDS), note: r.m_note, createdAt: r.m_created } : null,
-      }));
+    return { where: where.join(' AND '), params };
   }
 
   /** Is this product in the shared list (monitored, or tracked by a sweep lately)? */

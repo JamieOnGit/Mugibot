@@ -26,6 +26,9 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // "Buy now" too), boxes ticked or unticked by the flow, WooCommerce's drop-downs and add-to-cart
 // link, and a card Stripe's Link has for you.
 export const ACO_EXTENSION_VERSION = '1.19.0';
+// The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
+// browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.
+export const RESTORE_EXTENSION_VERSION = '1.20.0';
 // The oldest that listens all the time as your checkout browser, so Discord's ⚡ Buy (pressed on
 // your phone) starts at once. Older ones pick it up at their next check (within a minute or so).
 export const REMOTE_EXTENSION_VERSION = '1.15.0';

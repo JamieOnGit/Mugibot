@@ -314,7 +314,7 @@ test("The Gamesmen (its Cloudflare turns servers away): refused once, an admin's
     assert.ok(sys(/The Gamesmen \(dummy store\): Mugibot's server is refused \(The store refused the search \(HTTP 403\)\)/));
     const t = due(id);
     assert.deepEqual([t.render, t.parser], [true, 'magento'], 'its search page opened in the browser and read');
-    assert.equal(t.url, `${store.url}/gamesmen/catalogsearch/result/?q=${encodeURIComponent(t.keyword)}`);
+    assert.equal(t.url, `${store.url}/gamesmen/catalogsearch/result/?q=${encodeURIComponent(t.keyword)}&product_list_order=recently-listed`);
     sw.stat(id).browserNext = 0; // (given out just now: given again for the read below)
     const [res] = await browserRead(id);
     assert.equal(res.ok, true, res.error);

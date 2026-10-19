@@ -97,9 +97,17 @@ const STATUS_WORD = {
 const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
 const parseSteps = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
 
+/** How long a placed run took, drop to order (its first step to its "placed"), in ms — or null. */
+export function tookMs(steps) {
+  const placed = steps.find((x) => x.status === 'placed');
+  return placed && steps.length && typeof steps[0].at === 'number' ? Math.max(0, placed.at - steps[0].at) : null;
+}
+
 export function toRun(r) {
   return r && {
     id: r.id, itemId: r.item_id, store: r.store, sku: r.sku, name: r.name, url: r.url, price: r.price, total: r.total, maxPrice: r.max_price,
+    // (Drop to order, for a placed run: how fast it was.)
+    tookMs: r.status === 'placed' ? tookMs(parseSteps(r.steps)) : null,
     mode: r.mode, trigger: r.trigger, status: r.status, reason: r.reason || '',
     statusText: r.status === 'waiting' && r.reason === 'checkpoint' ? 'Waiting for you at the checkpoint' : r.status === 'waiting' && r.reason === 'turn' ? 'Next in line' : STATUS_WORD[r.status] || r.status,
     reasonText: r.reason ? (REASONS[r.reason] || r.reason) : '', message: r.message || '', steps: parseSteps(r.steps),
@@ -117,6 +125,8 @@ export class Aco {
     this.listening = new Map(); // deviceId → when it last asked for runs
     this.follows = new Map(); // runId → { token, until, last }: Discord's ⚡ Buy reply, kept up to date
     this.lobbies = new Map(); // userId → Map(store → { id, store, url, by, at, sent }): browsers told to get in line
+    this.cards = new Map(); // deviceId → { state, at }: what each browser says of its card (from 1.20) — never the card
+    this.variants = new Map(); // runId → the listing's only option (a drop's run opens the store's add-to-cart link)
     this.timer = null;
   }
 
@@ -148,8 +158,10 @@ export class Aco {
 
   /** The last `days` days at a glance: attempts, orders placed, spent, and how the rest ended. */
   stats(userId, days = 30) {
-    const rows = this.db.all('SELECT status, price, total FROM aco_runs WHERE user_id = :u AND created_at > :since', { u: userId, since: this.now() - days * DAY });
+    const rows = this.db.all('SELECT status, price, total, steps FROM aco_runs WHERE user_id = :u AND created_at > :since', { u: userId, since: this.now() - days * DAY });
     const by = (st) => rows.filter((r) => st.includes(r.status)).length;
+    // Drop to order, for the orders placed: the typical one (the median) and the fastest.
+    const took = rows.filter((r) => r.status === 'placed').map((r) => tookMs(parseSteps(r.steps))).filter((x) => typeof x === 'number').sort((a, b) => a - b);
     return {
       days,
       drops: rows.length,
@@ -160,6 +172,8 @@ export class Aco {
       skipped: by(['skipped']),
       active: by(ACTIVE),
       spent: Math.round(rows.filter((r) => r.status === 'placed').reduce((s, r) => s + (r.total ?? r.price ?? 0), 0) * 100) / 100,
+      medianMs: took.length ? took[Math.floor((took.length - 1) / 2)] : null,
+      fastestMs: took.length ? took[0] : null,
     };
   }
 
@@ -194,12 +208,24 @@ export class Aco {
     return !!at && this.now() - at < LISTEN_MS;
   }
 
-  /** The member's browsers for the Auto-checkout page: which one checks out, and which are listening. */
+  /** What a browser says of its card as it asks for runs: 'ready', 'saved' (there, but not ready) or 'none'. */
+  noteCard(deviceId, state) {
+    if (['ready', 'saved', 'none'].includes(state)) this.cards.set(deviceId, { state, at: this.now() });
+  }
+
+  /** A browser's card, as it last said (in the last half an hour): { state, ready, saved, at } — or null. */
+  cardOf(deviceId) {
+    const c = this.cards.get(deviceId);
+    if (!c || this.now() - c.at > 30 * 60 * 1000) return null;
+    return { state: c.state, ready: c.state === 'ready', saved: c.state !== 'none', at: c.at };
+  }
+
+  /** The member's browsers for the Auto-checkout page: which one checks out, which are listening, and their cards. */
   browsers(userId) {
     const checkout = this.checkoutDevice(userId);
     return this.repo.listDevices(userId).map((d) => ({
       id: d.id, name: d.name, version: d.version, lastSeenAt: d.lastSeenAt,
-      checkout: !!checkout && checkout.id === d.id, listening: this.isListening(d.id),
+      checkout: !!checkout && checkout.id === d.id, listening: this.isListening(d.id), card: this.cardOf(d.id),
     }));
   }
 
@@ -252,7 +278,9 @@ export class Aco {
     if (running) return null;
     const price = typeof info.price === 'number' ? info.price : null;
     const base = { userId, item, price, mode: s.mode, trigger: info.test ? 'test' : info.manual ? 'manual' : info.source || '' };
-    const skip = (reason, message) => this.skip(base, reason, message);
+    // (info.later: the monitor's list of alerts to send once every member's run is made — monitor/index.js applyAll.)
+    const later = Array.isArray(info.later) ? info.later : null;
+    const skip = (reason, message) => this.skip(base, reason, message, later);
 
     const user = this.repo.userById(userId);
     if (!user || user.disabled) return null;
@@ -282,14 +310,22 @@ export class Aco {
     if (!this.repo.listDevices(userId).length) return skip('no_browser', 'Connect the extension in the browser you keep open.');
 
     const run = this.create(base, 'queued', '', `Dropped at ${r.name}${price !== null ? ` for ${money(price)}` : ''} — waiting for your browser to check out.`);
+    // (The search's listing says its only option: the run goes straight to the store's add-to-cart link
+    // with it, even before the catalogue knows the product — a brand-new listing's, say.)
+    if (/^\d{1,20}$/.test(String(info.variantId || ''))) {
+      this.variants.set(run.id, String(info.variantId));
+      if (this.variants.size > 500) this.variants.delete(this.variants.keys().next().value);
+    }
     this.wake(userId); // first: every second counts in a drop
     const queued = this.ctx.gates && this.ctx.gates.queueUp(item.store);
-    await this.notifier.notify(userId, {
+    const tell = () => this.notifier.notify(userId, {
       type: 'aco', level: 'urgent', channel: 'aco',
       title: `🤖 Auto-checkout ${info.test ? 'test ' : ''}started: ${item.name}`,
       message: `${r.name}${price !== null ? ` · ${money(price)}` : ''}\n${s.mode === 'place' ? 'Your browser is checking out now, and will place the order.' : 'Your browser is filling in checkout now, and will stop at the final button for you.'}${queued ? `\n🚦 ${r.name}'s virtual queue is up: your browser waits its turn in line first (don't refresh the queue page).` : ''}`,
       name: item.name, sku: item.sku, url: item.url, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
     });
+    if (later) later.push(tell);
+    else await tell();
     return toRun(run);
   }
 
@@ -405,19 +441,36 @@ export class Aco {
     return run;
   }
 
-  /** It dropped, but Auto-checkout didn't start (a limit, signed out…): kept, and the member hears why. */
-  async skip(base, reason, extra = '') {
+  /** It dropped, but Auto-checkout didn't start (a limit, signed out…): kept, and the member hears why (later: with the other alerts). */
+  async skip(base, reason, extra = '', later = null) {
     const r = this.retailers.get(base.item.store);
     const message = `${REASONS[reason] || reason}${extra ? ` — ${extra}` : ''}`;
     const run = this.create(base, 'skipped', reason, message);
-    await this.notifier.notify(base.userId, {
+    const tell = () => this.notifier.notify(base.userId, {
       type: 'aco', level: 'warn', channel: 'aco',
       title: `🤖 Auto-checkout didn't start: ${base.item.name}`,
       message: `${r ? r.name : base.item.store}${base.price !== null ? ` · ${money(base.price)}` : ''}\n${message}`,
       name: base.item.name, sku: base.item.sku, url: base.item.url || null,
       buttons: [base.item.url ? { label: '⚡ Buy', url: this.notifier.buyLink(base.userId, base.item), action: buyAction('i', base.item.id) } : null, { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }].filter(Boolean),
     });
+    if (later) later.push(tell);
+    else await tell();
     return toRun(run);
+  }
+
+  /** One purchase per drop watch (monitor/drops.js): its other armed finds disarmed, and the watch's own Auto-checkout off. */
+  oncePerWatch(userId, itemId) {
+    const it = this.db.get('SELECT drop_watch FROM items WHERE id = :i AND user_id = :u', { i: itemId, u: userId });
+    if (!it || !it.drop_watch) return 0;
+    const others = this.db.all('SELECT id, name FROM items WHERE user_id = :u AND drop_watch = :w AND aco = 1 AND id != :i', { u: userId, w: it.drop_watch, i: itemId });
+    for (const o of others) this.disarm(userId, o.id);
+    const off = this.db.run('UPDATE drop_watches SET aco = 0 WHERE id = :w AND user_id = :u AND aco = 1', { w: it.drop_watch, u: userId }).changes;
+    if (off && this.ctx.drops) this.ctx.drops.changed();
+    if (others.length || off) {
+      this.repo.addEvent(userId, { type: 'aco', level: 'info', message: `🤖 One purchase per drop watch: it bought one${others.length ? `, so its other find${others.length === 1 ? '' : 's'} (${others.map((o) => o.name).slice(0, 3).join(', ')}${others.length > 3 ? '…' : ''}) ${others.length === 1 ? 'is' : 'are'} disarmed` : ''} and what it finds next isn't armed — arm it again for another` });
+      this.hub.publish(userId, 'drop', {});
+    }
+    return others.length;
   }
 
   disarm(userId, itemId) {
@@ -477,7 +530,7 @@ export class Aco {
       const claimed = this.db.run("UPDATE aco_runs SET status = 'sent', device_id = :d, updated_at = :t WHERE id = :id AND status = 'queued'", { d: device.id, t: now, id: row.id }).changes;
       if (!claimed) continue;
       this.step(row.id, 'sent', `Opening ${this.retailers.name(row.store)} in ${device.name}`);
-      const go = startBuy(this.ctx, user, { ...item, quantity: 1 }, { runId: row.id });
+      const go = startBuy(this.ctx, user, { ...item, quantity: 1 }, { runId: row.id, variantId: this.variants.get(row.id) || null });
       out.push({ id: row.id, url: go.url, store: row.store, storeName: this.retailers.name(row.store), name: row.name, sku: row.sku, mode: row.mode });
     }
     return out;
@@ -506,13 +559,16 @@ export class Aco {
    * What happened, from the browser: status 'checkout' | 'ready' | 'placing' | 'placed' | 'needs_you' | 'failed',
    * reason (REASONS), message, total.
    */
-  async report(userId, runId, { status, reason = '', message = '', total = null }) {
+  async report(userId, runId, { status, reason = '', message = '', total = null, pressed = false }) {
     const row = this.get(userId, runId);
     if (!row) return null;
     // Done is done — except a payment the member finished themselves (the bank's check) turning out placed.
     if (DONE.has(row.status) && !(row.status === 'needs_you' && status === 'placed')) return toRun(row);
     if (typeof total === 'number' && Number.isFinite(total) && total > 0) this.db.run('UPDATE aco_runs SET total = :t WHERE id = :id', { t: Math.round(total * 100) / 100, id: row.id });
     if (status === 'checkout' || status === 'placing') {
+      // (The browser sends these without waiting for an answer: "at checkout" arriving after the final
+      // button's "placing" is old news.)
+      if (status === 'checkout' && row.status === 'placing') return toRun(row);
       this.db.run("UPDATE aco_runs SET status = :st, reason = '', updated_at = :t WHERE id = :id", { st: status, t: this.now(), id: row.id });
       this.step(row.id, status, message);
       // The final button is pressed: this arming is used up, whatever happens next.
@@ -527,6 +583,11 @@ export class Aco {
       return this.publish(userId, row.id);
     }
     if (!['ready', 'placed', 'needs_you', 'failed'].includes(status)) return toRun(row);
+    // (pressed: the browser pressed the final button — its "placing", sent without waiting, may not be here yet.)
+    if (pressed && row.status !== 'placing' && !parseSteps(row.steps).some((x) => x.status === 'placing')) {
+      this.step(row.id, 'placing', 'Final button pressed');
+      return this.finish(userId, this.get(userId, row.id), status, reason, message);
+    }
     return this.finish(userId, row, status, reason, message);
   }
 
@@ -565,7 +626,7 @@ export class Aco {
     if (!row || !['waiting', 'sent'].includes(row.status)) return null;
     const item = row.item_id ? this.repo.getItem(user.id, row.item_id) : null;
     if (!item || !item.url) return null;
-    return startBuy(this.ctx, user, { ...item, quantity: 1 }, { runId: row.id }).url;
+    return startBuy(this.ctx, user, { ...item, quantity: 1 }, { runId: row.id, variantId: this.variants.get(row.id) || null }).url;
   }
 
   // ---------------------------------------------------------------------------
@@ -653,6 +714,9 @@ export class Aco {
     this.step(row.id, status, text);
     // Bought (or it may have been), or filled in for them: armed again only by the member.
     if (status === 'placed' || status === 'ready' || pressed) this.disarm(userId, row.item_id);
+    // A drop watch's find bought (or it may have been): one purchase per watch — its other finds are
+    // disarmed, and what it finds from now on isn't armed (a broad watch would buy every listing that matches).
+    if (status === 'placed' || (pressed && status === 'needs_you')) this.oncePerWatch(userId, row.item_id);
     const run = this.publish(userId, row.id);
     const storeName = this.retailers.name(row.store);
     const total = run.total ?? run.price;

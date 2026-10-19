@@ -10,7 +10,7 @@ import { STATUS_LABEL } from './monitor/status.js';
 // ⚡ Buy links go straight to the store while they're valid (then they open the buy page, one
 // press more). A member's own link only works signed in as them, so it can last a week.
 const BUY_LINK_TTL = 7 * 24 * 60 * 60 * 1000;
-const COLORS = { urgent: 0x16a34a, success: 0x16a34a, warn: 0xd97706, info: 0x2563eb, listed: 0x7c3aed };
+const COLORS = { urgent: 0x16a34a, success: 0x16a34a, warn: 0xd97706, info: 0x2563eb, listed: 0x7c3aed, price: 0x0d9488 };
 
 const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
 // What a channel ⚡ Buy link signs: the same, trimmed, when it's made and when it comes back.
@@ -166,6 +166,16 @@ export class Notifier {
       return this.notify(userId, {
         type: 'listed', level: 'success', color: 'listed', channel: 'listed',
         title: `Listed: ${item.name}`, message: `${meta}\nThe product page is up — now ${label.toLowerCase()}.`,
+        name: item.name, sku: item.sku, url: item.url || null, buttons,
+      });
+    }
+    // Your own drop watch's find, cheaper than the read before (monitor/drops.js): at any store or website.
+    if (kind === 'price_drop') {
+      const stock = info.status && STATUS_LABEL[info.status] && info.status !== 'unknown' ? ` · ${STATUS_LABEL[info.status]}` : '';
+      return this.notify(userId, {
+        type: 'restock', level: 'success', color: 'price', channel: 'restock',
+        title: `📉 Price drop: ${item.name}`,
+        message: `${meta}${stock}\nWas ${money(info.previous)} — now ${money(price)}${typeof info.pct === 'number' ? ` (${info.pct.toFixed(info.pct < 10 ? 1 : 0)}% lower)` : ''}. ${buyable ? 'Press ⚡ Buy to go straight to checkout.' : 'Open the product to buy it there.'}`,
         name: item.name, sku: item.sku, url: item.url || null, buttons,
       });
     }

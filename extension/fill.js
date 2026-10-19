@@ -801,7 +801,7 @@ var MGBFill = (function () {
         if (!finalAt) finalAt = Date.now();
         if (C.payment === 'card' && opts.cardReady && Date.now() - finalAt < 12000 && !(await opts.cardReady())) {
           setStatus('Waiting for your card to go in…');
-          await wait(400);
+          await wait(200);
           continue;
         }
         await wait(200); // let the last fields settle

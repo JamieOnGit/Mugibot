@@ -16,10 +16,10 @@
 //
 // Live sweeps: Mugibot's server tries first, but The Gamesmen's Cloudflare turns servers away
 // ("Sorry, you have been blocked"), so after its first refusal an admin's browser stands in: it
-// opens the store's search page in a window of its own and reads the products off it (Magento's
-// tiles: name, price, "Add to Cart" or "Out of stock" — or, drawn some other way, any priced product
-// on the page or in the search answer it fetched). The server tries again every so often and takes
-// back over if it's ever let in.
+// opens the store's search page (newest first) in a window of its own and reads the products off it:
+// its own tiles (Hyvä, read from a copy of its real page: name, the price shown, a struck-through old
+// one, "Add to Cart" or "Pre-Order") — or Magento's usual ones, or any priced product on the page.
+// The server tries again every so often and takes back over if it's ever let in.
 
 import { ADD_WORDS } from '../monitor/words.js';
 
@@ -42,7 +42,10 @@ export default {
   sweep: {
     from: 'browser',
     parser: 'magento',
-    path: '/catalogsearch/result/?q={q}',
+    // Newest first ("Recently Listed", one of its sort orders): a new listing is on the first page the
+    // moment it's up, whatever else the keyword finds (its "pokemon" search runs to hundreds: plush,
+    // figures, games…).
+    path: '/catalogsearch/result/?q={q}&product_list_order=recently-listed',
     pagePath: '&p={page}',
     pages: 2,
     // The page is opened and read once it's drawn (a search provider may draw it in the browser).

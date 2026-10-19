@@ -259,3 +259,30 @@ export function cardBackup(input, now = Date.now()) {
 
 /** What the dashboard shows of a card backup (never the locked data). */
 export const cardBackupInfo = (b) => (b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, hasCvc: !!b.hasCvc, savedAt: b.savedAt } : null);
+
+// --- The card's copy for reinstalls (from extension 1.20) ----------------------------------------
+// Locked in the extension with a key the member's dashboard keeps in their browser (its own storage):
+// Mugibot keeps the locked copy and never has the key. One copy per browser key — a few at most (each
+// browser, and each address of the site, keeps its own key). Only its shape is checked here, plus the
+// parts shown in the dashboard.
+export const RESTORE_KEY_ID = /^[A-Za-z0-9_-]{16,40}$/;
+export const MAX_RESTORE_COPIES = 4;
+export function cardRestoreCopy(input, now = Date.now()) {
+  const b = input || {};
+  const iv = String(b.iv ?? '');
+  const ct = String(b.ct ?? '');
+  if (!B64.test(iv) || iv.length !== 16 || !B64.test(ct) || ct.length < 24 || ct.length > 4096) throw bad("The copy of your card isn't right");
+  const last4 = String(b.last4 ?? '');
+  const expMonth = String(b.expMonth ?? '');
+  const expYear = String(b.expYear ?? '');
+  if (!/^\d{4}$/.test(last4) || !/^(0[1-9]|1[0-2])$/.test(expMonth) || !/^20\d{2}$/.test(expYear)) throw bad("The copy of your card's details aren't right");
+  // (host: the dashboard's address the key belongs to — where the card comes back.)
+  const host = String(b.host ?? '').toLowerCase().replace(/[^a-z0-9.:-]/g, '').slice(0, 100);
+  return { v: 1, iv, ct, last4, brand: CARD_BRANDS.includes(b.brand) ? b.brand : 'Card', expMonth, expYear, hasCvc: !!b.hasCvc, host, savedAt: now };
+}
+
+/** What the dashboard shows of the copies for reinstalls (never the locked data): switched on, and each copy's card. */
+export const cardRestoreInfo = (doc) => ({
+  on: !(doc && doc.off),
+  copies: ((doc && doc.copies) || []).map((c) => ({ id: c.id, brand: c.brand, last4: c.last4, expMonth: c.expMonth, expYear: c.expYear, hasCvc: !!c.hasCvc, host: c.host || '', savedAt: c.savedAt })),
+});
