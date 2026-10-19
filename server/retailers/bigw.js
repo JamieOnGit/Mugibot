@@ -9,6 +9,8 @@
 //     ("Enter address manually") → "Continue to payment" → card frame
 //     → STOP at "Place order".
 
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'bigw',
   name: 'BIG W',
@@ -32,7 +34,7 @@ export default {
   monitor: { server: true, browser: true },
   flow: {
     product: {
-      add: [/\badd to (cart|trolley)\b/i, /\bpre-?order\b/i],
+      add: ADD_WORDS,
       waitMs: 12000,
     },
     added: {

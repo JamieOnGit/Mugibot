@@ -14,14 +14,17 @@
 //   ebgames          EB Games' and Zing's search JSON (what their search page fetches).
 //   crystal          A CrystalCommerce store's search page (The Games Cube): a tile per product.
 //   pbandai          Premium Bandai's search JSON (/api/search, what its search page fetches).
+//   woo              WooCommerce's product API (Gamesworld): JSON, with stock and the add-to-cart id.
+//   magento          Magento's search page (Gamesmen): a tile per product, with its price and stock.
 //   generic          Any other store: product data in the page's scripts (Next.js
 //                    data, JSON-LD, embedded state), plus product tiles in the HTML.
 //
 // A product: { sku, aliases, title, price, wasPrice, inStock (true/false/null),
 //              preorder, url, image, marketplace }
 
-import { findAll, findFirst, parseHTML, textContent } from './html.js';
+import { decodeEntities, findAll, findFirst, parseHTML, textContent } from './html.js';
 import { looksBlocked, parsePrice } from './extract.js';
+import { TILE_ADD_RE } from './words.js';
 
 const clean = (s, max = 200) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 const httpsUrl = (v, base) => {
@@ -389,6 +392,94 @@ export function parseCrystal(html, { base } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// WooCommerce's product API (/wp-json/wc/store/v1/products — Gamesworld's): JSON, a product a row
+// with its link, price (in cents), stock and add-to-cart words ("Add to cart", "Pre-order now").
+// Names come with HTML entities in them ("&amp;"). A simple product's id is what the store's own
+// add-to-cart link takes (/checkout/?add-to-cart=<id>).
+// ---------------------------------------------------------------------------
+export function parseWoo(text, { base } = {}) {
+  let j;
+  try { j = typeof text === 'string' ? JSON.parse(text) : text; } catch { return { products: [], problem: pageProblem(text) || 'layout' }; }
+  if (!Array.isArray(j)) return { products: [], problem: 'layout' };
+  const products = [];
+  for (const p of j) {
+    if (!p || typeof p !== 'object' || !p.name || typeof p.permalink !== 'string') continue;
+    const url = httpsUrl(p.permalink, base);
+    if (!url) continue;
+    const slug = (new URL(url).pathname.match(/\/product\/([^/?#]+)\/?$/) || [])[1] || String(p.slug || p.id);
+    const pr = p.prices && typeof p.prices === 'object' ? p.prices : {};
+    const unit = 10 ** (Number.isInteger(pr.currency_minor_unit) ? pr.currency_minor_unit : 2);
+    const cents = (v) => (v === undefined || v === null || v === '' || !Number.isFinite(Number(v)) ? null : money(Number(v) / unit));
+    const price = cents(pr.price);
+    const was = cents(pr.regular_price);
+    const words = `${(p.add_to_cart && p.add_to_cart.text) || ''} ${(p.stock_availability && p.stock_availability.text) || ''}`;
+    const inStock = p.is_in_stock === true && p.is_purchasable !== false ? true : p.is_in_stock === false ? false : null;
+    const title = clean(decodeEntities(p.name));
+    const img = Array.isArray(p.images) && p.images[0] ? p.images[0].thumbnail || p.images[0].src : '';
+    products.push({
+      sku: slug, aliases: [String(p.id), ...(p.sku ? [String(p.sku)] : [])], title, price,
+      wasPrice: was && price && was > price ? was : null, inStock,
+      // (Only a simple product goes in with its id alone: one with options needs one chosen first.)
+      variantId: p.type === 'simple' && /^\d{1,20}$/.test(String(p.id)) ? String(p.id) : null,
+      preorder: PREORDER_RE.test(`${words} ${title}`) || p.is_on_backorder === true,
+      url, image: httpsUrl(img, base), marketplace: false,
+    });
+  }
+  return { products, total: null, problem: null };
+}
+
+// ---------------------------------------------------------------------------
+// Magento's search results (/catalogsearch/result/?q=… — Gamesmen's): a tile per product
+// (li.product-item, or a Hyvä form.product-item) with its link (a.product-item-link), its price
+// (data-price-amount), and "Add to Cart" / "Pre-order" — or "Out of stock".
+// ---------------------------------------------------------------------------
+export function parseMagento(html, { base, skuFromPath = null } = {}) {
+  const s = String(html || '');
+  const problem = pageProblem(s);
+  if (problem) return { products: [], problem };
+  const doc = parseHTML(s);
+  const cls = (n) => ` ${String((n.attrs && n.attrs.class) || '')} `;
+  const tilesFound = findAll(doc, (n) => ['li', 'div', 'form', 'article'].includes(n.tag) && / product-item /.test(cls(n)) && !!findFirst(n, (x) => x.tag === 'a' && / product-item-link /.test(cls(x))));
+  // (Only the outermost tile: Luma's li.product-item holds a div.product-item-info.)
+  const tiles = tilesFound.filter((t) => !tilesFound.some((o) => o !== t && findFirst(o, (x) => x === t)));
+  if (!tiles.length) return { products: [], problem: /returned no results|no results|did not match any/i.test(s) ? 'empty' : 'layout' };
+  const products = [];
+  const seen = new Set();
+  for (const t of tiles) {
+    const link = findFirst(t, (n) => n.tag === 'a' && / product-item-link /.test(cls(n)));
+    const url = httpsUrl(link.attrs.href, base);
+    if (!url) continue;
+    const path = new URL(url).pathname;
+    const m = skuFromPath ? path.match(skuFromPath) : null;
+    const sku = (m && m[1]) || path.replace(/^\/+|\/+$/g, '').split('/').pop().replace(/\.html$/, '');
+    if (!sku || seen.has(sku)) continue;
+    seen.add(sku);
+    const title = clean(textContent(link) || link.attrs.title || '');
+    if (title.length < 3) continue;
+    const amount = (type) => {
+      const n = findFirst(t, (x) => x.attrs['data-price-type'] === type && x.attrs['data-price-amount'] !== undefined);
+      return n ? money(n.attrs['data-price-amount']) : null;
+    };
+    const priceText = findFirst(t, (n) => / price /.test(cls(n)) && money(textContent(n)) !== null);
+    const price = amount('finalPrice') ?? (priceText ? money(textContent(priceText)) : null);
+    const was = amount('oldPrice');
+    const text = tileText(t);
+    const tocart = findFirst(t, (n) => (n.tag === 'button' || n.tag === 'input') && (/ tocart /.test(cls(n)) || TILE_ADD_RE.test(textContent(n) || n.attrs.value || n.attrs.title || '')));
+    const sold = findFirst(t, (n) => / (stock|unavailable) /.test(cls(n)) && / unavailable /.test(cls(n))) || /\b(out of stock|sold out|no longer available|currently unavailable)\b/i.test(text);
+    const inStock = sold ? false : tocart ? true : null;
+    const formSku = findFirst(t, (n) => n.attrs['data-product-sku'] !== undefined);
+    const priceBox = findFirst(t, (n) => n.attrs['data-product-id'] !== undefined);
+    const img = findFirst(t, (n) => n.tag === 'img' && (n.attrs.src || n.attrs['data-src']));
+    products.push({
+      sku, aliases: [formSku && formSku.attrs['data-product-sku'], priceBox && priceBox.attrs['data-product-id']].filter(Boolean).map(String), title, price,
+      wasPrice: was && price && was > price ? was : null, inStock, preorder: PREORDER_RE.test(`${text} ${title}`),
+      url, image: img ? httpsUrl(img.attrs.src || img.attrs['data-src'], base) : '', marketplace: false,
+    });
+  }
+  return { products, total: null, problem: products.length ? null : 'empty' };
+}
+
+// ---------------------------------------------------------------------------
 // Any store: data in the page's scripts, then product tiles
 // ---------------------------------------------------------------------------
 const URL_KEYS = ['url', 'href', 'link', 'productUrl', 'productURL', 'pdpUrl', 'canonicalUrl', 'baseProductUrl', 'seoUrl', 'urlPath', 'path', 'slugUrl'];
@@ -575,7 +666,7 @@ function tiles(doc, ctx) {
     out.push({
       sku: ctx.skuFrom(u.href) || key, aliases: [], title, price: pm ? money(pm[1]) : null, wasPrice: null,
       inStock: /\b(out of stock|sold out|unavailable|no stock|currently unavailable)\b/i.test(text) ? false
-        : /\b(add to (cart|bag|trolley|basket)|in stock|pre-?order)\b/i.test(text) ? true : null,
+        : TILE_ADD_RE.test(text) ? true : null,
       preorder: /\bpre-?order\b/i.test(text), url: u.href, image: img ? httpsUrl(img.attrs.src || img.attrs['data-src'], ctx.base) : '',
       marketplace: /\bmarket ?place\b|\bsold by\b|\bships from\b/i.test(text) && !(ctx.storeWord && new RegExp(`sold by ${ctx.storeWord}`, 'i').test(text)),
     });
@@ -620,7 +711,7 @@ export function parseGeneric(html, { base, productPath = null, skuFromPath = nul
   return { products: [...map.values()].slice(0, 300), problem: map.size ? null : 'empty' };
 }
 
-export const PARSERS = { citybeach: parseCityBeach, target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, crystal: parseCrystal, pbandai: parsePBandai, generic: parseGeneric };
+export const PARSERS = { woo: parseWoo, magento: parseMagento, citybeach: parseCityBeach, target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, crystal: parseCrystal, pbandai: parsePBandai, generic: parseGeneric };
 
 export function parseListing(parser, text, opts) {
   return (PARSERS[parser] || parseGeneric)(text, opts);

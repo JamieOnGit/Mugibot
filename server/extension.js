@@ -21,8 +21,11 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // payment frames sooner — a frame asking for the focus before the page is listening asks again —
 // and works the same either way.) 1.17.0: several runs at once — side by side at different stores, in
 // turn at the same one (its one bag), at full speed in a tab behind — and never stuck between the bag
-// and checkout.
-export const ACO_EXTENSION_VERSION = '1.17.0';
+// and checkout. 1.19.0: six more stores (Pokébox, Good Games, Collectible Madness, Cherry
+// Collectables, The Gamesmen, Games World), every store's buy button by the same words (words.js:
+// "Buy now" too), boxes ticked or unticked by the flow, WooCommerce's drop-downs and add-to-cart
+// link, and a card Stripe's Link has for you.
+export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that listens all the time as your checkout browser, so Discord's ⚡ Buy (pressed on
 // your phone) starts at once. Older ones pick it up at their next check (within a minute or so).
 export const REMOTE_EXTENSION_VERSION = '1.15.0';
@@ -31,7 +34,7 @@ export const REMOTE_EXTENSION_VERSION = '1.15.0';
 // searches at a store while its queue is up).
 export const GATE_EXTENSION_VERSION = '1.16.0';
 // The monitor's page reader, used by the extension's in-browser checks too.
-const SHARED = ['html.js', 'extract.js', 'status.js', 'listing.js', 'gate.js'].map((f) => ({ name: `lib/${f}`, from: path.join(ROOT, 'server', 'monitor', f) }));
+const SHARED = ['html.js', 'extract.js', 'status.js', 'listing.js', 'gate.js', 'words.js'].map((f) => ({ name: `lib/${f}`, from: path.join(ROOT, 'server', 'monitor', f) }));
 
 const isLocal = (u) => ['localhost', '127.0.0.1'].includes(new URL(u).hostname);
 

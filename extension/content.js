@@ -165,11 +165,12 @@
       const seen = frames.filter((f) => f.seen > 0);
       if (seen.length) return seen.every((f) => f.done) && (!boxes.length || pageDone);
       if (boxes.length) return pageDone;
-      return MGBChecks.savedCardShown(document, checkoutFlow, false);
+      // (A card the store, Shop Pay or the payment provider already has for you: Stripe's Link, in its frame.)
+      return MGBChecks.savedCardShown(document, checkoutFlow, false) || frames.some((f) => f.saved);
     }
     if (boxes.some((el) => el.value && /^card(Number|Expiry|ExpMonth)$/.test(MGBFill.classifyField(el, checkoutFlow) || ''))) return true;
     if (frames.some((f) => f.filled > 0)) return true;
-    return !frames.some((f) => f.seen > 0) && MGBChecks.savedCardShown(document, checkoutFlow, boxes.length > 0);
+    return !frames.some((f) => f.seen > 0) && (MGBChecks.savedCardShown(document, checkoutFlow, boxes.length > 0) || (!boxes.length && frames.some((f) => f.saved)));
   }
 
   /**
@@ -258,8 +259,9 @@
     // (Stores that pay with the card saved in your account there — Amazon's — need none from the extension;
     // nor does a card the store or Shop Pay shows it already has for you.)
     const ownCard = !checkoutFlow || checkoutFlow.payment !== 'account';
-    const saved = ownCard && !cardBoxesOnPage().length && MGBChecks.savedCardShown(document, checkoutFlow, false)
-      && !((await ask({ type: 'cardFrames' })) || []).some((f) => f.seen > 0);
+    const frames = (await ask({ type: 'cardFrames' })) || [];
+    const saved = ownCard && !cardBoxesOnPage().length && !frames.some((f) => f.seen > 0)
+      && (MGBChecks.savedCardShown(document, checkoutFlow, false) || frames.some((f) => f.saved));
     if (ownCard && !saved && !data.card) return acoStop('needs_you', 'card_missing', 'No card is saved in the extension — add it (icon → Card settings) and finish this yourself.', fin);
     if (ownCard && checkoutFlow && checkoutFlow.payment === 'card' && !(await cardIn())) return acoStop('needs_you', 'card_not_filled', "Your card didn't go into the store's card boxes — type it in and press the button yourself.", fin);
     await MGBFlows.wait(400); // the page's own checks on the last boxes
@@ -288,6 +290,8 @@
   async function fillCheckout() {
     if (assisting || !assistFlag.active()) return;
     assisting = true;
+    // (WooCommerce's add-to-cart link: out of the address, so a reload doesn't add it again.)
+    if (retailer && retailer.platform === 'woocommerce') MGBQuick.dropCartParams();
     try {
       const flag = assistFlag.read();
       const data = await ask({ type: 'fillData', part: 'all', profileId: flag && flag.profileId });

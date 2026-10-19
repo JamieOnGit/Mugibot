@@ -12,7 +12,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
-import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseShopifyProducts, parseShopifySuggest, parseTarget, termsRegex } from '../server/monitor/listing.js';
+import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseMagento, parseShopifyProducts, parseShopifySuggest, parseTarget, parseWoo, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
 import { Sweeper, olderVersion, retryAfterMs } from '../server/monitor/sweep.js';
 
@@ -297,7 +297,7 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   // The real stores off (tests never touch them); the dummy ones swept from the server.
   r = await boss.put('/api/monitor/sweep', {
     everySeconds: 5, keywords: 'Pokemon, one piece',
-    stores: { target: 'off', jbhifi: 'off', toysrus: 'off', trainertown: 'off', amazon: 'off', kmart: 'off', bigw: 'off', ebgames: 'off', zing: 'off', thegamescube: 'off', gamerholic: 'off', pokemoncenter: 'off', pbandai: 'off', 'demo-kmart': 'server', 'demo-jbhifi': 'server', 'demo-bigw': 'server', 'demo-ebgames': 'browser', 'demo-trainertown': 'server' },
+    stores: { target: 'off', jbhifi: 'off', toysrus: 'off', trainertown: 'off', amazon: 'off', kmart: 'off', bigw: 'off', ebgames: 'off', zing: 'off', thegamescube: 'off', gamerholic: 'off', pokemoncenter: 'off', pbandai: 'off', citybeach: 'off', pokebox: 'off', goodgames: 'off', collectiblemadness: 'off', cherrycollectables: 'off', gamesmen: 'off', gamesworld: 'off', 'demo-kmart': 'server', 'demo-jbhifi': 'server', 'demo-bigw': 'server', 'demo-ebgames': 'browser', 'demo-trainertown': 'server' },
   });
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(r.body.settings.keywords, ['pokemon', 'one piece']);
@@ -1125,4 +1125,80 @@ test("Premium Bandai: its search JSON (/api/search) — on sale, pre-orders, clo
   assert.equal(parseListing('pbandai', '{"timestamp":"2026-10-16T13:27:22.023Z","status":500,"error":"Internal Server Error","path":"/api/search"}', { storeBase: 'https://p-bandai.com/au' }).problem, 'layout');
   // Each one counts as Premium Bandai's own (the sweeps keep only the store's own links).
   assert.equal(env.app.retailers.forUrl(r.products[0].url).id, 'pbandai');
+});
+
+test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg\" added: sealed products, not singles), and as its second page the store's newest products — a new listing alerts from there, with Shopify's add-to-cart link", async () => {
+  const saved = sw.settings.stores;
+  sw.save({ stores: { ...saved, 'demo-pokebox': 'server' } }, null);
+  try {
+    assert.match(sw.urlFor(R('pokebox'), 'pokemon'), /^https:\/\/www\.pokebox\.com\.au\/search\/suggest\.json\?q=pokemon%20tcg&/);
+    assert.equal(sw.urlFor(R('pokebox'), 'one piece', 2), 'https://www.pokebox.com.au/products.json?limit=30', 'page 2: its newest products, whatever the keyword');
+    assert.equal(sw.paceFor(R('pokebox')), 10000);
+    for (const id of ['goodgames', 'collectiblemadness', 'cherrycollectables']) {
+      assert.equal(R(id).sweep.from, 'server', id);
+      assert.equal(sw.urlFor(R(id), 'pokemon', 2), `${R(id).base}/products.json?limit=30`, id);
+    }
+    assert.equal(sw.urlFor(R('demo-pokebox'), 'pokemon', 2), `${store.url}/pokebox/products.json?limit=30`);
+    // The first read of each page sets the scene.
+    assert.equal((await sweep('demo-pokebox', 'pokemon', 1)).baseline, true);
+    assert.equal((await sweep('demo-pokebox', 'pokemon', 2)).baseline, true);
+    assert.equal(product('demo-pokebox', 'pokemon-tcg-30th-celebration-elite-trainer-box-etb').status, 'in_stock');
+    // A product the store lists: its newest products show it.
+    store.shop('pokebox').products.push({ sku: 'pokemon-tcg-perfect-order-booster-bundle', name: 'Pokemon TCG: Mega Evolution ME03 - Perfect Order Booster Bundle', price: 79.99, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499990 });
+    const r = await sweep('demo-pokebox', 'pokemon', 2);
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.new, 1);
+    assert.ok(alerts('listed').some((a) => a.sku === 'pokemon-tcg-perfect-order-booster-bundle'));
+    assert.equal(product('demo-pokebox', 'pokemon-tcg-perfect-order-booster-bundle').variant_id, '4499990', 'the option to buy, for the cart link');
+    assert.equal(env.app.retailers.cartUrl('demo-pokebox', { variantId: '4499990' }), `${store.url}/pokebox/cart/4499990:1`);
+  } finally {
+    sw.save({ stores: saved }, null);
+  }
+});
+
+test("Games World (WooCommerce): its product API — names with HTML entities read right, stock, pre-orders, and the product's id for its add-to-cart link (straight to checkout); a restock alerts", async () => {
+  const saved = sw.settings.stores;
+  sw.save({ stores: { ...saved, 'demo-gamesworld': 'server' } }, null);
+  try {
+    assert.equal(sw.urlFor(R('gamesworld'), 'one piece'), 'https://www.gamesworld.com.au/wp-json/wc/store/v1/products?search=one%20piece&per_page=30&orderby=date&order=desc&_fields=id,name,slug,permalink,sku,type,prices,images,is_in_stock,is_purchasable,is_on_backorder,stock_availability,add_to_cart');
+    assert.equal(sw.paceFor(R('gamesworld')), 15000);
+    assert.equal((await sweep('demo-gamesworld', 'one piece')).baseline, true);
+    const S = store.shop('gamesworld');
+    const box = product('demo-gamesworld', 'one-piece-carrying-on-his-will-op-13-sealed-booster-box-24');
+    assert.deepEqual([box.status, box.price, box.name], ['in_stock', 240, 'ONE PIECE CARRYING ON HIS WILL [OP-13] SEALED BOOSTER BOX (24)']);
+    assert.equal(box.variant_id, String(S.products[0].id));
+    assert.match(box.url, /\/gamesworld\/product\/one-piece-carrying-on-his-will-op-13-sealed-booster-box-24\/$/);
+    assert.equal(env.app.retailers.cartUrl('demo-gamesworld', { variantId: box.variant_id }), `${store.url}/gamesworld/checkout/?add-to-cart=${box.variant_id}&quantity=1`);
+    assert.equal((await sweep('demo-gamesworld', 'pokemon')).baseline, true);
+    assert.equal(product('demo-gamesworld', 'pokemon-tcg-mega-evolution-elite-trainer-box').status, 'out_of_stock');
+    store.set('gamesworld', 'pokemon-tcg-mega-evolution-elite-trainer-box', { status: 'in_stock' });
+    assert.equal((await sweep('demo-gamesworld', 'pokemon')).restock, 1);
+    assert.ok(alerts('restock').some((a) => a.sku === 'pokemon-tcg-mega-evolution-elite-trainer-box'));
+  } finally {
+    sw.save({ stores: saved }, null);
+  }
+});
+
+test('WooCommerce and Magento results, read: entities decoded, cents to dollars, backorders as pre-orders; Luma and Hyvä tiles, sold out, and "no results"', () => {
+  const woo = parseWoo(JSON.stringify([
+    { id: 11, name: 'POKEMON SV &amp; SWORD &#8211; ETB', slug: 'pokemon-etb', permalink: 'https://shop.example/product/pokemon-etb/', type: 'simple', prices: { price: '8999', regular_price: '9999', currency_minor_unit: 2 }, images: [{ thumbnail: 'https://shop.example/a.jpg' }], is_in_stock: true, is_purchasable: true, is_on_backorder: false, add_to_cart: { text: 'Add to cart' } },
+    { id: 12, name: 'ONE PIECE OP-15 BOX', slug: 'op15', permalink: 'https://shop.example/product/op15/', type: 'variable', prices: { price: '24000', currency_minor_unit: 2 }, is_in_stock: true, is_purchasable: true, is_on_backorder: true, add_to_cart: { text: 'Select options' } },
+    { id: 13, name: 'Sold out', slug: 'gone', permalink: 'https://shop.example/product/gone/', type: 'simple', prices: { price: '100' }, is_in_stock: false },
+  ]), { base: 'https://shop.example/' });
+  assert.deepEqual(woo.products.map((p) => [p.sku, p.title, p.price, p.wasPrice, p.inStock, p.preorder, p.variantId]), [
+    ['pokemon-etb', 'POKEMON SV & SWORD – ETB', 89.99, 99.99, true, false, '11'],
+    ['op15', 'ONE PIECE OP-15 BOX', 240, null, true, true, null],
+    ['gone', 'Sold out', 1, null, false, false, '13'],
+  ]);
+  assert.equal(parseWoo('<html>blocked</html>').problem, 'layout');
+  const hyva = `<div class="products-grid"><form method="post" action="/checkout/cart/add/" class="item product product-item product_addtocart_form">
+    <a class="product-item-link" href="https://shop.example/pokemon-tcg-booster-bundle-mega">Pokemon TCG Booster Bundle Mega</a>
+    <span class="price-wrapper" data-price-amount="54.95" data-price-type="finalPrice"><span class="price">$54.95</span></span>
+    <span class="price-wrapper" data-price-amount="64.95" data-price-type="oldPrice"></span>
+    <button class="action tocart" type="submit"><span>Add to Cart</span></button></form>
+    <form class="item product product-item"><a class="product-item-link" href="https://shop.example/one-piece-op-14-box-display">One Piece OP-14 Box Display</a><span class="price">$199.00</span><p class="unavailable stock">Out of stock</p></form></div>`;
+  const m = parseMagento(hyva, { base: 'https://shop.example/' });
+  assert.deepEqual(m.products.map((p) => [p.sku, p.price, p.wasPrice, p.inStock]), [['pokemon-tcg-booster-bundle-mega', 54.95, 64.95, true], ['one-piece-op-14-box-display', 199, null, false]]);
+  assert.equal(parseMagento('<div class="message notice"><div>Your search returned no results.</div></div>').problem, 'empty');
+  assert.equal(parseMagento('<html><head><title>Attention Required! | Cloudflare</title></head><body>Sorry, you have been blocked</body></html>').problem, 'blocked');
 });

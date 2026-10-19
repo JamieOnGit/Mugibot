@@ -10,6 +10,8 @@
 //   quick checkout (a window over the product page, sometimes shown instead) is filled in the same
 //   way, in its frame (checkout.frames).
 
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'amazon',
   name: 'Amazon AU',
@@ -48,7 +50,7 @@ export default {
   hints: { availabilityRe: /(^|[\s_-])(availability|outOfStock)([\s_-]|$)/i },
   flow: {
     // "Buy Now" first (straight to checkout); "Add to Cart" where there's none.
-    product: { add: [/^add to cart$/i], buyNow: [/^buy now$/i], waitMs: 12000 },
+    product: { add: ADD_WORDS, buyNow: [/^buy now$/i], waitMs: 12000 },
     added: { checkout: [/\bproceed to (checkout|buy)\b/i], viewBag: [/^go to cart$/i] },
     // (url: the cart's own page, for when nothing on the product page leads there.)
     // (Clear cart: only what's in the cart itself — its "Saved for later" list, right under it, is left alone.)

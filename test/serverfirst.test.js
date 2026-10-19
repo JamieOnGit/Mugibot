@@ -300,3 +300,38 @@ test("the loop: while the browser stands in, the server only tries when it's tim
     fresh(id);
   }
 });
+
+test("The Gamesmen (its Cloudflare turns servers away): refused once, an admin's browser stands in — it opens Magento's search page and reads its tiles; Pokébox and Games World answer the server", async () => {
+  const id = 'demo-gamesmen';
+  sw.save({ stores: { ...sw.settings.stores, [id]: 'auto', 'demo-pokebox': 'auto', 'demo-gamesworld': 'auto' } }, null);
+  fresh(id);
+  store.shop('gamesmen').refuseServers = true;
+  try {
+    const r = await sweep(id);
+    assert.equal(r.ok, false);
+    assert.ok(sw.stat(id).backup, 'handed over at the first refusal (a store known to turn servers away)');
+    assert.ok(sys(/The Gamesmen \(dummy store\): Mugibot's server is refused \(The store refused the search \(HTTP 403\)\)/));
+    const t = due(id);
+    assert.deepEqual([t.render, t.parser], [true, 'magento'], 'its search page opened in the browser and read');
+    assert.equal(t.url, `${store.url}/gamesmen/catalogsearch/result/?q=${encodeURIComponent(t.keyword)}`);
+    sw.stat(id).browserNext = 0; // (given out just now: given again for the read below)
+    const [res] = await browserRead(id);
+    assert.equal(res.ok, true, res.error);
+    const etb = env.app.catalog.productFor(id, 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box');
+    assert.deepEqual([etb.status, etb.price], ['in_stock', 119.95]);
+    assert.match(etb.url, /\/gamesmen\/pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box$/);
+    assert.equal(env.app.catalog.productFor(id, 'pokemon-tcg-mega-evolution-pitch-black-elite-trainer-box').status, 'out_of_stock');
+    assert.equal(card(id).source, 'browser');
+  } finally {
+    store.shop('gamesmen').refuseServers = false;
+    fresh(id);
+  }
+  // The others answer Mugibot's server: nothing for the browser.
+  for (const other of ['demo-pokebox', 'demo-gamesworld']) {
+    fresh(other);
+    const r = await sweep(other);
+    assert.equal(r.ok, true, `${other}: ${r.error}`);
+    assert.equal(due(other), undefined, `${other}: no admin's browser while the server's let in`);
+  }
+  sw.save({ stores: { ...sw.settings.stores, [id]: 'off', 'demo-pokebox': 'off', 'demo-gamesworld': 'off' } }, null);
+});

@@ -20,6 +20,8 @@
 // page does (like EB Games'). (The search page itself answered "PAGE NOT AVAILABLE" when tried
 // in Oct 2026, even from the site's own search box, while this JSON answered fine.)
 
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'pbandai',
   name: 'Premium Bandai',
@@ -53,7 +55,7 @@ export default {
   flow: {
     product: {
       // "PLACE PRE-ORDER" when it drops (a pre-order), or "Add to Cart".
-      add: [/^add to cart$/i, /\bpre-?order\b/i, /^(buy|purchase) now$/i],
+      add: ADD_WORDS,
       waitMs: 15000,
     },
     added: {

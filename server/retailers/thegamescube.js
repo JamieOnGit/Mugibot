@@ -13,6 +13,8 @@
 // Live sweeps from Mugibot's server: its search pages are made on the server, a tile per
 // product with each option's stock and price (the "crystal" reader).
 
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'thegamescube',
   name: 'The Games Cube',
@@ -33,7 +35,7 @@ export default {
   monitor: { server: true, browser: true },
   flow: {
     product: {
-      add: [/\badd to cart\b/i, /\bpre-?order\b/i],
+      add: ADD_WORDS,
       // The cart button is an icon with no words: the first option in stock.
       addSelector: 'form.add-to-cart-form [type="submit"].add-to-cart, form.add-to-cart-form button.add-to-cart',
       waitMs: 12000,

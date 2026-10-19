@@ -109,8 +109,8 @@ With Developer Mode on:
 | the `#restocks` channel | Copy Channel ID | `DISCORD_RESTOCK_CHANNEL_ID` (optional) |
 
 Optional: make a permanent invite link (`#welcome` → Invite People → Edit
-invite link → Expire: Never) for `DISCORD_INVITE_URL`. Members see it on their
-Discord tab. The bot adds members by itself, so this is just a convenience.
+invite link → Expire: Never) for `DISCORD_INVITE_URL`. Members see it under
+Setup → Discord & pings. The bot adds members by itself, so this is just a convenience.
 
 ---
 

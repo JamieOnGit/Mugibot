@@ -99,9 +99,9 @@ export class Bags {
     if (!entitlement(user, this.now()).active) return { error: `Clear cart needs an active membership: ${this.cfg.baseUrl}/app#membership` };
     const aco = this.ctx.aco;
     const device = aco.checkoutDevice(userId);
-    if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer (Extension tab), and its bags are emptied there.` };
+    if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer (Setup page), and its bags are emptied there.` };
     if (olderVersion(device.version, BAGS_EXTENSION_VERSION)) {
-      return { error: `Clear cart needs the extension ${BAGS_EXTENSION_VERSION} or newer in ${device.name}${device.version ? ` (it has ${device.version})` : ''} — update it there from the Extension tab.` };
+      return { error: `Clear cart needs the extension ${BAGS_EXTENSION_VERSION} or newer in ${device.name}${device.version ? ` (it has ${device.version})` : ''} — update it there from the Setup page.` };
     }
     const all = this.storeList();
     const list = stores === 'all' ? all : all.filter((r) => (Array.isArray(stores) ? stores : [stores]).includes(r.id));

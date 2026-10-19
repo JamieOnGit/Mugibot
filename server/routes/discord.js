@@ -274,7 +274,7 @@ export function register(router, ctx) {
           fields: [
             { name: 'Membership', value: ent.label, inline: true },
             { name: 'Watchlist', value: `${items.length} SKUs (${instock} available now)`, inline: true },
-            { name: 'Browser extension', value: devices ? `${devices} connected` : 'Not connected — see the Extension tab', inline: true },
+            { name: 'Browser extension', value: devices ? `${devices} connected` : 'Not connected — see the Setup page', inline: true },
             { name: 'Members\' server', value: user.discord_in_guild ? (user.discord_role || !cfg.discord.memberRoleId ? 'In the server ✓' : 'In the server, no member role yet') : 'Not in the server', inline: true },
           ],
         }],

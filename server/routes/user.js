@@ -235,7 +235,8 @@ export function register(router, ctx) {
   });
 
   router.post('/api/bags/clear', async (req) => {
-    if (!limiter.hit(`bags-clear:${req.user.id}`, 20, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    // (Each press only queues a store's bag: room for a member pressing Clear cart at every store in turn.)
+    if (!limiter.hit(`bags-clear:${req.user.id}`, 60, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     const body = req.body || {};
     const stores = body.stores === 'all' ? 'all' : (Array.isArray(body.stores) ? body.stores : [body.store]).map((s) => str(s, 40)).filter(Boolean).slice(0, 40);
     if (stores !== 'all' && !stores.length) throw bad('Which store? (store, or stores: "all")');

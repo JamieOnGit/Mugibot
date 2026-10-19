@@ -10,6 +10,8 @@
 //   frame from paydock.com, PAYMENT_HOSTS) → STOP at "Place order". Signed in: the same, with your
 //   details already in.
 
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'target',
   name: 'Target',
@@ -33,7 +35,7 @@ export default {
   account: { signIn: '' },
   monitor: { server: true, browser: true },
   flow: {
-    product: { add: [/\badd to (cart|basket|bag)\b/i, /\bpre-?order\b/i], waitMs: 12000 },
+    product: { add: ADD_WORDS, waitMs: 12000 },
     // upsell: the "Often Bought Together" pop-up after Add to basket — closed with its ✕, never accepted.
     added: { checkout: [/^(secure )?check ?out( now)?$/i], viewBag: [/\bview (basket|cart|bag)\b/i], upsell: [/often bought together/i] },
     // (Its bag is the basket: /basket.)

@@ -1,8 +1,9 @@
 /* Mugibot — the store-page part of ⚡ Buy (built on TCGBot's Quick Checkout).
 
    One of each, straight to checkout, as fast as the store allows:
-   - Shopify stores: the store's own cart link (/cart/<variant>:1) opens checkout with the
-     product already in it — no product page clicks at all.
+   - Shopify and WooCommerce stores: the store's own cart link (/cart/<variant>:1, WooCommerce's
+     /checkout/?add-to-cart=<id>) opens checkout with the product already in it — no product page
+     clicks at all.
    - Other stores: Add to bag the moment the store's page can take the press, then — as
      soon as the store shows it went in — straight to its checkout page (or its "added"
      popup's Checkout button).
@@ -40,15 +41,29 @@ var MGBQuick = (function () {
   var ANSWERED_MS = 2500;
   // How long to wait for a page built with React or Vue to wire up its Add button.
   var READY_MS = 8000;
-  var ADDED_RE = /\badded to (your )?(bag|cart|basket|trolley)\b|\bitems? added\b/i;
+  // ("Added to your cart", "… has been added to your cart", Magento's "You added … to your shopping cart.")
+  var ADDED_RE = /\badded to (your )?(shopping )?(bag|cart|basket|trolley)\b|\bitems? added\b|\byou added .{1,160} to your (shopping )?(bag|cart|basket|trolley)\b/i;
   var EMPTY_RE = /\b(bag|cart|basket|trolley) is (currently )?empty\b|\bno items in (your )?(shopping )?(bag|cart|basket|trolley)\b|\bnothing in (your )?(bag|cart|basket|trolley)\b/i;
   var RECOMMENDATIONS = '[class*="recommend" i], [id*="recommend" i], [class*="carousel" i], [class*="related" i], [class*="upsell" i], [class*="product-card" i], [class*="product-tile" i], [class*="also-like" i]';
   var DRAWER = '[role="dialog"], [aria-modal="true"], [class*="drawer" i], [class*="minicart" i], [class*="mini-cart" i], [class*="mini-bag" i], [class*="minibag" i], [class*="flyout" i], [class*="modal" i], [class*="side-cart" i], [class*="added-to" i], [class*="addedto" i]';
   var EXPRESS = /paypal|afterpay|zip ?pay|\bzip\b|klarna|humm|latitude|apple ?pay|google ?pay|shop ?pay|express|continue shopping/i;
-  var ADD_RE = /\b(add to (bag|cart|basket|trolley)|pre-?order)\b/i;
+  // A product page's buy button, at every store: "Add to cart", "Add to basket", "Pre-order", "Buy now",
+  // "Buy"… (the same words, in the same order of preference, as server/monitor/words.js: a store's flow
+  // sends them as its product.add). NOT_ADD: buttons with those words that aren't one (a wish list,
+  // paying later, a wallet's own express button).
+  var ADD_WORDS = [
+    /\badd to (my |your )?(shopping )?(cart|bag|basket|trolley|order)\b/i,
+    /\bpre-?\s?order\b/i,
+    /\bbuy (it )?now\b/i,
+    /^buy$/i,
+    /^(order|purchase|get it) now$/i,
+    /^add$/i,
+  ];
+  var NOT_ADD = /wish ?list|favou?rite|compare|registry|gift ?card|notify|remind|alert me|pay later|pay in \d|lay-?by|laybuy|afterpay|zip ?pay|\bzip\b|paypal|klarna|humm|latitude|apple ?pay|google ?pay|g ?pay|shop ?pay|with shop\b|in-?store|click (&|and) collect|pick ?up|reserve/i;
   // The final "buy" buttons are never pressed while getting to checkout, whatever a flow says
-  // (only an armed Auto-checkout run presses one: content.js, at checkout).
-  var FINAL = /check ?out securely|place (my |your )?order|pay now|pay securely|complete (my |your )?(order|purchase|payment)|submit (my )?(order|payment)|confirm (and|&) pay|pay \$|buy now/i;
+  // (only an armed Auto-checkout run presses one: content.js, at checkout). ("Buy now" on a product
+  // page is its buy button — on a checkout page, fill.js knows it as the final one.)
+  var FINAL = /check ?out securely|place (my |your )?order|pay now|pay securely|complete (my |your )?(order|purchase|payment)|submit (my )?(order|payment)|confirm (and|&) pay|pay \$|buy now (and|&) pay/i;
   // Pop-ups that try to sell you more ("Often Bought Together" at Target) — closed, never accepted —
   // and newsletter sign-ups that cover the page.
   var UPSELL_RE = /often bought together|frequently bought( together)?|bought together|you (may|might) also (like|need|want)|customers (also|who) (bought|viewed|liked)|complete (the|your) (look|set|collection)|recommended for you|goes (well )?with|pairs? (well )?with|don.?t forget|add (a |an )?(protection|warranty|care plan|gift ?wrap)|protect your purchase|before you go|special offer|upgrade your (order|purchase)/i;
@@ -198,18 +213,34 @@ var MGBQuick = (function () {
     });
   }
 
+  /** Which of the add words a button's label matches first (its rank: lower is preferred), or -1. */
+  function addRank(labels, el) {
+    var parts = labelParts(el);
+    for (var i = 0; i < labels.length; i++) {
+      var re = labels[i];
+      if (re && re.test && parts.some(function (t) { return t.length < 80 && re.test(t); })) return i;
+    }
+    return -1;
+  }
+
   function findAddToBag(R) {
+    // (Never at checkout: its "Buy now" is the final button there.)
+    if (onCheckoutPage(R)) return null;
     var P = part(R, 'product');
-    var labels = P.add && P.add.length ? P.add : [ADD_RE];
+    var labels = P.add && P.add.length ? P.add : ADD_WORDS;
     var all = [];
     if (P.addSelector) {
       try { all = toArray(document.querySelectorAll(P.addSelector)).filter(function (el) { return isVisible(el) && !isDisabled(el) && !inAnyPanel(el); }); } catch (e) { all = []; }
     }
     if (!all.length) {
-      all = controls().filter(function (el) {
+      all = controls().map(function (el) {
         var label = labelOf(el);
-        return label.length < 80 && any(labels, label) && !isFinal(R, textOf(el)) && !el.closest('header, nav');
-      });
+        var rank = label.length < 80 && !NOT_ADD.test(label) && !EXPRESS.test(label) && !isFinal(R, textOf(el)) && !el.closest('header, nav') ? addRank(labels, el) : -1;
+        return { el: el, rank: rank };
+      }).filter(function (x) { return x.rank !== -1; })
+        // "Add to cart" before "Buy now" (the store's own order of preference), each in the page's order.
+        .sort(function (a, b) { return a.rank - b.rank; })
+        .map(function (x) { return x.el; });
     }
     // Prefer the main buy box; fall back to any Add button that isn't on another product's tile.
     return all.find(function (el) { return !el.closest(RECOMMENDATIONS); })
@@ -470,6 +501,37 @@ var MGBQuick = (function () {
   }
 
   /** Shopify: the product's option to buy — the one in the link, else the first in stock. */
+  /**
+   * WooCommerce: a simple product's id, from its own Add to cart button (there only while it can be
+   * bought) — what its add-to-cart link takes. A product with options to pick first (its form has
+   * them): none, and its Add to cart is pressed instead.
+   */
+  function wooVariant() {
+    var form = document.querySelector('form.cart');
+    if (!form || form.classList.contains('variations_form') || form.querySelector('.variations, [name="variation_id"]')) return null;
+    var btn = form.querySelector('button[name="add-to-cart"], button.single_add_to_cart_button, input[name="add-to-cart"]');
+    var id = form.querySelector('[name="add-to-cart"]');
+    var v = id ? String(id.value || id.getAttribute('value') || '') : '';
+    var press = btn && btn.tagName === 'BUTTON' ? btn : form.querySelector('button[type="submit"], .single_add_to_cart_button');
+    if (!press || !isVisible(press) || isDisabled(press)) return null;
+    return /^\d{1,20}$/.test(v) ? v : null;
+  }
+
+  /**
+   * WooCommerce's add-to-cart link left in the address (/checkout/?add-to-cart=…): taken out once
+   * checkout's open, so a reload of the page never puts the product in the cart a second time.
+   */
+  function dropCartParams() {
+    try {
+      var u = new URL(location.href);
+      if (!u.searchParams.has('add-to-cart')) return false;
+      u.searchParams.delete('add-to-cart');
+      u.searchParams.delete('quantity');
+      history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+      return true;
+    } catch (e) { return false; }
+  }
+
   async function shopifyVariant(R) {
     var m = MGBFlows.decodedPath(location).match(/\/products\/([^/?#.]+)/);
     if (!m) return null;
@@ -611,10 +673,10 @@ var MGBQuick = (function () {
       if (onCheckoutPage(R)) { setStatus('At checkout — filling it in…'); return 'checkout'; }
       if (onBagPage(R)) return checkoutFromBag();
       if (!product) { setStatus('Open one of your SKUs first (list below).'); return 'error'; }
-      // Shopify: the store's own cart link puts it in the cart and opens checkout — no clicks.
+      // Shopify and WooCommerce: the store's own cart link puts it in the cart and opens checkout — no clicks.
       if (R && R.cartPath && R.cartPath.indexOf('{variant}') !== -1) {
         setStatus('Opening checkout with it in your cart…');
-        var variant = await shopifyVariant(R);
+        var variant = R.platform === 'woocommerce' ? wooVariant() : await shopifyVariant(R);
         if (variant) {
           store.save({ stage: 'cart-link', startedAt: Date.now(), sku: product.sku, name: product.name });
           report('add', 'Opened the store\'s cart link — straight to checkout', product);
@@ -1074,6 +1136,7 @@ var MGBQuick = (function () {
     onCheckoutPage: onCheckoutPage,
     onBagPage: onBagPage,
     productForPage: productForPage,
+    dropCartParams: dropCartParams,
     run: run,
     makePanel: makePanel,
     sessionStore: sessionStore,

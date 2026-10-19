@@ -29,7 +29,9 @@
 // reads hold every result: with more results than that, nothing is marked.
 //
 // Trainer Town (Shopify) keeps each game in a collection of its own; there a
-// keyword's whole collection is read in one go, sold-out products included.
+// keyword's whole collection is read in one go, sold-out products included. At
+// Pokébox and the other card shops on Shopify, each keyword's second page is the
+// store's newest products (sweep.feedPath), where a new drop shows up first.
 //
 // Stores that answer servers (Target, JB Hi-Fi, Trainer Town, Amazon) are swept
 // from the server, honestly identified as Mugibot; so is Kmart, through its
@@ -370,6 +372,9 @@ export class Sweeper {
   urlFor(r, keyword, page = 1, { vip = false } = {}) {
     const collection = !vip && this.collectionFor(r, keyword);
     if (collection) return `${r.base}${r.sweep.collectionPath.replace('{collection}', encodeURIComponent(collection))}`;
+    // A keyword's second page at a store that has one list of its newest products (sweep.feedPath:
+    // Pokébox's): that list, whatever the keyword — it's read for the keyword's products in it.
+    if (page > 1 && r.sweep.feedPath) return `${r.base}${r.sweep.feedPath}`;
     // (A VIP or drop watch's words are searched as they are.)
     let p = r.sweep.path.replace('{q}', encodeURIComponent(vip ? keyword : this.query(r, keyword)));
     if (page > 1 && r.sweep.pagePath) p += r.sweep.pagePath.replace('{page}', String(page));
@@ -1066,7 +1071,7 @@ export class Sweeper {
 
   /** An admin's browser whose extension is too old for a store (Chrome won't let it open that store's pages): say so, once. */
   needsUpdate(r, st, needs, browser) {
-    const note = `Needs Mugibot's extension ${needs} or newer in an admin's browser${browser.version ? ` (${browser.who ? `${browser.who}'s has` : 'this one has'} ${browser.version})` : ''} — update it from the dashboard's Extension tab`;
+    const note = `Needs Mugibot's extension ${needs} or newer in an admin's browser${browser.version ? ` (${browser.who ? `${browser.who}'s has` : 'this one has'} ${browser.version})` : ''} — update it from the dashboard's Setup page`;
     const fresh = st.lastError !== note;
     st.needsUpdateAt = this.now();
     st.lastError = note;

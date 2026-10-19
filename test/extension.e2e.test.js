@@ -792,6 +792,142 @@ test('Toys"R"Us (Shopify, at toysrus.com.au): ⚡ Buy → its cart link → your
   await dash.close();
 });
 
+test('Pokébox (Shopify, as its real checkout goes): ⚡ Buy → Shopify\'s cart link → your name, address (Shopify\'s suggestions come up as it\'s typed), suburb, state/territory, postcode, phone → the shipping method it picked → card number, MM/YY, security code, name on card → "Use shipping address as billing address" ticked (it came unticked) → stops at "Pay now"', async () => {
+  const handle = 'pokemon-tcg-30th-celebration-elite-trainer-box-etb';
+  store.shop('pokebox').billingUnticked = true;
+  store.shop('pokebox').shippingRates = 'express'; // (the shipping method Shopify picked: left as it is)
+  await useItems([{ store: 'demo-pokebox', sku: handle, name: 'PB ETB' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'PB ETB');
+  await shop.waitForURL(/\/pokebox\/checkouts\/c\/abc123$/, { timeout: 30000 });
+  await waitReady(shop, 'Pay now');
+  assert.deepEqual(store.shop('pokebox').cart.map((c) => [c.sku, c.qty]), [[handle, 1]], 'one of it, by the cart link');
+  assert.deepEqual(await Promise.all(['email', 'firstName', 'lastName', 'address1', 'city', 'postalCode', 'phone'].map((n) => shop.inputValue(`input[name=${n}]`))),
+    [PROFILE_A.email, 'Ash', 'Ketchum', PROFILE_A.address1, 'Sydney', '2000', PROFILE_A.phone]);
+  assert.equal(await shop.inputValue('select[name=zone]'), 'NSW');
+  assert.equal(await shop.isChecked('input[name=shipping][value=express]'), true, 'the shipping method it picked, left as it was');
+  assert.equal(await shop.isChecked('input[name=billingSame]'), true, '"Use shipping address as billing address": ticked');
+  assert.equal(await shop.isVisible('#billing-address'), false, 'no billing address to fill in');
+  await waitFor(async () => JSON.stringify(await shopifyCard(shop)) === JSON.stringify(EXPECT_SHOPIFY_CARD), { timeout: 20000, message: 'card number, expiry, security code, name on card' });
+  await shop.waitForTimeout(500);
+  assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+for (const [id, handle] of [['goodgames', 'pokemon-tcg-mega-lucario-ex-league-battle-deck'], ['collectiblemadness', 'pokemon-tcg-mega-zygarde-ex-premium-collection'], ['cherrycollectables', 'pokemon-tcg-mega-evolution-phantasmal-flames-booster-pack']]) {
+  test(`${id} (Shopify, the same flow as Pokébox): ⚡ Buy → its cart link → your details → the card with its name → billing address the same as shipping → stops at "Pay now"`, async () => {
+    await useItems([{ store: `demo-${id}`, sku: handle, name: `${id} item` }]);
+    const dash = await ctx.newPage();
+    const shop = await buyFromDashboard(dash, `${id} item`);
+    await shop.waitForURL(new RegExp(`/${id}/checkouts/c/abc123$`), { timeout: 30000 });
+    await waitReady(shop, 'Pay now');
+    assert.deepEqual(store.shop(id).cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+    assert.equal(await shop.inputValue('input[name=address1]'), PROFILE_A.address1);
+    assert.equal(await shop.inputValue('input[name=postalCode]'), '2000');
+    assert.equal(await shop.isChecked('input[name=billingSame]'), true);
+    await waitFor(async () => JSON.stringify(await shopifyCard(shop)) === JSON.stringify(EXPECT_SHOPIFY_CARD), { timeout: 20000, message: 'the card in its boxes' });
+    assert.equal(ordersPlaced(), 0);
+    await shop.close();
+    await dash.close();
+  });
+}
+
+const gmCard = (shop) => Promise.all(['cc-number', 'cc-exp', 'cc-cvv'].map((id) => shop.inputValue(`#${id}`)));
+test('The Gamesmen (Magento, as its real checkout goes): "Add to Cart" → "You added … to your shopping cart" → checkout → email, first and last name, street address, suburb, state/territory (full names), postcode, country Australia, mobile → "I have a different billing address" unticked (it came ticked) → "Standard" → "Credit card" → card number, expiry, security code → the terms box ticked → stops at "CONFIRM AND PAY"', async () => {
+  const sku = 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box';
+  store.shop('gamesmen').billingTicked = true;
+  await useItems([{ url: store.productUrl('gamesmen', sku), name: 'GM ETB' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'GM ETB');
+  await reach(shop, /\/gamesmen\/checkout\/$/);
+  await waitReady(shop, 'CONFIRM AND PAY');
+  assert.deepEqual(store.shop('gamesmen').cart.map((c) => [c.sku, c.qty]), [[sku, 1]], '"Add to Cart" pressed once');
+  assert.deepEqual(await Promise.all(['username', 'firstname', 'lastname', 'street[0]', 'city', 'postcode', 'telephone'].map((n) => shop.inputValue(`input[name="${n}"]`))),
+    [PROFILE_A.email, 'Ash', 'Ketchum', PROFILE_A.address1, 'Sydney', '2000', PROFILE_A.phone]);
+  assert.equal(await shop.$eval('#sa-region_id', (el) => el.selectedOptions[0].textContent), 'New South Wales');
+  assert.equal(await shop.inputValue('#sa-country_id'), 'AU');
+  assert.equal(await shop.isChecked('#billing-different'), false, '"I have a different billing address": unticked');
+  assert.equal(await shop.isChecked('#s_method_standard'), true, '"Standard"');
+  assert.equal(await shop.isChecked('#braintree'), true, '"Credit card"');
+  assert.equal(await shop.isChecked('#agreement_1'), true, 'the terms box ticked');
+  await waitFor(async () => JSON.stringify(await gmCard(shop)) === JSON.stringify(['4242 4242 4242 4242', '07/29', '123']), { timeout: 20000, message: 'card number, expiry, security code in its card fields' });
+  await shop.waitForTimeout(500);
+  assert.equal(store.shop('gamesmen').orders.length, 0, '"CONFIRM AND PAY" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('The Gamesmen with no "Standard" shipping: the first one it offers', async () => {
+  const sku = 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box';
+  store.shop('gamesmen').noStandard = true;
+  await useItems([{ url: store.productUrl('gamesmen', sku), name: 'GM ETB' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'GM ETB');
+  await waitReady(shop, 'CONFIRM AND PAY');
+  assert.equal(await shop.isChecked('#s_method_courier'), true, 'the first option (Courier)');
+  assert.equal(await shop.isChecked('#s_method_express'), false);
+  await shop.close();
+  await dash.close();
+});
+
+const gwCard = async (shop) => {
+  const f = shop.frames().find((x) => x.url().includes('/stripe-element'));
+  return f ? f.evaluate(() => [...document.querySelectorAll('input')].map((el) => el.value)) : null;
+};
+test('Games World (WooCommerce, as its real checkout goes): ⚡ Buy → its add-to-cart link, straight to checkout (taken out of the address again) → email, first and last name, Country/Region Australia, street address, suburb, state (WooCommerce\'s own drop-down over the real one), postcode, phone → "Deliver to a different address?" unticked (it came ticked) → Standard Shipping → card number, MM/YY, security code in Stripe\'s form → stops at "Place order"', async () => {
+  const sku = 'one-piece-carrying-on-his-will-op-13-sealed-booster-box-24';
+  await useItems([{ url: store.productUrl('gamesworld', sku), name: 'GW OP13' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'GW OP13');
+  await reach(shop, /\/gamesworld\/checkout\/$/);
+  await waitReady(shop, 'Place order');
+  const S = store.shop('gamesworld');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [[sku, 1]], 'one of it');
+  assert.equal(S.cartLinks, 1, 'by its add-to-cart link, once');
+  assert.ok(!/add-to-cart/.test(shop.url()), `the link taken out of the address (${shop.url()}): a reload doesn't add it again`);
+  assert.deepEqual(await Promise.all(['billing_email', 'billing_first_name', 'billing_last_name', 'billing_address_1', 'billing_city', 'billing_postcode', 'billing_phone'].map((n) => shop.inputValue(`#${n}`))),
+    [PROFILE_A.email, 'Ash', 'Ketchum', PROFILE_A.address1, 'Sydney', '2000', PROFILE_A.phone]);
+  assert.equal(await shop.inputValue('#billing_country'), 'AU');
+  assert.equal(await shop.inputValue('#billing_state'), 'NSW', 'the state, in the real drop-down under selectWoo\'s');
+  assert.equal(await shop.textContent('#select2-billing_state-container'), 'New South Wales', "selectWoo's drop-down shows it");
+  assert.equal(await shop.isChecked('#ship-to-different-address-checkbox'), false, '"Deliver to a different address?": unticked');
+  assert.equal(await shop.inputValue('#shipping_first_name'), '', 'the other address left empty');
+  assert.equal(await shop.isChecked('#kl_newsletter_checkbox'), false, 'no newsletter');
+  assert.equal(await shop.isChecked('#shipping_method_0_table_rate821'), true, 'Standard Shipping');
+  assert.equal(await shop.isChecked('#payment_method_stripe'), true, 'the card');
+  await waitFor(async () => JSON.stringify(await gwCard(shop)) === JSON.stringify(['4242 4242 4242 4242', '07 / 29', '123']), { timeout: 20000, message: "the card in Stripe's form" });
+  await shop.waitForTimeout(500);
+  assert.equal(S.orders.length, 0, '"Place order" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('🛒 every store\'s buy button by its words — "Buy Now" (Kmart), "Add to Basket" (BIG W), "Buy" (EB Games), "Pre Order" (Pokémon Center): ⚡ Buy presses it the same way, then on to checkout; and beside "Add to bag", a "Buy Now" is left alone', async () => {
+  for (const [shopId, sku, words, final] of [['kmart', '43818587', 'Buy Now', 'Checkout securely'], ['bigw', '6012346', 'Add to Basket', 'Place order'], ['ebgames', '312346', 'Buy', 'CONFIRM & PAY'], ['pokemoncenter', '10-10447-108', 'Pre Order', 'Place Order']]) {
+    store.reset();
+    store.state.account = KMART_ACCOUNT;
+    store.shop(shopId).addLabel = words;
+    await useItems([{ url: store.productUrl(shopId, sku), name: `${shopId} ${words}` }]);
+    const dash = await ctx.newPage();
+    const shop = await buyFromDashboard(dash, `${shopId} ${words}`);
+    await waitReady(shop, final);
+    assert.deepEqual(store.shop(shopId).cart.map((c) => [c.sku, c.qty]), [[sku, 1]], `${shopId}: "${words}" pressed once`);
+    await shop.close();
+    await dash.close();
+  }
+  store.reset();
+  store.state.account = KMART_ACCOUNT;
+  store.shop('kmart').buyNowToo = true;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart both' }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart both');
+  await waitReady(shop, 'Checkout securely');
+  assert.equal(store.shop('kmart').buyNowPresses || 0, 0, '"Add to bag" pressed, not "Buy Now"');
+  await shop.close();
+  await dash.close();
+});
+
 test('Pokémon Center (draft): "Add to Cart" → "View Cart" → "Checkout" → "Continue as Guest" → shipping → card frame → stops at "Place Order"', async () => {
   await useItems([{ url: store.productUrl('pokemoncenter', '10-10447-108'), name: 'PC ETB' }]);
   const dash = await ctx.newPage();
@@ -1126,6 +1262,39 @@ test("BIG W's search page builds its products once it's open: an admin's browser
     store.shop('bigw').clientSearch = false;
     sweeper.save({ stores: off }, null);
     Object.assign(sweeper.stat('demo-bigw'), { slowUntil: 0 });
+  }
+});
+
+test("The Gamesmen: its Cloudflare turns Mugibot's server away — refused once, this admin's browser stands in: it opens Magento's search page in the sweep window and reads its tiles, and a new drop alerts", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-gamesmen': 'auto' } }, null);
+  Object.assign(sweeper.stat('demo-gamesmen'), { backup: null, serverMisses: 0, fails: 0, slowUntil: 0, retryAt: 0, browserNext: 0 });
+  store.shop('gamesmen').refuseServers = true;
+  store.set('gamesmen', 'pokemon-tcg-mega-evolution-pitch-black-elite-trainer-box', { listed: false });
+  const R = env.app.retailers.get('demo-gamesmen');
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    assert.equal((await sweeper.sweepTerm(R, { keyword: 'pokemon', page: 1 })).ok, false, "the server's turned away");
+    assert.ok(sweeper.stat('demo-gamesmen').backup, 'one refusal is enough here');
+    sweeper.stat('demo-gamesmen').slowUntil = 0; // (at its usual pace here: the test's short)
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => env.app.catalog.productFor('demo-gamesmen', 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box'), { timeout: 30000, message: 'its tiles read in this browser' });
+    const etb = env.app.catalog.productFor('demo-gamesmen', 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box');
+    assert.deepEqual([etb.status, etb.price], ['in_stock', 119.95]);
+    assert.ok(store.state.requests.some((x) => x.path === '/gamesmen/catalogsearch/result/' && /Chrome|Mozilla/.test(x.ua)), 'its search page, opened in this browser');
+    assert.equal(sweeper.health().find((s) => s.store === 'demo-gamesmen').terms[0].source, 'browser');
+    // (Every keyword's pages read once — their scene set — before the store lists anything new.)
+    await waitFor(() => sweeper.health().find((s) => s.store === 'demo-gamesmen').terms.filter((t) => t.baselineAt).length >= 4, { timeout: 60000, message: "every page's first read" });
+    // The store lists a product: the next search from this browser alerts it.
+    store.set('gamesmen', 'pokemon-tcg-mega-evolution-pitch-black-elite-trainer-box', { listed: true, status: 'in_stock' });
+    await waitFor(() => env.app.catalog.recentAlerts({ kind: 'listed' }).some((a) => a.sku === 'pokemon-tcg-mega-evolution-pitch-black-elite-trainer-box'), { timeout: 90000, message: 'a new drop from the browser' });
+  } finally {
+    store.shop('gamesmen').refuseServers = false;
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: off }, null);
+    for (const pg of ctx.pages()) if (pg.url().includes('/gamesmen/')) await pg.close().catch(() => null);
   }
 });
 
@@ -1674,6 +1843,98 @@ test('🤖 Auto-checkout at Toys"R"Us signed in with Shop: Shop Pay has your det
   await closeStorePages('toysrus');
 });
 
+test('🤖 Auto-checkout at Pokébox signed in with Shop: Shop Pay has your details and card → "Pay now" — placed', async () => {
+  store.state.signedIn.pokebox = 'shop';
+  const handle = 'one-piece-card-game-op-15-booster-box-japanese';
+  store.set('pokebox', handle, { status: 'in_stock' });
+  await useItems([{ store: 'demo-pokebox', sku: handle, name: 'ACO PB OP15', maxPrice: 160 }]);
+  await testRun('ACO PB OP15');
+  const run = await runOver('the Pokébox run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('pokebox').orders[0];
+  assert.equal(o.shopPay, true, 'paid with Shop Pay');
+  assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+  assert.equal(o.form.card_number, '', 'no card typed (Shop Pay had it)');
+  await closeStorePages('pokebox');
+});
+
+test('🤖 Auto-checkout at Collectible Madness as a guest: your details, the card in Shopify\'s card fields, billing the same as shipping → "Pay now" — placed', async () => {
+  const handle = 'pokemon-tcg-mega-zygarde-ex-premium-collection';
+  store.shop('collectiblemadness').billingUnticked = true;
+  await useItems([{ store: 'demo-collectiblemadness', sku: handle, name: 'ACO CM UPC', maxPrice: 150 }]);
+  await testRun('ACO CM UPC');
+  const run = await runOver('the Collectible Madness run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('collectiblemadness').orders[0];
+  assert.deepEqual([o.form.card_number, o.form.card_expiry, o.form.card_cvv, o.form.card_name], ['4242 4242 4242 4242', '07 / 29', '123', 'Ash Ketchum']);
+  assert.equal(o.form.billingSame, 'on', 'billing address: the same as shipping (ticked)');
+  assert.equal(o.form.address1, PROFILE_A.address1);
+  await closeStorePages('collectiblemadness');
+});
+
+test('🤖 Auto-checkout at The Gamesmen as a guest: "Add to Cart" → checkout → your details → Standard → Credit card → the card → the terms ticked → the total checked → "CONFIRM AND PAY" — placed', async () => {
+  const sku = 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box';
+  await useItems([{ url: store.productUrl('gamesmen', sku), name: 'ACO GM ETB', maxPrice: 150 }]);
+  await testRun('ACO GM ETB');
+  const run = await runOver('the Gamesmen run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('gamesmen').orders[0];
+  assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [[sku, 1]]);
+  assert.deepEqual(o.form.address, { email: PROFILE_A.email, firstname: 'Ash', lastname: 'Ketchum', street: PROFILE_A.address1, city: 'Sydney', region: 'New South Wales', postcode: '2000', country: 'AU', telephone: PROFILE_A.phone });
+  assert.deepEqual([o.form.shipping, o.form.payment, o.form.billingDifferent, o.form.agreed], ['standard', 'braintree', false, true]);
+  assert.deepEqual(o.form.card, { number: '4242 4242 4242 4242', expiry: '07/29', cvv: '123' });
+  assert.equal(run.total, 129.9, '$119.95 + $9.95 Standard, read from the checkout');
+  await closeStorePages('gamesmen');
+});
+
+test('🤖 Auto-checkout at The Gamesmen signed in (your address saved): the same — Standard, Credit card, the card, the terms box → "CONFIRM AND PAY" — placed', async () => {
+  store.state.signedIn.gamesmen = true;
+  const sku = 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box';
+  await useItems([{ url: store.productUrl('gamesmen', sku), name: 'ACO GM ETB', maxPrice: 150 }]);
+  await testRun('ACO GM ETB');
+  const run = await runOver('the Gamesmen (signed in) run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('gamesmen').orders[0];
+  assert.equal(o.form.signed, true);
+  assert.equal(o.form.address, null, 'your saved address (no boxes)');
+  assert.deepEqual([o.form.shipping, o.form.payment, o.form.agreed], ['standard', 'braintree', true]);
+  assert.equal(o.form.card.number, '4242 4242 4242 4242');
+  await closeStorePages('gamesmen');
+});
+
+test('🤖 Auto-checkout at Games World as a guest: its add-to-cart link → your details (not to a different address) → Standard Shipping → the card in Stripe\'s form → the total checked → "Place order" — placed', async () => {
+  const sku = 'pokemon-tcg-mega-evolution-elite-trainer-box';
+  store.set('gamesworld', sku, { status: 'in_stock' });
+  await useItems([{ url: store.productUrl('gamesworld', sku), name: 'ACO GW ETB', maxPrice: 120 }]);
+  await testRun('ACO GW ETB');
+  const run = await runOver('the Games World run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('gamesworld').orders[0];
+  assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [[sku, 1]]);
+  assert.deepEqual(o.form.billing, { first_name: 'Ash', last_name: 'Ketchum', country: 'AU', address_1: PROFILE_A.address1, city: 'Sydney', state: 'NSW', postcode: '2000', phone: PROFILE_A.phone, email: PROFILE_A.email });
+  assert.deepEqual([o.form.shipToDifferent, o.form.newsletter, o.form.shipping, o.form.payment, o.form.link], [false, false, 'table_rate:8:21', 'stripe', false]);
+  assert.deepEqual(o.form.card, { number: '4242 4242 4242 4242', expiry: '07 / 29', cvc: '123' });
+  assert.equal(run.total, 99.99, '$89.99 + $10 Standard Shipping');
+  await closeStorePages('gamesworld');
+});
+
+test('🤖 Auto-checkout at Games World signed in, with Stripe\'s Link connected: your saved details, no card boxes — Link\'s card and its "Confirm" → "Place order" — placed', async () => {
+  store.state.signedIn.gamesworld = true;
+  store.shop('gamesworld').link = true;
+  const sku = 'pokemon-tcg-mega-evolution-elite-trainer-box';
+  store.set('gamesworld', sku, { status: 'in_stock' });
+  await useItems([{ url: store.productUrl('gamesworld', sku), name: 'ACO GW Link', maxPrice: 120 }]);
+  await testRun('ACO GW Link');
+  const run = await runOver('the Games World (Link) run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('gamesworld').orders[0];
+  assert.equal(o.form.link, true, "Link's Confirm pressed");
+  assert.equal(o.form.card.number, '', 'no card typed (Link had it)');
+  assert.equal(o.form.billing.email, 'ash.gw@example.com', 'your saved details, left as they were');
+  assert.equal(o.form.shipToDifferent, false);
+  await closeStorePages('gamesworld');
+});
+
 test('🤖 Auto-checkout at Amazon (signed in): "Buy Now" → "No thanks" to Prime → your Amazon address and card → the total checked → "Place your order" — placed', async () => {
   // (Amazon only sells signed in: a browser last seen signed out there — the login monitor's test — is skipped.)
   await seenSignedIn('amazon');
@@ -1992,6 +2253,12 @@ const BAGS = [
   ['target', ['71234567', '71234568'], '"Remove" → "… has been removed" with "Undo" (never pressed)'],
   ['amazon', ['B0MGBTEST1', 'B0MGBTEST2'], '"Delete" — never "Save for later" — with its "Saved for later" list left alone'],
   ['citybeach', ['20424049-01', '20499999-01'], '× "Remove product …" → "Remove Product? Are you sure…" → Yes'],
+  ['pokebox', ['pokemon-tcg-30th-celebration-elite-trainer-box-etb', 'one-piece-card-game-op-15-booster-box-japanese'], "Shopify's own cart emptied at once (/cart/clear.js)"],
+  ['goodgames', ['pokemon-tcg-mega-lucario-ex-league-battle-deck', 'one-piece-card-game-op-14-booster-box'], 'Shopify\'s "Remove" links, without its cart API', { noAjaxCart: true }],
+  ['collectiblemadness', ['pokemon-tcg-mega-zygarde-ex-premium-collection', 'pokemon-tcg-delta-reign-booster-box'], "Shopify's own cart emptied at once"],
+  ['cherrycollectables', ['pokemon-tcg-mega-evolution-phantasmal-flames-booster-pack', 'pokemon-tcg-30th-celebration-elite-trainer-box'], "Shopify's own cart emptied at once"],
+  ['gamesmen', ['pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box', 'one-piece-card-game-op-16-the-time-of-battle-booster-box'], 'Magento\'s "Remove item" (a form posted: a new page each time)'],
+  ['gamesworld', ['one-piece-carrying-on-his-will-op-13-sealed-booster-box-24', 'pokemon-tcg-mega-evolution-elite-trainer-box'], 'WooCommerce\'s × "Remove … from cart" links ("removed. Undo?" — Undo never pressed)'],
 ];
 
 for (const [shopId, skus, how, opts = {}] of BAGS) {
@@ -2027,7 +2294,7 @@ for (const [shopId, skus, how, opts = {}] of BAGS) {
     await dash.waitForFunction((id) => /Emptied — 3 items removed/.test(document.querySelector(`#bags li[data-store="demo-${id}"]`)?.textContent || ''), shopId, { timeout: 10000 });
   });
 }
-const SHOPIFY_SHOPS = new Set(['jbhifi', 'gamerholic', 'toysrus', 'trainertown']);
+const SHOPIFY_SHOPS = new Set(['jbhifi', 'gamerholic', 'toysrus', 'trainertown', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']);
 
 test('🧹 Clear all: every store\'s bag in turn, in one tab — the ones with things in them emptied, the rest "already empty" — pressed where there\'s no extension (your phone), the checkout browser does it', async (t) => {
   t.after(closeDashboards);

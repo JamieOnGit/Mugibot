@@ -24,26 +24,36 @@
   </header>
 
   <div class="app">
-    <nav class="side" aria-label="Sections">
-      <a href="#monitor" data-tab="monitor">📡 Monitor</a>
-      <a href="#checkout" data-tab="checkout">📦 Checkout details</a>
-      <a href="#aco" data-tab="aco">🤖 Auto-checkout</a>
-      <a href="#discord" data-tab="discord">💬 Discord</a>
-      <a href="#extension" data-tab="extension">🧩 Extension</a>
-      <a href="#membership" data-tab="membership">⭐ Membership</a>
-      <a href="#account" data-tab="account">👤 Account</a>
+    <!-- Four pages (a tab bar at the bottom on phones): the live drops, everything about buying, the
+         one-time setup, and your account. -->
+    <nav class="side" aria-label="Pages">
+      <a href="#monitor" data-tab="monitor"><span class="ic" aria-hidden="true">🔥</span><span class="lb">Drops</span></a>
+      <a href="#aco" data-tab="aco"><span class="ic" aria-hidden="true">⚡</span><span class="lb">Checkout</span></a>
+      <a href="#setup" data-tab="setup"><span class="ic" aria-hidden="true">🧰</span><span class="lb">Setup</span></a>
+      <a href="#account" data-tab="account"><span class="ic" aria-hidden="true">👤</span><span class="lb">Account</span></a>
+      <div class="side-foot" aria-hidden="true"><span class="holo-dot"></span> Live across <b id="side-stores">every store</b></div>
     </nav>
 
     <main class="main">
       <div id="banner"></div>
       <!-- Checkpoints and virtual queues up now (JB Hi-Fi's, EB Games', Pokémon Center's) -->
       <div id="gates-banner" aria-live="polite"></div>
+      <!-- On a page with several parts: a row to jump to each -->
+      <nav class="jump" data-for="aco" aria-label="On this page" hidden>
+        <button type="button" data-jump="#aco-form">🤖 Auto-checkout</button><button type="button" data-jump="#bags-card">🧹 Bags</button><button type="button" data-jump="#aco-items-card">🎯 Armed items</button><button type="button" data-jump="#aco-runs-card">📜 Run history</button><button type="button" data-jump="[data-panel=&quot;checkout&quot;]">📦 Delivery &amp; card</button>
+      </nav>
+      <nav class="jump" data-for="setup" aria-label="On this page" hidden>
+        <button type="button" data-jump="[data-panel=&quot;extension&quot;]">🧩 Extension</button><button type="button" data-jump="#logins-card">🔑 Store sign-ins</button><button type="button" data-jump="#devices-card">💻 Browsers</button><button type="button" data-jump="[data-panel=&quot;discord&quot;]">💬 Discord &amp; pings</button>
+      </nav>
+      <nav class="jump" data-for="account" aria-label="On this page" hidden>
+        <button type="button" data-jump="[data-panel=&quot;membership&quot;]">⭐ Membership</button><button type="button" data-jump="#acct-form">👤 Profile</button><button type="button" data-jump="#pw-form">🔒 Password</button><button type="button" data-jump="#del-form">🗑 Delete account</button>
+      </nav>
 
       <!-- 📡 Monitor: live (everyone) -->
       <section data-panel="monitor" hidden>
         <div class="mon-head">
           <div class="mon-titles">
-            <div class="mon-title"><h2>Monitor</h2><span class="live" id="m-live" title="Updates as they happen">Live</span></div>
+            <div class="mon-title"><h2>Drops</h2><span class="live" id="m-live" title="Updates as they happen">Live</span></div>
             <p class="mon-sub" id="mon-sub">Every store's search, read every few seconds.</p>
           </div>
           <div class="mon-actions">
@@ -56,6 +66,8 @@
             <button class="btn small primary" id="m-add-toggle" type="button" hidden>+ Add monitor</button>
           </div>
         </div>
+        <!-- Your loadout: is everything ready for the next drop? (Auto-checkout, your browser, card, membership) -->
+        <div class="loadout" id="loadout" hidden></div>
         <nav class="mon-tabs" aria-label="Monitor pages" hidden><a href="#monitor" data-mtab="monitor">Live</a><a href="#monitor-settings" data-mtab="monitor-settings">Settings</a><a href="#monitor-log" data-mtab="monitor-log">Check log</a></nav>
         <div id="m-paywall"></div>
         <div class="mon-attn" id="sn-attention" role="status" hidden></div>
@@ -372,27 +384,10 @@
           </div>
         </dialog>
 
-      <!-- 📦 Checkout details -->
-      <section data-panel="checkout" hidden>
-        <div class="tab-head"><h2>Checkout details</h2><button class="btn small" id="p-add" type="button">+ Add another address</button></div>
-        <p class="muted">Filled in at every store's checkout. Encrypted, and only for your account. Anything a store already filled in from your store account is left as it is.</p>
-        <form id="p-form">
-          <div id="p-list"></div>
-          <div class="form-actions"><button class="btn primary" type="submit">Save delivery details</button><span class="msg" id="p-msg"></span></div>
-        </form>
-        <div class="card mt">
-          <h3>Payment card</h3>
-          <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close the browser. It's typed into the {{APP_NAME}} extension's own card page (not this website), saved in this browser, encrypted and tied to your account. Your card is <b>never sent to our servers</b>. If you back it up to your account, only a copy locked with your card passphrase is kept, and we can't open it.</p>
-          <p id="card-state" class="notice">Checking this browser…</p>
-          <div class="form-actions"><button class="btn primary" type="button" id="card-open">Add your card</button></div>
-          <div id="card-backup" class="card-backup"></div>
-        </div>
-      </section>
-
       <!-- 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md) -->
       <section data-panel="aco" hidden>
         <div class="tab-head"><h2>Auto-checkout</h2><span class="pill" id="aco-state">Off</span></div>
-        <p class="muted aco-lead">When an item you've armed drops, your browser checks out by itself, within your limits: the store, your bag, checkout with your details and card, the order. <b>One purchase per arming</b>. Your items, and what the monitor sees of them, are on the <a href="#watch">Monitor page</a>: this page is for what Auto-checkout does with them.</p>
+        <p class="muted aco-lead">When an item you've armed drops, your browser checks out by itself, within your limits: the store, your bag, checkout with your details and card, the order. <b>One purchase per arming</b>. Your items, and what the monitor sees of them, are on the <a href="#watch">Drops page</a>; here's what Auto-checkout does with them — and, at the bottom, the delivery details and card every checkout uses.</p>
 
         <div class="aco-stats" id="aco-stats"></div>
 
@@ -446,12 +441,12 @@
           <p class="msg" id="bags-msg"></p>
         </div>
 
-        <div class="card">
+        <div class="card" id="aco-items-card">
           <div class="card-head"><h3>Armed items</h3>
             <div class="aco-items-tools"><span class="muted small" id="aco-armed-count"></span>
               <select id="aco-show" aria-label="Show"><option value="">Every item</option><option value="armed">Armed only</option></select></div>
           </div>
-          <p class="muted small">Your watchlist's items (add them on the <a href="#watch">Monitor page</a>). Arm one with its max price: Mugibot never pays more. <b>Trigger ACO</b> runs one now, as if it had just dropped.</p>
+          <p class="muted small">Your watchlist's items (add them on the <a href="#watch">Drops page</a>). Arm one with its max price: Mugibot never pays more. <b>Trigger ACO</b> runs one now, as if it had just dropped.</p>
           <div class="table-wrap"><table class="aco-table">
             <thead><tr><th scope="col">Armed</th><th scope="col">Item</th><th scope="col">Sign-in</th><th scope="col">Max price</th><th scope="col"><span class="sr-only">Test</span></th></tr></thead>
             <tbody id="aco-items"></tbody>
@@ -459,7 +454,7 @@
           <nav class="pager" id="aco-pager" aria-label="Armed items pages"></nav>
         </div>
 
-        <div class="card">
+        <div class="card" id="aco-runs-card">
           <div class="card-head"><h3>Run history</h3>
             <select id="aco-filter" aria-label="Show"><option value="">Everything</option><option value="placed">Orders placed</option><option value="needs">Needed you</option><option value="failed">Failed</option><option value="skipped">Didn't start</option></select>
           </div>
@@ -469,42 +464,20 @@
         </div>
       </section>
 
-      <!-- 💬 Discord -->
-      <section data-panel="discord" hidden>
-        <div class="tab-head"><h2>Discord</h2></div>
-        <div class="card">
-          <h3>Your Discord</h3>
-          <div id="d-status" class="notice">Loading…</div>
-          <div class="form-actions" id="d-actions"></div>
-          <p class="muted small">Connecting lets the bot add you to the members' server (while your membership is active), DM you restock pings, and answer your slash commands.</p>
-        </div>
-        <form class="card" id="a-form">
-          <h3>Pings</h3>
-          <label class="check"><input type="checkbox" id="a-dm"> <span>DM me when one of my SKUs is <b>in stock</b> or pre-orders open</span></label>
-          <label class="check"><input type="checkbox" id="a-dm-listed"> <span>DM me when a SKU I'm waiting for is first <b>listed</b></span></label>
-          <label class="check"><input type="checkbox" id="a-dm-checkout"> <span>DM me when checkout is filled in and waiting for me</span></label>
-          <details class="mt"><summary class="small">Also post to my own Discord server (webhook)</summary>
-            <label for="a-hook">Discord webhook</label>
-            <input id="a-hook" name="discordWebhook" type="url" placeholder="https://discord.com/api/webhooks/…">
-            <p class="muted small">In your own server: Server settings → Integrations → Webhooks → New webhook → Copy webhook URL.</p>
-            <label for="a-mention">Mention <span class="muted">(optional, e.g. &lt;@your-user-id&gt;)</span></label>
-            <input id="a-mention" name="discordMention">
-          </details>
-          <h3 class="mt">Email</h3>
-          <label class="check"><input type="checkbox" id="a-email-restock"> <span>Email me restocks too</span></label>
-          <label class="check"><input type="checkbox" id="a-email-checkout"> <span>Email me when checkout is waiting for me</span></label>
-          <p class="muted small" id="a-email-note"></p>
-          <div class="form-actions"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="a-test">Send a test ping</button><span class="msg" id="a-msg"></span></div>
+      <!-- 📦 Checkout details -->
+      <section data-panel="checkout" hidden>
+        <div class="tab-head"><h2>Delivery details &amp; card</h2><button class="btn small" id="p-add" type="button">+ Add another address</button></div>
+        <p class="muted">Filled in at every store's checkout. Encrypted, and only for your account. Anything a store already filled in from your store account is left as it is.</p>
+        <form id="p-form">
+          <div id="p-list"></div>
+          <div class="form-actions"><button class="btn primary" type="submit">Save delivery details</button><span class="msg" id="p-msg"></span></div>
         </form>
-        <div class="card">
-          <h3>Slash commands</h3>
-          <ul class="plain">
-            <li><code>/watch sku:43818648 store:Kmart</code> — watch a SKU (or paste a product link as the SKU)</li>
-            <li><code>/watchlist</code> — your SKUs and their stock, with ⚡ Buy links</li>
-            <li><code>/buy sku:43818648</code> — a ⚡ Buy button</li>
-            <li><code>/unwatch sku:43818648</code> · <code>/status</code></li>
-          </ul>
-          <p class="muted small">Replies are private — only you see them.</p>
+        <div class="card mt">
+          <h3>Payment card</h3>
+          <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close the browser. It's typed into the {{APP_NAME}} extension's own card page (not this website), saved in this browser, encrypted and tied to your account. Your card is <b>never sent to our servers</b>. If you back it up to your account, only a copy locked with your card passphrase is kept, and we can't open it.</p>
+          <p id="card-state" class="notice">Checking this browser…</p>
+          <div class="form-actions"><button class="btn primary" type="button" id="card-open">Add your card</button></div>
+          <div id="card-backup" class="card-backup"></div>
         </div>
       </section>
 
@@ -566,7 +539,7 @@
         </div>
         <div class="card">
           <h3>3. Save your card (optional)</h3>
-          <p class="muted">Click the extension's icon → <b>Add your card</b> (or <a href="#checkout">Checkout details</a> → Add your card). Save it once and every ⚡ Buy fills it in, even after you restart the browser. It stays in that browser, encrypted. Tick <b>Back up</b> when you save it, and a new install restores it with your card passphrase.</p>
+          <p class="muted">Click the extension's icon → <b>Add your card</b> (or <a href="#checkout">Checkout → Delivery &amp; card</a> → Add your card). Save it once and every ⚡ Buy fills it in, even after you restart the browser. It stays in that browser, encrypted. Tick <b>Back up</b> when you save it, and a new install restores it with your card passphrase.</p>
         </div>
         <div class="card" id="logins-card">
           <div class="card-head"><h3>4. Sign in at the stores</h3><button class="btn small" id="logins-check" type="button">Check now</button></div>
@@ -586,9 +559,48 @@
           <p class="muted small">Each store has its own flow. <b>Verified</b> = tested end to end on the real store. <b>Beta</b> = tested on a copy of the store. <b>Draft</b> = not tested yet — watch each step.</p>
           <ul class="items" id="stores"></ul>
         </div>
-        <div class="card">
+        <div class="card" id="devices-card">
           <h3>Connected browsers</h3>
           <ul class="items" id="devices"></ul>
+        </div>
+      </section>
+
+      <!-- 💬 Discord -->
+      <section data-panel="discord" hidden>
+        <div class="tab-head"><h2>Discord</h2></div>
+        <div class="card">
+          <h3>Your Discord</h3>
+          <div id="d-status" class="notice">Loading…</div>
+          <div class="form-actions" id="d-actions"></div>
+          <p class="muted small">Connecting lets the bot add you to the members' server (while your membership is active), DM you restock pings, and answer your slash commands.</p>
+        </div>
+        <form class="card" id="a-form">
+          <h3>Pings</h3>
+          <label class="check"><input type="checkbox" id="a-dm"> <span>DM me when one of my SKUs is <b>in stock</b> or pre-orders open</span></label>
+          <label class="check"><input type="checkbox" id="a-dm-listed"> <span>DM me when a SKU I'm waiting for is first <b>listed</b></span></label>
+          <label class="check"><input type="checkbox" id="a-dm-checkout"> <span>DM me when checkout is filled in and waiting for me</span></label>
+          <details class="mt"><summary class="small">Also post to my own Discord server (webhook)</summary>
+            <label for="a-hook">Discord webhook</label>
+            <input id="a-hook" name="discordWebhook" type="url" placeholder="https://discord.com/api/webhooks/…">
+            <p class="muted small">In your own server: Server settings → Integrations → Webhooks → New webhook → Copy webhook URL.</p>
+            <label for="a-mention">Mention <span class="muted">(optional, e.g. &lt;@your-user-id&gt;)</span></label>
+            <input id="a-mention" name="discordMention">
+          </details>
+          <h3 class="mt">Email</h3>
+          <label class="check"><input type="checkbox" id="a-email-restock"> <span>Email me restocks too</span></label>
+          <label class="check"><input type="checkbox" id="a-email-checkout"> <span>Email me when checkout is waiting for me</span></label>
+          <p class="muted small" id="a-email-note"></p>
+          <div class="form-actions"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="a-test">Send a test ping</button><span class="msg" id="a-msg"></span></div>
+        </form>
+        <div class="card">
+          <h3>Slash commands</h3>
+          <ul class="plain">
+            <li><code>/watch sku:43818648 store:Kmart</code> — watch a SKU (or paste a product link as the SKU)</li>
+            <li><code>/watchlist</code> — your SKUs and their stock, with ⚡ Buy links</li>
+            <li><code>/buy sku:43818648</code> — a ⚡ Buy button</li>
+            <li><code>/unwatch sku:43818648</code> · <code>/status</code></li>
+          </ul>
+          <p class="muted small">Replies are private — only you see them.</p>
         </div>
       </section>
 

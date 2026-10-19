@@ -9,6 +9,8 @@
 //   billing address left as the delivery one) → "Done" (once the card is in) → STOP at
 //   "CONFIRM & PAY". Signed in: only "CONFIRM & PAY" (the card EB has for you, if it shows one).
 
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'ebgames',
   name: 'EB Games',
@@ -48,7 +50,7 @@ export default {
   },
   flow: {
     product: {
-      add: [/\badd to cart\b/i, /\bpre-?order( now)?\b/i],
+      add: ADD_WORDS,
       waitMs: 12000,
     },
     added: {

@@ -403,7 +403,9 @@ var MGBFill = (function () {
   }
 
   function radioLabel(el) {
-    return (labelText(el) || (el.parentElement ? el.parentElement.innerText : '') || el.value || '').toLowerCase();
+    // (A radio alone in its cell, its words in the row's other cells — Magento's shipping methods table.)
+    var row = el.closest('tr, li');
+    return (labelText(el) || (el.parentElement ? el.parentElement.innerText : '') || (row ? row.innerText : '') || el.value || '').replace(/\s+/g, ' ').trim().toLowerCase();
   }
 
   /** The heading a radio sits under ("Parcel Post", "Shipping method"), if any. */
@@ -432,6 +434,39 @@ var MGBFill = (function () {
   var SWITCHED = {};
 
   /**
+   * A drop-down drawn over by a nicer one (WooCommerce's selectWoo, select2, Choices, Tom Select): the
+   * real one is hidden, its stand-in shown — it's the real one that's chosen in (the stand-in follows it).
+   */
+  function enhancedSelect(el) {
+    if (el.tagName !== 'SELECT' || !/select2-hidden-accessible|choices__input|tomselected|ts-hidden-accessible/.test(String(el.className || ''))) return false;
+    var next = el.nextElementSibling;
+    var wrap = el.closest('.choices, .ts-wrapper');
+    return !!((next && /select2|ts-wrapper/.test(String(next.className || '')) && isVisible(next)) || (wrap && isVisible(wrap)));
+  }
+
+  /**
+   * The flow's boxes to have ticked (C.tick: Shopify's "Use shipping address as billing address") or
+   * not (C.untick: WooCommerce's "Deliver to a different address?", which can come ticked). Each at
+   * most twice per page (a store that ticks it back: left as it says).
+   */
+  function setTicks(root, C, out) {
+    if (!(C.tick && C.tick.length) && !(C.untick && C.untick.length)) return;
+    toArray(root.querySelectorAll('input[type="checkbox"]')).forEach(function (el) {
+      if (el.disabled || inPanel(el)) return;
+      var l = el.closest('label') || el.parentElement;
+      if (!isVisible(el) && !(l && isVisible(l))) return;
+      var words = (labelText(el) + ' ' + describe(el)).replace(/\s+/g, ' ');
+      var want = any(C.tick, words) ? true : any(C.untick, words) ? false : null;
+      if (want === null || el.checked === want) return;
+      var key = 'tick|' + (el.name || el.id || words.slice(0, 40));
+      if ((SWITCHED[key] || 0) >= 2) return;
+      SWITCHED[key] = (SWITCHED[key] || 0) + 1;
+      el.click();
+      out.filled.push((want ? 'ticked "' : 'unticked "') + (labelText(el) || el.name || 'box').replace(/\s+/g, ' ').trim().slice(0, 50) + '"');
+    });
+  }
+
+  /**
    * Fill empty, visible fields in `root`. opts.onlyCard: card fields only. opts.selectsOnly: drop-downs only.
    * opts.flow: the store's checkout flow.
    * Returns { filled: [...kinds], kinds: {kind: true}, cardFieldsSeen, missingCard }.
@@ -440,6 +475,7 @@ var MGBFill = (function () {
     opts = opts || {};
     var C = opts.flow || {};
     var out = { filled: [], kinds: {}, cardFieldsSeen: 0, missingCard: false };
+    if (!opts.onlyCard) setTicks(root, C, out);
     var fields = toArray(root.querySelectorAll('input, select, textarea')).filter(function (el) {
       var type = (el.getAttribute('type') || '').toLowerCase();
       if (['hidden', 'submit', 'button', 'image', 'reset', 'file', 'password', 'search'].indexOf(type) !== -1) return false;
@@ -448,7 +484,7 @@ var MGBFill = (function () {
         var l = el.closest('label') || el.parentElement;
         return isVisible(el) || (l && isVisible(l));
       }
-      return isVisible(el);
+      return isVisible(el) || enhancedSelect(el);
     });
 
     var ctx = { hasParts: addressParts(fields, C) };
@@ -502,7 +538,8 @@ var MGBFill = (function () {
         if (!checked) {
           if (isPayment) pick = list.find(card);
           else if (isDelivery && wantCollect) pick = list.find(function (r) { return COLLECT_RE.test(radioLabel(r)); });
-          else if (isDelivery) pick = list.find(ship) || list.find(home);
+          // (C.shippingFallback 'first': the flow's choice, else whatever the store offers first — Gamesmen's.)
+          else if (isDelivery) pick = list.find(ship) || list.find(home) || (C.shippingFallback === 'first' ? list.find(function (r) { return !COLLECT_RE.test(radioLabel(r)); }) : null);
         } else if (isDelivery && !wantCollect && COLLECT_RE.test(radioLabel(checked))) {
           pick = list.find(ship) || list.find(home); // the store chose click & collect for you
         } else if (isDelivery && wantShip && !ship(checked)) {

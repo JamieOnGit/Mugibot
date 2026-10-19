@@ -66,7 +66,8 @@ test('connection codes are easy to type', () => {
 });
 
 test('retailers: each store has its own flow; product codes from links; demo copies on the dummy store', () => {
-  assert.deepEqual(RETAILER_DEFS.map((r) => r.id), ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown', 'amazon', 'thegamescube', 'gamerholic', 'pokemoncenter', 'pbandai', 'citybeach']);
+  assert.deepEqual(RETAILER_DEFS.map((r) => r.id), ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown', 'amazon', 'thegamescube', 'gamerholic', 'pokemoncenter', 'pbandai', 'citybeach',
+    'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gamesmen', 'gamesworld']);
   for (const r of RETAILER_DEFS) {
     assert.ok(r.flow && r.flow.product && r.flow.checkout, `${r.id} has a flow`);
     assert.ok(r.flow.checkout.final.length, `${r.id} names its final button`);
@@ -102,6 +103,29 @@ test('retailers: each store has its own flow; product codes from links; demo cop
   assert.equal(retailers.forUrl('https://www.cardshop.example/x'), null);
   assert.equal(retailers.searchUrl(retailers.get('bigw'), '6012345'), 'https://www.bigw.com.au/search?text=6012345');
   assert.equal(retailers.productUrlFromSku(retailers.get('amazon'), 'B0ABCDEF12'), 'https://www.amazon.com.au/dp/B0ABCDEF12');
+  // The six added in 1.19.0: four card shops on Shopify, The Gamesmen (Magento), Games World (WooCommerce).
+  for (const [id, url, code] of [['pokebox', 'https://www.pokebox.com.au/products/pokemon-tcg-30th-celebration-elite-trainer-box-etb', 'pokemon-tcg-30th-celebration-elite-trainer-box-etb'],
+    ['pokebox', 'https://pokebox.com.au/products/x-y', 'x-y'], ['goodgames', 'https://www.goodgames.com.au/products/pokemon-tcg-deck', 'pokemon-tcg-deck'],
+    ['collectiblemadness', 'https://collectiblemadness.com.au/products/pokemon-tcg-delta-reign-booster-box', 'pokemon-tcg-delta-reign-booster-box'],
+    ['cherrycollectables', 'https://www.cherrycollectables.com.au/products/pokemon-tcg-30th-celebration-elite-trainer-box', 'pokemon-tcg-30th-celebration-elite-trainer-box'],
+    ['gamesmen', 'https://www.gamesmen.com.au/pokemon-tcg-mega-evolution-pitch-black-elite-trainer-box', 'pokemon-tcg-mega-evolution-pitch-black-elite-trainer-box'],
+    ['gamesworld', 'https://www.gamesworld.com.au/product/one-piece-starter-deck-sabo-st35/', 'one-piece-starter-deck-sabo-st35']]) {
+    assert.equal(retailers.forUrl(url).id, id, url);
+    assert.equal(sku(url), code, url);
+  }
+  for (const id of ['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']) {
+    const r = retailers.get(id);
+    assert.equal(r.platform, 'shopify', id);
+    assert.equal(r.flow, retailers.get('jbhifi').flow, `${id}: the Shopify flow`);
+    assert.equal(retailers.cartUrl(id, { variantId: '123' }), `${r.base}/cart/123:1`);
+  }
+  assert.ok(retailers.get('gamesmen').productPath.test('/pokemon-tcg-scarlet-violet-151-elite-trainer-box'));
+  assert.ok(!retailers.get('gamesmen').productPath.test('/checkout/cart/') && !retailers.get('gamesmen').productPath.test('/pokemon'), "Magento's other pages aren't products");
+  assert.equal(retailers.productUrlFromSku(retailers.get('gamesmen'), 'pokemon-tcg-etb-box'), 'https://www.gamesmen.com.au/pokemon-tcg-etb-box');
+  assert.equal(retailers.cartUrl('gamesworld', { variantId: '687010' }), 'https://www.gamesworld.com.au/checkout/?add-to-cart=687010&quantity=1', "WooCommerce's add-to-cart link, straight to checkout");
+  assert.equal(retailers.cartUrl('gamesworld', {}), null, 'none without the product\'s id');
+  const gm = retailers.get('gamesmen').flow.checkout;
+  assert.ok(gm.path.test('/checkout/') && gm.path.test('/onestepcheckout/') && !gm.path.test('/checkout/cart/'), "its checkout, not its cart");
 
   const demo = new Retailers({ demoStoreUrl: 'http://localhost:5055' });
   const dk = demo.forUrl('http://127.0.0.1:5055/kmart/product/x-43818648/');
@@ -309,7 +333,7 @@ test("store login monitor: each store's page says whether you're signed in (Shop
   // As the extension gets them: through JSON, the RegExps as { re, f }.
   const check = (id) => JSON.parse(JSON.stringify(serialize(RETAILER_DEFS.find((r) => r.id === id).account.check)));
   const shopify = (cid) => `<script>var __st={"a":1,"offset":36000,"u":"x","p":"home"${cid ? ',"cid":12345' : ''}};</script>`;
-  for (const id of ['jbhifi', 'trainertown', 'gamerholic', 'toysrus']) {
+  for (const id of ['jbhifi', 'trainertown', 'gamerholic', 'toysrus', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']) {
     assert.equal(fromHtml(shopify(true), 'https://x/', check(id)), 'in', id);
     assert.equal(fromHtml(shopify(false), 'https://x/', check(id)), 'out', id);
   }
@@ -321,6 +345,11 @@ test("store login monitor: each store's page says whether you're signed in (Shop
   assert.equal(fromHtml('<form name="signIn">', 'https://www.amazon.com.au/ap/signin?openid.return_to=x', check('amazon')), 'out', 'sent to the sign-in page');
   assert.equal(fromHtml('<span id="nav-link-accountList-nav-line-1" class="nav-line-1">Hello, Jamie</span>', 'https://www.amazon.com.au/gp/css/homepage.html', check('amazon')), 'in');
   assert.equal(fromHtml('<span id="nav-link-accountList-nav-line-1" class="nav-line-1">Hello, sign in</span>', 'https://www.amazon.com.au/gp/css/homepage.html', check('amazon')), null);
+  // Magento's "who's signed in" (The Gamesmen), WordPress's "logged-in" (Games World).
+  assert.equal(fromHtml('{"customer":{"fullname":"Ash Ketchum","firstname":"Ash","data_id":1}}', '', check('gamesmen')), 'in');
+  assert.equal(fromHtml('{"customer":{"data_id":1}}', '', check('gamesmen')), 'out');
+  assert.equal(fromHtml('<body class="page woocommerce-account logged-in">', '', check('gamesworld')), 'in');
+  assert.equal(fromHtml('<body class="page woocommerce-account">', '', check('gamesworld')), 'out');
   // Stores whose pages don't say so: the page you open (its header) instead.
   for (const id of ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'pokemoncenter']) {
     const r = RETAILER_DEFS.find((x) => x.id === id);
@@ -360,3 +389,25 @@ test('production refuses to start without an encryption key', () => {
   assert.equal(cfg.trialDays, 0, 'no free trial unless you set TRIAL_DAYS');
   assert.equal(cfg.priceDisplay, 'A$19.99 / month');
 });
+
+test('the buy button by its words, the same at every store: "Add to cart", "Add to basket", "Pre-order", "Buy now", "Buy"… — never a wish list, paying later or a wallet; the extension keeps the same list', async () => {
+  const { ADD_WORDS, NOT_ADD, isAddLabel } = await import('../server/monitor/words.js');
+  const { classifyActionText } = await import('../server/monitor/extract.js');
+  for (const t of ['Add to cart', 'ADD TO CART', 'Add to Basket', 'Add To Bag', 'Add to trolley', 'Add to my cart', 'Add to shopping cart', 'Pre-order', 'Pre-order now', 'PLACE PRE-ORDER', 'Pre Order', 'Preorder', 'Buy now', 'Buy it now', 'BUY', 'Order now', 'Purchase now', 'Add']) {
+    assert.ok(isAddLabel(t), t);
+  }
+  for (const t of ['Add to wishlist', 'Add to wish list', 'Add to compare', 'Buy now, pay later', 'Buy with Shop Pay', 'Buy with PayPal', 'Buy now with Afterpay', 'Notify me', 'Reserve in store', 'Click & Collect', 'Buy a gift card', 'Checkout', 'Pay now', 'Add a protection plan']) {
+    assert.ok(!isAddLabel(t), t);
+  }
+  assert.equal(classifyActionText('Add to Basket'), 'in_stock');
+  assert.equal(classifyActionText('Buy'), 'in_stock');
+  assert.equal(classifyActionText('Pre Order'), 'preorder');
+  // Every store's flow: the same words, in the same order (Amazon's "Buy Now" is its own straight-to-checkout button too).
+  for (const r of RETAILER_DEFS) assert.equal(r.flow.product.addSelector || r.flow.product.add === ADD_WORDS ? true : r.flow.product.add, true, `${r.id}: the shared add words`);
+  // extension/core.js has its own copy (a classic script): the same words, in the same order.
+  const core = fs.readFileSync(new URL('../extension/core.js', import.meta.url), 'utf8');
+  const list = core.match(/var ADD_WORDS = \[([\s\S]*?)\];/)[1].trim().split(/,\s*\n\s*/).map((x) => x.replace(/,$/, '').trim());
+  assert.deepEqual(list, ADD_WORDS.map(String));
+  assert.equal(core.match(/var NOT_ADD = (\/.*\/i);/)[1], String(NOT_ADD));
+});
+

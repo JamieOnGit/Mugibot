@@ -61,6 +61,11 @@ var MGBChecks = (function () {
     return best;
   }
 
+  // Good news a store shows the way it shows an error (WooCommerce's "“…” has been added to your cart."
+  // is an alert too — at its checkout, after its add-to-cart link): not what's wrong.
+  var GOOD_NEWS = /(^|[\s_-])(success|woocommerce-message|woocommerce-info|message-success|alert-success|notice-success)([\s_-]|$)/i;
+  var ADDED_NEWS = /\b(has been |been )?added to your (shopping )?(cart|bag|basket|trolley)\b|^\W*you added\b/i;
+
   /** What the page says is wrong (an error message, or a box marked invalid), or ''. */
   function pageError(doc) {
     doc = doc || document;
@@ -69,6 +74,7 @@ var MGBChecks = (function () {
       var el = els[i];
       if (el.matches('input, select, textarea, form, body')) continue;
       var t = visibleText(el);
+      if (t && (GOOD_NEWS.test(el.getAttribute('class') || '') || ADDED_NEWS.test(t))) continue;
       if (t && t.length < 300 && /[a-z]/i.test(t)) return t.slice(0, 160);
     }
     var bad = Array.prototype.slice.call(doc.querySelectorAll('[aria-invalid="true"]')).find(visible);

@@ -245,6 +245,11 @@ async function fillData(sender, part, profileId) {
   if (!pass || Date.now() > pass.expires || pass.userId !== auth.user.id) return null;
   // Only for the store the checkout was started on.
   if (tabHost(sender) !== pass.host) return null;
+  // (A payment frame showing a card the provider has for you — Stripe's Link: the store's words for its Confirm, no card.)
+  if (part === 'confirm') {
+    const r = await storeForTab(sender);
+    return { confirm: (r && r.flow && r.flow.checkout && r.flow.checkout.frameConfirm) || [] };
+  }
   const vault = await Vault.status(auth.user.id);
   const card = vault.ready ? await Vault.card(auth.user.id) : null;
   // Why there's no card, for the panel: none saved, saved by an older version (passphrase), or unreadable.
@@ -1588,7 +1593,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         let host = '';
         try { host = new URL(sender.url).host; } catch { /* keep empty */ }
         // (done: every box there's something saved for has kept it — or been given up on.)
-        await chrome.storage.session.set({ [frameKey(sender.tab.id, sender.frameId)]: { host, seen: Number(msg.seen) || 0, filled: Number(msg.filled) || 0, done: !!msg.done, detail: String(msg.detail || '').slice(0, 300), at: Date.now() } });
+        // (saved: no boxes, a card the provider already has for you — Stripe's Link.)
+        await chrome.storage.session.set({ [frameKey(sender.tab.id, sender.frameId)]: { host, seen: Number(msg.seen) || 0, filled: Number(msg.filled) || 0, done: !!msg.done, saved: !!msg.saved, detail: String(msg.detail || '').slice(0, 300), at: Date.now() } });
         return { ok: true };
       }
       case 'cardFrames':
