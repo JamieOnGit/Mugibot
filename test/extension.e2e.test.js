@@ -41,16 +41,21 @@ let profileDir;
 // it connects directly (a proxy from the environment would look the addresses up itself).
 const NO_STORES = [`--host-resolver-rules=${[...new Set(RETAILER_DEFS.flatMap((r) => r.hosts))].map((h) => `MAP ${h} 127.0.0.1`).join(', ')}`, '--no-proxy-server'];
 
-/** Start Chromium with the extension (again: the same profile, like reopening the browser). */
-async function launch() {
+/** Start Chromium with the extension (again: the same profile, like reopening the browser). dir: another copy of it. */
+async function launch(dir = extDir) {
   ctx = await chromium.launchPersistentContext(profileDir, {
     channel: 'chromium',
     headless: true,
     viewport: { width: 1200, height: 900 },
-    args: [`--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`, ...NO_STORES],
+    args: [`--disable-extensions-except=${dir}`, `--load-extension=${dir}`, ...NO_STORES],
   });
-  sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
+  // (Mugibot's own worker — not one of the browser's built-in extensions', which can start first in a
+  // profile that's been used before.)
+  const ours = (w) => /^chrome-extension:\/\/[a-p]{32}\/background\.js$/.test(w.url());
+  sw = ctx.serviceWorkers().find(ours) || await ctx.waitForEvent('serviceworker', { predicate: ours });
   extId = new URL(sw.url()).host;
+  // (A copy just installed in this profile: its worker is up a moment before its extension APIs are.)
+  await waitFor(async () => (await sw.evaluate(() => typeof chrome.storage).catch(() => '')) === 'object', { message: "the extension's APIs ready", timeout: 15000 });
 }
 
 before(async () => {
@@ -305,6 +310,65 @@ test("card backup: locked in the extension with a card passphrase and kept in yo
   await dash.waitForFunction(() => /ready: ⚡ Buy fills it in/.test(document.querySelector('#card-state').textContent));
   await dash.close();
   await opts.close();
+});
+
+test('🔁 an update loaded from a new folder (a new copy of the extension, its storage empty): press Connect this browser and your card is back — no passphrase; your account only ever had a locked copy, and the key stays in this browser', async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  // The dashboard handed this browser's extension its restore key: a copy of the card, locked with it, is in the account.
+  const dash = await ctx.newPage();
+  await dash.goto(`${env.url}/app#checkout`);
+  await waitFor(() => ((env.app.repo.getData(userId, 'cardRestore', null) || {}).copies || []).length === 1, { message: 'a copy kept for updates', timeout: 20000 });
+  await dash.waitForFunction(() => /comes back by itself after an extension update in this browser/.test(document.querySelector('#card-restore').textContent), null, { timeout: 20000 });
+  const kept = env.app.repo.getData(userId, 'cardRestore');
+  const copy = kept.copies[0];
+  assert.deepEqual([copy.brand, copy.last4, copy.expMonth, copy.expYear], ['Visa', '4242', '07', '2029']);
+  const key = await dash.evaluate((u) => JSON.parse(localStorage.getItem(`mgb-card-key:${u}`)), userId);
+  assert.equal(copy.id, key.id, 'locked with the key this browser keeps');
+  assert.doesNotMatch(JSON.stringify(kept), /4242 ?4242 ?4242|Ash Ketchum|"123"/, 'the account has nothing it could read the card from');
+  assert.doesNotMatch(JSON.stringify(env.app.db.all('SELECT * FROM user_data')) + JSON.stringify(env.app.db.all('SELECT * FROM events')), new RegExp(key.k.replace(/[+/=]/g, '.')), 'and never the key');
+  await dash.close();
+  const before = env.app.repo.listDevices(userId).map((d) => d.id);
+  // An update, loaded the "start fresh" way: a new folder — a new copy of the extension, nothing in it.
+  const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-ext-b-'));
+  dirs.push(dirB);
+  writeExtension(env.app.cfg, dirB);
+  const idA = extId;
+  await ctx.close();
+  await launch(dirB);
+  try {
+    assert.notEqual(extId, idA, 'a different copy of the extension');
+    assert.deepEqual(Object.keys(await sw.evaluate(() => chrome.storage.local.get(null))).filter((k) => k.startsWith('vault:') || k === 'auth'), [], 'it starts empty: no account, no card');
+    const page = await ctx.newPage();
+    await page.goto(`${env.url}/app#extension`);
+    await page.waitForFunction(() => /installed but not connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 15000 });
+    await page.click('#pair-now');
+    await page.waitForFunction(() => /is back in this browser/.test(document.querySelector('#pair-msg').textContent), null, { timeout: 20000 });
+    assert.match(await page.textContent('#pair-msg'), /Visa •••• 4242 is back in this browser/);
+    await page.waitForFunction(() => /Your card is back/.test(document.querySelector('#toasts')?.textContent || ''));
+    // In the new copy: the card, ready — encrypted with its own key, like any card saved there.
+    const local = await sw.evaluate(() => chrome.storage.local.get(null));
+    assert.equal(local[`vault:${userId}`].v, 2);
+    assert.equal(local[`vault:${userId}`].last4, '4242');
+    assert.doesNotMatch(JSON.stringify(local[`vault:${userId}`]), /4242 ?4242 ?4242/);
+    const opts = await ctx.newPage();
+    await opts.goto(`chrome-extension://${extId}/options.html`);
+    await opts.waitForSelector('#card-saved:not([hidden])');
+    assert.equal(await opts.textContent('#card-state'), 'Ready for checkout');
+    assert.match(await opts.textContent('#card-label'), /Visa •••• 4242 · expires 07\/29/);
+    assert.equal(await opts.isHidden('#restore-form'), true, 'no passphrase asked for');
+    await opts.close();
+    // The dashboard sees it ready; and its delivery details come from the account, as always.
+    await page.goto(`${env.url}/app#checkout`);
+    await page.waitForFunction(() => /Visa •••• 4242 · expires 07\/29 — ready/.test(document.querySelector('#card-state').textContent), null, { timeout: 20000 });
+    assert.equal(env.app.repo.profileFor(userId, null).address1, PROFILE_A.address1);
+    await page.close();
+  } finally {
+    // (Back to the first copy for the rest of the tests: this one's connection removed.)
+    for (const d of env.app.repo.listDevices(userId)) if (!before.includes(d.id)) env.app.repo.deleteDevice(userId, d.id);
+    await ctx.close();
+    await launch();
+  }
+  assert.equal(extId, idA);
 });
 
 test('Kmart flow (verified): ⚡ Buy → added → straight to checkout → details → delivery → payment → stops at "Checkout securely"', async () => {
@@ -2205,13 +2269,16 @@ test('🤖 Auto-checkout set to stop at the final button: fills checkout in and 
   await useItems([]);
 });
 
-test("🤖 Trigger ACO on the Auto-checkout page: a test run now, for an item that isn't armed — this browser opens the store and checks out (here, stopping at the final button)", async () => {
+test("🤖 Trigger ACO on the Armed list (Drops page): a test run now, for an item that isn't armed — this browser opens the store and checks out (here, stopping at the final button)", async () => {
   await browserApi('PUT', '/api/aco', { enabled: true, mode: 'fill' });
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO test run', maxPrice: 120 }]);
   const dash = await ctx.newPage();
-  await dash.goto(`${env.url}/app#aco`);
-  const row = dash.locator('#aco-items tr.aco-item', { hasText: 'ACO test run' });
+  await dash.goto(`${env.url}/app#armed`);
+  const row = dash.locator('#aco-items li.ar-row', { hasText: 'ACO test run' });
   await row.waitFor();
+  // Its checks: the bag, the sign-in, the card (ready in this, the checkout browser), the address, this browser.
+  await dash.waitForFunction(() => /Visa •••• 4242 ready/.test(document.querySelector('#aco-items li.ar-row [data-check="card"]')?.getAttribute('title') || ''), null, { timeout: 15000 });
+  assert.equal(await row.locator('[data-check="addr"]').getAttribute('class'), 'ck ok');
   dash.once('dialog', (d) => d.accept());
   await row.locator('.aco-test').click();
   await waitFor(async () => (await lastRun()).status === 'ready', { timeout: 45000, message: 'the test run filled in, waiting for you' });

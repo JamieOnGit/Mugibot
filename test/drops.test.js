@@ -8,7 +8,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client, discordOpts, makeMember, startApp, startFakeDiscord } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
-import { otherSku } from '../server/monitor/drops.js';
+import { hasWords, otherSku } from '../server/monitor/drops.js';
+import { item as checkItem } from '../server/schema.js';
 
 let env;
 let store;
@@ -345,6 +346,213 @@ test('🎯 a link at another website: its page read for stock, the member DM\'d 
   assert.equal(runsFor(item.id).length, 0);
   const listed = (await ash.get('/api/items')).body.items.find((x) => x.id === item.id);
   assert.equal(listed.acoCan, false);
+  assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
+});
+
+test('🎯 another website (a Garmin, say): your own watch tells you when it drops, comes back, opens for pre-order — or gets cheaper (📉) — by DM, alerts only', async () => {
+  // (A watch on the dummy "other website": its page's own JSON-LD says the price and the stock.)
+  store.state.acme.products.push({ handle: 'garmin-forerunner-265', name: 'Garmin Forerunner 265 GPS Smartwatch', price: 649, status: 'in_stock', listed: false });
+  const url = store.acmeUrl('garmin-forerunner-265');
+  const r = await ash.post('/api/drops', { url, label: 'Garmin Forerunner 265' });
+  assert.equal(r.status, 200, r.text);
+  const w = r.body.watch;
+  assert.equal(w.store, 'other');
+  const item = env.app.repo.itemBySku(ash.user.id, 'other', otherSku(url));
+  const row = () => env.app.db.get('SELECT * FROM items WHERE id = :id', { id: item.id });
+  const n0 = dms('d-ash').length;
+  const last = () => dms('d-ash').at(-1);
+  // Not up yet (its page isn't there): nothing to say. Then it drops — the page is up, in stock: 🟢.
+  await env.app.monitor.checkPage(url);
+  assert.equal(dms('d-ash').length, n0, 'not listed yet: quiet');
+  store.setAcme('garmin-forerunner-265', { listed: true });
+  await env.app.monitor.checkPage(url);
+  assert.equal(dms('d-ash').length, n0 + 1, 'it dropped: one DM');
+  assert.match(last().body.embeds[0].title, /^🟢 In stock: Garmin Forerunner 265/);
+  assert.equal(row().price_alert_price, 649, 'its first read notes the price — no price alert for it');
+  // Cheaper: 📉, with the price it was, how much lower, and its page (no ⚡ Buy at another website).
+  store.setAcme('garmin-forerunner-265', { price: 549 });
+  await env.app.monitor.checkPage(url);
+  assert.equal(dms('d-ash').length, n0 + 2, 'a price drop: a DM');
+  const drop = last();
+  assert.match(drop.body.embeds[0].title, /^📉 Price drop: Garmin Forerunner 265/);
+  assert.match(drop.body.embeds[0].description, /Was \$649\.00 — now \$549\.00 \(15% lower\)/);
+  assert.match(drop.body.embeds[0].description, /In stock/);
+  assert.match(drop.body.embeds[0].description, /Open the product to buy it there/);
+  assert.ok(buttons(drop).includes('Open product'));
+  assert.ok(!buttons(drop).includes('⚡ Buy'));
+  const ev = env.app.repo.listEvents(ash.user.id, { limit: 5 }).find((e) => /Price drop/.test(e.message));
+  assert.ok(ev, 'in their activity too');
+  // The same price again, a little higher, then back to it: nothing new to say (told at $549 already).
+  await env.app.monitor.checkPage(url);
+  store.setAcme('garmin-forerunner-265', { price: 559 });
+  await env.app.monitor.checkPage(url);
+  store.setAcme('garmin-forerunner-265', { price: 549 });
+  await env.app.monitor.checkPage(url);
+  assert.equal(dms('d-ash').length, n0 + 2, 'back to the price it was told about: quiet');
+  // Lower than that: told again.
+  store.setAcme('garmin-forerunner-265', { price: 499 });
+  await env.app.monitor.checkPage(url);
+  assert.equal(dms('d-ash').length, n0 + 3);
+  assert.match(last().body.embeds[0].description, /Was \$549\.00 — now \$499\.00 \(9\.1% lower\)/);
+  // Less than a dollar off (or under 1%): not a drop.
+  store.setAcme('garmin-forerunner-265', { price: 498.5 });
+  await env.app.monitor.checkPage(url);
+  assert.equal(dms('d-ash').length, n0 + 3, 'fifty cents off: quiet');
+  // Half a day later, the same lower price after a rise: told again.
+  store.setAcme('garmin-forerunner-265', { price: 520 });
+  await env.app.monitor.checkPage(url);
+  clock.offset += 13 * 60 * 60 * 1000;
+  try {
+    store.setAcme('garmin-forerunner-265', { price: 499 });
+    await env.app.monitor.checkPage(url);
+    assert.equal(dms('d-ash').length, n0 + 4, 'half a day on: told again');
+    // Sold out (quiet), then pre-orders open: 🟣.
+    store.setAcme('garmin-forerunner-265', { status: 'out_of_stock' });
+    await env.app.monitor.checkPage(url);
+    assert.equal(dms('d-ash').length, n0 + 4, 'sold out: nothing to say');
+    store.setAcme('garmin-forerunner-265', { status: 'preorder' });
+    await env.app.monitor.checkPage(url);
+    assert.equal(dms('d-ash').length, n0 + 5);
+    assert.match(last().body.embeds[0].title, /^🟣 Pre-order open: Garmin Forerunner 265/);
+  } finally {
+    clock.offset -= 13 * 60 * 60 * 1000;
+  }
+  // Someone else's watchlist item (not a drop watch's): its price moving is no DM — as before.
+  const plain = (await misty.post('/api/items', { url: store.acmeUrl('luffy-gear-5-figure'), name: 'Luffy figure' })).body;
+  const m0 = dms('d-misty').length;
+  await env.app.monitor.checkPage(store.acmeUrl('luffy-gear-5-figure'));
+  store.setAcme('luffy-gear-5-figure', { price: 59.95 });
+  await env.app.monitor.checkPage(store.acmeUrl('luffy-gear-5-figure'));
+  assert.equal(dms('d-misty').filter((d) => /Price drop/.test(d.body.embeds[0].title)).length, 0, 'a plain watchlist item: no price DMs');
+  assert.ok(dms('d-misty').length >= m0);
+  await misty.del(`/api/items/${plain.id}`);
+  store.setAcme('luffy-gear-5-figure', { price: 89.95 });
+  assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
+});
+
+test("🎯 an admin's watch at another website, for everyone: its price drops are posted in #non-tcg-alerts too (📉) — its rule gets price drops once, and an admin who takes them off is left alone", async () => {
+  store.state.acme.products.push({ handle: 'garmin-fenix-8', name: 'Garmin Fenix 8 Solar', price: 1499, status: 'in_stock', listed: true });
+  const url = store.acmeUrl('garmin-fenix-8');
+  const r = await boss.post('/api/drops', { url, label: 'Garmin Fenix 8' });
+  assert.equal(r.status, 200, r.text);
+  const w = r.body.watch;
+  const rule = env.app.catalog.listRoutes().find((x) => x.channelId === ch.nontcg);
+  assert.ok(rule.kinds.includes('price_drop'), '#non-tcg-alerts posts price drops (made with them)');
+  await env.app.monitor.checkPage(url);
+  const p0 = posts(ch.nontcg).length;
+  store.setAcme('garmin-fenix-8', { price: 1199 });
+  await env.app.monitor.checkPage(url);
+  const post = posts(ch.nontcg).at(-1);
+  assert.equal(posts(ch.nontcg).length, p0 + 1, 'the price drop is posted for everyone');
+  assert.match(JSON.stringify(post.body.embeds[0]), /Price drop/);
+  assert.match(JSON.stringify(post.body.embeds[0]), /\$1199\.00 \(was \$1499\.00\)/);
+  assert.ok(!buttons(post).some((b) => /Buy/.test(b)), 'another website: no ⚡ Buy');
+  // An older #non-tcg-alerts rule without price drops gets them — once.
+  env.app.catalog.saveRoute(rule.id, { ...rule, kinds: ['restock', 'listed'] });
+  env.app.repo.setSetting('nontcgPriceDrops', null);
+  drops().priceDropsInNonTcg();
+  assert.deepEqual(env.app.catalog.listRoutes().find((x) => x.id === rule.id).kinds, ['restock', 'listed', 'price_drop']);
+  env.app.catalog.saveRoute(rule.id, { ...rule, kinds: ['restock', 'listed'] });
+  drops().priceDropsInNonTcg();
+  assert.deepEqual(env.app.catalog.listRoutes().find((x) => x.id === rule.id).kinds, ['restock', 'listed'], 'taken off by an admin: left off');
+  env.app.catalog.saveRoute(rule.id, { ...rule, kinds: ['restock', 'listed', 'price_drop'] });
+  assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
+});
+
+test('🎯 drop watch words: short words and numbers are whole words ("xbox series x" isn\'t the Series S), longer ones count at a word\'s start — and Kmart\'s whole store is searched for them, not just its Trading Cards', async () => {
+  assert.equal(hasWords('Xbox Series X Console 1TB', 'xbox series x'), true);
+  assert.equal(hasWords('Xbox Series S 512GB Console', 'xbox series x'), false, 'not the Series S');
+  assert.equal(hasWords('PlayStation 5 Slim Console Promo Bundle', 'playstation 5 pro'), false, '"pro" isn\'t "Promo"');
+  assert.equal(hasWords('PlayStation®5 Pro Console', 'playstation 5 pro'), true);
+  assert.equal(hasWords('Nintendo Switch 2 Console', 'switch 2'), true);
+  assert.equal(hasWords('Nintendo Switch Lite 2024 Edition', 'switch 2'), false, '"2" isn\'t "2024"');
+  assert.equal(hasWords('Pokémon Skateboard Deck', 'pokemon skate'), true, 'a longer word at the start of one');
+  assert.equal(hasWords('Pokemon Booster Boxes', 'booster box'), true, 'a plural is fine');
+  assert.equal(hasWords('Garmin Forerunner 265 GPS Smartwatch', 'garmin forerunner 265'), true);
+  assert.equal(hasWords('Garmin Forerunner 2650', 'garmin forerunner 265'), false);
+  assert.equal(hasWords('Anything', ''), false);
+  const kmart = env.app.retailers.get('kmart');
+  const cards = sw().urlFor(kmart, 'pokemon');
+  const words = sw().urlFor(kmart, 'xbox series x', 1, { vip: true });
+  assert.match(cards, /filters%5Bgroup_id%5D=/, 'the card keywords: Trading Cards only');
+  assert.doesNotMatch(words, /group_id/, 'a watch\'s words: every department');
+  assert.match(words, /\/search\/xbox%20series%20x\?/);
+  assert.match(words, /filters%5BSeller%5D=Kmart&filters%5BSeller%5D=Target/, 'still Kmart\'s and Target\'s own');
+  assert.match(words, /sort_by=numberOfDaysSinceStartDate/, 'newest first');
+});
+
+test('🎯 a broad watch whose first look finds plenty still hears of what drops after it (listed-already and new finds each have room) — and says so once it\'s found the most it keeps', async () => {
+  const before = store.state.acme.products.length;
+  for (let i = 1; i <= 12; i++) store.state.acme.products.push({ handle: `garmin-band-${i}`, name: `Garmin Watch Band ${i}`, price: 39 + i, status: 'in_stock', listed: true });
+  try {
+    const site = store.acmeUrl();
+    const w = (await ash.post('/api/drops', { store: 'other', site, words: 'garmin watch band' })).body.watch;
+    assert.ok(w);
+    const look = await drops().look(drops().get(w.id));
+    assert.equal(look.ok, true, look.error);
+    const first = drops().get(w.id).found;
+    assert.equal(first.length, 10, 'its first look keeps 10 of what was listed already');
+    assert.ok(first.every((f) => f.base === true));
+    const n0 = dms('d-ash').length;
+    // A new one drops: there's room for it (before, a full first look left none).
+    store.state.acme.products.push({ handle: 'garmin-watch-band-quickfit-22', name: 'Garmin Watch Band QuickFit 22', price: 79, status: 'in_stock', listed: true });
+    drops().db.run('UPDATE drop_watches SET next_at = 0 WHERE id = :id', { id: w.id });
+    drops().changed();
+    await drops().look(drops().get(w.id));
+    const found = drops().get(w.id).found;
+    const fresh = found.find((f) => /quickfit-22/.test(f.sku));
+    assert.ok(fresh, 'the new drop is found');
+    assert.equal(fresh.base, false);
+    assert.ok(dms('d-ash').length > n0, 'and its owner is told');
+    assert.match(dms('d-ash').at(-1).body.embeds[0].title, /Garmin Watch Band QuickFit 22/);
+    // Ten new ones: the most it keeps — said once in their activity.
+    for (let i = 1; i <= 10; i++) store.state.acme.products.push({ handle: `garmin-watch-band-new-${i}`, name: `Garmin Watch Band New ${i}`, price: 50, status: 'out_of_stock', listed: true });
+    drops().db.run('UPDATE drop_watches SET next_at = 0 WHERE id = :id', { id: w.id });
+    drops().changed();
+    await drops().look(drops().get(w.id));
+    const after = drops().get(w.id).found;
+    assert.equal(after.filter((f) => f.base === false).length, 10, 'ten new finds at most');
+    const said = env.app.repo.listEvents(ash.user.id, { limit: 30 }).filter((e) => /the most one watch keeps/.test(e.message));
+    assert.equal(said.length, 1, 'said once');
+    // One taken off the watchlist makes room for the next.
+    const one = after.find((f) => f.base === false && f.itemId);
+    await ash.del(`/api/items/${one.itemId}`);
+    assert.equal(drops().room(drops().get(w.id), false), true);
+    assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
+  } finally {
+    store.state.acme.products.splice(before);
+  }
+});
+
+test('🤖 one purchase per drop watch: once Auto-checkout buys one of its finds, its other finds are disarmed and what it finds next isn\'t armed', async () => {
+  const w = (await ash.post('/api/drops', { store: 'demo-jbhifi', words: 'zelda tears console', aco: true, maxPrice: 900 })).body.watch;
+  assert.ok(w && w.aco);
+  const add = (sku, name, { maxPrice = 900, watch = w.id } = {}) => {
+    const it = env.app.repo.addItem(ash.user.id, checkItem({ store: 'demo-jbhifi', sku, name, maxPrice, aco: true, monitor: true }, { retailers: env.app.retailers }));
+    if (watch) env.app.db.run('UPDATE items SET drop_watch = :w WHERE id = :id', { w: watch, id: it.id });
+    return it;
+  };
+  const a = add('zelda-tears-console-a', 'Zelda Tears Console A');
+  const b = add('zelda-tears-console-b', 'Zelda Tears Console B');
+  const other = add('unrelated-thing', 'Unrelated thing', { maxPrice: 50, watch: null });
+  const run = env.app.aco.create({ userId: ash.user.id, item: env.app.repo.getItem(ash.user.id, a.id), price: 799, mode: 'place', trigger: 'sweep' }, 'checkout', '', 'At checkout');
+  await env.app.aco.report(ash.user.id, run.id, { status: 'placing', message: 'Pressing "Pay now"' });
+  await env.app.aco.report(ash.user.id, run.id, { status: 'placed', message: 'Order confirmed', total: 812 });
+  assert.equal(env.app.repo.getItem(ash.user.id, a.id).aco, false, 'the one bought: disarmed');
+  assert.equal(env.app.repo.getItem(ash.user.id, b.id).aco, false, 'the watch\'s other find: disarmed');
+  assert.equal(env.app.repo.getItem(ash.user.id, other.id).aco, true, 'anything else of yours stays armed');
+  assert.equal(drops().get(w.id).aco, false, 'and what the watch finds next isn\'t armed');
+  assert.ok(env.app.repo.listEvents(ash.user.id, { limit: 10 }).some((e) => /One purchase per drop watch/.test(e.message)));
+  // A run that didn't buy (failed before the final button) leaves the others armed.
+  env.app.db.run('UPDATE items SET aco = 1 WHERE id = :id', { id: b.id });
+  env.app.db.run('UPDATE drop_watches SET aco = 1 WHERE id = :id', { id: w.id });
+  drops().changed();
+  const c = add('zelda-tears-console-c', 'Zelda Tears Console C');
+  const run2 = env.app.aco.create({ userId: ash.user.id, item: env.app.repo.getItem(ash.user.id, c.id), price: 799, mode: 'place', trigger: 'sweep' }, 'checkout', '', 'At checkout');
+  await env.app.aco.report(ash.user.id, run2.id, { status: 'failed', reason: 'card_declined', message: 'Declined' });
+  assert.equal(env.app.repo.getItem(ash.user.id, b.id).aco, true, 'not bought: the others stay armed');
+  assert.equal(drops().get(w.id).aco, true);
+  for (const it of [a, b, c, other]) await ash.del(`/api/items/${it.id}`);
   assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
 });
 

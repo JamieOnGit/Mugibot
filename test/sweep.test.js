@@ -1221,6 +1221,39 @@ test('WooCommerce and Magento results, read: entities decoded, cents to dollars,
   assert.deepEqual(parseMagento(`<html><body>${menu}<main><p>Loading…</p></main></body></html>`, opts), { products: [], problem: 'layout' });
 });
 
+test("The Gamesmen's own tiles (from a copy of its real page): the price shown (not its data-price, GST left out), the old one, Add to Cart / Pre-Order, its product id — never its misleading data-dimension10 or the button's borrowed data-name", () => {
+  // Three tiles as its real page has them (trimmed): one on sale, one pre-order.
+  const tile = (slug, name, shown, dataPrice, { was = '', pre = false, id }) => `<div data-ga-type="product-list-item">
+    <a href="https://www.gamesmen.com.au/${slug}" data-id="POS-247173" data-name="${name}" data-price="${dataPrice}" data-currency="AUD" data-dimension10="Out of stock" data-event="select_item">
+      <div class="flex flex-row justify-between w-full h-full p-2 bg-white rounded-lg"><div class="flex flex-col w-2/5 xl:w-1/2 p-2"><div class="relative aspect-1-1">
+        <img class="absolute w-full h-full object-contain" alt="${name} (Image 1)" title="${name}" src="https://www.gamesmen.com.au/media/${slug}.jpg" width="360" height="360" loading="lazy"></div></div>
+      <div class="relative flex flex-col w-3/5 xl:w-1/2 m-2"><h3 class="text-sm font-medium product-card-title max-h-18 md:text-base">${name}</h3>
+        <div class="text-sm mb-2 lg:mb-4"><div>${pre ? '<span class="text-blue-500 font-medium">Pre-Order</span><p class="text-blue-500 text-xs md:text-sm">Due November 2026</p>' : '<span class="text-green-500"><span class="font-medium">Delivery</span></span>'}</div></div>
+        <div><span class="text-base font-medium text-black md:text-xl mr-2">$${shown}</span>${was ? `<span class="text-xs md:text-sm line-through text-gray-400 mr-2">$${was}</span><span class="text-xs inline-block px-1 rounded-md bg-red-600 text-white font-medium">-25%</span>` : ''}</div>
+        <div class="flex flex-col flex-grow justify-end items-end py-1"><div class="flex flex-wrap justify-end items-center gap-2">
+          <form method="post" class="product_addtocart_form" action="https://www.gamesmen.com.au/checkout/cart/add/uenc/aHR0cHM6Ly93d3cuZ2FtZXNtZW4uY29tLmF1L2JyYW5kL3Bva2Vtb24~/product/${id}/"><input name="form_key" type="hidden" value="xxxxxxxxxxxxxxxx"><input type="hidden" name="product" value="${id}">
+            <button type="submit" title="${pre ? 'Pre-Order' : 'Add to Cart'}" class="button w-auto h-full shadow-md product-list-addtocart " data-id="POS-256394" data-name="Bandai Pokemon Meowth Quick!! Model Kit" data-price="13.59" data-dimension10="Out of stock" data-event="add_to_cart"><span>${pre ? 'Pre-Order' : 'Add to Cart'}</span></button></form>
+          <button type="button" title="Add to Wish List ${name}"><span class="sr-only">Add to Wish List</span></button></div></div></div></div></a></div>`;
+  const page = `<html><head><title>The Gamesmen: Pokemon</title></head><body>
+    <nav><a class="block-category-link-inline" href="https://www.gamesmen.com.au/trading-card-games">Trading Card Games</a></nav>
+    <div class="products wrapper mode-grid products-grid"><div class="mx-auto pt-4 pb-12 grid gap-2 grid-cols-1 xl:grid-cols-2">
+    ${tile('pokemon-tcg-mega-evolution-chaos-rising-booster-pack', 'Pokemon TCG: Mega Evolution Chaos Rising Booster Pack', '10.95', '9.95', { id: 181952 })}
+    ${tile('pokemon-pikachu-winking-10-plush', 'Pokemon Pikachu Winking 10&quot; Plush', '29.95', '27.23', { was: '39.95', id: 132858 })}
+    ${tile('ukonic-pokemon-love-ball-light', 'Ukonic Pokemon Love Ball Light', '39.95', '36.32', { pre: true, id: 189890 })}
+    </div></div></body></html>`;
+  const r = parseListing('magento', page, { base: 'https://www.gamesmen.com.au/catalogsearch/result/?q=pokemon', productPath: R('gamesmen').productPath, skuFromPath: R('gamesmen').skuFromPath, storeName: 'The Gamesmen' });
+  assert.equal(r.problem, null);
+  assert.deepEqual(r.products.map((p) => [p.sku, p.title, p.price, p.wasPrice, p.inStock, p.preorder, p.aliases]), [
+    ['pokemon-tcg-mega-evolution-chaos-rising-booster-pack', 'Pokemon TCG: Mega Evolution Chaos Rising Booster Pack', 10.95, null, true, false, ['181952']],
+    ['pokemon-pikachu-winking-10-plush', 'Pokemon Pikachu Winking 10" Plush', 29.95, 39.95, true, false, ['132858']],
+    ['ukonic-pokemon-love-ball-light', 'Ukonic Pokemon Love Ball Light', 39.95, null, true, true, ['189890']],
+  ]);
+  assert.equal(r.products[0].url, 'https://www.gamesmen.com.au/pokemon-tcg-mega-evolution-chaos-rising-booster-pack');
+  assert.equal(r.products[0].image, 'https://www.gamesmen.com.au/media/pokemon-tcg-mega-evolution-chaos-rising-booster-pack.jpg');
+  // Newest first: its "Recently Listed" order.
+  assert.match(sw.urlFor(R('gamesmen'), 'pokemon'), /\/catalogsearch\/result\/\?q=pokemon&product_list_order=recently-listed$/);
+});
+
 test("a page Mugibot couldn't read says what it was; a bot check in an admin's browser says what to do (Mugibot never answers one)", async () => {
   const admin = { role: 'admin', username: 'boss' };
   const saved = { ...sw.settings.stores };

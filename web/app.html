@@ -40,10 +40,10 @@
       <div id="gates-banner" aria-live="polite"></div>
       <!-- On a page with several parts: a row to jump to each -->
       <nav class="jump" data-for="aco" aria-label="On this page" hidden>
-        <button type="button" data-jump="#aco-form">🤖 Auto-checkout</button><button type="button" data-jump="#bags-card">🧹 Bags</button><button type="button" data-jump="#aco-items-card">🎯 Armed items</button><button type="button" data-jump="#aco-runs-card">📜 Run history</button><button type="button" data-jump="[data-panel=&quot;checkout&quot;]">📦 Delivery &amp; card</button>
+        <button type="button" data-jump="#aco-form">🤖 Auto-checkout</button><button type="button" data-jump="#aco-remote">📱 Phone ⚡ Buy</button><button type="button" data-jump="#bags-card">🧹 Bags</button><button type="button" data-jump="#aco-runs-card">📜 Run history</button><a class="jump-link" href="#armed">🎯 Armed items ↗</a>
       </nav>
       <nav class="jump" data-for="setup" aria-label="On this page" hidden>
-        <button type="button" data-jump="[data-panel=&quot;extension&quot;]">🧩 Extension</button><button type="button" data-jump="#logins-card">🔑 Store sign-ins</button><button type="button" data-jump="#devices-card">💻 Browsers</button><button type="button" data-jump="[data-panel=&quot;discord&quot;]">💬 Discord &amp; pings</button>
+        <button type="button" data-jump="[data-panel=&quot;extension&quot;]">🧩 Extension</button><button type="button" data-jump="#logins-card">🔑 Store sign-ins</button><button type="button" data-jump="#devices-card">💻 Browsers</button><button type="button" data-jump="[data-panel=&quot;checkout&quot;]">📦 Delivery &amp; card</button><button type="button" data-jump="[data-panel=&quot;discord&quot;]">💬 Discord &amp; pings</button>
       </nav>
       <nav class="jump" data-for="account" aria-label="On this page" hidden>
         <button type="button" data-jump="[data-panel=&quot;membership&quot;]">⭐ Membership</button><button type="button" data-jump="#acct-form">👤 Profile</button><button type="button" data-jump="#pw-form">🔒 Password</button><button type="button" data-jump="#del-form">🗑 Delete account</button>
@@ -117,6 +117,7 @@
                 <div class="mon-ptabs" role="tablist" aria-label="Lists">
                   <button type="button" role="tab" class="mon-ptab" data-ptab="tracked" id="pt-tracked" aria-controls="pp-tracked">Tracked products <span class="mon-meta" id="m-count"></span></button>
                   <button type="button" role="tab" class="mon-ptab" data-ptab="watch" id="pt-watch" aria-controls="pp-watch">My watchlist <span class="mon-meta" id="w-count"></span></button>
+                  <button type="button" role="tab" class="mon-ptab" data-ptab="armed" id="pt-armed" aria-controls="pp-armed">🤖 Armed <span class="mon-meta" id="aco-armed-count"></span></button>
                   <button type="button" role="tab" class="mon-ptab" data-ptab="drops" id="pt-drops" aria-controls="pp-drops">🎯 Drop watches <span class="mon-meta" id="dw-count"></span></button>
                   <button type="button" role="tab" class="mon-ptab" data-ptab="activity" id="pt-activity" aria-controls="pp-activity">My activity</button>
                 </div>
@@ -161,7 +162,7 @@
                     <span class="msg" id="w-msg"></span>
                   </div>
                 </form>
-                <p class="muted small">Your own SKUs, checked about every <span id="w-interval">60</span> seconds. In stock (or pre-orders open): a Discord DM with <b>⚡ Buy</b>, which opens the product and fills in checkout for you. Armed for <a href="#aco">🤖 Auto-checkout</a>, it's bought by itself.</p>
+                <p class="muted small">Your own SKUs, checked about every <span id="w-interval">60</span> seconds. In stock (or pre-orders open): a Discord DM with <b>⚡ Buy</b>, which opens the product and fills in checkout for you. Armed for 🤖 Auto-checkout (the <a href="#armed">Armed</a> tab), it's bought by itself.</p>
                 <ul class="items" id="w-list"></ul>
                 <nav class="pager" id="w-pager" aria-label="Watchlist pages"></nav>
                 <div class="form-actions">
@@ -169,9 +170,26 @@
                   <button class="btn small" type="button" id="w-demo" hidden>Add dummy-store test items</button>
                 </div>
               </div>
+              <!-- 🤖 Armed: your watchlist's items for Auto-checkout — each one's switch, max price, whether
+                   everything it needs is ready (bag, sign-in, card, address, checkout browser), and its buttons -->
+              <div class="mon-ppanel" data-ppanel="armed" id="pp-armed" role="tabpanel" aria-labelledby="pt-armed" hidden>
+                <div class="ar-top">
+                  <div class="ar-state" id="ar-state" role="status"></div>
+                  <div class="ar-tools">
+                    <select id="aco-show" aria-label="Show"><option value="">Every item</option><option value="armed">Armed only</option></select>
+                    <button class="btn small" type="button" id="ar-ready" title="Empty your bag at every store with an armed item, in your checkout browser, and check your sign-ins again">🧹 Get ready</button>
+                    <button class="btn small" type="button" id="ar-recheck">↻ Check again</button>
+                  </div>
+                </div>
+                <p class="msg" id="ar-msg"></p>
+                <div class="ar-head" aria-hidden="true"><span>Armed</span><span>Item · ready to check out?</span><span>Max price</span><span></span></div>
+                <ul class="ar-list" id="aco-items"></ul>
+                <nav class="pager" id="aco-pager" aria-label="Armed items pages"></nav>
+                <p class="muted small ar-help">Arm an item with its max price and it's bought by itself the moment it drops — once, then it disarms — within your <a href="#aco">Auto-checkout limits</a>. Mugibot never pays more than the max. Each check says what the run needs: <b>Bag</b> empty (anything else in it stops the run), <b>Sign-in</b> at the store (faster: the store fills in your saved details), your <b>Card</b> and <b>Address</b> ready, and your checkout <b>Browser</b> open and listening. <b>Trigger ACO</b> runs one now, as if it had just dropped.</p>
+              </div>
               <!-- 🎯 Drop watches: anything outside the card keywords, by link or words, at any store or website -->
               <div class="mon-ppanel" data-ppanel="drops" id="pp-drops" role="tabpanel" aria-labelledby="pt-drops" hidden>
-                <p class="muted small dw-lead">Watch anything outside the card keywords — a console, a collectible, a product at any shop. Paste its link, or type the words in its name and choose where to look. <span id="dw-scope"></span></p>
+                <p class="muted small dw-lead">Watch anything outside the card keywords — a console, a collectible, a product at any shop (Garmin, a sneaker store…). Paste its link, or type the words in its name and choose where to look. You're told when it <b>drops</b>, comes <b>back in stock</b>, opens for <b>pre-order</b> or its <b>price drops</b>. <span id="dw-scope"></span></p>
                 <form class="card dw-form" id="dw-form" novalidate>
                   <label for="dw-input">Product link, or words in its name</label>
                   <input id="dw-input" autocomplete="off" maxlength="2000" placeholder="https://www.jbhifi.com.au/products/…   or   xbox series x">
@@ -182,7 +200,7 @@
                   </div>
                   <div class="grid2">
                     <div><label for="dw-label">Name it <span class="muted">(optional)</span></label><input id="dw-label" maxlength="80" placeholder="e.g. Xbox 25th Anniversary"></div>
-                    <div id="dw-cat-wrap" hidden><label for="dw-category">Category</label><select id="dw-category"><option value="nontcg">Non-TCG (#non-tcg-alerts)</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other cards</option></select></div>
+                    <div id="dw-cat-wrap" hidden><label for="dw-category">Category</label><select id="dw-category"><option value="nontcg">Non-TCG (#non-tcg-alerts)</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select></div>
                   </div>
                   <div class="dw-aco" id="dw-aco-wrap" hidden><label class="check inline"><input type="checkbox" id="dw-aco"> 🤖 Auto-checkout it when it drops, up to</label> <input id="dw-max" type="number" min="1" step="0.01" placeholder="Max price $" aria-label="Max price for Auto-checkout"> <a class="small" href="#aco">Auto-checkout settings</a></div>
                   <p class="small muted" id="dw-aco-note" hidden></p>
@@ -387,7 +405,7 @@
       <!-- 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md) -->
       <section data-panel="aco" hidden>
         <div class="tab-head"><h2>Auto-checkout</h2><span class="pill" id="aco-state">Off</span></div>
-        <p class="muted aco-lead">When an item you've armed drops, your browser checks out by itself, within your limits: the store, your bag, checkout with your details and card, the order. <b>One purchase per arming</b>. Your items, and what the monitor sees of them, are on the <a href="#watch">Drops page</a>; here's what Auto-checkout does with them — and, at the bottom, the delivery details and card every checkout uses.</p>
+        <p class="muted aco-lead">When an item you've armed drops, your browser checks out by itself, within your limits: the store, your bag, checkout with your details and card, the order. <b>One purchase per arming</b>. You arm items — and see whether each is ready — on the Drops page's <a href="#armed">🤖 Armed</a> tab; here's your switch and limits, ⚡ Buy from your phone, your bags and how every run went. Your delivery details and card are on the <a href="#checkout">Setup page</a>.</p>
 
         <div class="aco-stats" id="aco-stats"></div>
 
@@ -441,19 +459,6 @@
           <p class="msg" id="bags-msg"></p>
         </div>
 
-        <div class="card" id="aco-items-card">
-          <div class="card-head"><h3>Armed items</h3>
-            <div class="aco-items-tools"><span class="muted small" id="aco-armed-count"></span>
-              <select id="aco-show" aria-label="Show"><option value="">Every item</option><option value="armed">Armed only</option></select></div>
-          </div>
-          <p class="muted small">Your watchlist's items (add them on the <a href="#watch">Drops page</a>). Arm one with its max price: Mugibot never pays more. <b>Trigger ACO</b> runs one now, as if it had just dropped.</p>
-          <div class="table-wrap"><table class="aco-table">
-            <thead><tr><th scope="col">Armed</th><th scope="col">Item</th><th scope="col">Sign-in</th><th scope="col">Max price</th><th scope="col"><span class="sr-only">Test</span></th></tr></thead>
-            <tbody id="aco-items"></tbody>
-          </table></div>
-          <nav class="pager" id="aco-pager" aria-label="Armed items pages"></nav>
-        </div>
-
         <div class="card" id="aco-runs-card">
           <div class="card-head"><h3>Run history</h3>
             <select id="aco-filter" aria-label="Show"><option value="">Everything</option><option value="placed">Orders placed</option><option value="needs">Needed you</option><option value="failed">Failed</option><option value="skipped">Didn't start</option></select>
@@ -461,23 +466,6 @@
           <p class="muted small">Each time an armed item dropped (or you pressed Trigger ACO): whether Auto-checkout started, each step, and how it ended — with why.</p>
           <ul class="aco-runs" id="aco-runs"></ul>
           <nav class="pager" id="aco-runs-pager" aria-label="Run history pages"></nav>
-        </div>
-      </section>
-
-      <!-- 📦 Checkout details -->
-      <section data-panel="checkout" hidden>
-        <div class="tab-head"><h2>Delivery details &amp; card</h2><button class="btn small" id="p-add" type="button">+ Add another address</button></div>
-        <p class="muted">Filled in at every store's checkout. Encrypted, and only for your account. Anything a store already filled in from your store account is left as it is.</p>
-        <form id="p-form">
-          <div id="p-list"></div>
-          <div class="form-actions"><button class="btn primary" type="submit">Save delivery details</button><span class="msg" id="p-msg"></span></div>
-        </form>
-        <div class="card mt">
-          <h3>Payment card</h3>
-          <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close the browser. It's typed into the {{APP_NAME}} extension's own card page (not this website), saved in this browser, encrypted and tied to your account. Your card is <b>never sent to our servers</b>. If you back it up to your account, only a copy locked with your card passphrase is kept, and we can't open it.</p>
-          <p id="card-state" class="notice">Checking this browser…</p>
-          <div class="form-actions"><button class="btn primary" type="button" id="card-open">Add your card</button></div>
-          <div id="card-backup" class="card-backup"></div>
         </div>
       </section>
 
@@ -514,13 +502,13 @@
             <p class="muted small">From then on, new versions install themselves.</p>
           </div>
           <div id="update-zip">
-          <p class="muted">When there's a new version, the extension's icon in Chrome's toolbar shows <b>NEW</b> and its popup has an <b>Update</b> button that brings you here. Updating like this keeps your saved card.</p>
+          <p class="muted">When there's a new version, the extension's icon in Chrome's toolbar shows <b>NEW</b> and its popup has an <b>Update</b> button that brings you here. Updating like this keeps your saved card and connection.</p>
           <ol>
             <li><a class="btn small primary" href="/download/extension.zip">Download the latest version</a> and unzip it.</li>
             <li>Open the new <code>mugibot-extension</code> folder, select everything in it (<kbd>⌘</kbd>+<kbd>A</kbd> on a Mac, <kbd>Ctrl</kbd>+<kbd>A</kbd> on Windows) and copy it into the folder your extension was loaded from, replacing the old files. Not sure which folder? Open <code>chrome://extensions</code> → Mugibot → <b>Details</b>: it's under <b>Source</b>.</li>
             <li>Click the Mugibot icon in Chrome's toolbar → <b>Reload</b> (or the ↻ on Mugibot at <code>chrome://extensions</code>). If it asks, press <b>Connect this browser</b> below.</li>
           </ol>
-          <p class="muted small">Or start fresh: at <code>chrome://extensions</code> press <b>Remove</b> on Mugibot, then <b>Load unpacked</b> and choose the new folder, press <b>Connect this browser</b> below, and save your card again.</p>
+          <p class="muted small">Or start fresh: at <code>chrome://extensions</code> press <b>Remove</b> on Mugibot, then <b>Load unpacked</b> and choose the new folder, and press <b>Connect this browser</b> below. If the copy you removed was 1.20 or newer, your card comes back by itself as it connects — no passphrase, nothing to type (Delivery &amp; card, below, says so). From an older copy, copy the files over instead (above) to keep your card, or add it again once. Your delivery details are kept in your account either way.</p>
           </div>
         </div>
         <div class="card">
@@ -539,7 +527,7 @@
         </div>
         <div class="card">
           <h3>3. Save your card (optional)</h3>
-          <p class="muted">Click the extension's icon → <b>Add your card</b> (or <a href="#checkout">Checkout → Delivery &amp; card</a> → Add your card). Save it once and every ⚡ Buy fills it in, even after you restart the browser. It stays in that browser, encrypted. Tick <b>Back up</b> when you save it, and a new install restores it with your card passphrase.</p>
+          <p class="muted">Click the extension's icon → <b>Add your card</b> (or <a href="#checkout">Delivery &amp; card</a>, further down this page → Add your card). Save it once and every ⚡ Buy fills it in, even after you restart the browser. It stays in that browser, encrypted.</p>
         </div>
         <div class="card" id="logins-card">
           <div class="card-head"><h3>4. Sign in at the stores</h3><button class="btn small" id="logins-check" type="button">Check now</button></div>
@@ -562,6 +550,25 @@
         <div class="card" id="devices-card">
           <h3>Connected browsers</h3>
           <ul class="items" id="devices"></ul>
+        </div>
+      </section>
+
+      <!-- 📦 Checkout details -->
+      <section data-panel="checkout" hidden>
+        <div class="tab-head"><h2>Delivery details &amp; card</h2><button class="btn small" id="p-add" type="button">+ Add another address</button></div>
+        <p class="muted">Filled in at every store's checkout. Encrypted, and only for your account. Anything a store already filled in from your store account is left as it is.</p>
+        <form id="p-form">
+          <div id="p-list"></div>
+          <div class="form-actions"><button class="btn primary" type="submit">Save delivery details</button><span class="msg" id="p-msg"></span></div>
+        </form>
+        <div class="card mt">
+          <h3>Payment card</h3>
+          <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close the browser. It's typed into the {{APP_NAME}} extension's own card page (not this website), saved in this browser, encrypted and tied to your account. Your card is <b>never sent to our servers in a form we can read</b>.</p>
+          <p id="card-state" class="notice">Checking this browser…</p>
+          <div class="form-actions"><button class="btn primary" type="button" id="card-open">Add your card</button></div>
+          <!-- 🔁 Your card through extension updates: a copy locked with a key kept in this browser -->
+          <div id="card-restore" class="card-restore"></div>
+          <div id="card-backup" class="card-backup"></div>
         </div>
       </section>
 

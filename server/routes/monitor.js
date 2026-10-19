@@ -7,7 +7,7 @@ import { CATEGORIES, toMonitor, toProduct } from '../catalog.js';
 import { MonitorAdmin } from '../monitor/manage.js';
 import { publicEvent, publicProduct, publicStore } from '../monitor/public.js';
 import { SWEEP_DEFAULTS } from '../monitor/sweep.js';
-import { HttpError, bad, str } from '../schema.js';
+import { HttpError, bad, num, str } from '../schema.js';
 
 export function register(router, ctx) {
   const { cfg, repo, catalog, retailers, monitor, sweeper, feed, limiter } = ctx;
@@ -76,12 +76,21 @@ export function register(router, ctx) {
     return { hiddenStores };
   }, member);
 
+  // The products list, with its real total. page (and size, 25 a page): one page of it — else the first
+  // 600. The stores you've switched off are left out (unless you pick one), the total too.
   router.get('/api/monitor/products', async (req) => {
     const q = req.query;
-    const list = catalog.listProducts({
-      q: str(q.get('q'), 80), category: str(q.get('category'), 20), store: str(q.get('store'), 40), status: str(q.get('status'), 20), admin: isAdmin(req),
-    });
-    return { products: isAdmin(req) ? list : list.map(publicProduct) };
+    const store = str(q.get('store'), 40);
+    const hidden = store ? [] : monitorPrefs(req.user.id).hiddenStores;
+    const filters = {
+      q: str(q.get('q'), 80), category: str(q.get('category'), 20), store, status: str(q.get('status'), 20), admin: isAdmin(req),
+      // (A store's dummy copy goes with it.)
+      excludeStores: hidden.flatMap((id) => [id, `demo-${id}`]),
+    };
+    const page = num(q.get('page'), { min: 1, max: 100000, int: true, def: null });
+    const size = num(q.get('size'), { min: 1, max: 100, int: true, def: 25 });
+    const list = page ? catalog.listProducts({ ...filters, limit: size, offset: (page - 1) * size }) : catalog.listProducts(filters);
+    return { products: isAdmin(req) ? list : list.map(publicProduct), total: catalog.countProducts(filters), ...(page ? { page, size } : {}) };
   }, member);
 
   router.get('/api/monitor/products/:id', async (req) => {

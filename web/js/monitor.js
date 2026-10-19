@@ -100,17 +100,27 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     await Promise.all([loadHealth(), loadLog()]);
   }
 
-  // Tracked products: 25 to a page. Stores you've switched off are left out (unless you pick one).
+  // Tracked products: 25 to a page, asked for a page at a time, with the real total (all of them, not
+  // only what one page shows). Stores you've switched off are left out by the server (unless you pick one).
   const PRODUCTS_PAGE_SIZE = 25;
   async function loadProducts() {
     const f = filters();
-    const { products: all } = await api('GET', `/api/monitor/products?${qs(f)}`);
-    const hidden = live.hiddenStores();
-    const products = f.store ? all : all.filter((p) => !hidden.has(p.store) && !hidden.has(String(p.store).replace(/^demo-/, '')));
+    const key = JSON.stringify(f);
+    if (key !== m.filterKey) m.page = 1;
+    const ask = async (page) => api('GET', `/api/monitor/products?${qs({ ...f, page, size: PRODUCTS_PAGE_SIZE })}`);
+    let d = await ask(Math.max(1, m.page || 1));
+    const pages = Math.max(1, Math.ceil((d.total || 0) / PRODUCTS_PAGE_SIZE));
+    // (Fewer than before — a page past the end now: the last one.)
+    if ((m.page || 1) > pages) { m.page = pages; d = await ask(pages); }
+    // (The same page again — a live update: what wasn't on it before flashes.)
+    const same = key === m.filterKey && m.shownPage === m.page;
     const seen = new Set(m.products.map((p) => p.id));
-    m.fresh = m.products.length ? new Set(products.filter((p) => !seen.has(p.id)).map((p) => p.id)) : new Set();
-    m.products = products;
-    $('#m-count').textContent = `${products.length}`;
+    m.fresh = same && m.products.length ? new Set(d.products.filter((p) => !seen.has(p.id)).map((p) => p.id)) : new Set();
+    m.products = d.products;
+    m.total = d.total || 0;
+    m.filterKey = key;
+    m.shownPage = m.page;
+    $('#m-count').textContent = m.total.toLocaleString();
     renderProducts();
   }
 
@@ -118,16 +128,16 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     const list = $('#m-products');
     const products = m.products;
     list.textContent = '';
-    const pages = Math.max(1, Math.ceil(products.length / PRODUCTS_PAGE_SIZE));
-    m.page = Math.min(Math.max(1, m.page || 1), pages);
-    renderPager($('#m-pager'), { page: m.page, size: PRODUCTS_PAGE_SIZE, total: products.length, label: 'Tracked products', onPage: (p) => { m.page = p; renderProducts(); $('#m-lists').scrollIntoView({ block: 'start', behavior: 'smooth' }); } });
+    renderPager($('#m-pager'), {
+      page: m.page || 1, size: PRODUCTS_PAGE_SIZE, total: m.total || 0, label: 'Tracked products',
+      onPage: (p) => { m.page = p; loadProducts().then(() => $('#m-lists').scrollIntoView({ block: 'start', behavior: 'smooth' })).catch(showError); },
+    });
     if (!products.length) {
       const f = filters();
       list.append(h('li', { class: 'empty' }, f.q || f.category || f.store || f.status
         ? 'Nothing matches those filters.' : m.admin ? 'Nothing tracked yet — the live sweeps fill this in within a minute (or press + Add monitor).' : 'No products are being tracked yet.'));
     }
-    const from = (m.page - 1) * PRODUCTS_PAGE_SIZE;
-    for (const p of products.slice(from, from + PRODUCTS_PAGE_SIZE)) {
+    for (const p of products) {
       const r = productRow(p);
       if (m.fresh && m.fresh.has(p.id)) r.classList.add('flash');
       list.append(r);

@@ -104,8 +104,9 @@ $('upgrade-form').addEventListener('submit', async (e) => {
 
 $('remove').addEventListener('click', async () => {
   if (!confirm('Remove your card from this browser?')) return;
-  await ask({ type: 'vault', action: 'remove' });
-  say('saved-msg', '', true);
+  const r = await ask({ type: 'vault', action: 'remove' });
+  // (The copy kept for extension updates goes too — said if Mugibot couldn't be reached to delete it.)
+  say('saved-msg', r && r.restoreError ? `Removed from this browser. ${r.restoreError}.` : '', !(r && r.restoreError));
   render();
 });
 

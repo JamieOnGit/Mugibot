@@ -574,7 +574,11 @@ export class Repo {
       devices: this.listDevices(userId),
       activity: this.listEvents(userId, { limit: 500 }),
       cardBackup: (() => { const b = this.getData(userId, 'cardBackup', null); return b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, savedAt: new Date(b.savedAt).toISOString(), locked: true } : null; })(),
-      note: 'Your card stays in your browser extension. A backup, if you made one, is kept locked with your card passphrase: Mugibot can\'t open it.',
+      cardForUpdates: (() => {
+        const d = this.getData(userId, 'cardRestore', null);
+        return { on: !(d && d.off), copies: ((d && d.copies) || []).map((c) => ({ brand: c.brand, last4: c.last4, expMonth: c.expMonth, expYear: c.expYear, browserAddress: c.host || '', savedAt: new Date(c.savedAt).toISOString(), locked: true })) };
+      })(),
+      note: 'Your card stays in your browser extension. A backup, if you made one, is kept locked with your card passphrase: Mugibot can\'t open it. A copy for extension updates is locked with a key kept in your browser, which Mugibot never has.',
     };
   }
 }

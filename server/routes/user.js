@@ -5,9 +5,9 @@
 import { discordBotConfigured, discordOAuthConfigured } from '../config.js';
 import { entitlement } from '../entitlement.js';
 import { BAGS_EXTENSION_VERSION } from '../bags.js';
-import { ACO_EXTENSION_VERSION, EXTENSION_VERSION, REMOTE_EXTENSION_VERSION, storeUrl } from '../extension.js';
+import { ACO_EXTENSION_VERSION, EXTENSION_VERSION, REMOTE_EXTENSION_VERSION, RESTORE_EXTENSION_VERSION, storeUrl } from '../extension.js';
 import { DUMMY_PRODUCTS, STARTER_ITEMS, dummyProductPath } from '../presets.js';
-import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, cardBackupInfo, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
+import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, bool, cardBackupInfo, cardRestoreInfo, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
 import { publicUser } from './auth.js';
 
 const notFound = (what) => new HttpError(404, `${what} not found`);
@@ -150,7 +150,31 @@ export function register(router, ctx) {
   });
 
   // --- The card's locked backup (made and opened in the extension; routes/ext.js) ----------
-  router.get('/api/card-backup', async (req) => ({ backup: cardBackupInfo(repo.getData(req.user.id, 'cardBackup', null)) }));
+  // (restore: the copies kept for extension updates — locked with a key in the member's browser — and whether that's on.)
+  router.get('/api/card-backup', async (req) => ({
+    backup: cardBackupInfo(repo.getData(req.user.id, 'cardBackup', null)),
+    restore: { ...cardRestoreInfo(repo.getData(req.user.id, 'cardRestore', null)), extensionVersion: RESTORE_EXTENSION_VERSION },
+  }));
+  // Keeping the card for extension updates: on (the default) or off — off deletes the copies.
+  router.put('/api/card-restore', async (req) => {
+    const on = bool((req.body || {}).on, true);
+    const doc = repo.getData(req.user.id, 'cardRestore', null) || { off: false, copies: [] };
+    repo.setData(req.user.id, 'cardRestore', { off: !on, copies: on ? doc.copies || [] : [] });
+    if (on === !!doc.off) repo.addEvent(req.user.id, { type: 'card', level: 'info', message: on ? '🔁 Your card comes back by itself after an extension update (a copy locked with a key kept in your browser)' : 'Your card isn\'t kept for extension updates any more: the copies are deleted' });
+    const restore = cardRestoreInfo(repo.getData(req.user.id, 'cardRestore', null));
+    ctx.hub.publish(req.user.id, 'card', { restore });
+    return { restore };
+  });
+  router.delete('/api/card-restore', async (req) => {
+    const doc = repo.getData(req.user.id, 'cardRestore', null);
+    if (doc && (doc.copies || []).length) {
+      repo.setData(req.user.id, 'cardRestore', { off: !!doc.off, copies: [] });
+      repo.addEvent(req.user.id, { type: 'card', level: 'info', message: 'The copies of your card kept for extension updates are deleted' });
+    }
+    const restore = cardRestoreInfo(repo.getData(req.user.id, 'cardRestore', null));
+    ctx.hub.publish(req.user.id, 'card', { restore });
+    return { restore };
+  });
   router.delete('/api/card-backup', async (req) => {
     repo.deleteData(req.user.id, 'cardBackup');
     repo.addEvent(req.user.id, { type: 'card', level: 'info', message: 'Card backup deleted from your account' });
@@ -283,13 +307,16 @@ export function register(router, ctx) {
  * opens the store and the extension takes over. Shopify stores whose product option Mugibot
  * knows: the store's own cart link, which opens checkout with the product already in the cart.
  */
-export function startBuy(ctx, user, it, { runId = null } = {}) {
+export function startBuy(ctx, user, it, { runId = null, variantId = null } = {}) {
   if (!it.url) throw new HttpError(409, `The product page for SKU ${it.sku} hasn't been found yet — paste its link into the item, or wait for it to be listed`);
   const profile = ctx.repo.profileFor(user.id, it.profileId);
   // runId: an Auto-checkout run (server/aco.js) — the code says so when the extension claims it.
   const code = ctx.repo.createGoCode(user.id, it, 1, profile ? profile.id : null, runId);
   const r = ctx.retailers.get(it.store);
-  const known = r && r.cartPath && r.cartPath.includes('{variant}') && ctx.catalog ? ctx.catalog.productFor(it.store, it.sku) : null;
-  const cart = known && known.variant_id ? ctx.retailers.cartUrl(it.store, { sku: it.sku, variantId: known.variant_id, qty: 1 }) : null;
+  const carts = !!(r && r.cartPath && r.cartPath.includes('{variant}'));
+  const known = carts && ctx.catalog ? ctx.catalog.productFor(it.store, it.sku) : null;
+  // (variantId: an Auto-checkout run's, from the search that saw it drop — the catalogue's, when it has one.)
+  const variant = (known && known.variant_id) || (carts && variantId) || null;
+  const cart = variant ? ctx.retailers.cartUrl(it.store, { sku: it.sku, variantId: variant, qty: 1 }) : null;
   return { url: `${cart || it.url}#mgb-go=${code}`, item: it };
 }

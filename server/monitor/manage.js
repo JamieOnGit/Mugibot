@@ -176,7 +176,8 @@ export class MonitorAdmin {
       const existing = routes.find((r) => r.channelId === w.channelId);
       const rule = {
         name: `#${w.channelName}`, channelId: w.channelId, roleId: roleId || (existing ? existing.roleId : ''), categories: w.categories, stores: w.stores,
-        kinds: existing ? existing.kinds : ['restock', 'listed'], keywords: '', enabled: true, fallback: w.fallback,
+        // (#non-tcg-alerts: the drop watches' price drops too — a console's, say.)
+        kinds: existing ? existing.kinds : w === nonTcgOf(out) ? ['restock', 'listed', 'price_drop'] : ['restock', 'listed'], keywords: '', enabled: true, fallback: w.fallback,
       };
       const saved = this.catalog.saveRoute(existing ? existing.id : null, this.route(rule));
       if (!existing) added += 1;
@@ -271,7 +272,7 @@ export class MonitorAdmin {
     if (!existing && this.catalog.listRoutes().length >= MAX_ROUTES) throw bad(`${MAX_ROUTES} alert rules is the most`);
     const rule = this.catalog.saveRoute(existing ? existing.id : null, this.route({
       name: `#${ch.name}`, channelId: String(ch.id), roleId: roleId || (existing ? existing.roleId : ''), categories: ['nontcg'], stores: [],
-      kinds: existing ? existing.kinds : ['restock', 'listed'], keywords: '', enabled: true, fallback: false,
+      kinds: existing ? existing.kinds : ['restock', 'listed', 'price_drop'], keywords: '', enabled: true, fallback: false,
     }));
     if (user) this.ctx.repo.audit(user.id, null, 'non-tcg-channel-setup', `#${ch.name}${made ? ' (made)' : ''}`);
     return { channel: { name: ch.name, id: String(ch.id), made }, rule };
@@ -298,6 +299,9 @@ export function channelPlan() {
   plan.push({ names: ['misc-retailers', 'misc-retailer'], stores: [], categories: [], fallback: true, topic: 'Every other store and game, from Mugibot.' });
   return plan;
 }
+
+/** The #non-tcg-alerts part of the store channels' set-up. */
+const nonTcgOf = (out) => out.find((w) => w.names === NON_TCG_PLAN.names) || null;
 
 // #non-tcg-alerts: what isn't trading cards (the admins' drop watches: monitor/drops.js), from every
 // store — and only there (Feed.routesFor), not in the store channels.

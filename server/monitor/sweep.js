@@ -386,8 +386,9 @@ export class Sweeper {
     // A keyword's second page at a store that has one list of its newest products (sweep.feedPath:
     // Pokébox's): that list, whatever the keyword — it's read for the keyword's products in it.
     if (page > 1 && r.sweep.feedPath) return `${r.base}${r.sweep.feedPath}`;
-    // (A VIP or drop watch's words are searched as they are.)
-    let p = r.sweep.path.replace('{q}', encodeURIComponent(vip ? keyword : this.query(r, keyword)));
+    // (A VIP or drop watch's words are searched as they are — at a store whose search is kept to its
+    // trading cards for the card keywords (Kmart's), across the whole store: sweep.wordsPath.)
+    let p = (vip && r.sweep.wordsPath ? r.sweep.wordsPath : r.sweep.path).replace('{q}', encodeURIComponent(vip ? keyword : this.query(r, keyword)));
     if (page > 1 && r.sweep.pagePath) p += r.sweep.pagePath.replace('{page}', String(page));
     // (A store whose search is answered by its search provider: Kmart's, at Constructor.io. Or by
     // the site's own API, outside the region's pages: Premium Bandai's /api/search, not /au/….)
@@ -735,10 +736,10 @@ export class Sweeper {
     if (waiting.length && p.url) for (const sku of waiting) this.monitor.resolveSku(r.id, sku, p.url);
     if (!status) return;
     const fresh = waiting.length ? this.db.all(`SELECT * FROM items WHERE id IN (${items.map((_, i) => `:i${i}`).join(', ')})`, Object.fromEntries(items.map((it, i) => [`i${i}`, it.id]))) : items;
-    for (const item of fresh) {
-      if (!item.url) continue;
-      await this.monitor.applyResult(item, { status, title: p.title || null, price: typeof p.price === 'number' ? p.price : null, error: '' }, 'sweep');
-    }
+    // (Every member's Auto-checkout run first, then everyone's alerts: monitor/index.js applyAll. variantId: the
+    // listing's only option — a run for it opens the store's add-to-cart link, even for a listing that's brand new.)
+    const variantId = p.oneVariant && p.variantId ? String(p.variantId) : null;
+    await this.monitor.applyAll(fresh.filter((item) => item.url), { status, title: p.title || null, price: typeof p.price === 'number' ? p.price : null, error: '', variantId }, 'sweep');
   }
 
   /** Remember how a search went (the sweep_terms row, the store's recent requests) and log failures. */

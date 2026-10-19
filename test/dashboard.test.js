@@ -184,3 +184,37 @@ test('🛰 members never see where the live searches come from — the store lis
   assert.equal((await boss.put('/api/monitor/sweep', { stores: { 'demo-kmart': 'browser', 'demo-target': 'server', 'demo-bigw': 'server' } })).status, 200);
   assert.ok((await ash.get('/api/monitor/live')).body.stores.some((s) => s.id === 'demo-bigw'));
 });
+
+test('Tracked products: the real total, however many there are (it stopped at 600), a page at a time; the stores you switched off left out of both', async () => {
+  const now = Date.now();
+  const { catalog } = env.app;
+  // 630 tracked products at two dummy stores: more than the 600 the list used to stop at.
+  for (let i = 0; i < 630; i += 1) {
+    const p = catalog.upsertProduct({ store: i < 600 ? 'demo-kmart' : 'demo-bigw', sku: `630${String(i).padStart(4, '0')}`, name: `Pokémon TCG Page Test ${i}` });
+    catalog.updateProduct(p.id, { status: i % 2 ? 'in_stock' : 'out_of_stock', sweep_seen_at: now, sweep_first_at: now - i * 1000 });
+  }
+  const page = async (n, extra = '') => (await ash.get(`/api/monitor/products?q=Page%20Test&page=${n}&size=25${extra}`)).body;
+  const first = await page(1);
+  assert.equal(first.total, 630, 'every one counted');
+  assert.equal(first.products.length, 25);
+  assert.deepEqual([first.page, first.size], [1, 25]);
+  const last = await page(26);
+  assert.equal(last.products.length, 5, 'page 26: the last 5 (past where it used to stop)');
+  // No product on two pages, none missing.
+  const ids = new Set();
+  for (let n = 1; n <= 26; n += 1) for (const p of (await page(n)).products) ids.add(p.id);
+  assert.equal(ids.size, 630);
+  // A member who switched BIG W off: neither its products nor its count — unless they pick it.
+  assert.equal((await ash.put('/api/monitor/prefs', { hiddenStores: ['bigw'] })).status, 200);
+  try {
+    assert.equal((await page(1)).total, 600);
+    assert.equal((await page(1, '&store=demo-bigw')).total, 30, 'picked: shown');
+  } finally {
+    await ash.put('/api/monitor/prefs', { hiddenStores: [] });
+  }
+  // Without a page: as before (the first 600), now with the total.
+  const all = (await ash.get('/api/monitor/products?q=Page%20Test')).body;
+  assert.equal(all.products.length, 600);
+  assert.equal(all.total, 630);
+  env.app.db.run("DELETE FROM products WHERE name LIKE 'Pokémon TCG Page Test %'");
+});

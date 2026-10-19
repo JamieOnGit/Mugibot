@@ -24,8 +24,11 @@ community. Built on TCGCopBot's working Kmart flow.
   "Often Bought Together"), fills checkout in and presses the final button.
   It works within their limits (per order, orders and spending a day) and buys
   **once per arming**. It stops at a bank's or a bot check, a declined card,
-  another item in the bag or a total over the limit. Every attempt is logged on
-  the Checkout page with each step and why it ended, and DM'd. **Clear
+  another item in the bag or a total over the limit. Each armed item says
+  whether it's ready (its bag, the store sign-in, the card, the address, the
+  checkout browser), on the Drops page's 🤖 Armed list. Every attempt is logged
+  on the Checkout page with each step, how long after the drop it came and why it
+  ended, and DM'd. **Clear
   cart** empties a store's bag in the checkout browser (or **Clear all**, every
   store in turn), from anywhere, so nothing else in a bag stops a drop. See
   [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md).
@@ -103,14 +106,15 @@ community. Built on TCGCopBot's working Kmart flow.
   store fills in your saved details. The watchlist reminds you about a store
   you watch where you're signed out. It only looks: nothing is clicked or typed.
 - **The dashboard is four pages** (a sidebar on a computer, a tab bar at the
-  bottom on a phone): **🔥 Drops** (the live monitor, your watchlist, drop
-  watches and activity, with a strip at the top saying whether you're ready for
-  the next drop: membership, Auto-checkout, the extension, your card),
-  **⚡ Checkout** (Auto-checkout, Clear cart, armed items, run history, then
-  your delivery details and card), **🧰 Setup** (the extension, store sign-ins,
-  browsers, Discord and pings) and **👤 Account** (membership and your account).
-  Pages with several parts have a row of shortcuts at the top. Old links
-  (`#checkout`, `#extension`, `#discord`, `#membership`, `#update`) still open
+  bottom on a phone): **🔥 Drops** (the live monitor, your watchlist, your
+  armed items and whether each is ready, drop watches and activity, with a strip
+  at the top saying whether you're ready for the next drop: membership,
+  Auto-checkout, the extension, your card), **⚡ Checkout** (Auto-checkout, ⚡ Buy
+  from your phone, Clear cart, run history), **🧰 Setup** (the extension, store
+  sign-ins, browsers, your delivery details and card, Discord and pings) and
+  **👤 Account** (membership and your account). Pages with several parts have a
+  row of shortcuts at the top. Old links (`#checkout`, `#extension`, `#discord`,
+  `#membership`, `#update`, `#watch`) still open
   the right part. Light by default, bright and clean; dark is one press away (☾).
 - **Admin console** at `/admin`: members, memberships, Discord status, SKU
   totals, restock pings, stores and flows, a setup check, Whop memberships and
@@ -163,13 +167,13 @@ or change it first with `open -e .env` (Mac) / `notepad .env` (Windows).
 
 1. In the dashboard that opens (http://localhost:8080), **sign up** with the
    username in `ADMIN_USERNAMES`. Admins always have access, so you don't need Whop to try it.
-2. **Extension** tab → **Download the extension** → unzip it → open
+2. **Setup** → **Extension** → **Download the extension** → unzip it → open
    `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → choose
    the unzipped folder. Reload the dashboard and press **Connect this browser**.
-3. **Checkout details** tab: fill in your name and address. Then press **Add your
-   card** and save a test card, e.g. `4242 4242 4242 4242`, `12/30`, `123`. It
-   stays ready for every ⚡ Buy, even after you restart the browser.
-4. **Monitor** → **My watchlist** → **Add dummy-store test items**.
+3. **Setup** → **📦 Delivery & card**: fill in your name and address. Then press
+   **Add your card** and save a test card, e.g. `4242 4242 4242 4242`, `12/30`,
+   `123`. It stays ready for every ⚡ Buy, even after you restart the browser.
+4. **Drops** → **My watchlist** → **Add dummy-store test items**.
 5. Open the dummy store's control panel (http://localhost:5055), press
    **in_stock** on a sold-out product, and watch your watchlist ping. Press
    **⚡ Buy** on any dummy item and watch the extension go all the way to the
@@ -223,6 +227,7 @@ Discord and Whop are optional for this. Add them later with the guides.
 | Alert settings, Discord tokens | Server, encrypted per member | The member |
 | Watchlist, activity, connected browsers | Server, tied to the member | The member (admins see totals only) |
 | **Payment card** | **In the member's browser extension**, encrypted with a key that only that browser's extension has | The member. It's never sent to the server in readable form. |
+| Card copy for extension updates (on unless the member switches it off) | Server: only a copy **locked in the browser** (AES-256-GCM) with a random key the member's dashboard keeps in that browser, plus brand, last 4 and expiry | The member's extension, once connected from their dashboard in that browser: the key never leaves the browser, so the server can't open it by itself |
 | Card backup (optional, the member turns it on) | Server: only a copy **locked in the browser** with the member's card passphrase (PBKDF2-SHA256 600,000 rounds → AES-256-GCM), plus brand, last 4 and expiry | Nobody but the member: the passphrase never leaves their browser, so the server can't open it |
 | Membership payments | Whop | The member; you, on Whop |
 
@@ -230,15 +235,19 @@ Card numbers are deliberately not stored on the server in readable form.
 Keeping them there would make you responsible for PCI-DSS card security, and
 CVVs may never be stored that way. Each member's card stays in their own
 browser, encrypted and tied to their account, and is filled in at every store's
-checkout. The optional backup works like a password manager's vault: it's
-locked in the member's browser before it's sent and Mugibot never has the key,
-so the server holds nothing it can read (have your own adviser confirm how that
-sits with PCI-DSS where you trade).
+checkout. The copy kept for extension updates and the optional backup work
+like a password manager's vault: each is locked in the member's browser before
+it's sent and Mugibot never has the key, so the server holds nothing it can read
+by itself (have your own adviser confirm how that sits with PCI-DSS where you
+trade). The copy for updates is opened with a key kept by the dashboard in the
+member's own browser — code served on the dashboard's address could reach it,
+so it's a convenience members can switch off (Setup → Delivery & card), unlike
+the passphrase backup.
 
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 349 tests in about sixteen minutes:
+the 360 tests in about sixteen minutes:
 
 ```bash
 npm install
@@ -337,6 +346,10 @@ npm test
     whose Checkout button Mugibot doesn't know;
   - Trigger ACO (a test run now, from the dashboard), and stores that only sell
     signed in (Amazon);
+  - a drop for several members: every armed member's run made before anyone's
+    alerts go out; a brand-new listing's only option straight to the store's
+    add-to-cart link; the final button's outcome counted even when its
+    "placing" report comes second;
   - ⚡ Buy from your phone: a Discord button pressed (signed by Discord, for
     whoever pressed it) makes the checkout browser check out, the real
     extension included, with nothing armed. It places the order with
@@ -386,6 +399,12 @@ npm test
     drops, never posted, its words hidden from others;
   - a link and words at another website: read as Mugibot, alerts with no
     ⚡ Buy, a site that refuses backing off;
+  - a product at another website (a Garmin watch, say): DM'd when its page goes
+    up, when it gets cheaper (📉 at least 1% and $1; again only lower still or
+    half a day later), back in stock and open for pre-order; `#non-tcg-alerts`
+    given price drops once; stricter words ("xbox series x" isn't the Series S);
+    Kmart's whole store for a watch's words; a broad watch keeping room for what
+    drops; one purchase per watch;
   - with the real extension: ⚡ Buy for a product that isn't a trading card at
     every one of the 13 stores, to its final button; a drop watch on a console
     at JB Hi-Fi bought by Auto-checkout; the 🎯 tab's ⚡ Buy;
@@ -395,9 +414,13 @@ npm test
   an Amazon page (the dummy Amazon gives servers HTTP 503, like the real one).
 - **Dashboard round:** the card backup (only a locked copy reaches the server,
   which can't open it; restored in a fresh install with the passphrase; a wrong
-  passphrase refused; kept per account), activity, watchlist, products and run
-  history paged, members' own store switches, and members never told where a
-  store is searched from (API and live stream).
+  passphrase refused; kept per account), the card's copy for extension updates
+  (a fresh copy of the extension gets the card back on Connect this browser, no
+  passphrase; only a locked copy reaches the server, never its key), the 🤖
+  Armed list (its checks lined up row to row, To fix, Get ready), Tracked
+  products past 600, activity, watchlist, products and run history paged,
+  members' own store switches, and members never told where a store is
+  searched from (API and live stream).
 - **Website in a browser:** the dashboard's four pages (each page's parts and
   shortcuts, the ready-for-the-next-drop strip, old links landing on the right
   part, the tab bar on a phone) and every admin tab, including the

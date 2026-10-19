@@ -270,9 +270,7 @@ export class Monitor {
     }
     const items = this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id, page_checks c
       WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { url, now });
-    for (const item of items) {
-      await this.applyResult(item, { status, title: r.title || null, price: r.price ?? null, error: r.error || '' }, 'server');
-    }
+    await this.applyAll(items, { status, title: r.title || null, price: r.price ?? null, error: r.error || '' }, 'server');
     return { status, previous: prev.status };
   }
 
@@ -292,7 +290,20 @@ export class Monitor {
   // -------------------------------------------------------------------------
   // One item's new status → its owner's alerts
   // -------------------------------------------------------------------------
-  async applyResult(item, r, source) {
+  /**
+   * One store answer for everyone watching it: armed items first, and every member's Auto-checkout run
+   * made before anyone's alerts go out (they go after, in turn) — in a drop, the tenth member's run
+   * doesn't wait on nine members' DMs.
+   */
+  async applyAll(items, r, source) {
+    const later = [];
+    const order = [...items].sort((a, b) => (b.aco ? 1 : 0) - (a.aco ? 1 : 0));
+    for (const item of order) await this.applyResult(item, r, source, { later });
+    for (const send of later) await send().catch((e) => this.cfg.log('[alerts]', e.message));
+  }
+
+  /** later: a list to put this item's alerts on (sent by the caller), instead of sending them now. */
+  async applyResult(item, r, source, { later = null } = {}) {
     const now = this.now();
     const prev = item.status;
     const failed = FAILED.has(r.status);
@@ -315,6 +326,13 @@ export class Monitor {
     if (changed || error !== (item.error || '')) {
       this.hub.publish(item.user_id, 'watch', { id: item.id, status, source, checkedAt: now, price: r.price ?? item.last_price, error });
     }
+    // Your own drop watch's find — at any store or website: its price going down is news too (monitor/drops.js).
+    // (With the other alerts, after every member's Auto-checkout run is made: applyAll.)
+    if (item.drop_watch && this.drops && !failed && typeof r.price === 'number') {
+      const drop = () => this.drops.priceDropped(item, r.price, status).catch((e) => this.cfg.log('[drops]', e.message));
+      if (later) later.push(drop);
+      else await drop();
+    }
     if (!changed) return status;
     const fresh = { ...item, status, last_price: r.price ?? item.last_price, title: r.title || item.title };
     if (firstRead) {
@@ -322,29 +340,36 @@ export class Monitor {
       return status;
     }
     if (isOrderable(status) && !isOrderable(prev)) {
-      await this.alertRestock(fresh, { status, price: r.price ?? item.last_price, source, wasListed: prev !== STATUS.NOT_LISTED });
+      await this.alertRestock(fresh, { status, price: r.price ?? item.last_price, source, wasListed: prev !== STATUS.NOT_LISTED, later, variantId: r.variantId || null });
     } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.BLOCKED, STATUS.ERROR, STATUS.NOT_FOUND, 'pending'].includes(status)) {
-      await this.notifier.itemAlert(item.user_id, fresh, 'listed', { status, price: r.price ?? item.last_price });
+      const dm = () => this.notifier.itemAlert(item.user_id, fresh, 'listed', { status, price: r.price ?? item.last_price });
+      if (later) later.push(dm);
+      else await dm();
     } else if (isOrderable(prev) && !failed) {
       this.repo.addEvent(item.user_id, { type: 'restock', level: 'info', message: `${item.name} is now ${status.replace(/_/g, ' ')}`, name: item.name, sku: item.sku, url: item.url || null });
     }
     return status;
   }
 
-  async alertRestock(item, { status, price, source, manual = false, note = '' }) {
+  /** later: a list to put the alerts on (applyAll sends them once every member's run is made), instead of sending them now. */
+  async alertRestock(item, { status, price, source, manual = false, note = '', later = null, variantId = null }) {
     if (item.max_price !== null && item.max_price !== undefined && typeof price === 'number' && price > item.max_price) {
       this.repo.addEvent(item.user_id, { type: 'restock', level: 'info', message: `${item.name} is available but $${price.toFixed(2)} is over your limit of $${item.max_price.toFixed(2)}`, name: item.name, sku: item.sku, url: item.url || null });
-      await this.autoCheckout(item, { status, price, source, manual }); // (armed: kept as "skipped, over your max")
+      await this.autoCheckout(item, { status, price, source, manual, later }); // (armed: kept as "skipped, over your max")
       return false;
     }
     this.db.run('UPDATE items SET last_alert_at = :now WHERE id = :id', { now: this.now(), id: item.id });
     // Armed for Auto-checkout (server/aco.js): the member's browser starts checking out straight away.
-    await this.autoCheckout(item, { status, price, source, manual });
-    await this.notifier.itemAlert(item.user_id, item, 'restock', { status, price, source, manual, note });
-    if (item.announce) {
-      const owner = this.repo.userById(item.user_id);
-      if (owner && owner.role === 'admin') await this.announce(item, { status, price, manual, note });
-    }
+    await this.autoCheckout(item, { status, price, source, manual, later, variantId });
+    const tell = async () => {
+      await this.notifier.itemAlert(item.user_id, item, 'restock', { status, price, source, manual, note });
+      if (item.announce) {
+        const owner = this.repo.userById(item.user_id);
+        if (owner && owner.role === 'admin') await this.announce(item, { status, price, manual, note });
+      }
+    };
+    if (later) later.push(tell);
+    else await tell();
     return true;
   }
 

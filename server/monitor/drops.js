@@ -24,7 +24,7 @@ import { CATEGORIES, linkName, productName } from '../catalog.js';
 import { newId } from '../crypto.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { bad, bool, httpUrl, item as checkItem, num, str } from '../schema.js';
-import { mentions, norm, parseGeneric, parseShopifyProducts, parseShopifySuggest } from './listing.js';
+import { norm, parseGeneric, parseShopifyProducts, parseShopifySuggest } from './listing.js';
 import { MonitorAdmin } from './manage.js';
 import { publicError } from './public.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
@@ -39,8 +39,13 @@ const MAX_BACKOFF_MS = 30 * 60 * 1000;
 // Statuses that say whether something's on sale (not a failed or empty read).
 const READ = new Set([STATUS.IN_STOCK, STATUS.PREORDER, STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.NOT_LISTED]);
 const NO_ACO = 'Auto-checkout works at stores Mugibot has a checkout for — at another website you get the alert, and buy it there yourself';
-// What an admin's watch for everyone posts in the channel chosen for it: its drops and restocks.
-export const DROP_ROUTE_KINDS = ['listed', 'restock'];
+// What an admin's watch for everyone posts in the channel chosen for it: its drops, restocks (and
+// pre-orders) and price drops.
+export const DROP_ROUTE_KINDS = ['listed', 'restock', 'price_drop'];
+// A drop watch's find going down in price, for its owner (their own watch: a DM): at least this much
+// lower (and a dollar), and said again only when it goes lower still — or half a day later.
+export const OWN_PRICE_DROP_PERCENT = 1;
+export const OWN_PRICE_AGAIN_MS = 12 * 60 * 60 * 1000;
 const SNOWFLAKE = /^\d{5,25}$/;
 const DEST_MS = 60 * 1000;
 const json = (s, fallback) => { try { const v = JSON.parse(s); return v ?? fallback; } catch { return fallback; } };
@@ -48,6 +53,19 @@ const json = (s, fallback) => { try { const v = JSON.parse(s); return v ?? fallb
 /** Words to look for: lower case, no accents or punctuation ("Xbox Series X!" → "xbox series x"). */
 export function wordsOf(v) {
   return norm(str(v, 60)).replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * A drop watch's words in a product's name: every one of them. A short word (three letters or fewer)
+ * or a number is a whole word — "x" isn't "Xbox", "5" isn't "50", "pro" isn't "Promo" (a plural is
+ * fine: "box" → "Boxes") — so "xbox series x" isn't the Series S, nor "playstation 5 pro" a "PlayStation
+ * 5 … Promo Bundle". A longer word counts at the start of one: "skate" → "Skateboard", "pokemon" →
+ * "Pokémon's".
+ */
+export function hasWords(title, words) {
+  const t = ` ${norm(title).replace(/[^a-z0-9]+/g, ' ')} `;
+  const list = norm(words).split(/[^a-z0-9]+/).filter(Boolean);
+  return list.length > 0 && list.every((w) => (w.length <= 3 || /^\d+$/.test(w) ? new RegExp(` ${w}(e?s)? `).test(t) : t.includes(` ${w}`)));
 }
 
 /** Another website's product code: its address and the last part of its link (one per site). */
@@ -125,9 +143,23 @@ export class Drops {
     this.cache = null;
   }
 
+  /**
+   * Room for another find? What was listed already at the watch's first look, and what dropped after it,
+   * each have their own room — so a broad watch whose first look found plenty still hears of what drops.
+   * (Finds from before this was told apart: listed already if they were found by its first look.)
+   */
+  room(w, baseline) {
+    const max = w.shared ? MAX_FOUND_SHARED : MAX_FOUND_OWN;
+    const isBase = (f) => (typeof f.base === 'boolean' ? f.base : !!w.baselineAt && f.at <= w.baselineAt);
+    // (Your own watch's finds you've taken off your watchlist make room: they're never put back.)
+    const kept = (f) => !f.itemId || !!this.db.get('SELECT 1 AS y FROM items WHERE id = :id', { id: f.itemId });
+    return w.found.filter((f) => isBase(f) === !!baseline && kept(f)).length < max;
+  }
+
   /** What it found (kept on the watch object too, so a loop over finds sees each one). */
   saveFound(w, found) {
-    w.found = found.slice(-Math.max(MAX_FOUND_SHARED, MAX_FOUND_OWN));
+    // (Both kinds of find, each to its most: what's dropped since its first look is never dropped from it.)
+    w.found = found.slice(-2 * Math.max(MAX_FOUND_SHARED, MAX_FOUND_OWN));
     this.db.run('UPDATE drop_watches SET found = :f WHERE id = :id', { id: w.id, f: JSON.stringify(w.found) });
     this.changed();
   }
@@ -177,14 +209,14 @@ export class Drops {
   sharedFor(storeId, title, words = null) {
     const name = norm(title);
     if (!name) return null;
-    return this.wordsAt(storeId).find((w) => w.shared && (!words || w.words === words) && mentions(name, w.words)) || null;
+    return this.wordsAt(storeId).find((w) => w.shared && (!words || w.words === words) && hasWords(name, w.words)) || null;
   }
 
   /** Someone's own watches whose words are in this name. */
   ownFor(storeId, title) {
     const name = norm(title);
     if (!name) return [];
-    return this.wordsAt(storeId).filter((w) => !w.shared && mentions(name, w.words));
+    return this.wordsAt(storeId).filter((w) => !w.shared && hasWords(name, w.words));
   }
 
   /** One search of these words at a store went (sweep.js): what each watch with them shows — and its first look is done. */
@@ -214,9 +246,9 @@ export class Drops {
   async foundShared(w, product, { baseline = false, status = null } = {}) {
     if (!w || !product) return;
     this.monitorFor(w, product);
-    if (w.found.some((f) => f.productId === product.id) || w.found.length >= MAX_FOUND_SHARED) return;
+    if (w.found.some((f) => f.productId === product.id) || !this.room(w, baseline)) return;
     const arm = this.armOf(w, product.store, product.url, status, baseline);
-    this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, at: this.now(), ...(arm ? { arm } : {}) }]);
+    this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, at: this.now(), base: !!baseline, ...(arm ? { arm } : {}) }]);
     this.repo.ensurePageFor({ store: product.store, sku: product.sku, url: product.url });
     if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url: product.url });
     if (arm === 'armed') {
@@ -285,6 +317,14 @@ export class Drops {
     this.repo.addEvent(w.userId, { type: 'aco', level: 'info', message: `Drop watch: ${productName(p)} was on sale already when the watch first looked, so it isn't armed — ⚡ Buy it yourself if you want it`, name: p.name || null, sku: p.sku, url: p.url || null });
   }
 
+  /** Someone's own watch has found as much as it keeps of what's dropped: said once a day (it's time to make it narrower). */
+  noRoom(w) {
+    const day = Math.floor(this.now() / 86400000);
+    if (this.roomDay && this.roomDay.get(w.id) === day) return;
+    (this.roomDay ||= new Map()).set(w.id, day);
+    this.repo.addEvent(w.userId, { type: 'restock', level: 'warn', message: `Drop watch "${w.label || w.words || w.url}" has found ${MAX_FOUND_OWN} new products already, the most one watch keeps — take the ones you don't want off your watchlist (that makes room), or make its words narrower` });
+  }
+
   /** Someone's watchlist is full: said once a day. */
   full(w) {
     const day = Math.floor(this.now() / 86400000);
@@ -312,7 +352,8 @@ export class Drops {
    * p: the search's product; status: its stock there (or null).
    */
   async foundOwn(w, r, p, status, { baseline = false } = {}) {
-    if (!w || !p || !p.url || w.found.some((f) => String(f.sku).toLowerCase() === String(p.sku).toLowerCase()) || w.found.length >= MAX_FOUND_OWN) return null;
+    if (!w || !p || !p.url || w.found.some((f) => String(f.sku).toLowerCase() === String(p.sku).toLowerCase())) return null;
+    if (!this.room(w, baseline)) { if (!baseline) this.noRoom(w); return null; }
     return this.addOwn(w, { store: r.id, sku: p.sku, url: p.url, name: p.title || p.name, price: p.price ?? null }, status, { baseline });
   }
 
@@ -339,7 +380,7 @@ export class Drops {
       this.db.run(`UPDATE items SET drop_watch = :w, status = :st, status_source = 'server', status_at = :t, checked_at = :t,
         last_price = COALESCE(:price, last_price) WHERE id = :id`, { w: w.id, st, t, price: typeof p.price === 'number' ? p.price : null, id: item.id });
     }
-    this.saveFound(w, [...w.found, { itemId: item.id, sku: p.sku, at: this.now(), ...(arm ? { arm } : {}) }]);
+    this.saveFound(w, [...w.found, { itemId: item.id, sku: p.sku, at: this.now(), base: !!baseline, ...(arm ? { arm } : {}) }]);
     this.hub.publish(user.id, 'watch', { id: item.id, added: true });
     this.hub.publish(user.id, 'drop', { id: w.id });
     if (added && !baseline) {
@@ -392,6 +433,7 @@ export class Drops {
   // Words at another website: read from the server, every couple of minutes
   // ---------------------------------------------------------------------------
   start() {
+    this.priceDropsInNonTcg();
     if (this.timer || !this.cfg.monitor.enabled) return;
     this.timer = setInterval(() => { this.tick().catch((e) => this.cfg.log('[drops]', e.message)); }, 5000);
     this.timer.unref?.();
@@ -400,6 +442,51 @@ export class Drops {
   stop() {
     clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /**
+   * #non-tcg-alerts (the drop watches' channel) posts price drops too, from this release: its rule gets
+   * 📉 Price drops once — an admin who takes them off again later is left alone.
+   */
+  priceDropsInNonTcg() {
+    try {
+      if (this.repo.getSetting('nontcgPriceDrops')) return;
+      for (const r of this.catalog.listRoutes()) {
+        if (r.vip || r.categories.length !== 1 || r.categories[0] !== 'nontcg' || r.kinds.includes('price_drop')) continue;
+        this.catalog.saveRoute(r.id, { ...r, kinds: [...r.kinds, 'price_drop'] });
+      }
+      this.repo.setSetting('nontcgPriceDrops', true);
+    } catch (e) {
+      this.cfg.log('[drops]', e.message);
+    }
+  }
+
+  /**
+   * Someone's own drop watch's find was read (monitor/index.js): its price went down — a DM to its owner
+   * (📉, with ⚡ Buy where Mugibot checks out, else Open product). At least OWN_PRICE_DROP_PERCENT lower than
+   * the read before, and a dollar; said again only when it's lower than last time, or half a day later.
+   * The first read after it was found (or after this release) only notes the price: what a listing said
+   * and what its page says can differ, and that's not a drop.
+   * item: the items row as it was; price: the price just read; status: its stock just read. Returns whether they were told.
+   */
+  async priceDropped(item, price, status = item.status) {
+    if (!item.drop_watch || typeof price !== 'number' || !(price > 0)) return false;
+    const now = this.now();
+    if (typeof item.price_alert_price !== 'number') {
+      this.db.run('UPDATE items SET price_alert_at = 0, price_alert_price = :p WHERE id = :id', { p: price, id: item.id });
+      return false;
+    }
+    const was = item.last_price;
+    if (typeof was !== 'number' || was <= 0 || price >= was) return false;
+    const pct = ((was - price) / was) * 100;
+    if (pct < OWN_PRICE_DROP_PERCENT || was - price < 1) return false;
+    const told = item.price_alert_at && now - item.price_alert_at < OWN_PRICE_AGAIN_MS;
+    if (told && price >= item.price_alert_price - 0.005) return false;
+    const w = this.get(item.drop_watch);
+    if (!w || !w.active || w.shared) return false;
+    this.db.run('UPDATE items SET price_alert_at = :t, price_alert_price = :p WHERE id = :id', { t: now, p: price, id: item.id });
+    await this.notifier.itemAlert(item.user_id, { ...item, last_price: price }, 'price_drop', { price, previous: was, pct, status });
+    return true;
   }
 
   /** The other-website watches due a look: a few at a time, one website at a time (a gap between requests to it). */
@@ -499,7 +586,7 @@ export class Drops {
         continue;
       }
       const baseline = !x.baselineAt;
-      for (const p of got.products.filter((q) => mentions(norm(q.title), x.words))) {
+      for (const p of got.products.filter((q) => hasWords(q.title, x.words))) {
         if (x.shared) await this.foundSharedSite(x, p, { baseline });
         else await this.foundOwnSite(x, p, { baseline });
       }
@@ -531,11 +618,11 @@ export class Drops {
   async foundSharedSite(w, p, { baseline }) {
     const url = this.siteLink(p);
     const sku = url && otherSku(url);
-    if (!sku || w.found.some((f) => f.sku === sku) || w.found.length >= MAX_FOUND_SHARED || this.catalog.isBlocked('other', sku)) return;
+    if (!sku || w.found.some((f) => f.sku === sku) || !this.room(w, baseline) || this.catalog.isBlocked('other', sku)) return;
     const known = this.catalog.productFor('other', sku);
     const product = this.catalog.upsertProduct({ store: 'other', sku, url, name: p.title, image: p.image || '', category: known ? '' : w.category });
     this.monitorFor(w, product);
-    this.saveFound(w, [...w.found, { productId: product.id, sku, at: this.now() }]);
+    this.saveFound(w, [...w.found, { productId: product.id, sku, at: this.now(), base: !!baseline }]);
     this.repo.ensurePage(url, 'product', 'other', sku);
     if (!baseline && !known) {
       const t = this.now();
@@ -550,7 +637,8 @@ export class Drops {
   async foundOwnSite(w, p, { baseline }) {
     const url = this.siteLink(p);
     const sku = url && otherSku(url);
-    if (!sku || w.found.some((f) => f.sku === sku) || w.found.length >= MAX_FOUND_OWN) return null;
+    if (!sku || w.found.some((f) => f.sku === sku)) return null;
+    if (!this.room(w, baseline)) { if (!baseline) this.noRoom(w); return null; }
     return this.addOwn(w, { store: 'other', sku, url, name: p.title, price: p.price ?? null }, null, { baseline });
   }
 

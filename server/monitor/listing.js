@@ -160,8 +160,10 @@ export function parseShopifyProducts(text, { base } = {}) {
     products.push({
       sku: String(p.handle), aliases: p.id ? [String(p.id)] : [], title: clean(p.title), price,
       wasPrice: was && price && was > price ? was : null, inStock,
-      // The option to buy, for Shopify's add-to-cart link (the cheapest one in stock).
+      // The option to buy, for Shopify's add-to-cart link (the cheapest one in stock). oneVariant: the only
+      // one there is (a drop's run goes straight to its cart link: nothing to choose between).
       variantId: cheapest && /^\d{1,20}$/.test(String(cheapest.id)) ? String(cheapest.id) : null,
+      oneVariant: vars.length === 1,
       preorder: PREORDER_RE.test(`${p.title} ${tags.join(' ')} ${p.product_type || ''}`),
       url: httpsUrl(`${shop}/products/${encodeURIComponent(p.handle)}`, base), image: httpsUrl(images[0] && images[0].src, base), marketplace: false,
     });
@@ -423,6 +425,7 @@ export function parseWoo(text, { base } = {}) {
       wasPrice: was && price && was > price ? was : null, inStock,
       // (Only a simple product goes in with its id alone: one with options needs one chosen first.)
       variantId: p.type === 'simple' && /^\d{1,20}$/.test(String(p.id)) ? String(p.id) : null,
+      oneVariant: p.type === 'simple',
       preorder: PREORDER_RE.test(`${words} ${title}`) || p.is_on_backorder === true,
       url, image: httpsUrl(img, base), marketplace: false,
     });
@@ -445,6 +448,9 @@ export function parseMagento(html, { base, skuFromPath = null, productPath = nul
   // (Only the outermost tile: Luma's li.product-item holds a div.product-item-info.)
   const tiles = tilesFound.filter((t) => !tilesFound.some((o) => o !== t && findFirst(o, (x) => x === t)));
   if (!tiles.length) {
+    // The Gamesmen's own tiles (its Hyvä theme, Oct 2026), before anything looser.
+    const ga = gamesmenTiles(doc, { base, skuFromPath });
+    if (ga.length) return { products: ga, total: null, problem: null };
     // Results drawn some other way (a search provider's own tiles, or its answer the browser asked for
     // again: see the extension's renderedPage): any product with its link and a price. Only priced
     // ones — the site's menu links look like product links at a store whose products are /<name>.
@@ -487,6 +493,51 @@ export function parseMagento(html, { base, skuFromPath = null, productPath = nul
   }
   return { products, total: null, problem: products.length ? null : 'empty' };
 }
+
+// The Gamesmen's tiles (its search and brand pages, from a copy of its real page, Oct 2026): a
+// div[data-ga-type="product-list-item"] per product, its link round the whole tile; the name in
+// .product-card-title; the price shown (GST in — the link's data-price leaves GST out), a struck-through
+// old one; and its button's title, "Add to Cart" or "Pre-Order" (a "Pre-Order" line above it too). Its
+// data-dimension10 isn't the stock (it says "Out of stock" on products that can be added), and the
+// buttons' own data-name/data-price are another product's: neither is read.
+function gamesmenTiles(doc, { base, skuFromPath }) {
+  const cls = (n) => ` ${String((n.attrs && n.attrs.class) || '')} `;
+  const PRICE_ONLY = /^\s*\$\s?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\s*$/;
+  const out = [];
+  const seen = new Set();
+  for (const t of findAll(doc, (n) => n.attrs && n.attrs['data-ga-type'] === 'product-list-item')) {
+    const link = findFirst(t, (n) => n.tag === 'a' && !!n.attrs.href);
+    const url = link ? httpsUrl(link.attrs.href, base) : null;
+    if (!url) continue;
+    const path = new URL(url).pathname;
+    const m = skuFromPath ? path.match(skuFromPath) : null;
+    const sku = (m && m[1]) || path.replace(/^\/+|\/+$/g, '').split('/').pop().replace(/\.html$/, '');
+    if (!sku || seen.has(sku)) continue;
+    const head = findFirst(t, (n) => / product-card-title /.test(cls(n)));
+    const img = findFirst(t, (n) => n.tag === 'img' && (n.attrs.src || n.attrs['data-src']));
+    const title = clean((head && textContent(head)) || decodeEntities(link.attrs['data-name'] || '') || (img && img.attrs.alt) || '');
+    if (title.length < 3) continue;
+    seen.add(sku);
+    const prices = findAll(t, (n) => n.tag === 'span' && PRICE_ONLY.test(textContent(n)));
+    const now = prices.find((n) => !/ line-through /.test(cls(n)));
+    const old = prices.find((n) => / line-through /.test(cls(n)));
+    const price = now ? money(textContent(now)) : null;
+    const was = old ? money(textContent(old)) : null;
+    const text = tileText(t);
+    const add = findFirst(t, (n) => n.tag === 'button' && (/ product-list-addtocart /.test(cls(n)) || ADD_BUTTON_RE.test(n.attrs.title || textContent(n))));
+    const words = add ? `${add.attrs.title || ''} ${textContent(add)}` : '';
+    const sold = /\b(out of stock|sold out|no longer available|currently unavailable|notify me)\b/i.test(text);
+    const inStock = add && add.attrs.disabled === undefined ? true : sold || (add && add.attrs.disabled !== undefined) ? false : null;
+    const id = findFirst(t, (n) => n.tag === 'input' && n.attrs.name === 'product' && /^\d{1,12}$/.test(n.attrs.value || ''));
+    out.push({
+      sku, aliases: id ? [String(id.attrs.value)] : [], title, price, wasPrice: was && price && was > price ? was : null, inStock,
+      preorder: PREORDER_RE.test(words) || /(^|\s)pre-?\s?order(\s|$)/i.test(text), url,
+      image: img ? httpsUrl(img.attrs.src || img.attrs['data-src'], base) : '', marketplace: false,
+    });
+  }
+  return out;
+}
+const ADD_BUTTON_RE = /^\s*(add to (cart|bag|basket|trolley)|pre-?\s?order)\s*$/i;
 
 // ---------------------------------------------------------------------------
 // Any store: data in the page's scripts, then product tiles

@@ -19,12 +19,15 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
   // ---------------------------------------------------------------------------
   // The form: one box for a link or words; where to look appears for words
   // ---------------------------------------------------------------------------
-  const isLink = (v) => /^https?:\/\/\S+$/i.test(String(v || '').trim());
+  // A link — with its https://, or pasted without it ("www.garmin.com/en-AU/p/…", "garmin.com/…").
+  const BARE_LINK = /^(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+\/\S*$/i;
+  const isLink = (v) => /^https?:\/\/\S+$/i.test(String(v || '').trim()) || BARE_LINK.test(String(v || '').trim());
+  const linkOf = (v) => { const t = String(v || '').trim(); return /^https?:\/\//i.test(t) ? t : `https://${t}`; };
 
   /** The store a link is at (as the extension tells: its address, and the dummy store's path), or null. */
   function storeOf(raw) {
     let u;
-    try { u = new URL(String(raw).trim()); } catch { return null; }
+    try { u = new URL(linkOf(raw)); } catch { return null; }
     const host = u.host.toLowerCase();
     let path = u.pathname;
     try { path = decodeURIComponent(path); } catch { /* as it is */ }
@@ -61,11 +64,11 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
       const s = storeOf(raw);
       if (s) {
         aco = s.aco;
-        hint.textContent = s.aco ? `✓ ${s.name} — you're told the moment it's in stock, and ⚡ Buy and Auto-checkout work here.` : `✓ ${s.name} — you're told the moment it's in stock.`;
+        hint.textContent = s.aco ? `✓ ${s.name} — you're told the moment it's in stock (or open for pre-order) and when its price drops, and ⚡ Buy and Auto-checkout work here.` : `✓ ${s.name} — you're told the moment it's in stock (or open for pre-order), and when its price drops.`;
       } else {
         let host = '';
-        try { host = new URL(raw).host.replace(/^www\./, ''); } catch { /* not yet a link */ }
-        hint.textContent = `Another website${host ? ` (${host})` : ''} — you're told the moment it's back in stock, and buy it there yourself (Mugibot checks out at the stores it knows).`;
+        try { host = new URL(linkOf(raw)).host.replace(/^www\./, ''); } catch { /* not yet a link */ }
+        hint.textContent = `Another website${host ? ` (${host})` : ''} — you're told when it drops, comes back in stock, opens for pre-order or gets cheaper, and buy it there yourself (Mugibot checks out at the stores it knows).`;
       }
       note = 'A link is bought as soon as it\'s on sale — now, if it already is.';
     } else {
@@ -73,8 +76,8 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
       const s = (d.data.stores || []).find((x) => x.id === where);
       aco = !!(s && s.aco);
       hint.textContent = words.length < 3 ? 'Type a few words of its name.' : where === OTHER
-        ? `Anything at that website whose name has "${words}" — its search is read every couple of minutes. Alerts only there.`
-        : s ? `Anything at ${s.name} whose name has "${words}" — searched about every ${d.data.sweepSeconds} seconds, alongside the card keywords.` : 'Now choose where to look.';
+        ? `Anything at that website whose name has "${words}" — its search is read every couple of minutes, and you're told when one drops, comes back, opens for pre-order or gets cheaper. Alerts only there.`
+        : s ? `Anything at ${s.name} whose name has "${words}" — searched in turn with the card keywords (every ${d.data.sweepSeconds} seconds or so, more when ${s.name} is busy), and you're told when one drops, comes back or gets cheaper.` : 'Now choose where to look.';
       note = 'Words buy only what drops after the watch has looked — never what\'s on sale already.';
     }
     $('#dw-aco-wrap').hidden = !aco;
@@ -336,7 +339,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     e.preventDefault();
     const raw = $('#dw-input').value.trim();
     const body = { label: $('#dw-label').value.trim() };
-    if (isLink(raw)) body.url = raw;
+    if (isLink(raw)) body.url = linkOf(raw);
     else Object.assign(body, { words: raw, store: $('#dw-store').value, site: $('#dw-store').value === OTHER ? $('#dw-site').value.trim() : '' });
     if ($('#dw-aco').checked) Object.assign(body, { aco: true, maxPrice: $('#dw-max').value ? Number($('#dw-max').value) : null });
     if (isAdmin()) Object.assign(body, { shared: $('#dw-share').checked, category: $('#dw-category').value });

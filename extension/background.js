@@ -58,7 +58,11 @@ async function getAuth() {
   return auth && auth.token && auth.server === SERVER ? auth : null;
 }
 
-async function api(method, path, body, { token } = {}) {
+// How long a call to Mugibot's server may take before it's given up on (an answer that waits for a run
+// to drop asks for its own, longer): a checkout never waits on a server that's stopped answering.
+const API_TIMEOUT_MS = 15000;
+
+async function api(method, path, body, { token, timeoutMs = API_TIMEOUT_MS } = {}) {
   const auth = token ? { token } : await getAuth();
   if (!auth) return { status: 401, body: { error: 'Not connected' } };
   let res;
@@ -68,6 +72,7 @@ async function api(method, path, body, { token } = {}) {
       headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
       cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     return { status: 0, body: { error: `Can't reach ${CONFIG.appName}` } };
@@ -91,6 +96,89 @@ async function cardBackupInfo() {
   if (r.status !== 200) return undefined;
   const b = r.body && r.body.backup;
   return b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, hasCvc: !!b.hasCvc, savedAt: b.savedAt } : null;
+}
+
+// --- the card's copy for reinstalls (vault.js, from 1.20) ------------------------------
+// Locked here with a key your Mugibot dashboard keeps in this browser: Mugibot's server keeps the locked
+// copy and never has the key. A new install of the extension (even from another folder) gets the key from
+// the dashboard as it's connected, and has your card back — no passphrase. Keys are kept per account:
+// a few, as each address of the site keeps its own.
+const restoreKeysKey = (userId) => `restoreKeys:${userId}`;
+const restoreMadeKey = (userId) => `restoreMade:${userId}`; // key id → the card (its savedAt) its copy is of
+
+async function restoreKeys(userId) {
+  return (await chrome.storage.local.get(restoreKeysKey(userId)))[restoreKeysKey(userId)] || [];
+}
+
+async function markRestoreMade(userId, keyId, savedAt) {
+  const made = (await chrome.storage.local.get(restoreMadeKey(userId)))[restoreMadeKey(userId)] || {};
+  if (savedAt) made[keyId] = savedAt;
+  else delete made[keyId];
+  await chrome.storage.local.set({ [restoreMadeKey(userId)]: made });
+}
+
+/** This card's copy under one of the dashboard's keys, sent to your account. false: no card ready here, or turned off. */
+async function putRestoreCopy(auth, key, host = '') {
+  const userId = auth.user.id;
+  const st = await Vault.status(userId);
+  if (!st.ready) return false;
+  const copy = await Vault.lockForRestore(userId, key);
+  if (!copy) return false;
+  const r = await api('PUT', `/api/ext/card-restore/${encodeURIComponent(key.id)}`, { ...copy, host: String(host || '').slice(0, 100) });
+  if (r.status !== 200) return false; // (409: the member turned it off — nothing kept)
+  await markRestoreMade(userId, key.id, st.savedAt);
+  return true;
+}
+
+/**
+ * The dashboard's restore key for this browser (bridge.js): kept, and used. A card here: its copy under
+ * the key is made (again, when the card's newer, or the account hasn't got it: has === false). No card
+ * here — a new install, or it was never saved in this browser — and a copy under the key: your card back.
+ * { ok, restored, card } — or { ok: false, error }.
+ */
+async function useCardKey(auth, key, { has, host } = {}) {
+  const userId = auth.user.id;
+  if (!key || !/^[A-Za-z0-9_-]{16,40}$/.test(String(key.id || '')) || typeof key.k !== 'string') return { ok: false, error: 'That isn\'t a restore key' };
+  const keys = (await restoreKeys(userId)).filter((k) => k.id !== key.id);
+  await chrome.storage.local.set({ [restoreKeysKey(userId)]: [{ id: key.id, k: key.k, host: String(host || '').slice(0, 100) }, ...keys].slice(0, 4) });
+  const st = await Vault.status(userId);
+  if (st.ready) {
+    const made = (await chrome.storage.local.get(restoreMadeKey(userId)))[restoreMadeKey(userId)] || {};
+    if (has === false || made[key.id] !== st.savedAt) await putRestoreCopy(auth, key, host).catch(() => false);
+    return { ok: true, restored: false, card: st };
+  }
+  // (Asked for only when the account has one for this key: the dashboard says.)
+  if (has === false) return { ok: true, restored: false, card: st };
+  const r = await api('GET', `/api/ext/card-restore/${encodeURIComponent(key.id)}`);
+  if (r.status === 404 || r.status === 429) return { ok: true, restored: false, card: st };
+  if (r.status !== 200 || !r.body || !r.body.copy) return { ok: false, error: (r.body && r.body.error) || `Can't reach ${CONFIG.appName}`, card: st };
+  try {
+    const card = await Vault.unlockRestore(userId, r.body.copy, key);
+    // (The copy is of the card now here: it needn't be made again.)
+    await markRestoreMade(userId, key.id, card.savedAt);
+    cardState = null;
+    return { ok: true, restored: true, card };
+  } catch (e) {
+    return { ok: false, error: e.message, card: st };
+  }
+}
+
+/** A card saved (or replaced) here: its copy under each of the dashboard's keys this browser has. */
+async function refreshRestoreCopies(auth) {
+  for (const key of await restoreKeys(auth.user.id)) await putRestoreCopy(auth, key, key.host).catch(() => false);
+}
+
+// What this browser's card is, for the dashboard's Armed checks (its checkout browser's card, seen from
+// anywhere): 'ready', 'saved' (there, but not ready) or 'none' — never the card. Kept a minute.
+let cardState = null;
+async function cardStateNow() {
+  const auth = await getAuth();
+  if (!auth) return '';
+  if (cardState && cardState.userId === auth.user.id && Date.now() - cardState.at < 60 * 1000) return cardState.v;
+  const st = await Vault.status(auth.user.id).catch(() => null);
+  const v = !st ? '' : st.ready ? 'ready' : st.saved ? 'saved' : 'none';
+  cardState = { userId: auth.user.id, v, at: Date.now() };
+  return v;
 }
 
 async function forget() {
@@ -135,7 +223,7 @@ let refreshing = null;
 function refreshState(auth) {
   if (!refreshing) {
     refreshing = (async () => {
-      const res = await api('GET', `/api/ext/items?src=${SOURCE}`);
+      const res = await api('GET', `/api/ext/items?src=${SOURCE}&card=${await cardStateNow()}`);
       if (res.status !== 200 || !res.body) return null;
       const st = { items: res.body.items, flows: res.body.flows, active: res.body.active, browserChecks: res.body.browserChecks, aco: res.body.aco || null };
       await chrome.storage.local.set({ [`state:${auth.user.id}`]: { ...st, at: Date.now() } });
@@ -957,15 +1045,23 @@ const acoWanted = (a) => !!a && (a.listen || a.clearing > 0 || (typeof a.clears 
 async function acoLoop() {
   if (acoLooping) return;
   if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return;
-  const st = await getState();
-  if (!st.paired || !acoWanted(st.aco)) return;
+  let st = await getState();
+  if (!st.paired) return;
+  // Not wanted, by the copy from the last couple of minutes: asked again first — something may have been
+  // armed since (by a drop watch, or from your phone), and its drop shouldn't wait for the next copy.
+  if (!acoWanted(st.aco)) {
+    const auth = await getAuth();
+    const fresh = auth ? await refreshState(auth).catch(() => null) : null;
+    if (!fresh || !acoWanted(fresh.aco)) return;
+    st = { ...st, aco: fresh.aco };
+  }
   acoLooping = true;
   try {
     for (let quiet = 0; quiet < 3;) {
       // (An extension call between asks keeps this worker running while it waits.)
       await chrome.storage.session.set({ acoBeat: Date.now() });
       const started = Date.now();
-      const res = await api('GET', '/api/ext/aco/next?wait=20');
+      const res = await api('GET', `/api/ext/aco/next?wait=20&card=${await cardStateNow()}`, undefined, { timeoutMs: 40000 });
       if (res.status !== 200 || !res.body) {
         quiet += 1; // offline, or the account's membership ended: try again in a moment, then leave it to the alarm
         await new Promise((r) => setTimeout(r, 3000));
@@ -983,7 +1079,8 @@ async function acoLoop() {
       // Bags to empty (Clear cart): one store at a time, in a tab of their own.
       if ((res.body.clears || []).length) startClears(res.body.clears);
       if (!acoWanted(res.body)) break;
-      if (Date.now() - started < 1000) await new Promise((r) => setTimeout(r, 1000));
+      // (A quick answer with nothing in it: a moment before asking again. With runs: straight away — more may be waiting.)
+      if (!(res.body.runs || []).length && Date.now() - started < 1000) await new Promise((r) => setTimeout(r, 1000));
     }
   } finally {
     acoLooping = false;
@@ -1583,10 +1680,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // for you) in a few minutes. (Stopped before anything went into the bag: straight away.)
         if (status === 'placed' || status === 'failed' || (status === 'needs_you' && NOTHING_ADDED.has(String(msg.reason || '')))) turnEnded(sender.tab.id).catch(() => null);
         else if (status === 'ready' || status === 'needs_you') turnEnded(sender.tab.id, { parked: true }).catch(() => null);
-        const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, {
+        // (pressed: the final button was pressed in this run — said with how it ended, in case its "placing" is still on its way.)
+        const post = () => api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, {
           status, reason: String(msg.reason || ''), message: String(msg.message || '').slice(0, 300),
-          total: typeof msg.total === 'number' ? msg.total : null,
+          total: typeof msg.total === 'number' ? msg.total : null, pressed: !!run.placing,
         });
+        // At checkout, and pressing the final button: the page carries on at once — what matters (the final
+        // button pressed at most once) is on the tab's pass already — and your account hears a moment later.
+        // (A checkout never waits on Mugibot's server.)
+        if (status === 'checkout' || status === 'placing') {
+          post().catch(() => null);
+          return { ok: true };
+        }
+        const res = await post();
         return res.status === 200 ? { ok: true } : { ok: false, status: res.status };
       }
       case 'acoInfo': {
@@ -1728,6 +1834,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const auth = await getAuth();
         return auth ? { userId: auth.user.id, card: await Vault.status(auth.user.id) } : null;
       }
+      case 'cardKey': {
+        // The dashboard's restore key for this browser (bridge.js): your card's copy for updates made under it —
+        // or, with no card here (a new install), your card back from it. off: switched off — the keys forgotten.
+        if (!fromApp(sender)) return null;
+        const auth = await getAuth();
+        if (!auth) return { ok: false, paired: false };
+        if (msg.off) {
+          await chrome.storage.local.remove([restoreKeysKey(auth.user.id), restoreMadeKey(auth.user.id)]);
+          return { ok: true, off: true };
+        }
+        return useCardKey(auth, msg.key, { has: msg.has, host: msg.host });
+      }
       case 'openCardSettings':
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
         await chrome.runtime.openOptionsPage();
@@ -1775,18 +1893,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try {
           if (msg.action === 'save') {
             const saved = await Vault.save(auth.user.id, msg.card);
+            cardState = null;
             // Backed up too (locked with the card passphrase): the backup in your account is the new card.
             let backupError = null;
             if (msg.passphrase) await backupCard(auth, msg.passphrase).catch((e) => { backupError = e.message; });
+            // …and its copies for updates (under the dashboard's keys this browser has) are of the new card.
+            await refreshRestoreCopies(auth).catch(() => null);
             return { status: saved, backup: await cardBackupInfo(), backupError };
           }
-          if (msg.action === 'upgrade') return { status: await Vault.upgrade(auth.user.id, msg.passphrase) };
-          if (msg.action === 'remove') { await Vault.remove(auth.user.id); return { status: await Vault.status(auth.user.id), backup: await cardBackupInfo() }; }
+          if (msg.action === 'upgrade') { cardState = null; const up = await Vault.upgrade(auth.user.id, msg.passphrase); await refreshRestoreCopies(auth).catch(() => null); return { status: up }; }
+          if (msg.action === 'remove') {
+            await Vault.remove(auth.user.id);
+            cardState = null;
+            // Removed on purpose: no copy is kept for updates either (or it would come back by itself).
+            const gone = await api('DELETE', '/api/ext/card-restore');
+            await chrome.storage.local.remove(restoreMadeKey(auth.user.id));
+            return { status: await Vault.status(auth.user.id), backup: await cardBackupInfo(), restoreError: gone.status === 200 ? null : `Couldn't reach ${CONFIG.appName} to delete the copy kept for updates — delete it on the dashboard (Setup → Delivery & card)` };
+          }
           if (msg.action === 'backup') { await backupCard(auth, msg.passphrase); return { status: await Vault.status(auth.user.id), backup: await cardBackupInfo() }; }
           if (msg.action === 'restore') {
             const r = await api('GET', '/api/ext/card-backup');
             if (r.status !== 200) throw new Error((r.body && r.body.error) || `Can't reach ${CONFIG.appName}`);
             const restored = await Vault.unlock(auth.user.id, r.body.backup, msg.passphrase);
+            cardState = null;
+            await refreshRestoreCopies(auth).catch(() => null);
             return { status: restored, backup: await cardBackupInfo() };
           }
           if (msg.action === 'unbackup') {

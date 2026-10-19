@@ -680,40 +680,61 @@ details.menu[open] > summary { background: var(--surface-2); }
 .aco-checks li { align-items: baseline; }
 .aco-runs { list-style: none; margin: 8px 0 0; padding: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-/* Armed items: a table, 10 to a page */
-.aco-items-tools { display: flex; align-items: center; gap: 10px; }
-.aco-items-tools select { width: auto; padding: 6px 10px; font-size: 14px; }
-.aco-table { margin-top: 8px; }
-.aco-table th, .aco-table td { vertical-align: middle; }
-.aco-table td.sw { width: 56px; }
-.aco-table td.info { min-width: 220px; }
-.aco-table td.signin, .aco-table td.act { white-space: nowrap; }
-.aco-table td.max { width: 120px; }
-.aco-table td.act { text-align: right; }
-.aco-table tr.empty td { color: var(--muted); padding: 14px 10px; }
-.aco-item .name { font-weight: 600; }
-.aco-item .meta { color: var(--muted); font-size: 13px; }
-.aco-item.armed .name::after { content: ' · armed'; color: var(--ok); font-weight: 600; font-size: 12.5px; }
+/* 🤖 Armed (a list on the Drops page): one row per item — its switch, the item and its checks, its max price,
+   its buttons — every column, and every check, in line from row to row */
+.ar-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.ar-state { flex: 1 1 340px; min-width: 0; margin: 0; padding: 8px 12px; font-size: 13.5px; }
+.ar-state:empty { display: none; }
+.ar-tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.ar-tools select { width: auto; padding: 6px 10px; font-size: 13.5px; }
+#ar-msg:empty { display: none; }
+.ar-head, .ar-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 116px 112px; gap: 14px; align-items: center; }
+.ar-head { margin: 10px -16px 0; padding: 8px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-2); }
+.ar-list { list-style: none; margin: 0 -16px; padding: 0; }
+.ar-row { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.ar-row.armed { box-shadow: inset 3px 0 0 var(--ok); }
+.ar-row.armed.unready { box-shadow: inset 3px 0 0 var(--warn); }
+.ar-row .sw { align-self: start; padding-top: 2px; }
+.ar-row .info { min-width: 0; }
+.ar-row .name { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 650; }
+.ar-row .name .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ar-row .name .pill { flex: none; }
+.ar-row .meta { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* (Every row's checks wrap at the same place: they stay in line, however wide the page.) */
+.ar-checks { display: grid; grid-template-columns: repeat(auto-fill, 88px); gap: 6px; margin: 8px 0 2px; }
+.ck { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 3px 9px 3px 3px; border-radius: 99px; font-size: 12px; font-weight: 650; line-height: 1.2; white-space: nowrap; text-decoration: none; background: var(--surface-2); color: var(--muted); border: 1px solid transparent; }
+.ck .lb { overflow: hidden; text-overflow: ellipsis; }
+.ck .mk { flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 800; background: var(--surface); }
+.ck.ok { background: var(--ok-bg); color: var(--ok); }
+.ck.no { background: var(--err-bg); color: var(--err); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
+.ck.warn { background: var(--warn-bg); color: var(--warn); }
+a.ck:hover { border-color: currentColor; }
+.ar-fix { margin-top: 5px; font-size: 12.5px; color: var(--warn); }
+.ar-row .max { justify-self: start; }
+.ar-row .acts { display: grid; gap: 6px; }
+.ar-row .acts .btn { width: 100%; justify-content: center; }
+.ar-list .empty { padding: 22px 16px; }
+.ar-help { margin: 12px 0 0; }
 .aco-last.ok { color: var(--ok); } .aco-last.warn { color: var(--warn); } .aco-last.err { color: var(--err); }
+.aco-dt { display: inline-block; min-width: 54px; margin: 0 6px; font: 12px var(--mono, ui-monospace, monospace); color: var(--muted); }
 .aco-max-wrap { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; font-weight: 600; color: var(--muted); }
-.aco-max { width: 96px; padding: 6px 8px; }
+.aco-max { width: 92px; padding: 6px 8px; }
 .aco-test { white-space: nowrap; }
 .pager { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .pager .pg { min-width: 34px; }
 .pager .pg.on { background: var(--brand); border-color: var(--brand); color: var(--brand-fg); }
 .pager .pg-sum { margin-left: auto; }
 @media (max-width: 640px) {
-  /* Each item in two lines: switch, name and Trigger ACO; then sign-in and max price. */
-  .aco-table thead { display: none; }
-  .aco-table, .aco-table tbody { display: block; }
-  .aco-table tr.aco-item { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 8px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
-  .aco-table tr.aco-item td { border: 0; padding: 0; width: auto; }
-  .aco-table td.sw { grid-column: 1; grid-row: 1; align-self: start; }
-  .aco-table td.info { grid-column: 2; grid-row: 1; min-width: 0; }
-  .aco-table td.act { grid-column: 3; grid-row: 1; align-self: start; }
-  .aco-table td.signin { grid-column: 2; grid-row: 2; }
-  .aco-table td.max { grid-column: 3; grid-row: 2; }
-  .aco-table tr.empty, .aco-table tr.empty td { display: block; }
+  /* Each item: the switch and the item (with its checks); then its max price and its buttons. */
+  .ar-head { display: none; }
+  .ar-list { margin-top: 10px; border-top: 1px solid var(--line); }
+  .ar-row { grid-template-columns: 40px minmax(0, 1fr); grid-template-areas: "sw info" "sw more"; gap: 8px 10px; }
+  .ar-row .sw { grid-area: sw; } .ar-row .info { grid-area: info; }
+  .ar-row .max, .ar-row .acts { grid-area: more; }
+  .ar-row .acts { display: flex; justify-self: end; flex-wrap: wrap; }
+  .ar-row .acts .btn { width: auto; }
+  .ar-row .name { flex-wrap: wrap; }
+  .ar-row .name .nm { white-space: normal; }
   .pager .pg-sum { margin-left: 0; width: 100%; }
 }
 .aco-run { border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--surface); }
@@ -778,6 +799,11 @@ details.menu[open] > summary { background: var(--surface-2); }
 
 /* The card's backup in your account (Checkout details) */
 .card-backup { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+.card-restore { margin-top: 14px; }
+.card-restore:empty { display: none; }
+.card-restore .aco-switch-row { align-items: flex-start; }
+.card-restore .aco-switch-row .sn-sw { margin-top: 2px; }
+.card-restore .form-actions { margin-top: 8px; align-items: center; }
 .pager .pg-gap { padding: 0 2px; }
 
 /* 🎯 Drop watches (the Monitor page's lists): a link or words, at any store or website */
@@ -864,6 +890,8 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 .jump::-webkit-scrollbar { display: none; }
 .jump button { flex: none; font: inherit; font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; box-shadow: 0 1px 2px rgba(26, 20, 51, .05); }
 .jump button:hover { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); color: var(--brand); }
+.jump .jump-link { flex: none; font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 99px; border: 1px dashed color-mix(in srgb, var(--brand) 45%, var(--line)); color: var(--brand); text-decoration: none; background: var(--surface); }
+.jump .jump-link:hover { border-style: solid; }
 [data-panel] .card, [data-panel] .mon-card, [data-panel] { scroll-margin-top: 120px; }
 [data-panel="checkout"], [data-panel="discord"], [data-panel="account"] { margin-top: 30px; padding-top: 22px; border-top: 1px dashed var(--line); }
 @media (max-width: 820px) { .jump { top: 60px; } }

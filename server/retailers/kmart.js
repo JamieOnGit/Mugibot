@@ -40,6 +40,10 @@ export default {
     path: '/search/{q}?key=key_GZTqlLr41FS2p7AY&c=mugibot-1.0&i=mugibot-monitor&s=1&section=Products&num_results_per_page=100'
       + '&sort_by=numberOfDaysSinceStartDate&sort_order=ascending&filters%5Bgroup_id%5D=65839471a7eefbf864519e8c4009fc29'
       + '&filters%5BSeller%5D=Kmart&filters%5BSeller%5D=Target',
+    // A VIP or drop watch's words (a console, a skateboard…): the same search across every department —
+    // not just Trading Cards — still Kmart's and Target's own, newest first.
+    wordsPath: '/search/{q}?key=key_GZTqlLr41FS2p7AY&c=mugibot-1.0&i=mugibot-monitor&s=1&section=Products&num_results_per_page=100'
+      + '&sort_by=numberOfDaysSinceStartDate&sort_order=ascending&filters%5BSeller%5D=Kmart&filters%5BSeller%5D=Target',
     pagePath: '&page={page}',
     pages: 3,
   },
