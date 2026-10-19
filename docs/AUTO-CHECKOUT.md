@@ -367,12 +367,17 @@ copy from another folder, which starts with empty storage:
    for every ⚡ Buy and Auto-checkout. "Your card is back" says so. Your delivery
    details were never in the extension: they come from your account as always.
 
+The first update to 1.20 (from 1.19 or older) is the exception: the older copy
+never made a locked copy, so update it in place (copy the new files over the old
+folder, then Reload) and the card stays; a fresh copy needs it added once. From
+then on it comes back by itself.
+
 How it's kept safe:
 
 - Mugibot's server has the locked copy but **never the key**, so it can't open it
   by itself; the key never leaves this browser. Someone with your Mugibot
-  password can't get it either: the copy is only ever given to a connected
-  extension.
+  password can't open it either: the copy only ever goes to a connected
+  extension, and the key that opens it is in your browser.
 - One copy per browser (and per address of the site): each keeps its own key.
   Clearing this site's data in your browser loses the key; the extension, which
   still has the card, makes a new copy.

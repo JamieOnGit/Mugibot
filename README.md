@@ -167,13 +167,13 @@ or change it first with `open -e .env` (Mac) / `notepad .env` (Windows).
 
 1. In the dashboard that opens (http://localhost:8080), **sign up** with the
    username in `ADMIN_USERNAMES`. Admins always have access, so you don't need Whop to try it.
-2. **Extension** tab → **Download the extension** → unzip it → open
+2. **Setup** → **Extension** → **Download the extension** → unzip it → open
    `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → choose
    the unzipped folder. Reload the dashboard and press **Connect this browser**.
-3. **Checkout details** tab: fill in your name and address. Then press **Add your
-   card** and save a test card, e.g. `4242 4242 4242 4242`, `12/30`, `123`. It
-   stays ready for every ⚡ Buy, even after you restart the browser.
-4. **Monitor** → **My watchlist** → **Add dummy-store test items**.
+3. **Setup** → **📦 Delivery & card**: fill in your name and address. Then press
+   **Add your card** and save a test card, e.g. `4242 4242 4242 4242`, `12/30`,
+   `123`. It stays ready for every ⚡ Buy, even after you restart the browser.
+4. **Drops** → **My watchlist** → **Add dummy-store test items**.
 5. Open the dummy store's control panel (http://localhost:5055), press
    **in_stock** on a sold-out product, and watch your watchlist ping. Press
    **⚡ Buy** on any dummy item and watch the extension go all the way to the
@@ -247,7 +247,7 @@ the passphrase backup.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 349 tests in about sixteen minutes:
+the 360 tests in about sixteen minutes:
 
 ```bash
 npm install
@@ -346,6 +346,10 @@ npm test
     whose Checkout button Mugibot doesn't know;
   - Trigger ACO (a test run now, from the dashboard), and stores that only sell
     signed in (Amazon);
+  - a drop for several members: every armed member's run made before anyone's
+    alerts go out; a brand-new listing's only option straight to the store's
+    add-to-cart link; the final button's outcome counted even when its
+    "placing" report comes second;
   - ⚡ Buy from your phone: a Discord button pressed (signed by Discord, for
     whoever pressed it) makes the checkout browser check out, the real
     extension included, with nothing armed. It places the order with
@@ -395,6 +399,12 @@ npm test
     drops, never posted, its words hidden from others;
   - a link and words at another website: read as Mugibot, alerts with no
     ⚡ Buy, a site that refuses backing off;
+  - a product at another website (a Garmin watch, say): DM'd when its page goes
+    up, when it gets cheaper (📉 at least 1% and $1; again only lower still or
+    half a day later), back in stock and open for pre-order; `#non-tcg-alerts`
+    given price drops once; stricter words ("xbox series x" isn't the Series S);
+    Kmart's whole store for a watch's words; a broad watch keeping room for what
+    drops; one purchase per watch;
   - with the real extension: ⚡ Buy for a product that isn't a trading card at
     every one of the 13 stores, to its final button; a drop watch on a console
     at JB Hi-Fi bought by Auto-checkout; the 🎯 tab's ⚡ Buy;
@@ -404,9 +414,13 @@ npm test
   an Amazon page (the dummy Amazon gives servers HTTP 503, like the real one).
 - **Dashboard round:** the card backup (only a locked copy reaches the server,
   which can't open it; restored in a fresh install with the passphrase; a wrong
-  passphrase refused; kept per account), activity, watchlist, products and run
-  history paged, members' own store switches, and members never told where a
-  store is searched from (API and live stream).
+  passphrase refused; kept per account), the card's copy for extension updates
+  (a fresh copy of the extension gets the card back on Connect this browser, no
+  passphrase; only a locked copy reaches the server, never its key), the 🤖
+  Armed list (its checks lined up row to row, To fix, Get ready), Tracked
+  products past 600, activity, watchlist, products and run history paged,
+  members' own store switches, and members never told where a store is
+  searched from (API and live stream).
 - **Website in a browser:** the dashboard's four pages (each page's parts and
   shortcuts, the ready-for-the-next-drop strip, old links landing on the right
   part, the tab bar on a phone) and every admin tab, including the

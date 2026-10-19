@@ -407,8 +407,9 @@ popup. Their saved card and connection stay. From 1.20, even a new copy loaded
 from another folder ("start fresh") gets the card back by itself: the member
 presses **Connect this browser** and the dashboard hands the new copy the key to
 the locked copy of their card kept in their account (docs/AUTO-CHECKOUT.md →
-Your card through extension updates). Copies from the Chrome Web Store update by
-themselves.
+Your card through extension updates). The first time, from 1.19 or older, there
+is no copy yet: copying the files over keeps the card (a fresh copy needs it
+added once). Copies from the Chrome Web Store update by themselves.
 
 ---
 
