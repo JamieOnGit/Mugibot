@@ -31,7 +31,8 @@ export const VIP_NOTE = 'VIP drop';
 // before this was kept: armed when found.)
 const armOf = (w, f) => (w.acoUser && w.maxPrice !== null ? f.arm || 'armed' : '');
 // Statuses that say whether something's on sale (not a failed or empty read).
-const READ = new Set([STATUS.IN_STOCK, STATUS.PREORDER, STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.NOT_LISTED]);
+// (In the store's shops only — Kmart's "In store only" — is a reading too: not on sale online yet.)
+const READ = new Set([STATUS.IN_STOCK, STATUS.PREORDER, STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.NOT_LISTED, STATUS.IN_STORE]);
 
 function toWatch(r) {
   let found = [];
