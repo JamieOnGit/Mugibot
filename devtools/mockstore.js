@@ -247,6 +247,9 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     signedIn: {},
     // Shops answering 429 with Retry-After: shop → seconds.
     tooMany: {},
+    // Kmart's Constructor.io browse of its Trading Cards (the whole range in one list): null (it works),
+    // 'missing' (HTTP 404) or 'odd' (an answer that isn't a product list).
+    cioBrowse: null,
     requests: [],
     // Acme Collectibles: another website (see acme() below).
     acme: defaultAcme(),
@@ -2255,10 +2258,14 @@ ${body}
       });
     }
     // Kmart's search provider (Constructor.io) — what Mugibot's live sweeps read for Kmart: each
-    // product with its sellers and the states it's out of stock in (every state: sold out online).
-    const cio = shop === 'kmart' && sub.match(/^\/cnstrc\/search\/([^/]+)$/);
+    // product with its sellers and the states it's out of stock in (every state: sold out online). Its
+    // browse of the Trading Cards group is every listed product, with no keyword.
+    const cio = shop === 'kmart' && (sub.match(/^\/cnstrc\/search\/([^/]+)$/) || sub.match(/^\/cnstrc\/browse\/group_id\/([^/]+)$/));
     if (cio) {
-      const all = searchHits(shop, decodeURIComponent(cio[1]));
+      const browse = sub.startsWith('/cnstrc/browse/');
+      if (browse && state.cioBrowse === 'missing') return json(404, { message: 'Unknown group' });
+      if (browse && state.cioBrowse === 'odd') return json(200, { nothing: 'here' });
+      const all = browse ? shopOf(shop).products.filter((x) => x.listed) : searchHits(shop, decodeURIComponent(cio[1]));
       const per = Number(u.searchParams.get('num_results_per_page')) || 20;
       const pg = Number(u.searchParams.get('page')) || 1;
       const states = ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'];
@@ -2271,7 +2278,9 @@ ${body}
               id: `P_${x.sku}`, url: pathFor(shop, x).replace(/^\/kmart/, ''), image_url: `http://${req.headers.host}${imagePath(shop, x)}`, price: x.price,
               Seller: [x.marketplace ? 'Marketplace' : 'Kmart'], isPreOrderActive: x.status === 'preorder',
               ...(x.was ? { SavePrice: `WAS $${x.was}` } : {}),
-              ...(x.status === 'in_stock' || x.status === 'preorder' ? {} : { stateOOS: Object.fromEntries(states.map((st) => [st, '6'])) }),
+              // (oosStates: in stock, but not in these states — e.g. only NSW and VIC have it.)
+              ...(Array.isArray(x.oosStates) && (x.status === 'in_stock' || x.status === 'preorder') ? { stateOOS: Object.fromEntries(x.oosStates.map((st) => [st, '6'])) }
+                : x.status === 'in_stock' || x.status === 'preorder' ? {} : { stateOOS: Object.fromEntries(states.map((st) => [st, '6'])) }),
             },
           })),
         },

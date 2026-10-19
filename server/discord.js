@@ -15,6 +15,8 @@ import { entitlement } from './entitlement.js';
 import { ENTITLED_SQL } from './repo.js';
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// Requests to Discord at once (its own limit is 50 a second; from Sydney each takes a few hundred ms).
+const MAX_ACTIVE = 6;
 
 /** Plain words for the Discord errors people hit while setting up. */
 function explain(status, body, what) {
@@ -35,6 +37,8 @@ export class Discord {
     this.d = cfg.discord;
     this.active = 0;
     this.waiting = [];
+    this.urgent = []; // a drop's channel posts: first in line, never behind members' DMs
+    this.freeAt = new Map(); // route → when Discord said it takes requests again (none left till then)
   }
 
   get oauthReady() { return discordOAuthConfigured(this.cfg); }
@@ -42,53 +46,73 @@ export class Discord {
   get interactionsReady() { return !!(this.d.publicKey && this.d.clientId); }
 
   // -------------------------------------------------------------------------
-  // REST, with Discord's rate limits respected (a few requests at a time, and
-  // waiting when Discord says "slow down")
+  // REST, with Discord's rate limits respected: a few requests at a time (a
+  // drop's channel posts first in line), waiting when Discord says "slow down"
+  // or that a route has no requests left — without holding a place in line
+  // meanwhile, so nothing else waits behind a wait
   // -------------------------------------------------------------------------
-  async slot() {
-    if (this.active < 4) { this.active += 1; return; }
-    await new Promise((r) => this.waiting.push(r));
-    this.active += 1;
+  async slot(urgent = false) {
+    if (this.active < MAX_ACTIVE) { this.active += 1; return; }
+    // (A place that comes free goes straight to the next in line: release().)
+    await new Promise((r) => (urgent ? this.urgent : this.waiting).push(r));
   }
 
   release() {
-    this.active -= 1;
-    const next = this.waiting.shift();
+    const next = this.urgent.shift() || this.waiting.shift();
     if (next) next();
+    else this.active -= 1;
   }
 
-  async api(method, path, body, { bearer = null, form = null } = {}) {
-    await this.slot();
-    try {
-      for (let attempt = 0; attempt < 4; attempt++) {
-        const headers = { 'user-agent': `DiscordBot (${this.cfg.baseUrl}, 1.0) ${this.cfg.appName}` };
-        if (bearer) headers.authorization = `Bearer ${bearer}`;
-        else if (!form) headers.authorization = `Bot ${this.d.botToken}`;
-        let payload;
-        if (form) {
-          headers['content-type'] = 'application/x-www-form-urlencoded';
-          payload = new URLSearchParams(form).toString();
-        } else if (body !== undefined) {
-          headers['content-type'] = 'application/json';
-          payload = JSON.stringify(body);
-        }
-        let res;
+  /** Discord's word on a route: no requests left on it → none sent there until its limit resets. */
+  noteLimit(route, res) {
+    const h = res && res.headers;
+    if (!h || typeof h.get !== 'function' || h.get('x-ratelimit-remaining') !== '0') return;
+    const after = Number(h.get('x-ratelimit-reset-after'));
+    if (!(after > 0)) return;
+    const now = Date.now();
+    this.freeAt.set(route, now + Math.min(after, 10) * 1000);
+    if (this.freeAt.size > 500) for (const [k, t] of this.freeAt) if (t <= now) this.freeAt.delete(k);
+  }
+
+  /** urgent: a drop's channel post — first in line. */
+  async api(method, path, body, { bearer = null, form = null, urgent = false } = {}) {
+    // (Discord's limits are per route: this message channel, that DM…)
+    const route = `${method} ${path.split('?')[0]}`;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const free = this.freeAt.get(route);
+      if (free && free > Date.now()) await wait(free - Date.now());
+      const headers = { 'user-agent': `DiscordBot (${this.cfg.baseUrl}, 1.0) ${this.cfg.appName}` };
+      if (bearer) headers.authorization = `Bearer ${bearer}`;
+      else if (!form) headers.authorization = `Bot ${this.d.botToken}`;
+      let payload;
+      if (form) {
+        headers['content-type'] = 'application/x-www-form-urlencoded';
+        payload = new URLSearchParams(form).toString();
+      } else if (body !== undefined) {
+        headers['content-type'] = 'application/json';
+        payload = JSON.stringify(body);
+      }
+      let res;
+      let data;
+      await this.slot(urgent);
+      try {
         try {
           res = await this.fetch(`${this.d.apiBase}${path}`, { method, headers, body: payload, signal: AbortSignal.timeout(10000) });
         } catch (e) {
           return { status: 0, body: { message: e.message } };
         }
-        const data = res.status === 204 ? null : await res.json().catch(() => null);
-        if (res.status === 429 && attempt < 3) {
-          await wait(Math.min(10, Number(data && data.retry_after) || 1) * 1000);
-          continue;
-        }
-        return { status: res.status, body: data };
+        data = res.status === 204 ? null : await res.json().catch(() => null);
+      } finally {
+        this.release();
       }
-      return { status: 429, body: { message: 'rate limited' } };
-    } finally {
-      this.release();
+      this.noteLimit(route, res);
+      if (res.status === 429 && attempt < 3) {
+        await wait(Math.min(10, Number(data && data.retry_after) || 1) * 1000);
+        continue;
+      }
+      return { status: res.status, body: data };
     }
+    return { status: 429, body: { message: 'rate limited' } };
   }
 
   // -------------------------------------------------------------------------
@@ -264,9 +288,10 @@ export class Discord {
     return r.status === 200;
   }
 
-  async post(channelId, message) {
+  /** urgent: a drop's alert — first in line. */
+  async post(channelId, message, { urgent = false } = {}) {
     if (!this.botReady || !channelId) return false;
-    const r = await this.api('POST', `/channels/${channelId}/messages`, message);
+    const r = await this.api('POST', `/channels/${channelId}/messages`, message, { urgent });
     if (r.status !== 200) this.cfg.log('[discord] channel post failed:', explain(r.status, r.body, 'post in that channel'));
     return r.status === 200;
   }

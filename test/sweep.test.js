@@ -14,7 +14,7 @@ import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, wa
 import { startMockStore } from '../devtools/mockstore.js';
 import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseMagento, parseShopifyProducts, parseShopifySuggest, parseTarget, parseWoo, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
-import { Sweeper, olderVersion, retryAfterMs } from '../server/monitor/sweep.js';
+import { Sweeper, olderVersion, retryAfterMs, statesNote } from '../server/monitor/sweep.js';
 
 // --- reading results -----------------------------------------------------------
 function targetPage(products, total = products.length) {
@@ -123,6 +123,9 @@ test("Kmart's search provider (Constructor.io): code, price, sellers, pre-orders
   ]);
   assert.equal(r.products[0].url, 'https://www.kmart.com.au/product/pokemon-tcg:-30th-celebration-elite-trainer-box-43818587/', 'a link on Kmart, not the search provider');
   assert.deepEqual(r.products[0].aliases, ['P_43818587']);
+  // In stock in some states only: which (its alerts say so); in every state, or none, nothing to say.
+  assert.deepEqual(r.products[0].states, ['NSW']);
+  assert.deepEqual(r.products.slice(1).map((p) => p.states), [undefined, undefined, undefined]);
   assert.equal(parseConstructor('{"nope":1}').problem, 'layout');
 });
 
@@ -1021,12 +1024,17 @@ test("EB Games' results: a marketplace seller's product only when the result say
 });
 
 test('the loops: each store swept from the server on its own loop, every few seconds; switched off, it stops', async () => {
-  const before = store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length;
+  // (Kmart's loop reads its whole range in one list — its Trading Cards browse — rather than a keyword at a time.)
+  const kmartSearches = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/')).length;
+  const before = kmartSearches();
+  const browsed = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/browse/group_id/')).length;
+  const browsedBefore = browsed();
   sw.running = false;
   sw.cfg.monitor.enabled = true;
   sw.start();
   try {
-    await waitFor(() => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length >= before + 2, { timeout: 15000, message: 'two Kmart searches' });
+    await waitFor(() => kmartSearches() >= before + 2, { timeout: 15000, message: 'two Kmart searches' });
+    assert.ok(browsed() >= browsedBefore + 2, 'its whole range in one list, each time');
     assert.ok(sw.loops.has('demo-kmart'));
     assert.ok(sw.events.some((e) => e.type === 'sys' && /Live sweeps started — .*Kmart \(dummy store\).* from Mugibot's server only · .*EB Games \(dummy store\) from admins' browsers/.test(e.message)));
     assert.ok(sw.loops.has('demo-jbhifi'));
@@ -1036,7 +1044,6 @@ test('the loops: each store swept from the server on its own loop, every few sec
     assert.ok(h.requests1h >= 2);
     assert.ok((await boss.get('/api/monitor')).body.overview.sweeps1h >= 2);
     // A store that asked to wait (Retry-After) isn't searched before then, even woken by Sweep now or a Reset…
-    const kmartSearches = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length;
     sw.stat('demo-kmart').retryAt = sw.now() + 60000;
     const asked = kmartSearches();
     sw.sweepNow();
@@ -1274,4 +1281,156 @@ test("a page Mugibot couldn't read says what it was; a bot check in an admin's b
     sw.save({ stores: saved }, null);
     for (const id of ['demo-gamesmen', 'demo-pokemoncenter']) Object.assign(sw.stat(id), { fails: 0, lastError: '', browserNext: 0, needsUpdateAt: 0 });
   }
+});
+
+// --- Speed: what goes first after a store answers, and how often each product is looked at --------
+test("⚡ a drop's channel ping comes first: in Discord as soon as the store answers — before the watching members' DMs (a few at a time, not one after another) — and every armed member's Auto-checkout run is made before either", async () => {
+  // A product ten members watch, one of them armed for Auto-checkout with a browser connected; out of stock.
+  store.shop('kmart').products.push({ sku: '43877001', name: 'Pokémon TCG: Speed Test Elite Trainer Box', price: 100, status: 'out_of_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477001 });
+  await sweep('demo-kmart');
+  const watchers = [];
+  for (let i = 0; i < 10; i++) {
+    const c = await Client.signup(env.url, `speedy-${i}`);
+    makeMember(env, c);
+    for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+    env.app.repo.updateUser(c.user.id, { discord_id: `d-speedy-${i}` });
+    const add = await c.post('/api/items', { url: store.productUrl('kmart', '43877001'), name: 'Speed Test ETB' });
+    assert.equal(add.status, 200, add.text);
+    watchers.push({ c, item: add.body });
+  }
+  const armed = watchers[0];
+  assert.equal((await armed.c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 400, perDay: 5, spendPerDay: 2000 })).status, 200);
+  env.app.repo.addDevice(armed.c.user.id, 'Chrome on Mac', '1.20.0');
+  assert.equal((await armed.c.put(`/api/items/${armed.item.id}`, { aco: true, maxPrice: 150 })).status, 200);
+  await sweep('demo-kmart'); // (their items read: out of stock)
+  const posts = channel().length;
+  // Discord answering as slowly as it does from Sydney: ten DMs one after another would take over 3 s.
+  discord.state.delayMs = 150;
+  store.set('kmart', '43877001', { status: 'in_stock' });
+  const t0 = Date.now();
+  let r;
+  try {
+    r = await sweep('demo-kmart');
+  } finally {
+    discord.state.delayMs = 0;
+  }
+  const took = Date.now() - t0;
+  assert.equal(r.restock, 1);
+  const post = channel().slice(posts).find((m) => /Speed Test Elite Trainer Box/.test(m.body.embeds[0].title));
+  assert.ok(post, 'posted in the restock channel');
+  const dms = watchers.map((_, i) => discord.dmsTo(`d-speedy-${i}`).find((m) => /Speed Test ETB/.test(m.body.embeds[0].title)));
+  assert.ok(dms.every(Boolean), 'every watching member has their DM by the time the search is done');
+  assert.ok(dms.every((m) => m.at >= post.at), 'the channel ping before any member\'s DM');
+  assert.ok(post.at - t0 < 1000, `in Discord ${post.at - t0} ms after the search began`);
+  assert.ok(took < 2500, `the DMs a few at a time: ${took} ms for the search and every alert`);
+  const run = env.app.db.get('SELECT * FROM aco_runs WHERE item_id = :i', { i: armed.item.id });
+  assert.ok(run, 'the armed member\'s Auto-checkout run');
+  assert.ok(run.created_at - clock.offset <= post.at, 'made before the channel ping went out');
+  // How long it took to reach Discord, for the live monitor.
+  assert.equal(typeof sw.live().discordMs, 'number');
+  for (const { c, item } of watchers) await c.del(`/api/items/${item.id}`);
+});
+
+test("⚡ a search whose reading fails partway through its list still sends the members' alerts it already has", async () => {
+  store.shop('kmart').products.push({ sku: '43877003', name: 'Pokémon TCG: Partway Test Booster Bundle', price: 60, status: 'out_of_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477003 });
+  const c = await Client.signup(env.url, 'partway');
+  makeMember(env, c);
+  for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  env.app.repo.updateUser(c.user.id, { discord_id: 'd-partway' });
+  const add = await c.post('/api/items', { url: store.productUrl('kmart', '43877003'), name: 'Partway Bundle' });
+  assert.equal(add.status, 200, add.text);
+  await sweep('demo-kmart'); // (their item read: out of stock)
+  store.set('kmart', '43877003', { status: 'in_stock' });
+  // Reading the product after its watchers' alerts are in line breaks (whatever the reason).
+  const track = sw.track;
+  sw.track = async function (r, p, ...rest) {
+    if (p.sku === '43877003') throw new Error('reading the list broke');
+    return track.call(this, r, p, ...rest);
+  };
+  try {
+    await assert.rejects(sweep('demo-kmart'), /reading the list broke/);
+  } finally {
+    sw.track = track;
+  }
+  assert.ok(discord.dmsTo('d-partway').some((m) => /Partway Bundle/.test(m.body.embeds[0].title)), "the watching member's DM went out all the same");
+  await c.del(`/api/items/${add.body.id}`);
+});
+
+test("⚡ Kmart's whole range in one list: every trading card it sells read in one request each time (not one keyword in turn) — restocks of any keyword's products, the states it's in stock in, and a list that fails falls back to each keyword at once", async () => {
+  const r = R('demo-kmart');
+  // The loop's search at Kmart: the whole range (its Trading Cards browse), every time.
+  for (let i = 0; i < 5; i++) assert.deepEqual(sw.nextTerm(r), { keyword: '*', page: 1, all: true });
+  assert.match(sw.urlFor(r, '*'), /\/kmart\/cnstrc\/browse\/group_id\/65839471a7eefbf864519e8c4009fc29\?.*num_results_per_page=200/);
+  assert.match(sw.urlFor(R('kmart'), '*'), /^https:\/\/ac\.cnstrc\.com\/browse\/group_id\/65839471a7eefbf864519e8c4009fc29\?key=key_GZTqlLr41FS2p7AY&/);
+  // A One Piece product and a Pokémon one: both keywords' products in the one list.
+  store.shop('kmart').products.push({ sku: '43877002', name: 'One Piece Card Game: OP-15 Booster Box', price: 199, status: 'out_of_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477002 });
+  const browses = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/browse/')).length;
+  const searches = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search/')).length;
+  const [b0, s0] = [browses(), searches()];
+  const first = await sw.sweepTerm(r, sw.nextTerm(r));
+  assert.equal(first.ok, true, first.error);
+  assert.equal(first.keyword, 'every trading card');
+  assert.equal(browses(), b0 + 1, 'one request');
+  assert.equal(searches(), s0, 'no keyword searches');
+  assert.ok(first.kept >= 4, `every card product counted (${first.kept}), the plush left out`);
+  assert.equal(product('demo-kmart', '43877002').category, 'onepiece');
+  // A restock in it, at only some states: the alert says which.
+  store.set('kmart', '43877002', { status: 'in_stock', oosStates: ['QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'] });
+  const posts = channel().length;
+  const again = await sw.sweepTerm(r, sw.nextTerm(r));
+  assert.equal(again.restock, 1);
+  const [a] = alerts('restock').filter((x) => x.sku === '43877002');
+  assert.equal(a.note, 'In stock in NSW, VIC only.');
+  // (When most states have it, the ones that don't: shorter.)
+  assert.equal(statesNote(['NSW', 'VIC', 'QLD', 'WA']), 'In stock in NSW, VIC, QLD, WA only.');
+  assert.equal(statesNote(['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT']), 'In stock everywhere except ACT.');
+  assert.equal(statesNote(['NSW', 'VIC', 'QLD', 'WA', 'SA']), 'In stock everywhere except TAS, ACT, NT.');
+  assert.equal(statesNote(['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT']), '', 'every state: nothing to say');
+  assert.equal(statesNote(undefined), '');
+  assert.match(channel().slice(posts).map((m) => m.body.embeds[0].description || '').join(' '), /In stock in NSW, VIC only\./);
+  assert.ok(sw.events.some((e) => e.type === 'hb' && e.store === 'demo-kmart' && e.keyword === 'every trading card'), 'the live log says what was searched');
+  // A settings change keeps it (it holds every keyword's products).
+  sw.save({ priceDropPercent: sw.settings.priceDropPercent }, null);
+  assert.ok(env.app.db.get("SELECT 1 AS y FROM sweep_terms WHERE store = 'demo-kmart' AND keyword = '*'"));
+  // The list failing as a list (gone: 404; or an answer that isn't one): each keyword's own search at once…
+  for (const how of ['missing', 'odd']) {
+    store.state.cioBrowse = how;
+    Object.assign(sw.stat('demo-kmart'), { allOffUntil: 0 });
+    const [b1, s1] = [browses(), searches()];
+    const fell = await sw.sweepTerm(r, sw.nextTerm(r));
+    assert.equal(fell.ok, true, `${how}: ${fell.error}`);
+    assert.ok(['pokemon', 'one piece'].includes(fell.keyword), `${how}: a keyword's search instead, straight away (${fell.keyword})`);
+    assert.equal([browses() - b1, searches() - s1].join(), '1,1');
+    assert.ok(sw.events.some((e) => e.type === 'sys' && /whole range didn't come back as one list .*searching each keyword instead for 15 minutes/.test(e.message)));
+    assert.equal(sw.stat('demo-kmart').fails, 0, "not the store's failure: no backoff, no browser standing in");
+    // …for 15 minutes.
+    assert.notEqual(sw.nextTerm(r).keyword, '*');
+  }
+  store.state.cioBrowse = null;
+  clock.offset += 16 * 60 * 1000;
+  assert.equal(sw.nextTerm(r).keyword, '*', 'the list again after 15 minutes');
+  const back = await sw.sweepTerm(r, { keyword: '*', page: 1, all: true });
+  assert.equal(back.ok, true);
+  assert.ok(sw.events.some((e) => e.type === 'sys' && /comes back as one list again/.test(e.message)));
+  // A refusal is the store's (the same host as its keyword searches): it slows down as any refusal does.
+  store.state.tooMany = { kmart: 30 };
+  try {
+    const refused = await sw.sweepTerm(r, sw.nextTerm(r));
+    assert.equal(refused.ok, false);
+    assert.equal(refused.blocked, true);
+    assert.equal(sw.stat('demo-kmart').allOffUntil, 0, 'the list stays on');
+  } finally {
+    store.state.tooMany = {};
+    Object.assign(sw.stat('demo-kmart'), { fails: 0, retryAt: 0, slowUntil: 0, serverMisses: 0, backup: null, lastError: '' });
+  }
+});
+
+test('⚡ searches come on the set pace from the start of the last one: a store slow to answer isn\'t searched less often (at least half a second apart, never before Retry-After)', () => {
+  const st = { fails: 0, slowUntil: 0, retryAt: 0 };
+  assert.equal(sw.waitFor(st, 5000, { spent: 1200 }), 3800);
+  assert.equal(sw.waitFor(st, 5000, { spent: 9000 }), 500, 'at least half a second between two searches');
+  assert.equal(sw.waitFor(st, 5000), 5000);
+  assert.equal(sw.waitFor({ ...st, slowUntil: sw.now() + 60000 }, 5000, { spent: 1000 }), 14000, 'after a refusal: a third of the pace');
+  assert.ok(sw.waitFor({ ...st, retryAt: sw.now() + 30000 }, 5000, { spent: 1000 }) >= 29000, 'never before the store said');
+  assert.equal(sw.waitFor({ ...st, fails: 2 }, 5000, { spent: 4000 }), 20000, 'failing: backing off from its end');
 });

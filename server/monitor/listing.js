@@ -177,7 +177,7 @@ export function parseShopifyProducts(text, { base } = {}) {
 // Kmart's search page has no products in it: the page asks Kmart's search provider,
 // Constructor.io, for them once it's open. Its answer has every product's code, name, price,
 // picture, sellers, pre-order flag, and the states it's out of stock in ("stateOOS").
-const AU_STATES = ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'];
+export const AU_STATES = ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'];
 const storeLink = (root, path) => {
   if (typeof path !== 'string' || !path.trim()) return '';
   if (/^https?:\/\//i.test(path)) return httpsUrl(path);
@@ -201,6 +201,8 @@ export function parseConstructor(text, { base, storeBase } = {}) {
       wasPrice: was && price && was > price ? was : null,
       // Out of stock in every state = sold out online; in stock somewhere otherwise.
       inStock: !AU_STATES.every((s) => oos.includes(s)),
+      // In stock in some states only: which (its alerts say so).
+      ...(oos.length && !AU_STATES.every((s) => oos.includes(s)) ? { states: AU_STATES.filter((s) => !oos.includes(s)) } : {}),
       preorder: d.isPreOrderActive === true, url: storeLink(storeBase || base, d.url || d.uri), image: httpsUrl(d.image_url, base),
       marketplace: sellers.length > 0 && sellers.every((s) => /market ?place/i.test(s)),
     });

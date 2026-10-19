@@ -36,6 +36,22 @@ const KNOWN = new Set(Object.values(STATUS));
 
 const ITEMS_FOR_PAGE = `(c.kind = 'product' AND i.url = c.url) OR (c.kind = 'search' AND i.url = '' AND i.store = c.store AND i.sku = c.sku COLLATE NOCASE)`;
 
+/**
+ * Alerts waiting to go out (members' DMs, webhooks, emails): a few at a time — each member's own
+ * arrives in a fraction of a second, not after everyone before them has had theirs. A failed one is
+ * logged and the rest still go.
+ */
+export async function sendAll(list, onError, atOnce = 5) {
+  let next = 0;
+  const lane = async () => {
+    while (next < list.length) {
+      const send = list[next++];
+      await Promise.resolve().then(send).catch(onError);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(atOnce, list.length) }, lane));
+}
+
 /** Does this link's path contain the SKU (as a whole code, not part of a longer number)? */
 export function pathHasSku(url, sku) {
   let p;
@@ -255,22 +271,29 @@ export class Monitor {
       checked_at = :now, next_check_at = :next, fail_count = :fails, error = :err, found_url = COALESCE(:found, found_url) WHERE url = :url`,
     { url, status, title: r.title || null, price: r.price ?? null, sig: r.decidedBy || null, now, next, fails: failCount, err: r.error || '', found: r.foundUrl || null });
 
-    // The shared feed: every monitored product on this page.
-    for (const product of this.catalog.productsForPage(url)) {
-      if (prev.kind === 'search' && r.foundUrl) continue;
-      // What this check really saw: the feed keeps the last confirmed status itself.
-      await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
-      // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js).
-      if (this.vip) this.vip.checked(this.catalog.productById(product.id));
-      if (this.drops) this.drops.checked(this.catalog.productById(product.id));
+    // Members watching this page: each armed one's Auto-checkout run first; their alerts once the feed's are out.
+    const later = [];
+    const items = prev.kind === 'search' && r.foundUrl ? [] : this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id, page_checks c
+      WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { url, now });
+    await this.applyAll(items, { status, title: r.title || null, price: r.price ?? null, error: r.error || '' }, 'server', { later });
+    try {
+      // The shared feed: every monitored product on this page.
+      for (const product of this.catalog.productsForPage(url)) {
+        if (prev.kind === 'search' && r.foundUrl) continue;
+        // What this check really saw: the feed keeps the last confirmed status itself.
+        await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
+        // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js).
+        if (this.vip) this.vip.checked(this.catalog.productById(product.id));
+        if (this.drops) this.drops.checked(this.catalog.productById(product.id));
+      }
+    } finally {
+      // (Even when the shared feed's failed.)
+      await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
     }
     if (prev.kind === 'search' && r.foundUrl) {
       this.resolveSku(prev.store, prev.sku, r.foundUrl);
       return { status: 'found', url: r.foundUrl };
     }
-    const items = this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id, page_checks c
-      WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { url, now });
-    await this.applyAll(items, { status, title: r.title || null, price: r.price ?? null, error: r.error || '' }, 'server');
     return { status, previous: prev.status };
   }
 
@@ -292,14 +315,15 @@ export class Monitor {
   // -------------------------------------------------------------------------
   /**
    * One store answer for everyone watching it: armed items first, and every member's Auto-checkout run
-   * made before anyone's alerts go out (they go after, in turn) — in a drop, the tenth member's run
-   * doesn't wait on nine members' DMs.
+   * made before anyone's alerts go out (then a few at a time: sendAll) — in a drop, the tenth member's
+   * run doesn't wait on nine members' DMs. later: the caller's list to put the alerts on instead (a
+   * search's: sent once its channel alerts are out — sweep.js).
    */
-  async applyAll(items, r, source) {
-    const later = [];
+  async applyAll(items, r, source, { later: theirs = null } = {}) {
+    const later = theirs || [];
     const order = [...items].sort((a, b) => (b.aco ? 1 : 0) - (a.aco ? 1 : 0));
     for (const item of order) await this.applyResult(item, r, source, { later });
-    for (const send of later) await send().catch((e) => this.cfg.log('[alerts]', e.message));
+    if (!theirs) await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
   }
 
   /** later: a list to put this item's alerts on (sent by the caller), instead of sending them now. */

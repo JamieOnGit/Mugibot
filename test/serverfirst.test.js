@@ -264,7 +264,8 @@ test("pinned to the server only while the browser stood in: nothing stands in an
 
 test("the loop: while the browser stands in, the server only tries when it's time (Sweep now: straight away); let back in, it searches as before", async () => {
   const id = 'demo-kmart';
-  const searches = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search')).length;
+  // (Its searches: the server's tries are a keyword's; back in, its whole range in one list — both from Constructor.io.)
+  const searches = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/')).length;
   const others = Object.fromEntries(['demo-amazon', 'demo-bigw', 'demo-jbhifi'].map((x) => [x, 'off']));
   await boss.put('/api/monitor/sweep', { stores: { ...sw.settings.stores, ...others } });
   fresh(id);

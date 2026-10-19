@@ -66,7 +66,7 @@ stick.
 | JB Hi-Fi | Server first | JB Hi-Fi's search suggestions (Shopify): 10 products a search, with stock. "tcg" is added to each keyword ("pokemon tcg"), because "pokemon" alone finds plushies and games |
 | Toys"R"Us | Server first | Same as JB Hi-Fi (also a Shopify store) |
 | Trainer Town | Server first | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi). At most one read every 15 seconds: reading the whole collection every 5 seconds made Shopify answer **HTTP 429** (too many requests) |
-| Kmart | Server first | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online |
+| Kmart | Server first | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online. Its loop reads **every trading card it sells in one list** (its Trading Cards browse, newest first, 200 to a page — 177 products in October 2026): each product every few seconds, whatever the keywords. A VIP or drop watch's words are searched on their own, across the whole store |
 | The Games Cube | Server first | Its search pages (CrystalCommerce, made on the server): a tile per product with each option's stock and price, up to 4 pages of 25–30. Pre-orders are the ones in its "… Pre-Orders" categories. The cards it buys from customers (its buylist) are left out |
 | Gamerholic | Server first | Its **newest 100 products** (Shopify's product list, newest first, every option's stock), for every keyword: Gamerholic lists hundreds of products a day, so a new drop shows up there the moment it's listed. At most one read every 15 seconds |
 | BIG W | Server first: **an admin's browser** (the extension) stands in, as the server can't draw its products | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list — or, if the page has downloaded its products but not drawn them (pages in a minimised window may not), the product data it downloaded |
@@ -139,9 +139,11 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
  every store has its own loop                         (server/monitor/sweep.js)
    ┌──────────────────────────────────────────────────────────────────────┐
    │ next search: page 1 of each keyword in turn, then one later page      │
+   │   (Kmart: every trading card it sells, in one list, each time)        │
    │ fetch it (honest Mugibot headers)                                     │
    │ read every product: code, name, price, stock, link, picture          │──┐
-   │ wait ~5 s (±20%), or back off after a failure (×2 each time, ≤15 min) │  │
+   │ next one ~5 s (±20%) after this one began, or back off after a        │  │
+   │   failure (×2 each time, ≤15 min)                                     │  │
    └──────────────────────────────────────────────────────────────────────┘  │
  admins' browsers (extension) do the same for BIG W and EB Games ────────────┤
                                                                               ▼
@@ -212,15 +214,24 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
 
 ### Speed
 
-With the defaults (2 keywords, a search every 5 seconds per store):
+With the defaults (2 keywords, a search every 5 seconds per store), each search
+starts 5 s after the one before it *started*, so a store that's slow to answer
+isn't searched any less often (at least half a second between two searches):
 
+- Kmart: **every trading card it sells, in one request**: its Trading Cards
+  range from its search provider (177 products in October 2026, newest first),
+  every ~5 s, whatever the keywords. A restock of any card product there is
+  seen within about 5 s (about 10 s with a VIP watch at Kmart, which takes every
+  other search). VIP and drop watches' words still get their own searches,
+  across the whole store. If that list ever stops coming back as a list, each
+  keyword is searched instead for 15 minutes (the live log says so), then the
+  list again. A refusal is Kmart's, as for any search: it slows down.
 - Target: page 1 of each keyword every ~15 s, every page every ~1–2 minutes.
   Target's own CDN keeps a copy of a search page for a short while, so a
   change can take a minute or two to show up there. Mugibot doesn't try to
   get around their cache.
 - JB Hi-Fi and Toys"R"Us: each keyword every ~10 s.
 - Trainer Town: each keyword's whole collection every ~30 s (one read every 15 s).
-- Kmart: each keyword every ~10 s.
 - Amazon AU: each keyword every ~60 s (page 1), page 2 now and then.
 - The Games Cube: each keyword every ~10 s (page 1), the later pages now and then.
 - Gamerholic: its newest products every ~15 s.
@@ -233,6 +244,26 @@ With the defaults (2 keywords, a search every 5 seconds per store):
 
 More keywords means each one comes round a little less often. Each store has
 its own loop, so a slow store never holds up the others.
+
+**What goes first, the moment a search sees a drop:**
+
+1. Every armed member's **Auto-checkout run** is made, and their browsers are
+   told at once.
+2. The **channel alerts** go to Discord. Every channel whose rule wants the alert
+   gets it at once, ahead of any members' DMs still going out (Mugibot's line to
+   Discord puts a drop's channel post first). It never waits for the rest of the
+   search or for another product's alerts.
+3. The watching members' own **DMs**, webhooks and emails, five at a time.
+
+The dashboards' live feed has it before Discord does. **Alert speed** on the
+live monitor shows the latest alerts' time from the store's answer to your
+screen, and to Discord. Discord's limits are kept: a channel that has had its
+5 messages in 5 seconds waits for its reset (Discord says when), and a "slow
+down" on one request holds nothing else up.
+
+Kmart's figures give its stock state by state. When only some states have a
+product, its alert says which: "In stock in NSW, VIC only." When most of them
+have it, it names the ones that don't: "In stock everywhere except NT."
 
 ## 3. Setting it up
 
@@ -526,7 +557,7 @@ them is real: it comes from the sweeps as they happen. (Old `#watch` and
 | **Needs attention** | Only when a store keeps failing: which ones, and (admins) **↻ Reset all**. |
 | **Live sonar** | A sweeping radar with a blip per store; a blip rings each time that store answers a search (red when a search fails). |
 | **Stores** | One line per store: its colour, name and state (searching / slowed / retrying / off; admins also see waiting for an admin's browser), and underneath what it's doing ("Answered in 412 ms · next in 3 s") or what's wrong ("The store refused the search (HTTP 429)"). Click a store for the details: searches, last answer, next search, how long the store asked to wait (admins: where it's searched from). Each line has an **on/off switch** (below). Admins: **↻** on each line resets that store. |
-| **The four numbers** | Drops today (new drops and restocks in 24 h), available now, alert speed (from a store's answer to your screen), searches per hour (and failures). |
+| **The four numbers** | Drops today (new drops and restocks in 24 h), available now, alert speed (from a store's answer to your screen, and to Discord), searches per hour (and failures). |
 | **Live feed** | New drops and restocks as they're found, with the picture, price (and old price), **⚡ Buy** and a link to the store. **Show** switches to everything (each search, fault, setting change and product that drops out of the results), new drops, restocks, price changes, searches or problems. |
 | **Tracked products · My watchlist · My activity** | One card with three tabs (the dashboard remembers the last one you opened; members without a membership see My watchlist and My activity). **Tracked products**: every product the sweeps track, 25 to a page: picture, name, store, price (and old price), stock, **⚡ Buy**, and **☆** to add it to your watchlist (**★** when it's on it, **★ 🤖** when it's armed for Auto-checkout). 🆕 marks products found in the last 24 hours. Click a name for its price history. **My watchlist**: your own SKUs, 10 to a page, with **+ Add SKU**, the alerts for each and the 🤖 arming. **My activity**: your restocks, alerts and sign-ins, 20 to a page. All three page with buttons underneath (no endless scrolling); new activity appears at the top of page 1 as it happens. |
 

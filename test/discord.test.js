@@ -7,6 +7,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client, discordOpts, interactionKeys, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { commandDefinitions } from '../server/routes/discord.js';
+import { Discord } from '../server/discord.js';
 
 let env;
 let discord;
@@ -307,4 +308,45 @@ test('slash command definitions: store choices from the retailers, /restock admi
   assert.ok(store.choices.some((c) => c.value === 'bigw'));
   assert.ok(store.choices.length <= 25);
   assert.equal(defs.find((d) => d.name === 'restock').default_member_permissions, '32');
+});
+
+test("Discord's line: a drop's channel post goes ahead of members' DMs waiting their turn; a \"slow down\" wait holds no place in line; a route with no requests left waits for its reset instead of a 429", async () => {
+  const started = [];
+  const hits = new Map();
+  const fetchImpl = async (url) => {
+    const path = new URL(url).pathname.replace('/api/v10', '');
+    started.push(path);
+    hits.set(path, (hits.get(path) || 0) + 1);
+    // ("Slow down" the first time on each of these.)
+    if (path.startsWith('/channels/slow-') && hits.get(path) === 1) return new Response(JSON.stringify({ retry_after: 0.4 }), { status: 429, headers: { 'content-type': 'application/json' } });
+    await new Promise((r) => setTimeout(r, 40));
+    const headers = { 'content-type': 'application/json' };
+    // (A route with nothing left until its reset in a quarter of a second.)
+    if (path.startsWith('/channels/bucket/')) Object.assign(headers, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset-after': '0.25' });
+    return new Response(JSON.stringify({ id: 'm' }), { status: 200, headers });
+  };
+  const cfg = { discord: { apiBase: 'https://discord.test/api/v10', botToken: 'bot-token', guildId: 'guild-1' }, baseUrl: 'https://mugibot.test', appName: 'Mugibot', log: () => {} };
+  const d = new Discord({ cfg, repo: {}, fetchImpl });
+  // Twelve DMs (six at a time), then a drop's channel post: it goes next, not thirteenth.
+  const dms = Array.from({ length: 12 }, (_, i) => d.api('POST', `/channels/dm-${i}/messages`, { content: 'dm' }));
+  const urgent = d.post('chan-alerts', { content: 'drop' }, { urgent: true });
+  assert.ok((await Promise.all(dms)).every((x) => x.status === 200));
+  assert.equal(await urgent, true);
+  assert.equal(started.indexOf('/channels/chan-alerts/messages'), 6, `straight after the six already sending (${started.join(' ')})`);
+  assert.equal(d.active, 0, 'every place given back');
+  // Six told to slow down: their waits hold no place, so a seventh request goes straight away…
+  const slow = Array.from({ length: 6 }, (_, i) => d.api('POST', `/channels/slow-${i}/messages`, {}));
+  await new Promise((r) => setTimeout(r, 30));
+  const t0 = Date.now();
+  assert.equal((await d.api('POST', '/channels/other/messages', {})).status, 200);
+  assert.ok(Date.now() - t0 < 300, `not held up by their waits (${Date.now() - t0} ms)`);
+  // …and each goes once Discord said.
+  assert.ok((await Promise.all(slow)).every((x) => x.status === 200));
+  // No requests left on a route: the next one there waits for its reset — no 429 round trip on the way.
+  await d.api('POST', '/channels/bucket/messages', {});
+  const t1 = Date.now();
+  assert.equal((await d.api('POST', '/channels/bucket/messages', {})).status, 200);
+  assert.ok(Date.now() - t1 >= 200, `waited for the route's reset (${Date.now() - t1} ms)`);
+  assert.equal(hits.get('/channels/bucket/messages'), 2, 'two requests, none turned away');
+  assert.equal(d.active, 0);
 });
