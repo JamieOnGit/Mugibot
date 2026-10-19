@@ -25,6 +25,15 @@
 //             wired it up), its search JSON (only with its region header),
 //             "Go to Cart" → "Proceed to checkout" → the whole checkout in a
 //             Global-e-style frame from another address
+//   /pokebox, /goodgames, /collectiblemadness, /cherrycollectables  the same Shopify pages, with
+//             Shopify's address suggestions at checkout, its newest-products list and search suggestions
+//   /gamesmen  Magento-style (The Gamesmen): "Add to Cart" by AJAX ("You added … to your shopping
+//             cart"), the mini cart, its one-page checkout (shipping address, shipping methods table,
+//             "Credit card" with Braintree-style card fields, the terms box) → "CONFIRM AND PAY"; its
+//             search page (Cloudflare-style "Sorry, you have been blocked" for servers, when refuseServers)
+//   /gamesworld  WooCommerce-style (Games World): the product form, its add-to-cart link
+//             (?add-to-cart=<id>), "× Remove" cart links, its checkout (selectWoo drop-downs, "Deliver to
+//             a different address?" ticked, Stripe's card form or Link) → "Place order"; its product API
 //   /target   Target-style: "Add to basket" → an "Often Bought Together" pop-up
 //             offering clothes (closed with its ✕) → /checkout → its one-page
 //             checkout at /spc/order: guest → home delivery → card → "Place order";
@@ -64,10 +73,18 @@ const SHOPS = {
   target: { name: 'Target (dummy)', color: '#cc0000' },
   amazon: { name: 'Amazon AU (dummy)', color: '#232f3e' },
   citybeach: { name: 'City Beach (dummy)', color: '#111111' },
+  pokebox: { name: 'Pokébox (dummy Shopify)', color: '#d97706' },
+  goodgames: { name: 'Good Games (dummy Shopify)', color: '#15803d' },
+  collectiblemadness: { name: 'Collectible Madness (dummy Shopify)', color: '#7c3aed' },
+  cherrycollectables: { name: 'Cherry Collectables (dummy Shopify)', color: '#be123c' },
+  gamesmen: { name: 'The Gamesmen (dummy Magento)', color: '#0f4c81' },
+  gamesworld: { name: 'Games World (dummy WooCommerce)', color: '#7f1d1d' },
 };
 // The Shopify-style shops: the same product, cart and checkout pages.
-const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic', 'toysrus']);
-const SHOP_RE = /^\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|toysrus|thegamescube|pokemoncenter|pbandai|target|amazon|citybeach)(\/.*|$)/;
+const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic', 'toysrus', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']);
+// (The card shops added in Oct 2026: Shopify's address suggestions as you type, at their checkout.)
+const SUGGESTS = new Set(['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']);
+const SHOP_RE = new RegExp(`^/(${Object.keys(SHOPS).join('|')})(/.*|$)`);
 const LD_AVAIL = { in_stock: 'InStock', preorder: 'PreOrder', out_of_stock: 'OutOfStock' };
 // City Beach's marketing pop-up (Emarsys), over the product page a moment after it opens.
 const CITYBEACH_POPUP = `<div id="wps_popup" class="wps-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:900;align-items:center;justify-content:center">
@@ -111,10 +128,21 @@ export function defaultShops() {
       addNeedsLoad: 0,
       // What the bag page showed each time it was opened (number of items in it).
       bagViews: [],
+      // Clear cart: how many things were taken out of the bag (by its own Remove buttons, or Shopify's
+      // /cart/clear.js: cleared), "Undo" pressed (Target), and Amazon's "Saved for later" list (saved —
+      // moved there: savedMoves; deleted from it: savedDeletes). removeFails: its Remove does nothing;
+      // noAjaxCart: a Shopify shop without its cart API (/cart.js, /cart/clear.js).
+      // removeDelayMs: each Remove takes this long.
+      removed: 0, cleared: 0, undos: 0, saved: [], savedMoves: 0, savedDeletes: 0, removeFails: false, noAjaxCart: false, removeDelayMs: 0,
       // Its checkpoint (Shopify's hCaptcha page) and its virtual queue: see the top of this file.
       checkpoint: { on: false, shown: 0, solved: 0, botClicks: 0, passes: [] },
       // A notice across the top of its product pages ("Big launches use a virtual queue…").
       banner: '',
+      // Shopify: "Use shipping address as billing address" comes unticked. The Gamesmen: "I have a
+      // different billing address" comes ticked (billingTicked), no "Standard" shipping (noStandard),
+      // servers refused like its Cloudflare (refuseServers). Games World: "Deliver to a different
+      // address?" comes ticked (shipToDifferent), Stripe's Link connected (link: the saved card, Confirm).
+      billingUnticked: false, billingTicked: false, noStandard: false, refuseServers: false, shipToDifferent: id === 'gamesworld', link: false,
       // (log: every request while it's on — { id, at, path, what } — to show nothing asked again too soon.)
       queue: { on: false, admitAfterMs: 4000, refreshMs: 1500, tooSoonMs: 700, wait: 23, lateMs: 0, places: {}, admittedIds: [], kicks: 0, shown: 0, admitted: 0, cookieless: 0, log: [] },
     };
@@ -168,7 +196,17 @@ function bagLink(shop, count) {
   const label = count == null ? word : `${word}, ${count} item${count === 1 ? '' : 's'}`;
   // CrystalCommerce: the cart is at /checkout/cart, its count in .cart-count (0 included).
   if (shop === 'thegamescube') return `<a href="/thegamescube/checkout/cart" id="bag-link" class="cart-details">Cart <span class="cart-count">${count || 0}</span></a>`;
-  return `<a href="${shop ? `/${shop}` : ''}/cart" id="bag-link" aria-label="${label}">${word}${count ? ` <span class="bag-count">${count}</span>` : ''}</a>`;
+  // Magento's mini cart (The Gamesmen): "My Cart" with its count, and the block it opens after an add.
+  if (shop === 'gamesmen') {
+    return `<span class="minicart-wrapper"><style>.block-minicart{display:none;position:absolute;right:20px;top:44px;background:#fff;color:#222;padding:14px;box-shadow:0 2px 10px rgba(0,0,0,.3);z-index:50}.block-minicart.open{display:block}.counter.qty.empty{display:none}</style>
+      <a class="action showcart" href="/gamesmen/checkout/cart/" id="bag-link" data-bind="scope: 'minicart_content'"><span class="text">My Cart</span> <span class="counter qty${count ? '' : ' empty'}"><span class="counter-number">${count || ''}</span></span></a>
+      <div id="minicart" class="block block-minicart" role="dialog"><div class="block-content"><p class="items-total"><span class="count">${count || 0}</span> Item(s) in Cart</p>
+        <button type="button" id="top-cart-btn-checkout" class="action primary checkout" onclick="location.href='/gamesmen/checkout/'">Proceed to Checkout</button>
+        <a class="action viewcart" href="/gamesmen/checkout/cart/"><span>View and Edit Cart</span></a></div></div></span>`;
+  }
+  // (Target's bag is its basket; Amazon's at /gp/cart/view.html.)
+  const at = shop === 'target' ? '/basket' : shop === 'amazon' ? '/gp/cart/view.html' : '/cart';
+  return `<a href="${shop ? `/${shop}` : ''}${at}" id="bag-link" aria-label="${label}">${word}${count ? ` <span class="bag-count">${count}</span>` : ''}</a>`;
 }
 
 function parseBody(req) {
@@ -270,10 +308,14 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     if (SHOPIFY.has(shop)) {
       return page(shop, `${p.name} | ${SHOPS[shop].name}`, `${shopOf(shop).banner ? `<div class="site-banner" role="note">${esc(shopOf(shop).banner)}</div>` : ''}<div class="product-detail"><h1>${esc(p.name)}</h1><div class="price">$${p.price.toFixed(2)}</div>
         <form action="/${shop}/cart/add" method="get"><input type="hidden" name="id" value="${p.id}">${qtyControl(p)}
-        <button type="submit" name="add" ${orderable ? '' : 'disabled'}>${labels[p.status]}</button></form></div>`, { head: ldFor(p, shop) });
+        <button type="submit" name="add" ${orderable ? '' : 'disabled'}>${esc((orderable && shopOf(shop).addLabel) || labels[p.status])}</button></form></div>`, { head: ldFor(p, shop) });
     }
     if (shop === 'thegamescube') return crystalProductPage(p);
-    const button = orderable ? `<button type="button" id="atc" class="add-to-cart">${labels[p.status]}</button>` : `<button type="button" class="add-to-cart" disabled>${labels[p.status]}</button>`;
+    if (shop === 'gamesmen') return magentoProductPage(p);
+    if (shop === 'gamesworld') return wooProductPage(p);
+    // (addLabel: its buy button in other words — "Buy Now", "Add to Basket"…; buyNowToo: a "Buy Now" beside it, counted when pressed.)
+    const words = (orderable && shopOf(shop).addLabel) || labels[p.status];
+    const button = orderable ? `<button type="button" id="atc" class="add-to-cart">${esc(words)}</button>${shopOf(shop).buyNowToo ? ' <button type="button" id="buy-now" class="buy-now" onclick="fetch(\'/__admin/buynow?shop=' + shop + '\', { method: \'POST\' })">Buy Now</button>' : ''}` : `<button type="button" class="add-to-cart" disabled>${labels[p.status]}</button>`;
     const drawer = {
       kmart: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to bag"><h3>Added to bag</h3><p id="drawer-msg"></p><a class="btn" href="/kmart/checkout">Checkout</a> <a href="/kmart/cart">View bag</a></div>',
       bigw: '<div class="drawer added-to-cart-drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/bigw/cart">View cart</a> <a href="/bigw/">Continue shopping</a></div>',
@@ -469,14 +511,200 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       </script>`);
   }
 
+  // Each shop's bag, emptied the way its real one is (Clear cart's tests — each a different layout):
+  //   kmart          a "Remove" button per line; its page's code draws the list again (no new page)
+  //   bigw           "Remove" → "Remove … from your cart?" → Remove
+  //   ebgames        a bin icon with no words ("Remove item" for screen readers) posting a form: a new page
+  //   jbhifi, gamerholic, pokebox, goodgames, collectiblemadness, cherrycollectables  Shopify's "Remove" link
+  //                  (/cart/change?line=1&quantity=0) — and its cart API (/cart.js, /cart/clear.js)
+  //   gamesmen       Magento's "Remove item" (a data-post link: a form posted, a new page) — see magentoCart
+  //   gamesworld     WooCommerce's × "Remove … from cart" (a link: a new page, "removed. Undo?") — see wooCart
+  //   toysrus        Shopify (Dawn): an icon link, "Remove <name>" for screen readers
+  //   trainertown    an ✕ button "Remove <name>"; the page's code asks /cart/change.js
+  //   thegamescube   a "Remove" link with the browser's own "Are you sure?" box (confirm())
+  //   pokemoncenter  "Remove" → "Removing…" (the button greyed out a moment) → gone, "Item removed"
+  //   pbandai        "Delete" → "Are you sure you want to delete this item from your cart?" → OK
+  //   target         "Remove" → the line says it's been removed, with "Undo" (never pressed)
+  //   amazon         "Delete" (and "Save for later", never pressed), with its "Saved for later" list below (left alone)
+  //   citybeach      an × "Remove product <name>" → "Remove Product? Are you sure…" → Yes
+  // A shop's removeFails: its Remove does nothing (Clear cart says so).
+  function bagLine(shop, c, i, qty) {
+    const p = find(shop, c.sku);
+    const name = esc(c.name);
+    const sku = esc(c.sku);
+    const link = `<a href="${p ? pathFor(shop, p) : '#'}">${name}</a>`;
+    const vid = p ? p.id : 0;
+    // (A line on special: some stores mark the whole line as having a discount.)
+    const li = (extra) => `<li class="line-item${c.discount ? ' cart-item--has-discount' : ''}" data-sku="${sku}"><div class="line-name">${link}</div>${c.discount ? '<span class="discount-badge">Save $5</span>' : ''}<div class="line-qty">Qty ${qty}</div>${extra}</li>`;
+    switch (shop) {
+      case 'kmart': return li(`<button type="button" class="remove-line" data-remove="${sku}" aria-label="Remove ${name} from bag">Remove</button>`);
+      case 'bigw': return li(`<button type="button" class="link-btn" data-remove="${sku}" data-name="${name}">Remove</button>`);
+      case 'ebgames': return li(`<form method="post" action="/ebgames/cart/remove" class="remove-form"><input type="hidden" name="sku" value="${sku}"><button type="submit" class="remove-item" aria-label="Remove item" title="Remove item" style="background:none;color:#d22;padding:4px"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 5h12M7 5V3h4v2M5 5l1 11h6l1-11" stroke="currentColor" fill="none"/></svg></button></form>`);
+      case 'jbhifi': case 'gamerholic': case 'pokebox': case 'goodgames': case 'collectiblemadness': case 'cherrycollectables': return li(`<a href="/${shop}/cart/change?line=${i + 1}&amp;quantity=0" class="cart__remove">Remove</a>`);
+      case 'toysrus': return li(`<cart-remove-button id="Remove-${i + 1}" data-index="${i + 1}"><a href="/toysrus/cart/change?id=${vid}&amp;quantity=0" class="button button--tertiary" aria-label="Remove ${name}" style="display:inline-block;padding:4px"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10" stroke="currentColor" fill="none"/></svg></a></cart-remove-button>`);
+      case 'trainertown': return li(`<button type="button" class="cart-item__remove" data-variant="${vid}" aria-label="Remove ${name}">✕</button>`);
+      case 'thegamescube': return `<tr class="line-item" data-sku="${sku}"><td>${link}</td><td>Qty ${qty}</td><td><a href="/thegamescube/checkout/cart/remove/${vid}" class="remove" data-confirm="Are you sure you want to remove this item from your cart?">Remove</a></td></tr>`;
+      case 'pokemoncenter': return li(`<button type="button" class="remove-button" data-remove="${sku}">Remove</button>`);
+      case 'pbandai': return li(`<button type="button" class="cart-item__delete" data-remove="${sku}">Delete</button>`);
+      case 'target': return li(`<a href="#" role="button" class="basket-item__remove" data-remove="${sku}" data-name="${name}">Remove</a>`);
+      case 'citybeach': return li(`<button type="button" class="remove-btn remove-product btn btn-light" data-toggle="modal" data-target="#removeProductModal" data-remove="${sku}" data-name="${name}" aria-label="Remove product ${name}" title="Remove"><span aria-hidden="true">×</span></button>`);
+      default: return li('');
+    }
+  }
+
+  // The bag's own code (each shop's way of taking a thing out), and the confirm boxes some ask first.
+  function bagScript(shop) {
+    const word = shop === 'kmart' ? 'Bag' : 'Cart';
+    const common = `
+      const word = ${JSON.stringify(word)};
+      // The header's bag link shows how many are in it.
+      function setCount(n) {
+        const b = document.getElementById('bag-link');
+        if (!b) return;
+        b.setAttribute('aria-label', word + ', ' + n + ' item' + (n === 1 ? '' : 's'));
+        b.innerHTML = word + (n ? ' <span class="bag-count">' + n + '</span>' : '');
+      }
+      async function removeLine(sku) {
+        const r = await fetch('/${shop}/api/cart/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku }) });
+        return r.json();
+      }
+      // The line gone; nothing left: the bag says it's empty.
+      function gone(sku, d, emptyText) {
+        document.querySelector('.line-item[data-sku="' + CSS.escape(sku) + '"]')?.remove();
+        setCount(d.items);
+        if (!document.querySelector('.line-item')) {
+          document.querySelector('ul.lines').innerHTML = '<li class="empty-msg">' + emptyText + '</li>';
+          document.querySelectorAll('.bag-checkout').forEach((x) => x.remove());
+        }
+      }`;
+    const per = {
+      // React-style: the whole list drawn again from what the cart says (every line a new element).
+      kmart: `
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (!b) return;
+          await new Promise((r) => setTimeout(r, 300));
+          const d = await removeLine(b.dataset.remove);
+          if (!d.ok) return;
+          setCount(d.items);
+          const ul = document.querySelector('ul.lines');
+          ul.innerHTML = d.cart.length ? d.cart.map((c) => '<li class="line-item" data-sku="' + c.sku + '"><div class="line-name"><a href="#">' + c.name.replace(/</g, '&lt;') + '</a></div><div class="line-qty">Qty ' + c.qty + '</div><button type="button" class="remove-line" data-remove="' + c.sku + '" aria-label="Remove ' + c.name.replace(/"/g, '&quot;') + ' from bag">Remove</button></li>').join('') : '<li class="empty-msg">Your bag is empty</li>';
+          if (!d.cart.length) document.querySelectorAll('.bag-checkout').forEach((x) => x.remove());
+        });`,
+      bigw: `
+        let pending = null;
+        const modal = document.getElementById('confirm-remove');
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (b) { pending = b.dataset.remove; modal.querySelector('.what').textContent = 'Remove ' + b.dataset.name + ' from your cart?'; modal.style.display = 'block'; return; }
+          if (e.target.closest('#cr-cancel')) { modal.style.display = 'none'; pending = null; return; }
+          if (e.target.closest('#cr-yes') && pending) {
+            const sku = pending; pending = null;
+            modal.style.display = 'none';
+            const d = await removeLine(sku);
+            if (d.ok) gone(sku, d, 'Your cart is empty');
+          }
+        });`,
+      trainertown: `
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('.cart-item__remove');
+          if (!b) return;
+          const r = await fetch('/trainertown/cart/change.js', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: Number(b.dataset.variant), quantity: 0 }) });
+          const d = await r.json();
+          if (d.item_count === undefined) return;
+          gone(b.closest('.line-item').dataset.sku, { items: d.item_count }, 'Your cart is empty');
+        });`,
+      // Rails-style: a link with data-confirm asks the browser's own confirm() box first.
+      thegamescube: `
+        document.addEventListener('click', (e) => {
+          const a = e.target.closest('a[data-confirm]');
+          if (a && !window.confirm(a.dataset.confirm)) { e.preventDefault(); window.__declined = (window.__declined || 0) + 1; }
+        });`,
+      pokemoncenter: `
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (!b || b.disabled) return;
+          b.disabled = true; b.textContent = 'Removing…';
+          await new Promise((r) => setTimeout(r, 700));
+          const d = await removeLine(b.dataset.remove);
+          if (!d.ok) { b.disabled = false; b.textContent = 'Remove'; return; }
+          gone(b.dataset.remove, d, 'Your cart is empty');
+          const t = document.createElement('div'); t.setAttribute('role', 'status'); t.textContent = 'Item removed from your cart'; document.querySelector('main').append(t);
+        });`,
+      pbandai: `
+        let pending = null;
+        const modal = document.getElementById('pb-confirm');
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (b) { pending = b.dataset.remove; modal.style.display = 'flex'; return; }
+          if (e.target.closest('#pb-cancel')) { modal.style.display = 'none'; pending = null; return; }
+          if (e.target.closest('#pb-ok') && pending) {
+            const sku = pending; pending = null;
+            modal.style.display = 'none';
+            await new Promise((r) => setTimeout(r, 250));
+            const d = await removeLine(sku);
+            if (d.ok) gone(sku, d, 'There are no items in your cart.');
+          }
+        });`,
+      // The line stays, saying it's been removed — with "Undo" (the basket says it's empty on its next page).
+      target: `
+        document.addEventListener('click', async (e) => {
+          const u = e.target.closest('[data-undo]');
+          if (u) {
+            const r = await fetch('/target/api/cart/undo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: u.dataset.undo }) });
+            const d = await r.json();
+            setCount(d.items);
+            return;
+          }
+          const b = e.target.closest('[data-remove]');
+          if (!b) return;
+          e.preventDefault();
+          const d = await removeLine(b.dataset.remove);
+          if (!d.ok) return;
+          const line = b.closest('.line-item');
+          line.className = 'line-removed';
+          line.innerHTML = '<span>' + b.dataset.name + ' has been removed from your basket.</span> <button type="button" data-undo="' + b.dataset.remove + '">Undo</button>';
+          setCount(d.items);
+        });`,
+      citybeach: `
+        let pending = null;
+        const modal = document.getElementById('removeProductModal');
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-remove]');
+          if (b) { pending = b.dataset.remove; modal.querySelector('.product-to-remove').textContent = b.dataset.name; modal.style.display = 'block'; return; }
+          if (e.target.closest('[data-dismiss="modal"]')) { modal.style.display = 'none'; pending = null; return; }
+          if (e.target.closest('.cart-delete-confirmation-btn') && pending) {
+            const sku = pending; pending = null;
+            modal.style.display = 'none';
+            const d = await removeLine(sku);
+            if (d.ok) gone(sku, d, 'Your Shopping Bag is Empty');
+          }
+        });`,
+    };
+    return common + (per[shop] || '');
+  }
+
+  // The confirm boxes (hidden until a Remove asks).
+  const BAG_MODALS = {
+    bigw: '<div class="drawer modal" id="confirm-remove" role="dialog" aria-modal="true" aria-labelledby="cr-title" style="display:none"><h3 id="cr-title">Remove item</h3><p class="what"></p><button type="button" id="cr-cancel">Cancel</button> <button type="button" id="cr-yes">Remove</button></div>',
+    pbandai: '<div class="modal-overlay" id="pb-confirm" role="dialog" aria-modal="true" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center"><div class="modal" style="background:#fff;padding:20px"><p>Are you sure you want to delete this item from your cart?</p><button type="button" id="pb-cancel">Cancel</button> <button type="button" id="pb-ok">OK</button></div></div>',
+    citybeach: '<div class="modal fade" id="removeProductModal" role="dialog" style="display:none;position:fixed;top:20%;left:20%;right:20%;background:#fff;padding:20px;box-shadow:0 4px 20px rgba(0,0,0,.3)"><div class="modal-content"><h2 class="modal-title">Remove Product?</h2><p>Are you sure you want to remove the following product from the cart?</p><p class="product-to-remove"></p><button type="button" class="btn btn-outline-primary" data-dismiss="modal">Cancel</button> <button type="button" class="btn btn-primary cart-delete-confirmation-btn">Yes</button></div></div>',
+  };
+  const EMPTY_BAG = {
+    kmart: 'Your bag is empty', ebgames: 'Your cart is currently empty.', pbandai: 'There are no items in your cart.', target: 'Your basket is empty',
+    citybeach: 'Your Shopping Bag is Empty',
+  };
+
   function cartPage(shop) {
-    const cart = shopOf(shop).cart;
-    const rows = cart.map((c) => {
+    if (shop === 'amazon') return amazonCart();
+    const S = shopOf(shop);
+    const cart = S.cart;
+    const rows = cart.map((c, i) => {
       const p = find(shop, c.sku);
       const max = Number(p && p.maxQty) || 10;
-      const opts = Array.from({ length: max }, (_, i) => `<option value="${i + 1}" ${i + 1 === c.qty ? 'selected' : ''}>${i + 1}</option>`).join('');
-      const qty = SHOPIFY.has(shop) ? `<input type="number" name="updates[]" aria-label="Quantity" data-sku="${c.sku}" value="${c.qty}" min="1" style="width:60px">` : `<select aria-label="Quantity" data-sku="${c.sku}">${opts}</select>`;
-      return `<li class="line-item"><div class="line-name"><a href="${p ? pathFor(shop, p) : '#'}">${esc(c.name)}</a></div><div class="line-qty">Qty ${qty}</div></li>`;
+      const opts = Array.from({ length: max }, (_, j) => `<option value="${j + 1}" ${j + 1 === c.qty ? 'selected' : ''}>${j + 1}</option>`).join('');
+      const qty = SHOPIFY.has(shop) ? `<input type="number" name="updates[]" aria-label="Quantity" data-qty="${c.sku}" value="${c.qty}" min="1" style="width:60px">` : `<select aria-label="Quantity" data-qty="${c.sku}">${opts}</select>`;
+      return bagLine(shop, c, i, qty);
     }).join('');
     let go = {
       kmart: '<a class="btn" href="/kmart/checkout">Checkout</a>', bigw: '<button type="button" id="to-checkout">Proceed to checkout</button>', ebgames: '<a class="btn" href="/ebgames/checkout">Secure Checkout</a>', jbhifi: '<button type="button" id="to-checkout" name="checkout">Check out</button>',
@@ -484,12 +712,64 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       target: '<a class="btn" href="/target/checkout">Checkout</a>', citybeach: '<a class="btn checkout-btn" href="/citybeach/checkout">Checkout</a>',
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     // (Its Checkout button in other words: bagButton.)
-    if (go && shopOf(shop).bagButton) go = go.replace(/>([^<]*)<\/(a|button)>$/, `>${esc(shopOf(shop).bagButton)}</$2>`);
-    return page(shop, shop === 'kmart' ? 'Your bag' : 'Your cart', `<h1>${shop === 'kmart' ? 'Your bag' : 'Your cart'}</h1><ul class="lines">${rows || `<li>Your ${shop === 'kmart' ? 'bag' : 'cart'} is empty</li>`}</ul><a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length ? go : ''}
+    if (go && S.bagButton) go = go.replace(/>([^<]*)<\/(a|button)>$/, `>${esc(S.bagButton)}</$2>`);
+    const title = shop === 'kmart' ? 'Your bag' : shop === 'target' ? 'Your basket' : 'Your cart';
+    const emptyText = EMPTY_BAG[shop] || 'Your cart is empty';
+    const list = shop === 'thegamescube'
+      ? (cart.length ? `<table class="cart-table"><tbody>${rows}</tbody></table>` : `<ul class="lines"><li class="empty-msg">${emptyText}</li></ul>`)
+      : `<ul class="lines">${rows || `<li class="empty-msg">${emptyText}</li>`}</ul>`;
+    return page(shop, title, `<h1>${title}</h1>${list}<a href="/${shop}/" class="continue">Continue shopping</a> ${cart.length && go ? `<span class="bag-checkout">${go}</span>` : ''}
+      ${BAG_MODALS[shop] || ''}
       <script>
-        for (const s of document.querySelectorAll('[data-sku]')) s.addEventListener('change', () => fetch('/${shop}/api/cart/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: s.dataset.sku, qty: Number(s.value) }) }));
+        for (const s of document.querySelectorAll('[data-qty]')) s.addEventListener('change', () => fetch('/${shop}/api/cart/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: s.dataset.qty, qty: Number(s.value) }) }));
         document.getElementById('to-checkout')?.addEventListener('click', () => { location.href = '${SHOPIFY.has(shop) ? `/${shop}/checkouts/c/abc123` : `/${shop}/checkout`}'; });
-      </script>`);
+        ${bagScript(shop)}
+      </script>`, { bagCount: bagCount(shop) });
+  }
+
+  // Amazon's cart (/gp/cart/view.html): what's in it, each with "Delete" and "Save for later" — and the
+  // "Saved for later" list under it (Clear cart leaves that alone).
+  function amazonCart() {
+    const S = shopOf('amazon');
+    const qtySel = (c) => `<select name="quantity" aria-label="Quantity" data-asin="${esc(c.sku)}"><option value="0">0 (Delete)</option>${Array.from({ length: 10 }, (_, j) => `<option value="${j + 1}" ${j + 1 === c.qty ? 'selected' : ''}>${j + 1}</option>`).join('')}</select>`;
+    const line = (c) => `<div class="sc-list-item" data-asin="${esc(c.sku)}" data-itemtype="active"><a class="sc-product-link" href="/amazon/dp/${esc(c.sku)}">${esc(c.name)}</a> <span class="sc-price">$${c.price.toFixed(2)}</span>
+      ${qtySel(c)} <span class="a-declarative"><input type="submit" value="Delete" data-action="delete" aria-label="Delete ${esc(c.name)}" class="a-color-link" data-asin="${esc(c.sku)}"></span>
+      <span class="a-declarative"><input type="submit" value="Save for later" data-action="save-for-later" aria-label="Save for later ${esc(c.name)}" data-asin="${esc(c.sku)}"></span></div>`;
+    const saved = (x) => `<div class="sc-list-item" data-asin="${esc(x.sku)}" data-itemtype="saved"><a class="sc-product-link" href="/amazon/dp/${esc(x.sku)}">${esc(x.name)}</a>
+      <span class="a-declarative"><input type="submit" value="Delete" data-action="delete-saved" aria-label="Delete ${esc(x.name)}" data-asin="${esc(x.sku)}"></span>
+      <span class="a-declarative"><input type="submit" value="Move to cart" data-action="move-to-cart" data-asin="${esc(x.sku)}"></span></div>`;
+    return page('amazon', 'Amazon.com.au Shopping Cart', `<div id="sc-active-cart" data-name="Active Items" class="sc-cart"><h1>Shopping Cart</h1>
+      <div id="sc-lines">${S.cart.map(line).join('') || '<h2 class="sc-empty">Your Amazon Cart is empty.</h2>'}</div>
+      <div class="sc-subtotal" id="sc-subtotal">Subtotal (${bagCount('amazon')} items): $${total('amazon').toFixed(2)}</div>
+      ${S.cart.length ? '<a class="a-button" id="sc-buy-box-ptc-button" href="/amazon/checkout/p/p-123/spc">Proceed to checkout</a>' : ''}</div>
+      <div id="sc-saved-cart" data-name="Saved Items"><h2>Saved for later (${S.saved.length} item${S.saved.length === 1 ? '' : 's'})</h2>${S.saved.map(saved).join('')}</div>
+      <script>
+        async function post(path, sku) { const r = await fetch('/amazon/gp/cart/' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku }) }); return r.json(); }
+        function after(d) {
+          const b = document.getElementById('bag-link');
+          if (b) { b.setAttribute('aria-label', 'Cart, ' + d.items + ' items'); b.innerHTML = 'Cart' + (d.items ? ' <span class="bag-count">' + d.items + '</span>' : ''); }
+          document.getElementById('sc-subtotal').textContent = 'Subtotal (' + d.items + ' items): $' + d.total.toFixed(2);
+          if (!document.querySelector('#sc-lines [data-itemtype="active"]')) { document.getElementById('sc-lines').insertAdjacentHTML('beforeend', '<h2 class="sc-empty">Your Amazon Cart is empty.</h2>'); document.getElementById('sc-buy-box-ptc-button')?.remove(); }
+        }
+        async function del(sku) {
+          const line = document.querySelector('#sc-lines [data-asin="' + CSS.escape(sku) + '"]');
+          const name = line.querySelector('.sc-product-link').textContent;
+          const d = await post('ajax-delete', sku);
+          if (!d.ok) return;
+          line.outerHTML = '<div class="sc-list-item-removed-msg" role="status">' + name.replace(/</g, '&lt;') + ' was removed from Shopping Cart.</div>';
+          after(d);
+        }
+        document.addEventListener('click', async (e) => {
+          const b = e.target.closest('input[data-action]');
+          if (!b) return;
+          e.preventDefault();
+          if (b.dataset.action === 'delete') return del(b.dataset.asin);
+          if (b.dataset.action === 'save-for-later') { await post('save-for-later', b.dataset.asin); location.reload(); return; }
+          if (b.dataset.action === 'delete-saved') { await post('delete-saved', b.dataset.asin); b.closest('.sc-list-item').remove(); return; }
+          if (b.dataset.action === 'move-to-cart') { await post('move-to-cart', b.dataset.asin); location.reload(); }
+        });
+        for (const s of document.querySelectorAll('#sc-lines select[name=quantity]')) s.addEventListener('change', () => { if (s.value === '0') del(s.dataset.asin); });
+      </script>`, { bagCount: bagCount('amazon') });
   }
 
   // -------------------------------------------------------------------- checkouts
@@ -841,14 +1121,16 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const card = shopPay
       ? '<div class="shop-pay"><b>Shop Pay</b> <span>Visa •••• 4242</span> <span class="muted">Expires 07/29</span></div>'
       : `<label><input type="radio" name="payment" value="card" checked> Credit card</label>${field('number', 'Card number')}${field('expiry', 'Expiration date')}${field('verification_value', 'Security code')}${shop === 'gamerholic' ? '' : field('name', 'Name on card')}
-         <label><input type="checkbox" name="billingSame" checked> Use shipping address as billing address</label>`;
+         <label><input type="checkbox" name="billingSame"${shopOf(shop).billingUnticked ? '' : ' checked'}> Use shipping address as billing address</label>
+         <div id="billing-address"${shopOf(shop).billingUnticked ? '' : ' hidden'}><h4>Billing address</h4><input name="billingAddress1" placeholder="Billing address"></div>`;
     return `<h1>Checkout</h1><form method="post" id="sf">
         <h3>Contact</h3><input name="email" type="email" autocomplete="email" placeholder="Email" required${v('email')}>
         <h3>Delivery</h3>
         <select name="countryCode" autocomplete="shipping country"><option value="AU" selected>Australia</option><option value="NZ">New Zealand</option></select>
         <input name="firstName" autocomplete="shipping given-name" placeholder="First name" required${v('firstName')}>
         <input name="lastName" autocomplete="shipping family-name" placeholder="Last name" required${v('lastName')}>
-        <input name="address1" autocomplete="shipping address-line1" placeholder="Address" required role="combobox" aria-autocomplete="list"${v('address1')}>
+        <input name="address1" autocomplete="shipping address-line1" placeholder="Address" required role="combobox" aria-autocomplete="list" aria-controls="address1-options"${v('address1')}>
+        ${SUGGESTS.has(shop) ? '<ul id="address1-options" role="listbox" class="address-suggestions" hidden style="position:absolute;background:#fff;border:1px solid #ccc;margin:0;padding:0;list-style:none;z-index:5;width:320px"></ul>' : ''}
         <input name="address2" autocomplete="shipping address-line2" placeholder="Apartment, suite, etc. (optional)">
         <input name="city" autocomplete="shipping address-level2" placeholder="Suburb" required${v('city')}>
         <select name="zone" autocomplete="shipping address-level1" required><option value="" disabled ${P.zone ? '' : 'selected'}>State/territory</option><option value="ACT">Australian Capital Territory</option><option value="NSW" ${P.zone === 'NSW' ? 'selected' : ''}>New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option></select>
@@ -865,6 +1147,27 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         const map = { number: 'card_number', expiry: 'card_expiry', verification_value: 'card_cvv', name: 'card_name' };
         addEventListener('message', (e) => { if (e.data && e.data.cardField && map[e.data.cardField]) document.querySelector('[name=' + map[e.data.cardField] + ']').value = e.data.value; });
         for (const r of document.querySelectorAll('input[name=shipping]')) r.addEventListener('change', () => { document.getElementById('tot').textContent = (${total(shop)} + (r.value === 'express' ? 15 : 10)).toFixed(2); });
+        document.querySelector('[name=billingSame]')?.addEventListener('change', (e) => { document.getElementById('billing-address').hidden = e.target.checked; });
+        // Shopify's address suggestions (as you type the address): picking one fills in the suburb, state/territory and postcode.
+        const list = document.getElementById('address1-options');
+        if (list) {
+          const a1 = document.querySelector('[name=address1]');
+          a1.addEventListener('input', () => {
+            const q = a1.value.trim();
+            if (q.length < 3) { list.hidden = true; return; }
+            list.innerHTML = [['Sydney', 'NSW', '2000'], ['Melbourne', 'VIC', '3000']].map(([c, z, pc]) => '<li role="option" data-city="' + c + '" data-zone="' + z + '" data-pc="' + pc + '" style="padding:6px;cursor:pointer">' + q.replace(/</g, '&lt;') + ', ' + c + ' ' + z + ', Australia</li>').join('');
+            list.hidden = false;
+          });
+          list.addEventListener('mousedown', (e) => {
+            const o = e.target.closest('[role=option]');
+            if (!o) return;
+            e.preventDefault();
+            document.querySelector('[name=city]').value = o.dataset.city; document.querySelector('[name=zone]').value = o.dataset.zone; document.querySelector('[name=postalCode]').value = o.dataset.pc;
+            window.__picked = (window.__picked || 0) + 1;
+            list.hidden = true;
+          });
+          a1.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
+        }
       </script>`;
   }
 
@@ -923,6 +1226,292 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           location.href = '/bigw/checkout/confirmation';
         });
       </script>`;
+  }
+
+  // -------------------------------------------------------------------- The Gamesmen (Magento)
+  // Its product page, as Magento's Luma theme draws one: the price box, its item code, "Add to Cart"
+  // (or "Pre-order") posting to the cart by AJAX — then "You added … to your shopping cart.", the mini
+  // cart's count up and its block open with "Proceed to Checkout". Sold out: "Out of stock", no button.
+  function magentoProductPage(p) {
+    const orderable = p.status === 'in_stock' || p.status === 'preorder';
+    const label = p.status === 'preorder' ? 'Pre-order' : 'Add to Cart';
+    const other = shopOf('gamesmen').products.find((x) => x.sku !== p.sku && x.listed);
+    return page('gamesmen', `${p.name} | The Gamesmen`, `<div class="page messages"><div id="mg-messages" role="alert" class="messages"></div></div>
+      <div class="product-info-main"><h1 class="page-title"><span class="base" data-ui-id="page-title-wrapper">${esc(p.name)}</span></h1>
+        <div class="price-box price-final_price" data-role="priceBox" data-product-id="${p.id}"><span class="price-container"><span data-price-amount="${p.price}" data-price-type="finalPrice" class="price-wrapper"><span class="price">$${p.price.toFixed(2)}</span></span></span></div>
+        <div class="product attribute sku"><strong class="type">Item Code:</strong> <div class="value" itemprop="sku">${esc(p.code || p.id)}</div></div>
+        <div class="stock ${orderable ? 'available' : 'unavailable'}" title="Availability"><span>${orderable ? (p.status === 'preorder' ? 'Pre-order' : 'In stock') : 'Out of stock'}</span></div>
+        ${orderable ? `<form data-product-sku="${esc(p.code || '')}" action="/gamesmen/checkout/cart/add/" method="post" id="product_addtocart_form"><input type="hidden" name="product" value="${p.id}">
+          <div class="field qty"><label class="label" for="qty"><span>Qty</span></label> <input type="number" name="qty" id="qty" min="0" value="1" title="Qty" class="input-text qty" style="width:60px"></div>
+          <div class="actions"><button type="submit" title="${label}" class="action primary tocart" id="product-addtocart-button"><span>${label}</span></button></div></form>` : ''}
+      </div>
+      <div class="block related"><strong class="block-title">Related Products</strong>${other ? `<ol class="products list items product-items"><li class="item product product-item"><a class="product-item-link" href="${pathFor('gamesmen', other)}">${esc(other.name)}</a> <button type="button" class="action tocart primary"><span>Add to Cart</span></button></li></ol>` : ''}</div>
+      <script>
+        document.getElementById('product_addtocart_form')?.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const b = document.getElementById('product-addtocart-button');
+          const label = b.querySelector('span');
+          b.disabled = true; label.textContent = 'Adding...';
+          const r = await fetch('/gamesmen/checkout/cart/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sku: ${JSON.stringify(p.sku)}, qty: Number(document.getElementById('qty').value || 1) }) });
+          const d = await r.json();
+          b.disabled = false; label.textContent = ${JSON.stringify(label)};
+          const msg = document.getElementById('mg-messages');
+          if (!d.ok) { msg.innerHTML = '<div class="message-error error message"><div>The requested qty is not available</div></div>'; return; }
+          const c = document.querySelector('.minicart-wrapper .counter.qty');
+          c.classList.remove('empty'); c.querySelector('.counter-number').textContent = String(d.items);
+          document.querySelector('#minicart .count').textContent = String(d.items);
+          msg.innerHTML = '<div class="message-success success message"><div>You added ' + ${JSON.stringify(esc(p.name))} + ' to your <a href="/gamesmen/checkout/cart/">shopping cart</a>.</div></div>';
+          document.getElementById('minicart').classList.add('open');
+        });
+      </script>`, { head: ldFor(p, 'gamesmen'), bagCount: bagCount('gamesmen') });
+  }
+
+  // Its search page (/catalogsearch/result/?q=…): Luma's tiles — the name linked, the price box, "Add to
+  // Cart" (or "Pre-order"), or "Out of stock".
+  function magentoSearchPage(q) {
+    const hits = searchHits('gamesmen', q);
+    const tile = (x) => {
+      const orderable = x.status === 'in_stock' || x.status === 'preorder';
+      return `<li class="item product product-item"><div class="product-item-info" data-container="product-grid">
+        <a href="${pathFor('gamesmen', x)}" class="product photo product-item-photo"><img class="product-image-photo" src="${imagePath('gamesmen', x)}" alt="${esc(x.name)}" width="240"></a>
+        <div class="product details product-item-details"><strong class="product name product-item-name"><a class="product-item-link" href="${pathFor('gamesmen', x)}">${esc(x.name)}</a></strong>
+          <div class="price-box price-final_price" data-role="priceBox" data-product-id="${x.id}"><span class="price-container"><span data-price-amount="${x.price}" data-price-type="finalPrice" class="price-wrapper"><span class="price">$${x.price.toFixed(2)}</span></span></span></div>
+          <div class="product-item-actions"><div class="actions-primary">${orderable
+    ? `<form data-role="tocart-form" data-product-sku="${esc(x.code || '')}" action="/gamesmen/checkout/cart/add/" method="post"><button type="submit" title="${x.status === 'preorder' ? 'Pre-order' : 'Add to Cart'}" class="action tocart primary"><span>${x.status === 'preorder' ? 'Pre-order' : 'Add to Cart'}</span></button></form>`
+    : '<div class="stock unavailable"><span>Out of stock</span></div>'}</div></div></div></div></li>`;
+    };
+    return page('gamesmen', `Search results for: '${q}'`, `<h1 class="page-title"><span class="base">Search results for: '${esc(q)}'</span></h1>${hits.length
+      ? `<div class="search results"><div class="products wrapper grid products-grid"><ol class="products list items product-items">${hits.map(tile).join('')}</ol></div></div>`
+      : '<div class="message notice"><div>Your search returned no results.</div></div>'}`, { bagCount: bagCount('gamesmen') });
+  }
+
+  // Its cart (/checkout/cart/): a row per thing with "Remove item" (Magento's data-post link: a form
+  // posted, a new page), and "CHECKOUT".
+  function magentoCart() {
+    const S = shopOf('gamesmen');
+    S.bagViews.push(bagCount('gamesmen'));
+    const rows = S.cart.map((c) => {
+      const p = find('gamesmen', c.sku);
+      return `<tbody class="cart item"><tr class="item-info"><td class="col item"><strong class="product-item-name"><a href="${p ? pathFor('gamesmen', p) : '#'}">${esc(c.name)}</a></strong></td>
+        <td class="col price"><span class="price">$${c.price.toFixed(2)}</span></td><td class="col qty"><input class="input-text qty" title="Qty" value="${c.qty}" style="width:60px"></td>
+        <td class="col subtotal"><span class="price">$${(c.price * c.qty).toFixed(2)}</span></td></tr>
+        <tr class="item-actions"><td colspan="4"><div class="actions-toolbar"><a class="action action-edit" href="${p ? pathFor('gamesmen', p) : '#'}" title="Edit item parameters"><span>Edit</span></a>
+          <a href="#" title="Remove item" class="action action-delete" data-post='${JSON.stringify({ action: '/gamesmen/checkout/cart/delete/', data: { sku: c.sku } })}'><span>Remove item</span></a></div></td></tr></tbody>`;
+    }).join('');
+    return page('gamesmen', 'Shopping Cart', `<h1 class="page-title"><span class="base">Shopping Cart</span></h1>${S.cart.length
+      ? `<form id="form-validate" class="form form-cart"><table id="shopping-cart-table" class="cart items data table">${rows}</table></form>
+        <div class="cart-summary"><strong class="summary title">Summary</strong><p>Order Total <span class="price">$${total('gamesmen').toFixed(2)}</span></p>
+        <ul class="checkout methods items checkout-methods-items"><li class="item"><button type="button" data-role="proceed-to-checkout" title="Proceed to Checkout" class="action primary checkout" onclick="location.href='/gamesmen/checkout/'"><span>CHECKOUT</span></button></li></ul></div>`
+      : '<div class="cart-empty"><p>You have no items in your shopping cart.</p><p>Click <a href="/gamesmen/">here</a> to continue shopping.</p></div>'}
+      <script>
+        // Magento's data-post: a form posted to the address it names.
+        document.addEventListener('click', (e) => {
+          const a = e.target.closest('[data-post]');
+          if (!a) return;
+          e.preventDefault();
+          const d = JSON.parse(a.getAttribute('data-post'));
+          const f = document.createElement('form'); f.method = 'post'; f.action = d.action;
+          for (const [k, v] of Object.entries(d.data)) { const i = document.createElement('input'); i.type = 'hidden'; i.name = k; i.value = v; f.append(i); }
+          document.body.append(f); f.submit();
+        });
+      </script>`, { bagCount: bagCount('gamesmen') });
+  }
+
+  // Its one-page checkout, as the real one goes: Shipping Address (signed in: the address saved in your
+  // account, no boxes), "I have a different billing address" (unticked), Shipping Methods (a table:
+  // Standard, Express — or, noStandard, couriers only), Payment Method (Credit card: Braintree-style card
+  // fields, a frame per box, from another address; PayPal; Afterpay), the terms box, "CONFIRM AND PAY".
+  function magentoCheckout() {
+    const S = shopOf('gamesmen');
+    const signed = !!state.signedIn.gamesmen;
+    const regions = [['569', 'Australian Capital Territory'], ['570', 'New South Wales'], ['571', 'Northern Territory'], ['572', 'Queensland'], ['573', 'South Australia'], ['574', 'Tasmania'], ['575', 'Victoria'], ['576', 'Western Australia']];
+    const field = (name, label, attrs = '') => `<div class="field _required"><label class="label" for="sa-${name}"><span>${label}</span></label><div class="control"><input class="input-text" type="text" name="${name}" id="sa-${name}" aria-required="true"${attrs}></div></div>`;
+    const address = signed
+      ? '<div class="shipping-address-items"><div class="shipping-address-item selected-item">Ash Ketchum<br>1 Pallet Town Rd<br>Sydney, New South Wales 2000<br>Australia<br><a href="tel:0412345678">0412345678</a></div></div>'
+      : `<form class="form form-shipping-address" id="co-shipping-form">
+          <div class="field required"><label class="label" for="customer-email"><span>Email Address</span></label><div class="control"><input class="input-text" type="email" name="username" id="customer-email" autocomplete="email" aria-required="true"></div></div>
+          ${field('firstname', 'First Name')}${field('lastname', 'Last Name')}${field('street[0]', 'Street Address')}${field('city', 'Suburb')}
+          <div class="field _required"><label class="label" for="sa-region_id"><span>State/Territory</span></label><div class="control"><select class="select" name="region_id" id="sa-region_id" aria-required="true"><option value="">Please select a region, state or province.</option>${regions.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></div></div>
+          ${field('postcode', 'Postcode')}
+          <div class="field _required"><label class="label" for="sa-country_id"><span>Country</span></label><div class="control"><select class="select" name="country_id" id="sa-country_id" aria-required="true"><option value="AU" selected>Australia</option><option value="NZ">New Zealand</option></select></div></div>
+          ${field('telephone', 'Mobile / Phone Number', ' autocomplete="tel"')}
+        </form>`;
+    const methods = S.noStandard ? [['courier', 'Courier', 'Couriers Please', 12.95], ['express', 'Express', 'StarTrack', 18.95]] : [['standard', 'Standard', 'Australia Post', 9.95], ['express', 'Express', 'Australia Post', 14.95]];
+    const box = (f, label) => `<div class="field"><label class="label" for="braintree-${f}"><span>${label}</span></label><div class="control hosted-control" id="braintree-${f}"><iframe src="${cardOrigin}/hosted-field?field=${f}" name="braintree-hosted-field-${f}" title="Secure Credit Card Frame - ${label}" width="300" height="40" style="border:1px solid #ccc"></iframe></div></div>`;
+    return `<h1 class="page-title"><span class="base">Checkout</span></h1><div class="opc-wrapper one-step-checkout">
+      <div class="checkout-shipping-address"><div class="step-title" data-role="title">Shipping Address</div>${address}
+        <div class="field choice"><input type="checkbox" name="billing_different" id="billing-different" class="checkbox"${S.billingTicked ? ' checked' : ''}><label class="label" for="billing-different"><span>I have a different billing address</span></label></div>
+        <div id="billing-fields"${S.billingTicked ? '' : ' hidden'}><div class="step-title">Billing Address</div><div class="field"><label class="label" for="ba-street"><span>Billing Street Address</span></label><input class="input-text" name="billing_street" id="ba-street"></div></div></div>
+      <div class="checkout-shipping-method"><div class="step-title" data-role="title">Shipping Methods</div>
+        <table class="table-checkout-shipping-method"><tbody>${methods.map(([id, m, carrier, price]) => `<tr class="row"><td class="col col-method"><input type="radio" class="radio" name="shipping_method" value="${id}" id="s_method_${id}" aria-labelledby="label_method_${id} label_carrier_${id}" data-price="${price}"></td>
+          <td class="col col-price"><span class="price">$${price.toFixed(2)}</span></td><td class="col col-method" id="label_method_${id}">${m}</td><td class="col col-carrier" id="label_carrier_${id}">${carrier}</td></tr>`).join('')}</tbody></table></div>
+      <div class="checkout-payment-method"><div class="step-title" data-role="title">Payment Method</div>
+        <div class="payment-method"><div class="payment-method-title field choice"><input type="radio" name="payment[method]" class="radio" id="braintree" value="braintree"><label class="label" for="braintree"><span>Credit card</span></label></div>
+          <div class="payment-method-content" id="cc-fields" hidden>${box('number', 'Card number')}${box('expirationDate', 'Expiry Date')}${box('cvv', 'Security code')}</div></div>
+        <div class="payment-method"><div class="payment-method-title field choice"><input type="radio" name="payment[method]" class="radio" id="paypal_express" value="paypal_express"><label class="label" for="paypal_express"><span>PayPal</span></label></div></div>
+        <div class="payment-method"><div class="payment-method-title field choice"><input type="radio" name="payment[method]" class="radio" id="afterpay" value="afterpay"><label class="label" for="afterpay"><span>Afterpay</span></label></div></div></div>
+      <div class="opc-block-summary"><span class="title">Order Summary</span><p>Cart Subtotal <span class="price">$${total('gamesmen').toFixed(2)}</span></p><p>Shipping <span class="price" id="mg-ship">—</span></p><p class="grand totals">Order Total <strong><span class="price" id="mg-total">$${total('gamesmen').toFixed(2)}</span></strong></p></div>
+      <div class="checkout-agreements"><div class="checkout-agreement field choice required"><input type="checkbox" id="agreement_1" name="agreement[1]" value="1" required class="required-entry"><label class="label" for="agreement_1"><span>I agree to the Terms and Conditions and the Refund and Cancellation policy.</span></label></div></div>
+      <input type="hidden" id="cc-number"><input type="hidden" id="cc-exp"><input type="hidden" id="cc-cvv">
+      <div class="actions-toolbar"><button type="button" id="mg-place" class="action primary checkout" title="CONFIRM AND PAY"><span>CONFIRM AND PAY</span></button></div>
+      <div id="mg-error" class="message message-error error" style="display:none"></div></div>
+      <script>
+        const $ = (id) => document.getElementById(id);
+        const sub = ${total('gamesmen')};
+        addEventListener('message', (e) => { const m = { number: 'cc-number', expirationDate: 'cc-exp', cvv: 'cc-cvv' }[e.data && e.data.hostedField]; if (m) $(m).value = e.data.value; });
+        for (const r of document.querySelectorAll('input[name=shipping_method]')) r.addEventListener('change', () => { const p = Number(r.dataset.price); $('mg-ship').textContent = '$' + p.toFixed(2); $('mg-total').textContent = '$' + (sub + p).toFixed(2); });
+        for (const r of document.querySelectorAll('input[name="payment[method]"]')) r.addEventListener('change', () => { $('cc-fields').hidden = r.value !== 'braintree'; });
+        $('billing-different').addEventListener('change', (e) => { $('billing-fields').hidden = !e.target.checked; });
+        $('mg-place').addEventListener('click', async () => {
+          const err = (t) => { $('mg-error').textContent = t; $('mg-error').style.display = 'block'; $('mg-error').setAttribute('role', 'alert'); };
+          const v = (n) => (document.querySelector('[name="' + n + '"]') || {}).value || '';
+          const ship = document.querySelector('input[name=shipping_method]:checked');
+          const pay = document.querySelector('input[name="payment[method]"]:checked');
+          const address = ${signed ? 'null' : "{ email: v('username'), firstname: v('firstname'), lastname: v('lastname'), street: v('street[0]'), city: v('city'), region: (document.getElementById('sa-region_id').selectedOptions[0] || {}).textContent, postcode: v('postcode'), country: v('country_id'), telephone: v('telephone') }"};
+          if (address && Object.values(address).some((x) => !x || /^Please select/.test(x))) return err('This is a required field.');
+          if (!ship) return err('The shipping method is missing. Select the shipping method and try again.');
+          if (!pay) return err('Please specify a payment method.');
+          if (pay.value === 'braintree' && !($('cc-number').value && $('cc-exp').value && $('cc-cvv').value)) return err('Please enter your card details.');
+          if (!$('agreement_1').checked) return err('This is a required field.');
+          const r = await fetch('/gamesmen/checkout/place', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+            address, signed: ${signed}, shipping: ship.value, payment: pay.value, billingDifferent: $('billing-different').checked, agreed: $('agreement_1').checked,
+            card: { number: $('cc-number').value, expiry: $('cc-exp').value, cvv: $('cc-cvv').value } }) });
+          const d = await r.json();
+          if (!d.ok) return err(d.error || 'Something went wrong.');
+          location.href = '/gamesmen/checkout/onepage/success/';
+        });
+      </script>`;
+  }
+
+  // -------------------------------------------------------------------- Games World (WooCommerce)
+  const wooId = (p) => p.id;
+  // Its product page: the add-to-cart form (posted: the page again, "“…” has been added to your cart."
+  // with "View cart"), or "Out of stock". Pre-orders say "Pre-order now".
+  function wooProductPage(p, notice = '') {
+    const orderable = p.status === 'in_stock' || p.status === 'preorder';
+    const label = p.status === 'preorder' ? 'Pre-order now' : 'Add to cart';
+    return page('gamesworld', `${p.name} – Games World`, `<div class="woocommerce-notices-wrapper">${notice}</div>
+      <div class="product type-product ${orderable ? 'instock' : 'outofstock'}"><div class="summary entry-summary"><h1 class="product_title entry-title">${esc(p.name)}</h1>
+        <p class="price"><span class="woocommerce-Price-amount amount"><bdi><span class="woocommerce-Price-currencySymbol">$</span>${p.price.toFixed(2)}</bdi></span></p>
+        ${orderable ? `<p class="stock in-stock">${p.status === 'preorder' ? 'Available on backorder' : '3 in stock'}</p>
+          <form class="cart" action="${pathFor('gamesworld', p)}" method="post" enctype="multipart/form-data"><div class="quantity"><label class="screen-reader-text" for="quantity_1">Quantity</label><input type="number" id="quantity_1" class="input-text qty text" name="quantity" value="1" min="1" style="width:60px"></div>
+          <button type="submit" name="add-to-cart" value="${wooId(p)}" class="single_add_to_cart_button button alt">${label}</button></form>`
+    : '<p class="stock out-of-stock">Out of stock</p>'}
+      </div></div>`, { head: ldFor(p, 'gamesworld'), bagCount: bagCount('gamesworld') });
+  }
+
+  // Its cart (/cart/): a row per thing, its "×" a link (/cart/?remove_item=…: a new page, "“…” removed.
+  // Undo?" — Undo never pressed), and "Proceed to checkout".
+  function wooCart(notice = '') {
+    const S = shopOf('gamesworld');
+    S.bagViews.push(bagCount('gamesworld'));
+    const rows = S.cart.map((c) => {
+      const p = find('gamesworld', c.sku);
+      return `<tr class="woocommerce-cart-form__cart-item cart_item"><td class="product-remove"><a href="/gamesworld/cart/?remove_item=${encodeURIComponent(c.sku)}&amp;_wpnonce=d1a2b3" class="remove" aria-label="Remove ${esc(c.name)} from cart" data-product_id="${p ? p.id : 0}">&times;</a></td>
+        <td class="product-name"><a href="${p ? pathFor('gamesworld', p) : '#'}">${esc(c.name)}</a></td><td class="product-price"><span class="amount">$${c.price.toFixed(2)}</span></td>
+        <td class="product-quantity"><input type="number" class="input-text qty text" value="${c.qty}" aria-label="Product quantity" style="width:60px"></td><td class="product-subtotal"><span class="amount">$${(c.price * c.qty).toFixed(2)}</span></td></tr>`;
+    }).join('');
+    return page('gamesworld', 'Cart – Games World', `<div class="woocommerce-notices-wrapper">${notice}</div><h1>Cart</h1>${S.cart.length
+      ? `<form class="woocommerce-cart-form"><table class="shop_table shop_table_responsive cart woocommerce-cart-form__contents"><tbody>${rows}</tbody></table></form>
+        <div class="cart-collaterals"><div class="cart_totals"><h2>Cart totals</h2><p>Total <span class="amount">$${total('gamesworld').toFixed(2)}</span></p>
+        <div class="wc-proceed-to-checkout"><a href="/gamesworld/checkout/" class="checkout-button button alt wc-forward">Proceed to checkout</a></div></div></div>`
+      : '<div class="wc-empty-cart-message"><div class="cart-empty woocommerce-info" role="status">Your cart is currently empty.</div></div><p class="return-to-shop"><a class="button wc-backward" href="/gamesworld/">Return to shop</a></p>'}`, { bagCount: bagCount('gamesworld') });
+  }
+
+  // Its checkout, as the real one goes: Billing details (country and state drawn over by selectWoo's
+  // own drop-downs — the real ones hidden), "Deliver to a different address?" (ticked: shipToDifferent),
+  // its shipping methods (Standard chosen), Stripe's card form (one frame from another address: card
+  // number, expiration date, security code — or, link, Link's saved card and its Confirm), PayPal,
+  // Afterpay, Zip, "Place order". Signed in (state.signedIn.gamesworld): your saved details already in.
+  function wooCheckout() {
+    const S = shopOf('gamesworld');
+    const signed = !!state.signedIn.gamesworld;
+    const A = signed ? { email: 'ash.gw@example.com', first_name: 'Ash', last_name: 'Ketchum', address_1: '1 Pallet Town Rd', city: 'Sydney', state: 'NSW', postcode: '2000', phone: '0412345678' } : {};
+    const states = [['ACT', 'Australian Capital Territory'], ['NSW', 'New South Wales'], ['NT', 'Northern Territory'], ['QLD', 'Queensland'], ['SA', 'South Australia'], ['TAS', 'Tasmania'], ['VIC', 'Victoria'], ['WA', 'Western Australia']];
+    const input = (sec, key, label, ac, type = 'text') => `<p class="form-row validate-required" id="${sec}_${key}_field"><label for="${sec}_${key}" class="required_field">${label}&nbsp;<span class="required">*</span></label>
+      <span class="woocommerce-input-wrapper"><input type="${type}" class="input-text" name="${sec}_${key}" id="${sec}_${key}" value="${sec === 'billing' && A[key] ? esc(A[key]) : ''}" aria-required="true" autocomplete="section-${sec} ${sec} ${ac}"></span></p>`;
+    const select = (sec, key, label, ac, opts, chosen) => `<p class="form-row validate-required" id="${sec}_${key}_field"><label for="${sec}_${key}" class="required_field">${label}&nbsp;<span class="required">*</span></label>
+      <span class="woocommerce-input-wrapper"><select name="${sec}_${key}" id="${sec}_${key}" class="${key === 'country' ? 'country_to_state country_select' : 'state_select'} select2-hidden-accessible" aria-required="true" autocomplete="section-${sec} ${sec} ${ac}" tabindex="-1" aria-hidden="true">${opts.map(([v, t]) => `<option value="${v}"${v === chosen ? ' selected' : ''}>${t}</option>`).join('')}</select><span class="select2 select2-container select2-container--default" dir="ltr" style="width:320px"><span class="selection"><span class="select2-selection select2-selection--single" role="combobox" aria-labelledby="select2-${sec}_${key}-container"><span class="select2-selection__rendered" id="select2-${sec}_${key}-container">${(opts.find(([v]) => v === chosen) || opts[0])[1]}</span><span class="select2-selection__arrow" role="presentation">▾</span></span></span></span></span></p>`;
+    const section = (sec) => `${sec === 'billing' ? input(sec, 'email', 'Email address', 'email', 'email') : ''}${input(sec, 'first_name', 'First name', 'given-name')}${input(sec, 'last_name', 'Last name', 'family-name')}
+      <p class="form-row" id="${sec}_company_field"><label for="${sec}_company">Company name&nbsp;<span class="optional">(optional)</span></label><span class="woocommerce-input-wrapper"><input type="text" class="input-text" name="${sec}_company" id="${sec}_company" autocomplete="section-${sec} ${sec} organization"></span></p>
+      ${select(sec, 'country', 'Country/Region', 'country', [['', 'Select a country / region…'], ['AU', 'Australia'], ['NZ', 'New Zealand']], 'AU')}
+      ${input(sec, 'address_1', 'Street address', 'address-line1')}
+      <p class="form-row" id="${sec}_address_2_field"><label for="${sec}_address_2" class="screen-reader-text">Flat, suite, unit, etc.&nbsp;<span class="optional">(optional)</span></label><span class="woocommerce-input-wrapper"><input type="text" class="input-text" name="${sec}_address_2" id="${sec}_address_2" placeholder="Apartment, suite, unit, etc. (optional)" autocomplete="section-${sec} ${sec} address-line2"></span></p>
+      ${input(sec, 'city', 'Suburb', 'address-level2')}${select(sec, 'state', 'State', 'address-level1', [['', 'Select an option…'], ...states], sec === 'billing' ? A.state || '' : '')}${input(sec, 'postcode', 'Postcode', 'postal-code')}${input(sec, 'phone', 'Phone', 'tel', 'tel')}`;
+    return `<style>.select2-hidden-accessible{border:0!important;clip:rect(0 0 0 0)!important;height:1px!important;margin:-1px!important;overflow:hidden!important;padding:0!important;position:absolute!important;width:1px!important}.select2-selection{display:inline-block;border:1px solid #aaa;padding:6px;min-width:300px;background:#fff}</style>
+      <div class="woocommerce-notices-wrapper"></div><h1>Checkout</h1>
+      <form name="checkout" method="post" class="checkout woocommerce-checkout" id="wc-checkout" novalidate>
+        <div class="col2-set" id="customer_details"><div class="col-1"><div class="woocommerce-billing-fields"><h3>Billing details</h3><div class="woocommerce-billing-fields__field-wrapper">${section('billing')}</div></div>
+          <p class="form-row" id="kl_newsletter_checkbox_field"><label class="checkbox"><input type="checkbox" name="kl_newsletter_checkbox" id="kl_newsletter_checkbox" value="1" class="input-checkbox"> Sign me up to receive email updates and news&nbsp;<span class="optional">(optional)</span></label></p></div>
+          <div class="col-2"><div class="woocommerce-shipping-fields"><h3 id="ship-to-different-address"><label class="woocommerce-form__label woocommerce-form__label-for-checkbox checkbox"><input id="ship-to-different-address-checkbox" class="woocommerce-form__input woocommerce-form__input-checkbox input-checkbox"${S.shipToDifferent ? ' checked' : ''} type="checkbox" name="ship_to_different_address" value="1"> <span>Deliver to a different address?</span></label></h3>
+            <div class="shipping_address"${S.shipToDifferent ? '' : ' style="display:none"'}>${section('shipping')}</div></div>
+            <div class="woocommerce-additional-fields"><h3>Additional information</h3><p class="form-row notes"><label for="order_comments">Order notes&nbsp;<span class="optional">(optional)</span></label><textarea name="order_comments" id="order_comments" class="input-text" placeholder="Notes about your order, e.g. special notes for delivery." rows="2"></textarea></p></div></div></div>
+        <h3 id="order_review_heading">Your order</h3>
+        <div id="order_review" class="woocommerce-checkout-review-order"><table class="shop_table woocommerce-checkout-review-order-table"><tbody>${shopOf('gamesworld').cart.map((c) => `<tr class="cart_item"><td class="product-name">${esc(c.name)}&nbsp;<strong class="product-quantity">×&nbsp;${c.qty}</strong></td><td class="product-total"><span class="amount">$${(c.price * c.qty).toFixed(2)}</span></td></tr>`).join('')}</tbody>
+          <tfoot><tr class="woocommerce-shipping-totals shipping"><th>Shipping</th><td data-title="Shipping"><ul id="shipping_method" class="woocommerce-shipping-methods">
+            <li><input type="radio" name="shipping_method[0]" data-index="0" id="shipping_method_0_table_rate821" value="table_rate:8:21" class="shipping_method" checked data-price="10"><label for="shipping_method_0_table_rate821">Standard Shipping (5-7 business days): <span class="woocommerce-Price-amount amount">$10.00</span></label></li>
+            <li><input type="radio" name="shipping_method[0]" data-index="0" id="shipping_method_0_table_rate824" value="table_rate:8:24" class="shipping_method" data-price="15"><label for="shipping_method_0_table_rate824">Express Shipping (3-5 business days): <span class="woocommerce-Price-amount amount">$15.00</span></label></li></ul></td></tr>
+            <tr class="order-total"><th>Total</th><td><strong><span class="woocommerce-Price-amount amount" id="gw-total">$${(total('gamesworld') + 10).toFixed(2)}</span></strong></td></tr></tfoot></table>
+          <div id="payment" class="woocommerce-checkout-payment"><ul class="wc_payment_methods payment_methods methods">
+            <li class="wc_payment_method payment_method_stripe"><input id="payment_method_stripe" type="radio" class="input-radio" name="payment_method" value="stripe" checked><label for="payment_method_stripe">Credit / Debit Card</label>
+              <div class="payment_box payment_method_stripe"><fieldset id="wc-stripe-upe-form" class="wc-upe-form wc-payment-form"><div class="wc-stripe-upe-element"><iframe name="__privateStripeFrame1" title="Secure payment input frame" src="${cardOrigin}/stripe-element${S.link ? '?link=1' : ''}" width="380" height="${S.link ? 70 : 170}" style="border:0"></iframe></div></fieldset></div></li>
+            <li class="wc_payment_method payment_method_ppcp-gateway"><input id="payment_method_ppcp-gateway" type="radio" class="input-radio" name="payment_method" value="ppcp-gateway"><label for="payment_method_ppcp-gateway">PayPal</label></li>
+            <li class="wc_payment_method payment_method_afterpay"><input id="payment_method_afterpay" type="radio" class="input-radio" name="payment_method" value="afterpay"><label for="payment_method_afterpay">Afterpay</label></li>
+            <li class="wc_payment_method payment_method_zipmoney"><input id="payment_method_zipmoney" type="radio" class="input-radio" name="payment_method" value="zipmoney"><label for="payment_method_zipmoney">Zip now, pay later</label></li></ul>
+            <div class="form-row place-order"><div class="woocommerce-terms-and-conditions-wrapper"><div class="woocommerce-privacy-policy-text"><p>Your personal data will be used to process your order, as described in our privacy policy.</p></div></div>
+            <input type="hidden" id="stripe-number"><input type="hidden" id="stripe-expiry"><input type="hidden" id="stripe-cvc"><input type="hidden" id="stripe-link">
+            <button type="submit" class="button alt" name="woocommerce_checkout_place_order" id="place_order" value="Place order" data-value="Place order">Place order</button></div></div></div>
+      </form>
+      <script>
+        const $ = (id) => document.getElementById(id);
+        const sub = ${total('gamesworld')};
+        // selectWoo: its own drop-down shows what the real (hidden) one has.
+        for (const sel of document.querySelectorAll('select.select2-hidden-accessible')) sel.addEventListener('change', () => { const r = document.getElementById('select2-' + sel.id + '-container'); if (r) r.textContent = sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : ''; });
+        $('ship-to-different-address-checkbox').addEventListener('change', (e) => { document.querySelector('.shipping_address').style.display = e.target.checked ? '' : 'none'; });
+        for (const r of document.querySelectorAll('input.shipping_method')) r.addEventListener('change', () => { $('gw-total').textContent = '$' + (sub + Number(r.dataset.price)).toFixed(2); });
+        addEventListener('message', (e) => {
+          const d = e.data || {};
+          if (d.stripeField) $({ number: 'stripe-number', expiry: 'stripe-expiry', cvc: 'stripe-cvc' }[d.stripeField]).value = d.value;
+          if (d.stripeLink) $('stripe-link').value = '1';
+        });
+        $('wc-checkout').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const notices = document.querySelector('.woocommerce-notices-wrapper');
+          const err = (list) => { notices.innerHTML = '<ul class="woocommerce-error" role="alert">' + list.map((t) => '<li>' + t + '</li>').join('') + '</ul>'; };
+          const v = (n) => (document.querySelector('[name="' + n + '"]') || {}).value || '';
+          const different = $('ship-to-different-address-checkbox').checked;
+          const need = [['billing_first_name', 'Billing First name'], ['billing_last_name', 'Billing Last name'], ['billing_country', 'Billing Country / Region'], ['billing_address_1', 'Billing Street address'], ['billing_city', 'Billing Suburb'], ['billing_state', 'Billing State'], ['billing_postcode', 'Billing Postcode'], ['billing_phone', 'Billing Phone'], ['billing_email', 'Billing Email address']]
+            .concat(different ? [['shipping_first_name', 'Shipping First name'], ['shipping_address_1', 'Shipping Street address'], ['shipping_city', 'Shipping Suburb'], ['shipping_state', 'Shipping State'], ['shipping_postcode', 'Shipping Postcode']] : []);
+          const missing = need.filter(([n]) => !v(n)).map(([, l]) => l + ' is a required field.');
+          if (missing.length) return err(missing);
+          const pay = document.querySelector('input[name=payment_method]:checked');
+          if (pay.value === 'stripe' && !$('stripe-link').value && !($('stripe-number').value && $('stripe-expiry').value && $('stripe-cvc').value)) return err(['Your card number is incomplete.']);
+          const r = await fetch('/gamesworld/checkout/place', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+            billing: Object.fromEntries(need.filter(([n]) => n.startsWith('billing_')).map(([n]) => [n.slice(8), v(n)])), shipToDifferent: different, newsletter: $('kl_newsletter_checkbox').checked,
+            shipping: (document.querySelector('input.shipping_method:checked') || {}).value, payment: pay.value, link: !!$('stripe-link').value,
+            card: { number: $('stripe-number').value, expiry: $('stripe-expiry').value, cvc: $('stripe-cvc').value }, signed: ${signed} }) });
+          const d = await r.json();
+          if (!d.ok) return err([d.error || 'Something went wrong.']);
+          location.href = '/gamesworld/checkout/order-received/' + d.order + '/?key=wc_order_dummy';
+        });
+      </script>`;
+  }
+
+  // Its product API (/wp-json/wc/store/v1/products?search=…): what Mugibot's sweeps read — names with
+  // HTML entities in them, like the real one.
+  function wooStoreApi(u, host) {
+    const hits = searchHits('gamesworld', u.searchParams.get('search') || '').slice().reverse();
+    return hits.slice(0, Number(u.searchParams.get('per_page')) || 10).map((x) => {
+      const orderable = x.status === 'in_stock' || x.status === 'preorder';
+      return {
+        id: x.id, name: esc(x.name).replace(/&#39;/g, '&#8217;'), slug: x.sku, permalink: `http://${host}${pathFor('gamesworld', x)}`, sku: String(x.id), type: 'simple',
+        prices: { price: String(Math.round(x.price * 100)), regular_price: String(Math.round((x.was || x.price) * 100)), sale_price: String(Math.round(x.price * 100)), currency_code: 'AUD', currency_minor_unit: 2 },
+        images: [{ id: 1, src: `http://${host}${imagePath('gamesworld', x)}`, thumbnail: `http://${host}${imagePath('gamesworld', x)}` }],
+        is_in_stock: orderable, is_purchasable: true, is_on_backorder: x.status === 'preorder',
+        stock_availability: orderable ? { text: x.status === 'preorder' ? 'Available on backorder' : '3 in stock', class: x.status === 'preorder' ? 'available-on-backorder' : 'in-stock' } : { text: 'Out of stock', class: 'out-of-stock' },
+        add_to_cart: { text: orderable ? (x.status === 'preorder' ? 'Pre-order now' : 'Add to cart') : 'Read more', description: '' },
+      };
+    });
   }
 
   // -------------------------------------------------------------------- card iframe server
@@ -1064,6 +1653,67 @@ el.addEventListener('input', (e) => {
   typed = el.value;
   parent.postMessage({ cardField: el.name, value: typed }, '*');
 });
+</script></body></html>`);
+      return;
+    }
+    // Braintree's hosted fields (The Gamesmen's card form): a frame per box, keeping only real typing.
+    if (u.pathname === '/hosted-field') {
+      const f = { number: ['credit-card-number', 'cc-number', 'Credit Card Number', '•••• •••• •••• ••••'], expirationDate: ['expiration', 'cc-exp', 'Expiration Date', 'MM/YY'], cvv: ['cvv', 'cc-csc', 'CVV', '•••'] }[u.searchParams.get('field')] || [];
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui">
+<input id="${f[0]}" name="${f[0]}" autocomplete="${f[1]}" aria-label="${f[2]}" placeholder="${f[3]}" inputmode="numeric" data-braintree-name="${u.searchParams.get('field')}" style="display:block;padding:8px;width:260px;border:0">
+<script>
+const el = document.querySelector('input');
+const field = el.dataset.braintreeName;
+const format = (v) => {
+  if (field === 'number') return v.replace(/\\D/g, '').slice(0, 16).replace(/(\\d{4})(?=\\d)/g, '$1 ');
+  if (field === 'expirationDate') { const d = v.replace(/\\D/g, '').slice(0, 4); return d.length > 2 ? d.slice(0, 2) + '/' + d.slice(2) : d; }
+  return v.replace(/\\D/g, '').slice(0, 4);
+};
+let typed = '';
+el.addEventListener('input', (e) => {
+  if (!e.isTrusted) { el.value = typed; return; }
+  el.value = format(el.value);
+  typed = el.value;
+  parent.postMessage({ hostedField: field, value: typed }, '*');
+});
+</script></body></html>`);
+      return;
+    }
+    // Stripe's Payment Element (Games World's card form): one frame — card number, expiration date,
+    // security code (and the country) — keeping only real typing. link=1: Stripe's Link is connected —
+    // the card it has for you, and its "Confirm".
+    if (u.pathname === '/stripe-element') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      if (u.searchParams.get('link') === '1') {
+        res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui"><div class="p-Link" style="padding:8px;border:1px solid #ddd;border-radius:6px">
+<b>Link</b> <span class="p-LinkCard">Visa •••• 4242</span> <span style="color:#666">ash.orders@example.com</span>
+<button type="button" id="link-confirm" style="margin-left:8px">Confirm</button></div>
+<script>document.getElementById('link-confirm').addEventListener('click', () => { document.getElementById('link-confirm').textContent = 'Confirmed ✓'; document.getElementById('link-confirm').disabled = true; parent.postMessage({ stripeLink: true }, '*'); });</script></body></html>`);
+        return;
+      }
+      res.end(`<!doctype html><html><body style="margin:0;font:14px system-ui">
+<style>label{display:block;margin:4px 0 0;color:#30313d}input,select{display:block;padding:8px;width:300px;border:1px solid #e6e6e6;border-radius:5px}</style>
+<label for="Field-numberInput">Card number</label><input id="Field-numberInput" name="number" autocomplete="cc-number" inputmode="numeric" placeholder="1234 1234 1234 1234" aria-invalid="false">
+<label for="Field-expiryInput">Expiration date</label><input id="Field-expiryInput" name="expiry" autocomplete="cc-exp" inputmode="numeric" placeholder="MM / YY">
+<label for="Field-cvcInput">Security code</label><input id="Field-cvcInput" name="cvc" autocomplete="cc-csc" inputmode="numeric" placeholder="CVC">
+<label for="Field-countryInput">Country</label><select id="Field-countryInput" name="country" autocomplete="billing country"><option value="AU" selected>Australia</option><option value="NZ">New Zealand</option></select>
+<script>
+const typed = {};
+const format = (name, v) => {
+  if (name === 'number') return v.replace(/\\D/g, '').slice(0, 16).replace(/(\\d{4})(?=\\d)/g, '$1 ');
+  if (name === 'expiry') { const d = v.replace(/\\D/g, '').slice(0, 4); return d.length > 2 ? d.slice(0, 2) + ' / ' + d.slice(2) : d; }
+  return v.replace(/\\D/g, '').slice(0, 4);
+};
+for (const el of document.querySelectorAll('input')) {
+  typed[el.name] = '';
+  el.addEventListener('input', (e) => {
+    if (!e.isTrusted) { el.value = typed[el.name]; return; }
+    el.value = format(el.name, el.value);
+    typed[el.name] = el.value;
+    parent.postMessage({ stripeField: el.name, value: el.value }, '*');
+  });
+}
 </script></body></html>`);
       return;
     }
@@ -1284,7 +1934,7 @@ ${body}
     const redirect = (to) => { res.writeHead(302, { location: to }); res.end(); };
 
     // Product pictures (a coloured card with the product's name).
-    const img = p.match(/^\/img\/(kmart|bigw|ebgames|jbhifi|trainertown|gamerholic|toysrus|thegamescube|pokemoncenter|pbandai|target|amazon|citybeach)\/([^/]+)\.svg$/);
+    const img = p.match(new RegExp(`^/img/(${Object.keys(SHOPS).join('|')})/([^/]+)\\.svg$`));
     if (img) {
       const prod = find(img[1], decodeURIComponent(img[2]));
       if (!prod) return html(404, 'Not found');
@@ -1309,6 +1959,7 @@ ${body}
 
     // ---------------- control panel
     if (p === '/__admin/state') return json(200, { ...state, requests: undefined });
+    if (p === '/__admin/buynow' && req.method === 'POST') { const sh = shopOf(u.searchParams.get('shop')); if (sh) sh.buyNowPresses = (sh.buyNowPresses || 0) + 1; return json(200, { ok: true }); }
     if (p === '/__admin/set' && req.method === 'POST') {
       const b = await parseBody(req);
       const prod = find(b.shop, b.sku);
@@ -1371,6 +2022,101 @@ ${body}
       return json(200, { ok: false });
     }
     const pastCheckpoint = () => !S.checkpoint.on || S.checkpoint.passes.includes(cookieOf(req, `${shop}_checkpoint`) || '');
+    // (A thing out of the bag by its own Remove — Clear cart's tests: removeFails, it does nothing.)
+    const takeOutOf = (sku) => {
+      const i = S.cart.findIndex((c) => c.sku === sku);
+      if (i === -1 || S.removeFails) return false;
+      S.cart.splice(i, 1);
+      S.removed += 1;
+      return true;
+    };
+
+    // ---------------- The Gamesmen (Magento): its Cloudflare (refuseServers), cart, checkout, search, account
+    if (shop === 'gamesmen') {
+      if (S.refuseServers && !/Mozilla|Chrome/i.test(req.headers['user-agent'] || '')) {
+        return html(403, '<!DOCTYPE html><html><head><title>Attention Required! | Cloudflare</title></head><body><div id="cf-wrapper"><h1 data-translate="block_headline">Sorry, you have been blocked</h1><h2 class="cf-subheadline">You are unable to access gamesmen.com.au</h2></div></body></html>');
+      }
+      if (sub === '/checkout/cart/add' && req.method === 'POST') {
+        const b = await parseBody(req);
+        S.addedAt = Date.now();
+        const r = addToCart(shop, b.sku, b.qty);
+        return json(r.ok ? 200 : 409, r);
+      }
+      if (sub === '/checkout/cart/delete/' && req.method === 'POST') {
+        const b = await parseBody(req);
+        if (S.removeDelayMs) await new Promise((r) => setTimeout(r, S.removeDelayMs));
+        takeOutOf(String(b.sku || ''));
+        return redirect('/gamesmen/checkout/cart/');
+      }
+      if (sub === '/checkout/cart' || sub === '/checkout/cart/') return html(200, magentoCart());
+      if (sub === '/checkout' || sub === '/checkout/' || sub === '/checkout/index/') {
+        if (!S.cart.length) return redirect('/gamesmen/checkout/cart/');
+        S.data.checkoutOpened = Date.now();
+        return html(200, page(shop, 'Checkout', magentoCheckout(), { bagCount: bagCount(shop) }));
+      }
+      if (sub === '/checkout/place' && req.method === 'POST') {
+        const b = await parseBody(req);
+        if (S.decline) { S.declined = (S.declined || 0) + 1; return json(200, { ok: false, error: 'Your card was declined. Please try another card.' }); }
+        S.orders.push({ form: b, cart: S.cart.slice(), ts: Date.now() });
+        S.cart = [];
+        return json(200, { ok: true });
+      }
+      if (sub === '/checkout/onepage/success/' || sub === '/checkout/onepage/success') return html(200, page(shop, 'Success Page', `<h1 class="page-title">Thank you for your purchase!</h1><p>Your order # is: <span>0000${1000 + S.orders.length}</span>.</p>`));
+      if (sub === '/catalogsearch/result/' || sub === '/catalogsearch/result') return html(200, magentoSearchPage(u.searchParams.get('q') || ''));
+      // Magento's "who's signed in" (what its pages ask for, and the store login monitor reads).
+      if (sub === '/customer/section/load/' || sub === '/customer/section/load') return json(200, { customer: state.signedIn.gamesmen ? { fullname: 'Ash Ketchum', firstname: 'Ash', websiteId: '1', data_id: 1700000000 } : { data_id: 1700000000 } });
+    }
+
+    // ---------------- Games World (WooCommerce): its add-to-cart link, product form, cart, checkout, product API, account
+    if (shop === 'gamesworld') {
+      let notice = '';
+      const added = (prod) => `<div class="woocommerce-message" role="alert"><a href="/gamesworld/cart/" tabindex="1" class="button wc-forward">View cart</a> “${esc(prod.name)}” has been added to your cart.</div>`;
+      // ?add-to-cart=<id> on any page (its add-to-cart link: /checkout/?add-to-cart=<id>&quantity=1).
+      const linkId = u.searchParams.get('add-to-cart');
+      if (linkId && req.method === 'GET') {
+        const prod = S.products.find((x) => String(x.id) === linkId);
+        S.addedAt = Date.now();
+        S.cartLinks = (S.cartLinks || 0) + 1;
+        if (prod && addToCart(shop, prod.sku, Number(u.searchParams.get('quantity')) || 1).ok) notice = added(prod);
+        else notice = '<ul class="woocommerce-error" role="alert"><li>You cannot add that amount to the cart — we have 0 in stock.</li></ul>';
+      }
+      const pm = sub.match(/^\/product\/([^/]+)\/?$/);
+      if (pm && req.method === 'POST') {
+        const b = await parseBody(req);
+        const prod = find(shop, pm[1]);
+        S.addedAt = Date.now();
+        if (prod && String(b['add-to-cart']) === String(prod.id) && addToCart(shop, prod.sku, Number(b.quantity) || 1).ok) notice = added(prod);
+        return prod ? html(200, wooProductPage(prod, notice)) : html(404, page(shop, 'Page not found', '<h1>Oops! That page can’t be found.</h1>'));
+      }
+      if (pm && notice) { const prod = find(shop, pm[1]); if (prod) return html(200, wooProductPage(prod, notice)); }
+      if (sub === '/cart' || sub === '/cart/') {
+        const rm = u.searchParams.get('remove_item');
+        if (rm) {
+          const c = S.cart.find((x) => x.sku === rm);
+          if (S.removeDelayMs) await new Promise((r) => setTimeout(r, S.removeDelayMs));
+          if (c && takeOutOf(rm)) notice = `<div class="woocommerce-message" role="alert">“${esc(c.name)}” removed. <a href="/gamesworld/cart/?undo_item=${encodeURIComponent(rm)}" class="restore-item">Undo?</a></div>`;
+        }
+        return html(200, wooCart(notice));
+      }
+      if (sub === '/checkout' || sub === '/checkout/') {
+        if (!S.cart.length) return redirect('/gamesworld/cart/');
+        S.data.checkoutOpened = Date.now();
+        return html(200, page(shop, 'Checkout – Games World', wooCheckout(), { bagCount: bagCount(shop) }).replace('<div class="woocommerce-notices-wrapper"></div>', `<div class="woocommerce-notices-wrapper">${notice}</div>`));
+      }
+      if (sub === '/checkout/place' && req.method === 'POST') {
+        const b = await parseBody(req);
+        if (S.decline) { S.declined = (S.declined || 0) + 1; return json(200, { ok: false, error: 'Your card was declined.' }); }
+        S.orders.push({ form: b, cart: S.cart.slice(), ts: Date.now() });
+        S.cart = [];
+        return json(200, { ok: true, order: 70000 + S.orders.length });
+      }
+      if (/^\/checkout\/order-received\/\d+\/?$/.test(sub)) return html(200, page(shop, 'Checkout – Games World', '<h1>Order received</h1><p class="woocommerce-notice woocommerce-thankyou-order-received">Thank you. Your order has been received.</p>'));
+      if (sub === '/wp-json/wc/store/v1/products') return json(200, wooStoreApi(u, req.headers.host));
+      if (sub === '/my-account' || sub === '/my-account/') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        return res.end(`<!doctype html><html><head><title>My account – Games World</title></head><body class="page woocommerce-account woocommerce-page${state.signedIn.gamesworld ? ' logged-in' : ''}"><h1>My account</h1>${state.signedIn.gamesworld ? '<p>Hello <strong>Ash</strong> (not Ash? <a href="/gamesworld/my-account/customer-logout/">Log out</a>)</p>' : '<h2>Login</h2><form class="woocommerce-form-login"><input name="username"><input type="password" name="password"><button type="submit">Log in</button></form>'}</body></html>`);
+      }
+    }
 
     if (sub === '/' || sub === '') {
       return html(200, page(shop, SHOPS[shop].name, `<h1>${esc(SHOPS[shop].name)}</h1>${S.products.filter((x) => x.listed).map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}">${esc(x.name)}</a><div>$${x.price.toFixed(2)} · ${x.status.replace(/_/g, ' ')}</div></div>`).join('')}`));
@@ -1387,6 +2133,8 @@ ${body}
     if (shop === 'target') sku = (sub.match(/^\/p\/[^/]+\/(\d+)$/) || [])[1];
     if (shop === 'amazon') sku = (sub.match(/^\/dp\/([A-Z0-9]{10})$/) || [])[1];
     if (shop === 'citybeach') sku = (sub.match(/^\/[^/]+\/(\d{6,10}-\d{2})\.html$/) || [])[1];
+    if (shop === 'gamesmen') sku = (sub.match(/^\/([a-z0-9]+(?:-[a-z0-9]+){2,})\/?$/) || [])[1];
+    if (shop === 'gamesworld') sku = (sub.match(/^\/product\/([^/]+)\/?$/) || [])[1];
     if (SHOPIFY.has(shop)) {
       const js = sub.match(/^\/products\/([^/]+)\.js$/);
       if (js) {
@@ -1570,6 +2318,78 @@ ${body}
       if (typeof S.refuseAdds === 'number' && S.refuseAdds > 0) S.refuseAdds -= 1;
       const r = refuse ? { ok: false, said: S.quiet ? 'Something went wrong. Please try again.' : undefined } : addToCart(shop, b.sku, b.qty);
       return json(r.ok ? 200 : 409, r);
+    }
+    // ---------------- Clear cart: each shop's own way of taking a thing out of its bag (see cartPage)
+    const takeOut = (sku) => {
+      const i = S.cart.findIndex((c) => c.sku === sku);
+      if (i === -1 || S.removeFails) return false;
+      S.cart.splice(i, 1);
+      S.removed += 1;
+      return true;
+    };
+    const cartJson = () => ({ ok: true, items: bagCount(shop), total: total(shop), cart: S.cart.map((c) => ({ sku: c.sku, name: c.name, qty: c.qty })) });
+    const variantOf = (c) => String((find(shop, c.sku) || {}).id);
+    const shopifyCart = () => ({ token: 'dummy', item_count: bagCount(shop), total_price: Math.round(total(shop) * 100), items: S.cart.map((c) => ({ id: Number(variantOf(c)), quantity: c.qty, title: c.name, handle: c.sku, price: Math.round(c.price * 100) })) });
+    if (sub === '/api/cart/remove' && req.method === 'POST') {
+      const sku = String((await parseBody(req)).sku || '');
+      if (S.removeDelayMs) await new Promise((r) => setTimeout(r, S.removeDelayMs));
+      const ok = takeOut(sku);
+      return json(ok ? 200 : 409, ok ? cartJson() : { ok: false });
+    }
+    if (shop === 'target' && sub === '/api/cart/undo' && req.method === 'POST') {
+      const prod = find(shop, String((await parseBody(req)).sku || ''));
+      S.undos += 1;
+      if (prod) addToCart(shop, prod.sku, 1);
+      return json(200, cartJson());
+    }
+    if (shop === 'ebgames' && sub === '/cart/remove' && req.method === 'POST') {
+      takeOut(String((await parseBody(req)).sku || ''));
+      return redirect('/ebgames/cart');
+    }
+    if (SHOPIFY.has(shop) && sub === '/cart/change') {
+      const line = Number(u.searchParams.get('line'));
+      const c = line ? S.cart[line - 1] : S.cart.find((x) => variantOf(x) === u.searchParams.get('id'));
+      if (c && Number(u.searchParams.get('quantity')) === 0) takeOut(c.sku);
+      return redirect(`/${shop}/cart`);
+    }
+    if (SHOPIFY.has(shop) && sub === '/cart/change.js' && req.method === 'POST') {
+      const b = await parseBody(req);
+      const c = S.cart.find((x) => variantOf(x) === String(b.id));
+      if (c && Number(b.quantity) === 0) takeOut(c.sku);
+      return json(200, shopifyCart());
+    }
+    if (SHOPIFY.has(shop) && (sub === '/cart.js' || sub === '/cart/clear.js')) {
+      if (S.noAjaxCart) return json(404, { status: 404, message: 'Not Found' });
+      if (sub === '/cart/clear.js' && req.method === 'POST') {
+        S.cleared += 1;
+        if (!S.removeFails) { S.removed += S.cart.length; S.cart = []; }
+      }
+      return json(200, shopifyCart());
+    }
+    if (shop === 'thegamescube' && sub.startsWith('/checkout/cart/remove/')) {
+      const c = S.cart.find((x) => variantOf(x) === sub.split('/').pop());
+      if (c) takeOut(c.sku);
+      return redirect('/thegamescube/checkout/cart');
+    }
+    if (shop === 'amazon' && sub.startsWith('/gp/cart/') && req.method === 'POST') {
+      const sku = String((await parseBody(req)).sku || '');
+      if (sub === '/gp/cart/ajax-delete') { const ok = takeOut(sku); return json(ok ? 200 : 409, ok ? cartJson() : { ok: false }); }
+      if (sub === '/gp/cart/save-for-later') {
+        const c = S.cart.find((x) => x.sku === sku);
+        if (c) { S.cart = S.cart.filter((x) => x !== c); S.saved.push({ sku: c.sku, name: c.name, price: c.price }); }
+        S.savedMoves += 1;
+        return json(200, cartJson());
+      }
+      if (sub === '/gp/cart/delete-saved') { S.saved = S.saved.filter((x) => x.sku !== sku); S.savedDeletes += 1; return json(200, cartJson()); }
+      if (sub === '/gp/cart/move-to-cart') {
+        const x = S.saved.find((y) => y.sku === sku);
+        if (x) { S.saved = S.saved.filter((y) => y !== x); S.cart.push({ sku: x.sku, qty: 1, price: x.price, name: x.name }); }
+        return json(200, cartJson());
+      }
+    }
+    if ((shop === 'amazon' && sub === '/gp/cart/view.html') || (shop === 'target' && (sub === '/basket' || sub === '/basket/'))) {
+      S.bagViews.push(bagCount(shop));
+      return html(200, cartPage(shop));
     }
     // Shopify cart links: /cart/<variant>:<quantity> puts the product in the cart and opens checkout.
     const permalink = SHOPIFY.has(shop) && sub.match(/^\/cart\/(\d+):(\d+)$/);

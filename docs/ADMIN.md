@@ -43,7 +43,7 @@ product link) for one product, only a store for everything there, or only a
 SKU for that SKU at every store. Anything on it never alerts (dashboard or
 Discord), isn't tracked by the live sweeps, stays off the Monitor lists, and
 any monitor on it is removed. **Remove** takes it off again. Admins also have
-**🚫 Blacklist** on each product's page on the Monitor tab. See
+**🚫 Blacklist** on each product's page on the Drops page. See
 [MONITORING.md](MONITORING.md#the-blacklist).
 
 **Stores & flows.** Each store, its flow status (verified / beta / draft) and three switches:
@@ -105,7 +105,7 @@ row; once at BIG W, Amazon AU, EB Games, Pokémon Center and Premium Bandai,
 which often turn servers away) or the server can't read its products. The
 server tries again after 5 minutes (then 10, 20, every 30) and takes back over
 the moment it's let in. So keep Chrome open with the extension (1.8.1 or later
-for Pokémon Center and Premium Bandai: with an older one the Monitor tab says so
+for Pokémon Center and Premium Bandai: with an older one the Drops page says so
 on their cards, and they wait for an updated browser) connected to an admin
 account, to stand in. Settings → Stores can pin a store to **Server only**,
 **Admin's browser** or **Off**. (Zing's website now sends everyone to EB Games,

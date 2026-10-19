@@ -97,7 +97,11 @@ export function register(router, ctx) {
       // Auto-checkout: switched on, with items armed — this browser listens for runs.
       // (pending: runs waiting to start — a Trigger ACO test, for one, whose item needn't be armed.
       //  listen: this is the checkout browser, so Discord's ⚡ Buy may start a run here any time.)
-      aco: { enabled: ctx.aco.settings(req.user.id).enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id), listen: ctx.aco.listens(req.user, req.device) },
+      aco: {
+        enabled: ctx.aco.settings(req.user.id).enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id), listen: ctx.aco.listens(req.user, req.device),
+        // Clear cart (server/bags.js): bags for this browser to empty — it asks for them while there are.
+        clears: ctx.bags.activeFor(req.user, req.device),
+      },
       // Checkpoints and virtual queues up now (monitor/gates.js): this browser makes no requests to a store
       // whose queue is up, unless it's got through it.
       gates: gatesUp(),
@@ -183,12 +187,16 @@ export function register(router, ctx) {
     const waitMs = num(req.query.get('wait'), { min: 0, max: 25, def: 0 }) * 1000;
     let gone = false;
     res.on('close', () => { gone = true; });
-    const runs = await ctx.aco.next(req.user, req.device, { waitMs, alive: () => !gone && !res.writableEnded });
+    // Bags to empty (Clear cart, server/bags.js): handed over at once — with them, the answer doesn't wait.
+    let clears = ctx.bags.forBrowser(req.user, req.device);
+    const runs = await ctx.aco.next(req.user, req.device, { waitMs: clears.length ? 0 : waitMs, alive: () => !gone && !res.writableEnded });
+    if (!clears.length) clears = ctx.bags.forBrowser(req.user, req.device);
     const s = ctx.aco.settings(req.user.id);
     return {
       runs, enabled: s.enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id), listen: ctx.aco.listens(req.user, req.device),
       // Queues to get in line at (a queue went up where something's armed, or Discord's "Join the queue"), and what's up now.
       lobbies: ctx.aco.lobbiesFor(req.user, req.device), gates: gatesUp(),
+      clears, clearing: ctx.bags.activeFor(req.user, req.device),
     };
   }, { auth: 'device', entitled: true });
 
@@ -210,6 +218,19 @@ export function register(router, ctx) {
     });
     if (!run) throw new HttpError(404, 'That Auto-checkout run was not found');
     return { ok: true, run };
+  }, { auth: 'device' });
+
+  // Clear cart: how emptying a store's bag is going — 'clearing' (how many removed so far), or how it
+  // ended: 'cleared', 'empty', 'busy' (a checkout of yours is going there: left alone) or 'failed' (why).
+  router.post('/api/ext/bags/:id', async (req) => {
+    if (!limiter.hit(`bags-report:${req.device.id}`, 240, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const status = str(req.body.status, 20);
+    if (!['clearing', 'cleared', 'empty', 'busy', 'failed'].includes(status)) throw bad('Unknown status');
+    const job = ctx.bags.report(req.user.id, str(req.params.id, 40), {
+      status, removed: num(req.body.removed, { min: 0, max: 500, int: true, def: 0 }), message: str(req.body.message, 300),
+    });
+    if (!job) throw new HttpError(404, 'That Clear cart request was not found');
+    return { ok: true };
   }, { auth: 'device' });
 
   // Checkpoints and virtual queues (monitor/gates.js): what this browser saw — a store page that's the

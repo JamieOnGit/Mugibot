@@ -155,15 +155,36 @@
     }
   }
 
+  // --- a card the payment provider already has for you ------------------------------------------
+  // Stripe's Link, connected: the frame shows your saved card ("•••• 4242"), no boxes to type into.
+  // Said to the page (so the checkout knows the card's in), and — where the store's flow says so
+  // (checkout.frameConfirm: Games World's "Confirm") — its own Confirm pressed, once. Only while a
+  // checkout you started is running in this tab, at that store (the background worker checks).
+  let saved = null; // { said, confirmed, words }
+  async function savedCard() {
+    if (cardBoxes().length || !MGBChecks.savedCardShown(document, null, false)) return;
+    if (!saved) {
+      const res = await ask({ type: 'fillData', part: 'confirm' });
+      if (!res) return; // no checkout of yours in this tab
+      saved = { said: false, confirmed: false, words: (MGBFlows.revive(res.confirm) || []).filter((re) => re && re.test) };
+    }
+    if (!saved.said) { saved.said = true; ask({ type: 'cardFrame', seen: 0, filled: 0, done: true, saved: true, detail: 'a card saved with the payment provider' }); }
+    if (saved.confirmed || !saved.words.length) return;
+    const b = [...document.querySelectorAll('button, [role="button"], input[type="submit"]')]
+      .find((el) => MGBFill.isVisible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' && saved.words.some((re) => re.test((el.innerText || el.value || '').replace(/\s+/g, ' ').trim())));
+    if (b) { saved.confirmed = true; b.click(); }
+  }
+
   // --- card boxes ---------------------------------------------------------------------------------
   // Payment frames often draw their boxes a moment after loading.
   for (let i = 0; i < 480 && !cardBoxes().length; i++) {
     if (i >= 20) break;
+    await savedCard();
     await wait(500);
   }
   if (!cardBoxes().length) {
     // Drawn later still (a checkout step that opens the card form): keep a light watch for 4 minutes.
-    for (let i = 0; i < 160 && !cardBoxes().length; i++) await wait(1500);
+    for (let i = 0; i < 160 && !cardBoxes().length; i++) { await savedCard(); await wait(1500); }
     if (!cardBoxes().length) return;
   }
 

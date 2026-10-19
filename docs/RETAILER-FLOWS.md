@@ -9,12 +9,19 @@ only Auto-checkout does, for members who switched it on and armed the item
 ⚡ Buy buys **one** of each product (quantities are off for now) and gets to
 checkout as fast as the store allows:
 
-- **Shopify stores** (JB Hi-Fi, Trainer Town, Gamerholic, Toys"R"Us): the store's own cart
+- **Shopify stores** (JB Hi-Fi, Trainer Town, Gamerholic, Toys"R"Us, Pokébox, Good Games,
+  Collectible Madness, Cherry Collectables): the store's own cart
   link, `/cart/<variant>:1`, which opens checkout with the product in the cart.
   When the monitor has seen the product, the dashboard's ⚡ Buy opens that link
   straight away — no product page at all. Otherwise the product page opens, the
   extension looks up the product's option (`/products/<handle>.js`) and opens
   the cart link from there.
+- **WooCommerce stores** (Games World): the same idea with WooCommerce's own
+  add-to-cart link, `/checkout/?add-to-cart=<id>&quantity=1` — checkout, with the
+  product in the cart. The id is a simple product's (read from its product page,
+  or from the monitor's search); a product with options goes through its Add button.
+  The link's `add-to-cart` is taken off the address once checkout's open, so a
+  reload never adds it twice.
 - **Other stores**: Add to bag is pressed **the moment the store's page can take
   it**. Pages built with React or Vue (Kmart's) show the button before their code
   has wired it up, and a press then does nothing; the extension looks inside the
@@ -41,6 +48,12 @@ checkout as fast as the store allows:
 | Premium Bandai | `pbandai.js` | 🟦 beta | Australia only (`/au`). "PLACE PRE-ORDER" → "View Cart" → "Proceed to Checkout" → Global-e's checkout in a frame (`checkout.frames`: filled in there, by `frame.js`) — area, state, phone after its +61, card with month/year drop-downs, the purchase agreement → "Pay and Place Order". Signed in: "Default (same as billing address)". Guests too. |
 | Amazon AU | `amazon.js` | 🟦 beta | **Signed in only** (no guest checkout: the panel and dashboard say so). "Buy Now" → "No thanks" to Prime → your Amazon address and card → "Place your order". Its quick checkout (a window over the product page) is filled in its frame. |
 | City Beach | `citybeach.js` | 🟨 draft | Australia only (`/au`). Salesforce Commerce Cloud. Built from its real pages up to the final button: "Add To Bag" → straight to `/au/checkout` → your email → "Continue as guest" → "Delivery" → delivery to your address → "Submit shipping" → card (in the payment provider's frame) → "Confirm & pay". If a last "place order" stage follows (`?stage=placeOrder`, `checkout.review`), Auto-checkout presses its button once. Its marketing pop-up doesn't get in the way. Tested on the City Beach-style dummy store (`/citybeach`), not end to end on citybeach.com yet. |
+| Pokébox | `pokebox.js` | 🟦 beta | Shopify. Its cart link → signed in with Shop: "Pay now"; as a guest: name, address (Shopify's suggestions come up; suburb, state/territory and postcode are typed too), phone → the shipping method Shopify picked, left as it is → card number, MM/YY, security code, name on card, "Use shipping address as billing address" ticked (`tick`) → "Pay now". |
+| Good Games | `goodgames.js` | 🟦 beta | The same as Pokébox (Shopify). |
+| Collectible Madness | `collectiblemadness.js` | 🟦 beta | The same as Pokébox (Shopify), at **collectiblemadness.com.au** (www. sends you there). |
+| Cherry Collectables | `cherrycollectables.js` | 🟦 beta | The same as Pokébox (Shopify). |
+| The Gamesmen | `gamesmen.js` | 🟦 beta | Magento. From a member's walk-through (Oct 2026): "Add to Cart" / "Pre-order" → "You added … to your shopping cart" → straight to checkout → Shipping Address (email, first and last name, street address, suburb, state/territory, postcode, country Australia, mobile / phone) → "I have a different billing address" left unticked (`untick`) → Shipping Methods: "Standard", else the first one offered (`shippingFallback: 'first'`) → "Credit card" → card number, expiry, security code → the terms box ticked → "CONFIRM AND PAY". Signed in with your address saved: the same without the address. Its card form's provider wasn't visible from outside: the general card rules cover the usual ones. |
+| Games World | `gamesworld.js` | 🟦 beta | WooCommerce. Its add-to-cart link (`/checkout/?add-to-cart=<id>&quantity=1`, a simple product's id) → checkout: email, first and last name, Country/Region, street address, suburb, state (selectWoo's drop-down over the real one), postcode, phone → "Deliver to a different address?" unticked (it can come ticked) → Standard Shipping → Stripe's card form (card number, MM/YY, security code), or with Stripe's Link connected its card and "Confirm" (`frameConfirm`) → "Place order". Signed in, your saved details are left as they are. |
 
 - **verified**: tested on the real store.
 - **beta**: tested on that store's dummy copy (`npm run demo`) in the automated tests.
@@ -115,10 +128,14 @@ export default {
   searchPath: '/search?text={q}',   // where a SKU is looked for before it has a link
   // productPathFromSku: '/products/{sku}',   // stores whose link is built from the SKU (Shopify, Amazon)
   // cartPath: '/cart/{variant}:{qty}',       // Shopify: the store's cart link (⚡ Buy goes straight to checkout with it)
+  //   WooCommerce: '/checkout/?add-to-cart={variant}&quantity={qty}' (with platform: 'woocommerce')
+  // platform: 'shopify',             // 'shopify' | 'woocommerce' | 'magento': the store's platform, where Mugibot
+  //                                  //   uses something of its own (a cart link, the bag emptied at once)
   monitor: { server: true, browser: true },   // default for server / in-browser checks (admins can switch)
   flow: {
     product: {
-      add: [/\badd to (cart|trolley)\b/i, /\bpre-?order\b/i],  // the add button's label(s)
+      add: ADD_WORDS,               // the add button's label(s) — the shared words (server/monitor/words.js), below
+
       // buyNow: [/^buy now$/i],    // a button straight to checkout (Amazon): pressed instead of Add, when it's there
       addSelector: null,            // optional CSS selector for the add button
       waitMs: 12000,                // how long to wait for the add button on a fresh page
@@ -134,7 +151,12 @@ export default {
     bag: {                          // the cart page
       path: /\/cart(\/|$)/i,
       checkout: [/^proceed to checkout$/i],
-      // url: '/gp/cart/view.html',  // optional: its address, when it isn't /cart (opened when nothing on the page leads there)
+      // url: '/gp/cart/view.html',  // optional: its address, when it isn't /cart (opened when nothing on the page leads there,
+      //                             //   and by Clear cart)
+      // clear: {                    // optional, for Clear cart (extension/bag.js):
+      //   scope: '#sc-active-cart', //   only what's in here is the bag (Amazon: not its "Saved for later" below)
+      //   remove: [/^bin it$/i],    //   a line's Remove, when it's called something other than Remove / Delete / a bin / ×
+      // },
     },
     checkout: {
       path: /\/checkout(\/|$)/i,
@@ -161,6 +183,11 @@ export default {
       // frames: [/global-e\.com\//i], // the store's whole checkout runs in a frame from here: filled in (and, for
       //                               //   Auto-checkout, placed) in there — Premium Bandai's Global-e, Amazon's quick checkout
       // savedCard: /ending in \d{4}/i, // how the page shows a card the store already has for you (no card boxes)
+      // shippingFallback: 'first',    // no shipping method matching `shipping`: the first one offered (never a pick-up)
+      // tick: [/use shipping address as billing address/i],   // boxes to have ticked (ticked if they aren't)
+      // untick: [/deliver to a different address/i],         // boxes to have unticked (unticked if they come ticked)
+      // frameConfirm: [/^confirm$/i], // a payment frame showing a card it already has (Stripe's Link): its button,
+      //                               //   pressed once instead of typing a card
     },
   },
 };
@@ -170,8 +197,16 @@ Labels are regular expressions, matched against a button's visible text.
 Whatever a flow doesn't say is covered by general rules that work on most
 stores. Some rules always apply, whatever a flow says:
 
-- Final buttons ("Place order", "Pay now", "Checkout securely", "Buy now"…) are
-  **never** pressed by ⚡ Buy. Auto-checkout presses one once per run, after
+- **Every store's buy button reads the same**: "Add to cart", "Add to bag",
+  "Add to basket", "Add to trolley", "Pre-order", "Pre Order", "Buy", "Buy now",
+  "Order now"… are all the add button (`ADD_WORDS` in `server/monitor/words.js`,
+  shared by the flows, the monitor's stock reading and the extension — a test
+  keeps the extension's copy the same). With two on the page, the earlier one in
+  that list wins: "Add to cart" over "Buy now". Never a wish list, "Notify me",
+  click & collect, lay-by or an express payment's button (Afterpay, PayPal, Shop
+  Pay…), and never on the checkout page itself.
+- Final buttons ("Place order", "Pay now", "Checkout securely", "Confirm and pay",
+  "Buy now and pay"…) are **never** pressed by ⚡ Buy. Auto-checkout presses one once per run, after
   its checks (docs/AUTO-CHECKOUT.md), and never in a checkout inside another
   site's frame (Premium Bandai's Global-e).
 - "Add more" pop-ups after Add to bag ("Often Bought Together", "You may also
@@ -220,6 +255,18 @@ stores. Some rules always apply, whatever a flow says:
   - Shopify's cart link landing anywhere but the cart or checkout (the product
     page again): its Add button, like any store.
 
+Clear cart (the Checkout page's 🧹 Bags card; docs/AUTO-CHECKOUT.md) empties a
+store's bag with the same flow: its bag page (`bag.url`, else `/cart`; a page not
+found there: the store's own bag link, from its header), then each line's own
+Remove, one at a time — by its words ("Remove", "Delete", "Remove item"), what
+it's called for a screen reader ("Remove <name> from cart"), or an icon the store
+marks as remove (a bin, ×) — and the store's "Are you sure?" answered yes (its
+pop-up's Yes / OK / Remove, or the browser's own `confirm()` box). Never "Save for
+later", "Undo", a promo code's or gift card's remove, nor anything in a saved
+or wish list. A quantity drop-down with a 0 in it ("0 (Delete)") is the last
+resort. Shopify stores (`platform: 'shopify'`): the store's own `/cart/clear.js`
+first. Then the bag's opened once more, to check it's empty.
+
 Field names for `fields`: `email`, `phone`, `firstName`, `lastName`,
 `fullName`, `address1`, `address2`, `suburb`, `state`, `postcode`, `country`,
 `addressLookup`, `cardNumber`, `cardName`, `cardExpiry`, `cardExpMonth`,
@@ -243,8 +290,10 @@ and that store's dummy copy, so the test keeps proving the flow.
 
 ## Adding a new store
 
-1. Copy the closest flow file (`kmart.js` for big-box stores, `jbhifi.js` for
-   Shopify stores) to `server/retailers/<newstore>.js` and fill it in.
+1. Copy the closest flow file (`kmart.js` for big-box stores, `pokebox.js` for
+   Shopify card shops — Good Games and the others are a few lines on top of it —
+   `gamesworld.js` for WooCommerce, `gamesmen.js` for Magento) to
+   `server/retailers/<newstore>.js` and fill it in.
 2. Add it to `RETAILER_DEFS` in `server/retailers/index.js`.
 3. If the store's card boxes are in a frame from a payment provider that isn't
    in `PAYMENT_HOSTS` (same file), add its address pattern. You'll know: at

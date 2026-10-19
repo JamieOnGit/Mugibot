@@ -245,6 +245,11 @@ async function fillData(sender, part, profileId) {
   if (!pass || Date.now() > pass.expires || pass.userId !== auth.user.id) return null;
   // Only for the store the checkout was started on.
   if (tabHost(sender) !== pass.host) return null;
+  // (A payment frame showing a card the provider has for you — Stripe's Link: the store's words for its Confirm, no card.)
+  if (part === 'confirm') {
+    const r = await storeForTab(sender);
+    return { confirm: (r && r.flow && r.flow.checkout && r.flow.checkout.frameConfirm) || [] };
+  }
   const vault = await Vault.status(auth.user.id);
   const card = vault.ready ? await Vault.card(auth.user.id) : null;
   // Why there's no card, for the panel: none saved, saved by an older version (passphrase), or unreadable.
@@ -938,7 +943,8 @@ async function sweepLoop() {
 // see, and you can watch it go): the store page's script does the rest, with the run's limits.
 let acoLooping = false;
 
-const acoWanted = (a) => !!a && (a.listen || (a.enabled && (a.armed || a.pending)));
+// (clears / clearing: bags to empty — Clear cart — asked for while there are.)
+const acoWanted = (a) => !!a && (a.listen || a.clearing > 0 || (typeof a.clears === 'number' && a.clears > 0) || (a.enabled && (a.armed || a.pending)));
 
 async function acoLoop() {
   if (acoLooping) return;
@@ -966,6 +972,8 @@ async function acoLoop() {
       // unless a run just opened that store (its tab gets in line itself: never two tabs into one queue).
       const opened = new Set((res.body.runs || []).map((r) => r.store));
       for (const l of res.body.lobbies || []) if (!opened.has(l.store)) await joinLobby(l).catch(() => null);
+      // Bags to empty (Clear cart): one store at a time, in a tab of their own.
+      if ((res.body.clears || []).length) startClears(res.body.clears);
       if (!acoWanted(res.body)) break;
       if (Date.now() - started < 1000) await new Promise((r) => setTimeout(r, 1000));
     }
@@ -1063,7 +1071,9 @@ function withTurns(fn) {
 }
 
 /** Is this checkout still holding its store? */
-const holds = (e, now = Date.now()) => !!e && !e.over && now - e.since < TURN_MAX_MS && !(e.parkedAt && now - e.parkedAt > PARKED_MS);
+const holds = (e, now = Date.now()) => !!e && !e.over && now - e.since < (e.clear ? CLEAR_TURN_MS : TURN_MAX_MS) && !(e.parkedAt && now - e.parkedAt > PARKED_MS);
+// (Emptying a bag — Clear cart, below — holds its store for this long at most.)
+const CLEAR_TURN_MS = 2 * 60 * 1000;
 
 /** The checkout before this one at its store that's still going, or null: it's this one's turn. */
 function ahead(t, key, now = Date.now()) {
@@ -1077,7 +1087,9 @@ function ahead(t, key, now = Date.now()) {
   return first;
 }
 
-const nextInLine = (storeName, a) => `Next in line at ${storeName || 'the store'}: your checkout of ${(a && a.name) || 'another item'} there goes first (it keeps one bag for this browser) — this one goes the moment that's done`;
+const nextInLine = (storeName, a) => (a && a.clear
+  ? `Next in line at ${storeName || 'the store'}: your bag there is being emptied (Clear cart) — this one goes the moment that's done`
+  : `Next in line at ${storeName || 'the store'}: your checkout of ${(a && a.name) || 'another item'} there goes first (it keeps one bag for this browser) — this one goes the moment that's done`);
 
 /** This tab's checkout, in the line for its store (from its ⚡ Buy code: an Auto-checkout run's tab already is). */
 async function joinTurn(tabId, store, { runId = null, name = '' } = {}) {
@@ -1152,6 +1164,160 @@ async function turnMoved(tabId, url) {
   if (!e) return;
   const r = storeOfUrl((await getState()).flows, url);
   if (r && r.id !== e.store) await turnEnded(tabId, { gone: true });
+}
+
+// --- Clear cart: emptying your bag at a store (server/bags.js) ---------------------------------------
+// Pressed on your dashboard (anywhere, your phone too): this browser — your checkout browser, where your
+// bags are — opens the store's bag in a tab, and the store-page script (bag.js) empties it, checks it's
+// empty and says how it went; the tab closes. One store at a time (Clear all: each in turn, in the same
+// tab). It takes its turn at the store like a checkout does, so a drop meanwhile waits a moment for it —
+// and a store where a checkout of yours is going is left alone (its bag is that checkout's), as is one
+// whose virtual queue you're in here (asking it for a page could lose your place).
+// A bag it couldn't empty stays open in its tab, for you to see what's left.
+const CLEARS = 'clears'; // session: { [tabId]: job } — what the page in each tab is there to empty
+const CLEAR_STORE_MS = 90 * 1000;
+const clearQueue = [];
+let clearing = null; // the job in hand
+const clearWaits = new Map(); // job id → resolve(result)
+const clearAsked = new Set(); // job ids whose page has asked what it's for (its store-page script is running)
+// The bag's page loaded but its store-page script hasn't asked what it's for: this long, then it's said.
+const CLEAR_ASK_MS = 10 * 1000;
+
+/** Bags your account asks this browser to empty (each once: one already here isn't added again). */
+function startClears(jobs) {
+  for (const j of jobs || []) {
+    if (!j || !j.id || !j.url || (clearing && clearing.id === j.id) || clearQueue.some((x) => x.id === j.id)) continue;
+    clearQueue.push({ id: String(j.id), store: String(j.store || ''), storeName: String(j.storeName || j.store || 'the store'), url: String(j.url) });
+  }
+  runClears().catch(() => null);
+}
+
+const tellClear = (job, status, removed = 0, message = '') => api('POST', `/api/ext/bags/${encodeURIComponent(job.id)}`, { status, removed, message: String(message || '').slice(0, 300) });
+
+async function setClearTab(tabId, job) {
+  const all = (await chrome.storage.session.get(CLEARS))[CLEARS] || {};
+  if (job) all[tabId] = job;
+  else delete all[tabId];
+  await chrome.storage.session.set({ [CLEARS]: all });
+}
+const clearJobOf = async (tabId) => (((await chrome.storage.session.get(CLEARS))[CLEARS] || {})[tabId]) || null;
+
+let clearRunning = false;
+async function runClears() {
+  if (clearRunning) return;
+  clearRunning = true;
+  let tab = null; // the tab the bags are emptied in, one store after another
+  let back = null; // the tab you were on, in front again once it's done
+  try {
+    while (clearQueue.length) {
+      const job = clearQueue.shift();
+      clearing = job;
+      const res = await clearOne(job, tab, (t, was) => { tab = t; if (was && !back) back = was; }).catch((e) => ({ status: 'failed', message: `Something went wrong (${String((e && e.message) || e).slice(0, 80)})` }));
+      if (!res.keepTab && tab && !(await chrome.tabs.get(tab.id).catch(() => null))) tab = null; // (closed meanwhile)
+      clearing = null;
+      // (A bag it couldn't empty is left open in its tab, for you: the next store gets a tab of its own.)
+      if (res.status === 'failed' && res.keepTab) tab = null;
+    }
+  } finally {
+    clearing = null;
+    clearRunning = false;
+    if (tab) {
+      await setClearTab(tab.id, null).catch(() => null);
+      await chrome.tabs.remove(tab.id).catch(() => null);
+    }
+    if (back) await chrome.tabs.update(back, { active: true }).catch(() => null);
+  }
+}
+
+/** One store's bag: its turn there, the tab, then what the page says (or that it took too long). */
+async function clearOne(job, tab, useTab) {
+  const flows = (await getState()).flows || [];
+  const r = flows.find((x) => x.id === job.store);
+  const done = async (status, removed, message, extra = {}) => {
+    await tellClear(job, status, removed, message).catch(() => null);
+    return { status, removed, message, ...extra };
+  };
+  if (!r) return done('failed', 0, `This copy of the extension (v${VERSION}) doesn't know ${job.storeName} — update it`);
+  // Your place in its virtual queue: nothing asked of that store meanwhile.
+  if ((await heldStores()).has(job.store)) return done('busy', 0, `${job.storeName}'s virtual queue is up — its bag was left alone (asking it for a page could cost your place in line). Try again once it's down, or you're through.`);
+  // Its turn at the store — unless a checkout of yours is going there (its bag is that checkout's).
+  const key = `c:${job.id}`;
+  const other = await withTurns((t) => {
+    const now = Date.now();
+    const going = Object.entries(t).find(([k, e]) => k !== key && e.store === job.store && holds(e, now));
+    if (going) return going[1];
+    t[key] = { store: job.store, since: now, clear: true, name: 'Clear cart' };
+    return null;
+  });
+  if (other) return done('busy', 0, `Your checkout of ${other.name || 'an item'} at ${job.storeName} is going in this browser — its bag was left alone. Empty it once that's done.`);
+  try {
+    tellClear(job, 'clearing', 0, `Opening your ${job.storeName} bag`).catch(() => null);
+    // In front, like a checkout (a page you can see draws itself) — not over a checkout of yours going in
+    // another tab, nor while one types its card.
+    const checkingOut = Object.entries((await chrome.storage.session.get(TURNS))[TURNS] || {}).some(([k, e]) => k.startsWith('t:') && holds(e));
+    const front = !checkingOut && !typingElsewhere(null);
+    if (tab) {
+      await setClearTab(tab.id, job);
+      // (Closed meanwhile: a tab of its own, below.)
+      if (!(await chrome.tabs.update(tab.id, { url: job.url, ...(front ? { active: true } : {}) }).catch(() => null))) {
+        await setClearTab(tab.id, null);
+        tab = null;
+      }
+    }
+    if (!tab) {
+      const [was] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+      tab = await openStoreTab('about:blank', { active: front });
+      if (!tab) return done('failed', 0, "This browser couldn't open a tab");
+      useTab(tab, front && was ? was.id : null);
+      await setClearTab(tab.id, job);
+      await chrome.tabs.update(tab.id, { url: job.url });
+    }
+    const tabId = tab.id;
+    const result = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ status: 'failed', removed: 0, message: `It took too long at ${job.storeName} — have a look in the tab`, keepTab: true }), CLEAR_STORE_MS);
+      // (Touching storage now and then keeps this worker running while the page empties the bag.)
+      const beat = setInterval(() => chrome.storage.session.set({ clearBeat: Date.now() }).catch(() => null), 10000);
+      clearWaits.set(job.id, (res) => { clearTimeout(timer); clearInterval(beat); clearWaits.delete(job.id); resolve(res); });
+      // The page didn't load (the store's down, or this browser's offline), or its store-page script never
+      // started (it went somewhere Mugibot doesn't know): said in seconds, not a minute and a half on.
+      (async () => {
+        const fail = (message, keepTab) => { const w = clearWaits.get(job.id); if (w) w({ status: 'failed', removed: 0, message, keepTab }); };
+        for (const until = Date.now() + 30000; ;) {
+          await new Promise((r) => setTimeout(r, 500));
+          if (clearAsked.has(job.id) || !clearWaits.has(job.id)) return;
+          const t = await chrome.tabs.get(tabId).catch(() => null);
+          if (!t) return; // (closed: said when it was)
+          // (Still loading — or still the blank page it started on.)
+          if (t.status !== 'complete' || !t.url || /^about:/.test(t.url)) {
+            if (Date.now() > until) return fail(`Your ${job.storeName} bag took too long to open in this browser — is the store up?`, true);
+            continue;
+          }
+          const page = await chrome.scripting.executeScript({ target: { tabId }, func: () => location.href }).then(([r]) => (r && r.result) || null, () => null);
+          if (!page) return fail(`Couldn't open your ${job.storeName} bag in this browser — the page didn't load (is the store up?)`, false);
+          await new Promise((r) => setTimeout(r, CLEAR_ASK_MS));
+          if (!clearAsked.has(job.id)) fail(`${job.storeName}'s bag didn't open as Mugibot expected (the tab went to ${String(page).slice(0, 80)})`, true);
+          return;
+        }
+      })().catch(() => null);
+    });
+    clearAsked.delete(job.id);
+    if (clearWaits.has(job.id)) clearWaits.get(job.id)(result);
+    await setClearTab(tab.id, null).catch(() => null);
+    await tellClear(job, result.status, result.removed || 0, result.message || '').catch(() => null);
+    return result;
+  } finally {
+    await withTurns((t) => { delete t[key]; });
+    releaseTurns().catch(() => null); // (a drop that came in meanwhile goes now)
+  }
+}
+
+/**
+ * The page's own "Are you sure?" boxes (the browser's confirm()) answer yes in a tab emptying a bag, and
+ * its "Item removed" alert() boxes are closed (one left open would hold the page up until someone did).
+ */
+function sayYes() {
+  window.confirm = function () { return true; };
+  window.alert = function () {};
 }
 
 // --- card boxes: one tab at a time -------------------------------------------------------------
@@ -1305,6 +1471,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'state': {
         // The extension's own window for live sweeps: no panel, no checkout there.
         if (sender.tab && (await isSweepTab(sender.tab.id))) return { items: [], flows: [], sweepTab: true };
+        // A tab emptying your bag there (Clear cart): what it's for.
+        const clear = sender.tab && sender.frameId === 0 ? await clearJobOf(sender.tab.id) : null;
+        if (clear) { clearAsked.add(clear.id); return { ...(await getState()), clear }; }
         return getState();
       }
       case 'event': {
@@ -1424,7 +1593,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         let host = '';
         try { host = new URL(sender.url).host; } catch { /* keep empty */ }
         // (done: every box there's something saved for has kept it — or been given up on.)
-        await chrome.storage.session.set({ [frameKey(sender.tab.id, sender.frameId)]: { host, seen: Number(msg.seen) || 0, filled: Number(msg.filled) || 0, done: !!msg.done, detail: String(msg.detail || '').slice(0, 300), at: Date.now() } });
+        // (saved: no boxes, a card the provider already has for you — Stripe's Link.)
+        await chrome.storage.session.set({ [frameKey(sender.tab.id, sender.frameId)]: { host, seen: Number(msg.seen) || 0, filled: Number(msg.filled) || 0, done: !!msg.done, saved: !!msg.saved, detail: String(msg.detail || '').slice(0, 300), at: Date.now() } });
         return { ok: true };
       }
       case 'cardFrames':
@@ -1467,6 +1637,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await turnEnded(sender.tab.id, { gone: true });
         }
         return { ok: true };
+      case 'clearSayYes': {
+        // A tab emptying your bag (Clear cart): the page's own "Are you sure?" boxes answer yes there.
+        if (!sender.tab || sender.frameId !== 0 || !(await clearJobOf(sender.tab.id))) return null;
+        await chrome.scripting.executeScript({ target: { tabId: sender.tab.id, frameIds: [0] }, world: 'MAIN', func: sayYes }).catch(() => null);
+        return { ok: true };
+      }
+      case 'clearReport': {
+        // How emptying the bag in this tab is going (bag.js): on the way (to your account), or done.
+        if (!sender.tab || sender.frameId !== 0) return null;
+        const job = await clearJobOf(sender.tab.id);
+        if (!job || job.id !== msg.id) return null;
+        const status = ['clearing', 'cleared', 'empty', 'failed'].includes(msg.status) ? msg.status : 'failed';
+        const removed = Math.max(0, Math.min(500, Math.round(Number(msg.removed) || 0)));
+        const message = String(msg.message || '').slice(0, 300);
+        if (status === 'clearing') { tellClear(job, status, removed, message).catch(() => null); return { ok: true }; }
+        // (A bag it couldn't empty stays open in its tab, for you to see what's left.)
+        const res = { status, removed, message, keepTab: status === 'failed' && msg.keep !== false };
+        const waiting = clearWaits.get(job.id);
+        if (waiting) waiting(res);
+        else {
+          // (This worker started again since it opened the tab: said here, and the tab done with.)
+          await setClearTab(sender.tab.id, null);
+          await tellClear(job, status, removed, message).catch(() => null);
+          await withTurns((t) => { delete t[`c:${job.id}`]; });
+          if (!res.keepTab) chrome.tabs.remove(sender.tab.id).catch(() => null);
+        }
+        return { ok: true };
+      }
       case 'turn': {
         // A store page with a checkout to start: is it its turn at this store? (Another of yours there first: no.)
         if (!sender.tab || sender.frameId !== 0) return null;
@@ -1477,7 +1675,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!mine || mine.store !== r.id || !holds(mine)) await joinTurn(sender.tab.id, r.id, { name: typeof msg.name === 'string' ? msg.name.slice(0, 120) : '' });
         await releaseTurns(); // (closed tabs and finished checkouts forgotten first)
         const a = ahead((await chrome.storage.session.get(TURNS))[TURNS] || {}, key);
-        return a ? { go: false, name: a.name || '', store: r.name } : { go: true };
+        return a ? { go: false, name: a.name || '', store: r.name, clearing: !!a.clear } : { go: true };
       }
       case 'turnEnd':
         // This tab's checkout stopped (you pressed Stop, or it couldn't go on), or it's at the final button for you (parked).
@@ -1601,6 +1799,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  // (A tab emptying a bag, closed before it was done.)
+  clearJobOf(tabId).then((job) => {
+    const waiting = job && clearWaits.get(job.id);
+    if (waiting) waiting({ status: 'failed', removed: 0, message: 'Its tab was closed before the bag was empty' });
+  }).catch(() => null);
   chrome.storage.session.remove(passKey(tabId));
   clearCardFrames(tabId).catch(() => null);
   doneTyping(tabId, { all: true });
@@ -1629,3 +1832,4 @@ globalThis.mugibotSweepLoop = sweepLoop;
 globalThis.mugibotAcoLoop = acoLoop;
 globalThis.mugibotTurns = async () => (await chrome.storage.session.get(TURNS))[TURNS] || {};
 globalThis.mugibotTyping = () => typing.log;
+globalThis.mugibotClears = async () => ({ queue: clearQueue.map((j) => j.id), clearing: clearing && clearing.id, tabs: (await chrome.storage.session.get(CLEARS))[CLEARS] || {} });

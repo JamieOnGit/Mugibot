@@ -6,13 +6,13 @@ fills in checkout with their delivery details and the card saved in the
 extension, and presses the final button ("Place order", "Checkout securely"),
 all within limits the member sets.
 
-It is **off for everyone** until a member switches it on, on the
-**🤖 Auto-checkout** tab of their dashboard, and ticks the agreement. Nothing
+It is **off for everyone** until a member switches it on, at the top of the
+**⚡ Checkout** page of their dashboard, and ticks the agreement. Nothing
 is bought for an item until they **arm** it, and each arming buys **once**.
 
 ## For members
 
-1. **Switch it on.** Auto-checkout tab, then the switch. The first time, tick the
+1. **Switch it on.** Checkout page, then the switch. The first time, tick the
    box agreeing that Mugibot may check out by itself in your browser with your
    saved card, within your limits. You're responsible for those orders. Stores
    can cancel orders, or close accounts, that use automated checkout.
@@ -27,13 +27,14 @@ is bought for an item until they **arm** it, and each arming buys **once**.
    - **Only at stores where this browser is signed in** (optional). Signed in,
      checkout is faster because the store fills in your saved details.
      The sign-in status comes from the store login monitor.
-4. **Arm items.** In the "Armed items" table on the same tab (10 to a page;
+4. **Arm items.** In the "Armed items" table on the same page (10 to a page;
    "Armed only" shows just those), or with "🤖 Auto-checkout this item when it
-   drops" when you add or edit an item on your watchlist (Monitor → **My
+   drops" when you add or edit an item on your watchlist (Drops → **My
    watchlist**). Each armed item needs a **max price**. Mugibot never starts if
    the price is over it. The live searches, the store switches and the watchlist
-   all live on the Monitor page; this tab is only for what Auto-checkout does
-   with your armed items.
+   all live on the Drops page; the Checkout page is for what Auto-checkout does
+   with your armed items, then (at the bottom) the delivery details and card
+   every checkout uses.
    - **Not trading cards too:** a console, a collectible — any product at a
      store Mugibot checks out at is bought the same way. On the Monitor page's
      **🎯 Drop watches** tab, paste its link (or the words in its name and the
@@ -79,7 +80,7 @@ There's nothing to sign in to on the phone, and no browser needed there.
 
 - **Discord says who pressed it.** The button isn't a link. Discord tells
   Mugibot it was pressed, and by which Discord account. The Discord account
-  must be connected to a Mugibot account (Discord tab), with an active
+  must be connected to a Mugibot account (Setup page → Discord & pings), with an active
   membership. Someone else pressing your DM's button gets "That SKU isn't on
   your watchlist".
 - **What it does depends on your Auto-checkout settings:**
@@ -100,7 +101,7 @@ There's nothing to sign in to on the phone, and no browser needed there.
   minutes for it, then shows as "didn't start".
 - **A store that only sells signed in** (Amazon): it doesn't start if your
   checkout browser was last seen signed out there, and says to sign in first.
-- **Switch it off** under "⚡ Buy from your phone" on the Auto-checkout tab.
+- **Switch it off** under "⚡ Buy from your phone" on the Checkout page.
   The button then says it's off.
 - In the Run history it's "⚡ Buy pressed in Discord". The day's limits count
   its orders like any other.
@@ -158,6 +159,40 @@ browser:
   never go over them ("2 of 2 today (2 checking out now)"). One that stops
   short frees its place again.
 
+### Clear cart: your bags, emptied before a drop
+
+Auto-checkout only ever buys the one item, so a bag with something else in it
+stops it there ("your bag already had 1 item in it"). The Checkout page's
+**🧹 Your bags at each store** card empties a store's bag in your checkout
+browser — from anywhere, your phone too — so a drop goes through:
+
+- **Clear cart** (one store) or **Clear all** (every store, one at a time). Both
+  ask first.
+- Your checkout browser opens the store's bag in a tab, presses each thing's
+  own **Remove** (or Delete, or its bin or ×) one at a time, answers the store's
+  "Are you sure?" with yes, opens the bag once more to check it's empty, then
+  closes the tab. Shopify stores (JB Hi-Fi, Toys"R"Us, Gamerholic, Trainer
+  Town, Pokébox, Good Games, Collectible Madness, Cherry Collectables): the
+  store's own "empty the cart" (`/cart/clear.js`), checked the same way. The
+  Gamesmen's "Remove item" (a new page each time) and Games World's × links
+  (its "Undo" never pressed) go one at a time like any store's. Each store takes a second or two; Clear all goes through them in one tab.
+- **Nothing else is pressed**: not "Save for later", not "Undo", not a promo
+  code's or gift card's remove, and nothing in a "Saved for later" or wish list
+  (Amazon's is right under its cart: it's left alone).
+- **A store where a checkout of yours is going is left alone** — its bag is that
+  checkout's (the card says so: "Left alone"). Empty it once that's done. A drop
+  that comes in while a bag is being emptied waits a moment ("next in line: your
+  bag there is being emptied"), then goes, its own item alone in the order. So is
+  a store whose virtual queue you're in (asking it for a page could lose your
+  place).
+- **Each store says how it went**: "Emptied — 2 items removed", "Already empty",
+  "Left alone: …" or "Couldn't empty it: …" with why. A bag it couldn't empty
+  (a Remove that did nothing, a layout it doesn't know) stays open in its tab,
+  for you to finish. A store whose page doesn't load says so in seconds.
+- It needs the extension **1.18.0** or newer in your checkout browser (the card
+  says so if it's older). Not open right now? It empties them when it next is
+  (within a few minutes), or says it didn't start.
+
 ### Checkpoints and virtual queues
 
 Before a big drop, JB Hi-Fi can switch on its **checkpoint** (an hCaptcha
@@ -198,7 +233,7 @@ like you would.
   (add, checkout, your details and card, the final button). A store page that
   only mentions its queue (a launch banner) is the store, not the queue:
   ⚡ Buy goes straight through it.
-- Needs **extension 1.16.0** or later (the Auto-checkout tab says when yours
+- Needs **extension 1.16.0** or later (the Checkout page says when yours
   is older). Older ones get no checks or searches at a store while its queue
   is up, and their runs there don't wait in line.
 
@@ -243,7 +278,8 @@ After **3 failures in a day** it stops trying and disarms until you arm it again
 - **The card went in — every box of it.** It checks the store's card boxes,
   including boxes from a payment provider (one frame per box at Kmart, Shopify
   stores and Target). A card the store or Shop Pay already has for you ("Visa
-  •••• 4242", no card boxes) counts.
+  •••• 4242", no card boxes) counts, and so does a card Stripe's **Link** shows
+  in its frame (Games World), once its "Confirm" is pressed.
 - **The store didn't ask for something it couldn't fill in.** An error message,
   a box marked wrong, or a required box (or tick box) still empty: it stops and
   names it.
@@ -266,7 +302,7 @@ tells you.
 
 ### Run history
 
-Every time an armed item drops, the Auto-checkout tab logs it in the **Run
+Every time an armed item drops, the Checkout page logs it in the **Run
 history**, even when Auto-checkout didn't start. It's 10 runs to a page, with
 page buttons underneath (no endless scrolling). Each entry shows:
 
@@ -278,7 +314,7 @@ The filter shows orders placed, needed you, failed or didn't start, and goes
 back to the first page. Your general activity (restocks, alerts, sign-ins) is on
 the Monitor page, under **My activity**. The tiles on
 top count the last 30 days. You also get a Discord DM for every start and every
-ending, and an email if "Email me when checkout is waiting for me" is on (Discord tab).
+ending, and an email if "Email me when checkout is waiting for me" is on (Setup page → Discord & pings).
 
 | Ended as | Why it can happen |
 |---|---|
@@ -320,7 +356,22 @@ How it's kept safe:
 ## Stores
 
 Auto-checkout uses the same per-store flows as ⚡ Buy (see
-[RETAILER-FLOWS.md](RETAILER-FLOWS.md)), at every store that has one.
+[RETAILER-FLOWS.md](RETAILER-FLOWS.md)), at every store that has one. It needs
+the extension **1.19.0** or newer: the six card shops added with it (Pokébox, Good
+Games, Collectible Madness, Cherry Collectables, The Gamesmen, Games World) are
+new addresses Chrome only lets a newer copy open. The Checkout page's "Ready to
+check out?" says when yours is older.
+
+At **Pokébox, Good Games, Collectible Madness and Cherry Collectables** (Shopify)
+it goes in by the store's cart link. Signed in with Shop, Shop Pay's card is there
+and only "Pay now" is pressed; as a guest, your details, the address from
+Shopify's suggestions, the card and "Use shipping address as billing address"
+ticked, then "Pay now". At **The Gamesmen** it picks "Standard" shipping (else the
+first one offered), "Credit card", types the card, ticks "I agree to the Terms and
+Conditions…", leaves "I have a different billing address" unticked, then "CONFIRM
+AND PAY". At **Games World** it leaves "Deliver to a different address?" unticked
+and types the card into Stripe's form — or, with Stripe's **Link** connected,
+presses Link's "Confirm" — then "Place order".
 
 At **Premium Bandai** the whole checkout is in Global-e's frame. Mugibot runs it
 in there: your details, the card, the purchase agreement box, and — after the same
@@ -372,6 +423,16 @@ These flows are tested end to end on the **dummy stores** only:
 - City Beach:
   - an order placed;
   - a last "place order" stage, whose own "Confirm & pay" is pressed once.
+- Pokébox signed in with Shop: Shop Pay's card, "Pay now" pressed, the order placed.
+- Collectible Madness as a guest: your details, the address from Shopify's
+  suggestions, the card in Shopify's card fields, "Use shipping address as
+  billing address" ticked, "Pay now".
+- The Gamesmen as a guest (your details, "Standard" shipping, "Credit card",
+  the card, the terms box ticked, "CONFIRM AND PAY") and signed in with a saved
+  address (only the shipping, card and terms).
+- Games World as a guest (its add-to-cart link, your details, the state
+  drop-down, "Deliver to a different address?" unticked, Stripe's card form,
+  "Place order") and signed in with Stripe's Link (its card and "Confirm").
 
 **VIP drops** (Monitor → Settings, admins) can arm Auto-checkout for you: what a
 VIP watch finds goes on your watchlist, armed up to the max price you gave it (see
@@ -424,6 +485,15 @@ the monitor sees an armed item drop (live sweep, page check or a browser's check
   - Final button pressed with no outcome in 5 minutes: "needs you".
 - **Another member's browser** can't see, start or report your runs. A run's
   code only works for your account.
+- **Clear cart** (`server/bags.js`): `POST /api/bags/clear` (a store, or
+  `stores: 'all'`) makes a request per store for your checkout browser, handed
+  over with `GET /api/ext/aco/next` (it answers at once with them). The
+  extension (`extension/background.js`, "Clear cart") takes the store's turn
+  like a checkout (`c:<id>` in the line), opens the bag, and `extension/bag.js`
+  on the page empties it; how it went comes back with `POST /api/ext/bags/:id`
+  and shows on the dashboard as it happens. Not picked up in 4 minutes: "didn't
+  start"; quiet for 3 minutes: "lost touch". The page's own `confirm()` boxes
+  answer yes in that tab only.
 - **The extension listens** with one long-poll at a time: in your checkout
   browser all the time (for ⚡ Buy from your phone, unless that's switched off),
   and in any browser while something is armed or a test run is waiting. The
@@ -438,6 +508,8 @@ the monitor sees an armed item drop (live sweep, page check or a browser's check
 Files:
 
 - `server/aco.js`: runs, limits, reasons and notifications.
+- `server/bags.js`: Clear cart (`/api/bags`, `/api/bags/clear`, `/api/ext/bags/:id`).
+- `extension/bag.js`: emptying a store's bag, on its bag page.
 - `server/routes/user.js`: `/api/aco` (settings, your browsers), `/api/aco/test/:id`
   (Trigger ACO) and `/api/aco/remote/:id` (Send to my computer).
 - `server/routes/discord.js`: the ⚡ Buy button, pressed.
@@ -445,11 +517,13 @@ Files:
 - `extension/background.js`: listening and opening the tab.
 - `extension/content.js`: the checks, the final button and the outcome.
 - `extension/core.js`: pop-ups.
-- `web/js/app.js` and `web/app.html`: the Auto-checkout tab.
+- `web/js/app.js` and `web/app.html`: the Checkout page.
 
 Tests:
 
 - `test/aco.test.js`: server.
+- `test/bags.test.js`: Clear cart on the server; `test/extension.e2e.test.js` has
+  it emptying every dummy store's bag, each its own way.
 - `test/remote.test.js`: ⚡ Buy from your phone and the checkout browser.
 - `test/extension.e2e.test.js`: the real extension on the dummy stores
   (several at once included).

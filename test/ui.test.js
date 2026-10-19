@@ -138,8 +138,8 @@ test('⚡ Buy without the extension still opens the product (with a one-time cod
   await tab.close();
 });
 
-test('Checkout details: several addresses, a default, validated; the card stays in the extension', async () => {
-  await page.click('a[data-tab="checkout"]');
+test('Checkout → Delivery & card: several addresses, a default, validated; the card stays in the extension', async () => {
+  await page.click('a[data-tab="aco"]');
   await page.waitForSelector('#p-list fieldset.profile');
   await page.fill('#p-0-label', 'Home');
   await page.fill('#p-0-firstName', 'Jamie');
@@ -179,7 +179,7 @@ test('Checkout details: several addresses, a default, validated; the card stays 
 test('Discord tab: connect (the fake Discord sends straight back), pings, test ping, webhook check', async () => {
   discord.state.users['d-owner'] = { id: 'd-owner', username: 'owner_disc' };
   discord.state.nextUser = 'd-owner';
-  await page.click('a[data-tab="discord"]');
+  await page.click('a[data-tab="setup"]');
   await page.waitForSelector('#d-actions a[href="/auth/discord"]');
   await page.click('#d-actions a[href="/auth/discord"]');
   await page.waitForURL(/discord=linked/);
@@ -200,8 +200,8 @@ test('Discord tab: connect (the fake Discord sends straight back), pings, test p
   if (shots) await page.screenshot({ path: path.join(shots, 'discord.png'), fullPage: true });
 });
 
-test('Monitor tab: add a monitor, live alerts, product page with price history, alert rules; dark by default with a light switch', async () => {
-  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'dark theme by default');
+test('Drops (the monitor): add a monitor, live alerts, product page with price history, alert rules; light by default with a dark switch', async () => {
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light', 'the light look by default');
   await page.click('a[data-tab="monitor"]');
   await page.waitForSelector('#m-stats .sn-stat');
   assert.match(await page.textContent('#m-stats'), /Available now\s*0\s*of 0 tracked/);
@@ -333,9 +333,9 @@ test('Monitor tab: add a monitor, live alerts, product page with price history, 
   if (shots) await page.screenshot({ path: path.join(shots, 'monitor.png'), fullPage: true });
 
   await page.click('#theme-toggle');
-  assert.equal(await page.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('mgb-theme')].join()), 'light,light');
+  assert.equal(await page.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('mgb-theme2')].join()), 'dark,dark');
   await page.click('#theme-toggle');
-  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light');
 });
 
 test('Monitor tab: live sweeps — each store\'s health and settings; new drops, restocks and stock changes show up by themselves', async () => {
@@ -489,8 +489,8 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await sw.save({ keywords: 'pokemon, one piece', stores: { kmart: 'browser' }, everySeconds: 5, restockOncePerDay: true, priceAlerts: true }, null);
 });
 
-test('Extension tab: install steps, browser checks switch, stores and their flows', async () => {
-  await page.click('a[data-tab="extension"]');
+test('Setup → Extension: install steps, browser checks switch, stores and their flows', async () => {
+  await page.click('a[data-tab="setup"]');
   await page.waitForSelector('#stores li');
   const stores = await page.textContent('#stores');
   assert.match(stores, /Kmart.*verified flow/s);
@@ -542,7 +542,7 @@ test('Membership tab: become a member through Whop, then it shows the membership
   await p2.click('#signup button[type=submit]');
   await p2.waitForURL(/\/app/);
   assert.match(await p2.textContent('#banner'), /Start your membership \(A\$19\.99 \/ month\)/);
-  await p2.click('a[data-tab="membership"]');
+  await p2.click('a[data-tab="account"]');
   await p2.waitForSelector('#m-subscribe:not([hidden])');
   await p2.click('#m-subscribe');
   await p2.waitForURL(/^https:\/\/whop\.test\/checkout\/ch_\d+\/$/);
@@ -815,8 +815,8 @@ test('Auto-checkout tab: switched on only with the agreement; limits; arming nee
   // …and when it can't start, why: Day UPC at $360 is over the $250 an order limit.
   page.once('dialog', (d) => d.accept());
   await day.locator('.aco-test').click();
-  await page.waitForFunction(() => /didn't start/.test(document.querySelector('#toasts')?.textContent || ''));
-  assert.match(await page.textContent('#toasts'), /over your limit of \$250\.00 an order/);
+  // (Its own words: an earlier "didn't start" — this test's Day UPC drop, above — can still be showing.)
+  await page.waitForFunction(() => /over your limit of \$250\.00 an order/.test(document.querySelector('#toasts')?.textContent || ''));
   // A test run already going: not twice.
   page.once('dialog', (d) => d.accept());
   await ko.locator('.aco-test').click();
@@ -875,6 +875,63 @@ test("Auto-checkout tab: ⚡ Buy from your phone — its switch, and the checkou
   // (Leave it as it was: no browsers.)
   for (const d of (await me.get('/api/devices')).body.devices) await me.del(`/api/devices/${d.id}`);
   await me.put('/api/aco', { deviceId: '' });
+});
+
+test('Auto-checkout tab: 🧹 your bags at each store — Clear cart and Clear all, sent to your checkout browser (asked first), each store saying how it went; an old extension there: update it first', async () => {
+  const me = new Client(env.url);
+  await me.post('/api/auth/login', { username: 'owner', password: PASSWORD });
+  await page.goto(`${env.url}/app#aco`);
+  await page.reload(); // (already on this tab: what it shows now, not what it loaded then)
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #bags li[data-store="kmart"]');
+  // No browser connected yet.
+  assert.match(await page.textContent('#bags-sum'), /Connect the extension in the browser you check out with/);
+  assert.equal(await page.locator('#bags li[data-store="kmart"] button').isDisabled(), true);
+  assert.equal(await page.isDisabled('#bags-all'), true);
+  assert.match(await page.textContent('#bags li[data-store="kmart"]'), /Not emptied from here yet/);
+  // An extension too old to do it there.
+  const pc = await Device.pair(env.url, me, 'Chrome on Home PC');
+  await pc.call('GET', '/api/ext/me?v=1.17.0');
+  await page.reload();
+  await page.waitForFunction(() => /Update the extension in Chrome on Home PC to 1\.18\.0 or newer to empty its bags from here \(it has 1\.17\.0\)/.test(document.querySelector('#bags-sum').textContent));
+  assert.equal(await page.locator('#bags li[data-store="kmart"] button').isDisabled(), true);
+  // Up to date, and open.
+  await pc.call('GET', '/api/ext/me?v=1.18.0');
+  await pc.call('GET', '/api/ext/aco/next');
+  await page.reload();
+  await page.waitForFunction(() => /Emptied in Chrome on Home PC, your checkout browser \(open now\)/.test(document.querySelector('#bags-sum').textContent));
+  // Clear cart at one store: asked first — "no" asks nothing of the browser…
+  page.once('dialog', (d) => d.dismiss());
+  await page.click('#bags li[data-store="kmart"] button');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await pc.call('GET', '/api/ext/aco/next')).body.clears.length, 0);
+  // …"yes" sends it there, and the card follows how it goes by itself.
+  page.once('dialog', (d) => { assert.match(d.message(), /Empty your Kmart bag in Chrome on Home PC\?/); d.accept(); });
+  await page.click('#bags li[data-store="kmart"] button');
+  await page.waitForFunction(() => /Waiting for Chrome on Home PC/.test(document.querySelector('#bags li[data-store="kmart"]').textContent));
+  assert.match(await page.textContent('#bags-msg'), /Chrome on Home PC is emptying it\./);
+  assert.equal(await page.locator('#bags li[data-store="kmart"] button').isDisabled(), true, 'once at a time');
+  const job = (await pc.call('GET', '/api/ext/aco/next')).body.clears[0];
+  await pc.call('POST', `/api/ext/bags/${job.id}`, { status: 'clearing', removed: 1 });
+  await page.waitForFunction(() => /Emptying it… 1 removed so far/.test(document.querySelector('#bags li[data-store="kmart"]').textContent));
+  await pc.call('POST', `/api/ext/bags/${job.id}`, { status: 'cleared', removed: 2 });
+  await page.waitForFunction(() => /✓ Emptied — 2 items removed/.test(document.querySelector('#bags li[data-store="kmart"]').textContent));
+  // Clear all: every store, one at a time — each one's end shows on its own.
+  page.once('dialog', (d) => { assert.match(d.message(), /Empty your bags at all \d+ stores in Chrome on Home PC\?/); d.accept(); });
+  await page.click('#bags-all');
+  await page.waitForFunction(() => document.querySelectorAll('#bags li.active').length > 5);
+  assert.match(await page.textContent('#bags-msg'), /emptying your bags, one store at a time/);
+  for (const j of (await pc.call('GET', '/api/ext/aco/next')).body.clears) {
+    await pc.call('POST', `/api/ext/bags/${j.id}`, j.store === 'target' ? { status: 'failed', message: "Target didn't take it out when its Remove button was pressed" }
+      : j.store === 'bigw' ? { status: 'busy', message: 'Your checkout of ETB at BIG W is going in this browser — its bag was left alone.' } : { status: 'empty' });
+  }
+  await page.waitForFunction(() => !document.querySelector('#bags li.active'));
+  assert.match(await page.textContent('#bags li[data-store="target"]'), /✗ Couldn't empty it: Target didn't take it out/);
+  assert.match(await page.getAttribute('#bags li[data-store="target"]', 'class'), /\berr\b/);
+  assert.match(await page.textContent('#bags li[data-store="bigw"]'), /Left alone: Your checkout of ETB at BIG W is going/);
+  assert.match(await page.textContent('#bags li[data-store="ebgames"]'), /✓ Already empty/);
+  if (shots) await page.locator('#bags-card').screenshot({ path: path.join(shots, 'bags.png') });
+  // (Leave it as it was: no browsers.)
+  for (const d of (await me.get('/api/devices')).body.devices) await me.del(`/api/devices/${d.id}`);
 });
 
 test("Monitor page for a member: each store's switch (hidden just for them), ☆ Watch on a tracked product, and never where the searches come from", async () => {
@@ -1135,7 +1192,7 @@ test('Auto-checkout run history in pages; the card backup on Checkout details', 
   assert.match(await page.textContent('[data-panel="aco"]'), /Run history/);
   // Checkout details: a card backed up in the account (locked in the extension) shows, and can be deleted.
   env.app.repo.setData(owner.id, 'cardBackup', { v: 1, kdf: 'PBKDF2-SHA256', iterations: 600000, salt: 'AAAAAAAAAAAAAAAAAAAAAA==', iv: 'AAAAAAAAAAAAAAAA', ct: 'A'.repeat(48), last4: '4242', brand: 'Visa', expMonth: '12', expYear: '2031', hasCvc: true, savedAt: Date.now() });
-  await page.click('a[data-tab="checkout"]');
+  await page.goto(`${env.url}/app#checkout`);
   await page.waitForFunction(() => /Backed up/.test(document.querySelector('#card-backup').textContent));
   assert.match(await page.textContent('#card-backup'), /Visa •••• 4242 · expires 12\/31 is backed up in your account, locked with your card passphrase/);
   page.once('dialog', (d) => d.accept());
@@ -1143,6 +1200,44 @@ test('Auto-checkout run history in pages; the card backup on Checkout details', 
   await page.waitForFunction(() => /Not backed up/.test(document.querySelector('#card-backup').textContent));
   assert.equal(env.app.repo.getData(owner.id, 'cardBackup', null), null);
   env.app.db.run("DELETE FROM aco_runs WHERE id LIKE 'acr_page%'");
+});
+
+test('four pages, not seven: Drops, Checkout (Auto-checkout and your delivery details and card), Setup (the extension and Discord), Account (membership and your account) — every old address still lands on its part; your loadout on Drops; on a phone, a tab bar at the bottom', async () => {
+  await page.goto(`${env.url}/app#monitor`);
+  assert.deepEqual(await page.$$eval('.side a', (as) => as.map((a) => [a.dataset.tab, a.querySelector('.lb').textContent])),
+    [['monitor', 'Drops'], ['aco', 'Checkout'], ['setup', 'Setup'], ['account', 'Account']]);
+  // Drops: your loadout first — membership, Auto-checkout, the extension in this browser, your card.
+  await page.waitForSelector('#loadout:not([hidden]) .lo-chip');
+  assert.equal(await page.locator('#loadout .lo-chip').count(), 4);
+  assert.match(await page.textContent('#loadout'), /Auto-checkout (on|off)/);
+  // Each page, the parts it's made of; the old addresses open the page their part is on now, there.
+  const shown = () => page.$$eval('[data-panel]', (ps) => ps.filter((p) => !p.hidden).map((p) => p.dataset.panel));
+  for (const [hash, page_, panels] of [['aco', 'aco', ['aco', 'checkout']], ['checkout', 'aco', ['aco', 'checkout']], ['setup', 'setup', ['extension', 'discord']],
+    ['extension', 'setup', ['extension', 'discord']], ['discord', 'setup', ['extension', 'discord']], ['update', 'setup', ['extension', 'discord']],
+    ['account', 'account', ['membership', 'account']], ['membership', 'account', ['membership', 'account']], ['watch', 'monitor', ['monitor']]]) {
+    await page.goto(`${env.url}/app#${hash}`);
+    await page.waitForFunction((want) => document.querySelector('.side a.active')?.dataset.tab === want, page_);
+    assert.deepEqual(await shown(), panels, `#${hash}`);
+    assert.equal(await page.getAttribute('.side a.active', 'aria-current'), 'page');
+    assert.equal(await page.isVisible(`.jump[data-for="${page_}"]`), page_ !== 'monitor', `#${hash}: the row of its parts`);
+  }
+  // #discord lands on Discord, part way down Setup; the row's chips go to each part.
+  await page.goto(`${env.url}/app#discord`);
+  await page.waitForFunction(() => window.scrollY > 200);
+  await page.goto(`${env.url}/app#aco`);
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-items-card');
+  await page.click('.jump[data-for="aco"] [data-jump="#bags-card"]');
+  await page.waitForFunction(() => Math.abs(document.querySelector('#bags-card').getBoundingClientRect().top - 120) < 80);
+  // A phone: the four pages along the bottom, in reach of a thumb.
+  const phone = await browser.newPage({ viewport: { width: 390, height: 800 } });
+  await phone.context().addCookies(await page.context().cookies(env.url));
+  await phone.goto(`${env.url}/app#aco`);
+  await phone.waitForSelector('[data-panel="aco"]:not([hidden])');
+  const bar = await phone.locator('.side').boundingBox();
+  assert.ok(bar.y + bar.height >= 795 && bar.width >= 380, `the tab bar sits along the bottom: ${JSON.stringify(bar)}`);
+  await phone.click('.side a[data-tab="setup"]');
+  await phone.waitForSelector('[data-panel="extension"]:not([hidden])');
+  await phone.close();
 });
 
 test('phone-sized screens: no sideways scrolling', async () => {
@@ -1157,7 +1252,7 @@ test('phone-sized screens: no sideways scrolling', async () => {
   await phone.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
   for (const tab of ['watch', 'drops', 'activity', 'monitor', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account']) {
     await phone.goto(`${env.url}/app#${tab}`);
-    // (#watch, #drops and #activity: lists on the Monitor page.)
+    // (#watch, #drops and #activity: lists on Drops.)
     await phone.waitForSelector(`[data-panel="${['watch', 'drops', 'activity'].includes(tab) ? 'monitor' : tab}"]:not([hidden])`);
     await phone.waitForTimeout(150);
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

@@ -25,7 +25,9 @@ community. Built on TCGCopBot's working Kmart flow.
   It works within their limits (per order, orders and spending a day) and buys
   **once per arming**. It stops at a bank's or a bot check, a declined card,
   another item in the bag or a total over the limit. Every attempt is logged on
-  the Auto-checkout tab with each step and why it ended, and DM'd. See
+  the Checkout page with each step and why it ended, and DM'd. **Clear
+  cart** empties a store's bag in the checkout browser (or **Clear all**, every
+  store in turn), from anywhere, so nothing else in a bag stops a drop. See
   [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md).
 - **⚡ Buy from your phone.** Press ⚡ Buy on a Discord alert or DM anywhere,
   your phone included, with nothing signed in there: Discord says who pressed
@@ -54,11 +56,15 @@ community. Built on TCGCopBot's working Kmart flow.
   other websites get the alert only. See
   [docs/MONITORING.md](docs/MONITORING.md#-drop-watches-anything-that-isnt-the-card-keywords).
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games,
-  JB Hi-Fi, Target, Toys"R"Us, Amazon, The Games Cube, Gamerholic and Premium
-  Bandai (Australia) are beta (built from walk-throughs of their real checkouts
-  and tested on dummy copies of those stores). Zing, Trainer Town and Pokémon
+  JB Hi-Fi, Target, Toys"R"Us, Amazon, The Games Cube, Gamerholic, Premium
+  Bandai (Australia), and the card shops Pokébox, Good Games, Collectible
+  Madness, Cherry Collectables (Shopify), The Gamesmen (Magento) and Games World
+  (WooCommerce) are beta (built from walk-throughs of their real checkouts
+  and tested on dummy copies of those stores). Zing, Trainer Town, City Beach and Pokémon
   Center (Australia) are drafts. Amazon sells signed in only; The Games Cube
-  takes PayPal only, so it always stops there for you. Flows live on the server, so fixing one
+  takes PayPal only, so it always stops there for you. Every store's buy button
+  reads the same, whatever its words: "Add to cart", "Add to basket",
+  "Pre-order", "Buy", "Buy now"… Flows live on the server, so fixing one
   reaches everyone without reinstalling the extension. See
   [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md).
 - **Memberships on Whop (A$19.99/month).** Members pay through Whop, and their
@@ -76,14 +82,14 @@ community. Built on TCGCopBot's working Kmart flow.
   every member watching that SKU. Every store is searched **server first**:
   from Mugibot's server, with an admin's browser (the extension) standing in
   only while a store refuses the server or the server can't read it — BIG W,
-  Pokémon Center and Premium Bandai (their pages opened and read once they have
+  Pokémon Center, Premium Bandai and The Gamesmen (their pages opened and read once they have
   built their product lists), EB Games and Amazon AU (asked for from inside one
   of their pages) often do — and the server taking back over as soon as it's
   let in. Admins can also monitor single products. Each channel
   gets what its rule asks for (by category, store, kind or keyword), and one
   button sets up a channel per store and game (`kmart-pokemon`,
   `bigw-one-piece`…, `premium-bandai`, `pokemon-center`, and `misc-retailers`
-  for everything else). The dashboard's **Monitor** tab: a live sonar, each
+  for everything else). The dashboard's **Drops** page: a live sonar, each
   store's state (with **↻ Reset** for a store that keeps failing), today's
   numbers, a feed of new drops and restocks (with the product's picture, price
   and ⚡ Buy), drop pop-ups with a sound and a desktop notification, and every
@@ -92,10 +98,20 @@ community. Built on TCGCopBot's working Kmart flow.
   left out.
 - **Store sign-ins.** The extension notices whether you're signed in at each
   store (when you open it, and every 10 minutes for the stores whose pages
-  show it), and the Extension tab lists where you are and aren't, with a
+  show it), and the Setup page lists where you are and aren't, with a
   **Sign in** link for each: signed in, ⚡ Buy's checkout is faster because the
   store fills in your saved details. The watchlist reminds you about a store
   you watch where you're signed out. It only looks: nothing is clicked or typed.
+- **The dashboard is four pages** (a sidebar on a computer, a tab bar at the
+  bottom on a phone): **🔥 Drops** (the live monitor, your watchlist, drop
+  watches and activity, with a strip at the top saying whether you're ready for
+  the next drop: membership, Auto-checkout, the extension, your card),
+  **⚡ Checkout** (Auto-checkout, Clear cart, armed items, run history, then
+  your delivery details and card), **🧰 Setup** (the extension, store sign-ins,
+  browsers, Discord and pings) and **👤 Account** (membership and your account).
+  Pages with several parts have a row of shortcuts at the top. Old links
+  (`#checkout`, `#extension`, `#discord`, `#membership`, `#update`) still open
+  the right part. Light by default, bright and clean; dark is one press away (☾).
 - **Admin console** at `/admin`: members, memberships, Discord status, SKU
   totals, restock pings, stores and flows, a setup check, Whop memberships and
   an audit log.
@@ -175,7 +191,7 @@ Discord and Whop are optional for this. Add them later with the guides.
   servers. For those, each member's own browser, with the extension, re-checks
   **that member's own SKUs** about once a minute, just like refreshing the page.
   The results only ever update that member's own watchlist. Members can switch
-  this off on the Extension tab.
+  this off on the Setup page.
 - **Not listed yet.** A SKU without a product link is looked for on the store's
   search page. When the page goes up, members get a "Listed" ping.
 - **Never evades bot protection.** If a store shows a bot check, Mugibot backs
@@ -222,7 +238,7 @@ sits with PCI-DSS where you trade).
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 294 tests in about twelve minutes:
+the 347 tests in about sixteen minutes:
 
 ```bash
 npm install
@@ -273,8 +289,16 @@ npm test
   card form; and signed in), Amazon (Buy Now, "No thanks" to Prime; and
   signed out), Pokémon Center and Premium Bandai (its checkout in a
   Global-e-style frame: +61 phone, state and card-expiry drop-downs, the
-  purchase agreement) flows each stop at their final button with nothing
-  pressed, plus the
+  purchase agreement), Pokébox, Good Games, Collectible Madness and Cherry
+  Collectables (Shop Pay, and as a guest with Shopify's address suggestions and
+  "use shipping address as billing" ticked), The Gamesmen (as a guest and signed
+  in with a saved address; "Standard" shipping or the first one offered; the
+  billing box left unticked; "Credit card"; the terms box) and Games World (its
+  add-to-cart link, selectWoo's state drop-down, "Deliver to a different
+  address?" unticked, Stripe's card form or a Link card and its Confirm) flows
+  each stop at their final button with nothing pressed — every store's buy
+  button by its words ("Buy Now", "Add to Basket", "Buy", "Pre Order"; "Add to
+  bag" over a "Buy Now" beside it) — plus the
   card saved without a passphrase and still ready after the browser restarts,
   a card from an older version moving over, the card in a payment frame, card
   boxes in separate frames that only take real typing or key presses (like
@@ -294,8 +318,10 @@ npm test
   - at the dummy Kmart and Target: Target's upsell pop-up closed, the total
     over the limit, another item in the bag, a declined card and a bank's check;
   - orders placed at the dummy EB Games (guest and signed in), JB Hi-Fi,
-    Toys"R"Us (Shop Pay), Amazon (its checkout page and its quick checkout)
-    and Premium Bandai (inside Global-e's frame), and The Games Cube stopping
+    Toys"R"Us (Shop Pay), Amazon (its checkout page and its quick checkout),
+    Premium Bandai (inside Global-e's frame), Pokébox (Shop Pay), Collectible
+    Madness (as a guest), The Gamesmen (as a guest and signed in) and Games
+    World (as a guest, and with Stripe's Link), and The Games Cube stopping
     at PayPal for you;
   - an add the store didn't take (the empty bag noticed, Add pressed once more,
     then it says why);
@@ -319,6 +345,16 @@ npm test
     checkout browser alone, a picked one or the newest. Also covered: someone
     else's button, an unconnected Discord, no membership and "Send to my
     computer" on the buy page.
+  - Clear cart: every dummy store's bag emptied its own way — Remove buttons,
+    a bin icon posting a form, Shopify's `/cart/clear.js` and its Remove links,
+    Magento's "Remove item" forms, WooCommerce's × links,
+    "Are you sure?" pop-ups and the browser's own confirm box, a "Removing…"
+    button, Target's "Undo" and Amazon's "Save for later" never pressed (its
+    saved list left alone) — then checked empty; Clear all in one tab; a store
+    with a checkout going left alone; a drop while a bag's being emptied going
+    next in line; a bag with something else in it stopping Auto-checkout, emptied,
+    and the next drop bought; a Remove that does nothing, a queue where the bag
+    should be, a page that won't load, and a bag address that's a page not found.
 - **Checkpoints and virtual queues** (dummy JB Hi-Fi checkpoint that only a
   person's click solves; dummy EB Games and Pokémon Center queues that refresh
   themselves and lose your place if anything asks again too soon):
@@ -362,8 +398,10 @@ npm test
   passphrase refused; kept per account), activity, watchlist, products and run
   history paged, members' own store switches, and members never told where a
   store is searched from (API and live stream).
-- **Website in a browser:** every dashboard and admin tab, including the
-  Monitor page (live alerts, live sweeps' health and settings, the Tracked
+- **Website in a browser:** the dashboard's four pages (each page's parts and
+  shortcuts, the ready-for-the-next-drop strip, old links landing on the right
+  part, the tab bar on a phone) and every admin tab, including the
+  Drops page (live alerts, live sweeps' health and settings, the Tracked
   products / My watchlist / My activity tabs, store switches, product page with
   price chart, alert rules, light and dark themes), phone-sized screens, no
   JavaScript errors.

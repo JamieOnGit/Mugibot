@@ -12,13 +12,25 @@ const FLOW = { verified: 'verified flow', beta: 'beta flow', draft: 'draft flow'
 const state = { me: null, items: [], retailers: [], profiles: null, editing: null, ext: null, alerts: null, logins: null, aco: null, wPage: 1, feedPage: 1, feedTotal: 0, runsPage: 1, cardBackup: null };
 
 // ---------------------------------------------------------------------------
-// Tabs
+// Pages: four in the sidebar (a tab bar at the bottom on phones), each showing a few sections in order
 // ---------------------------------------------------------------------------
-const TABS = ['monitor', 'monitor-settings', 'monitor-log', 'checkout', 'aco', 'discord', 'extension', 'membership', 'account'];
-// The Monitor's own pages (Settings and Check log are for admins): the sidebar's Monitor stays lit.
+//   🔥 Drops     the live monitor: new drops and restocks, your watchlist, drop watches, your activity
+//   ⚡ Checkout  Auto-checkout (switch, limits, ready?, phone ⚡ Buy, bags, armed items, runs), then the
+//               delivery details and card every checkout uses
+//   🧰 Setup     the extension (install, connect, store sign-ins, browsers), then Discord and pings
+//   👤 Account   membership, then your account
+// The Monitor's admin pages (Settings, Check log) sit under Drops.
+const PAGES = {
+  monitor: ['monitor'], 'monitor-settings': ['monitor-settings'], 'monitor-log': ['monitor-log'],
+  aco: ['aco', 'checkout'], setup: ['extension', 'discord'], account: ['membership', 'account'],
+};
+// Addresses from before (in DMs, emails, the extension's Update button): the page each is on now, and where on it.
+const MOVED = { checkout: 'aco', extension: 'setup', discord: 'setup', update: 'setup', membership: 'account' };
+const SCROLL_TO = { checkout: '[data-panel="checkout"]', discord: '[data-panel="discord"]', update: '#ext-update', membership: '[data-panel="membership"]' };
+// The Monitor's own pages (Settings and Check log are for admins): the sidebar's Drops stays lit.
 const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
-// The lists on the Monitor page (tracked products, your watchlist, your drop watches, your activity).
-// #watch and #activity — the old tabs, still in links and DMs — and #drops open the Monitor page at that list.
+// The lists on the Drops page (tracked products, your watchlist, your drop watches, your activity).
+// #watch and #activity — the old tabs, still in links and DMs — and #drops open the Drops page at that list.
 const LISTS = ['tracked', 'watch', 'drops', 'activity'];
 const LIST_HASH = { watch: 'watch', drops: 'drops', activity: 'activity' };
 const LIST_KEY = 'mgb-list';
@@ -26,26 +38,38 @@ const loaders = {};
 
 function showTab() {
   const [hash, productId] = location.hash.slice(1).split('/');
-  // #update (from the extension's Update button) is the Extension tab's update steps;
-  // #monitor/<product> (from a Discord alert's Price history button) opens that product.
+  // #update (from the extension's Update button) is Setup's update steps; #checkout, #discord and
+  // #membership (from before) are parts of Checkout, Setup and Account; #monitor/<product> (from a
+  // Discord alert's Price history button) opens that product.
   if (LIST_HASH[hash]) state.list = LIST_HASH[hash];
-  const tab = hash === 'update' ? 'extension' : LIST_HASH[hash] ? 'monitor' : TABS.includes(hash) ? hash : 'monitor';
+  const tab = LIST_HASH[hash] ? 'monitor' : PAGES[hash] ? hash : MOVED[hash] || 'monitor';
   if (tab === 'monitor' && $$('.side a.active')[0]?.dataset.tab === 'monitor' && productId) {
     monitorUI.openProduct(productId);
     return;
   }
-  $$('[data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== tab; });
+  const panels = PAGES[tab];
+  $$('[data-panel]').forEach((p) => { p.hidden = !panels.includes(p.dataset.panel); });
+  $$('.jump').forEach((n) => { n.hidden = n.dataset.for !== tab; });
   document.body.classList.toggle('wide-main', MONITOR_PAGES.has(tab)); // the monitor uses the full width
-  $$('.side a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab || (a.dataset.tab === 'monitor' && MONITOR_PAGES.has(tab))));
+  $$('.side a').forEach((a) => {
+    const on = a.dataset.tab === tab || (a.dataset.tab === 'monitor' && MONITOR_PAGES.has(tab));
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
   $$('.mon-tabs a').forEach((a) => { a.classList.toggle('active', a.dataset.mtab === tab); if (a.dataset.mtab === tab) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  if (loaders[tab]) {
-    loaders[tab]().then(() => {
-      if (hash === 'update') $('#ext-update').scrollIntoView({ block: 'start' });
-      if (tab === 'monitor' && productId) monitorUI.openProduct(productId);
-    }).catch(showError);
-  }
+  const go = SCROLL_TO[hash] && $(SCROLL_TO[hash]);
+  if (!go) window.scrollTo(0, 0);
+  Promise.all(panels.map((p) => (loaders[p] ? loaders[p]() : null))).then(() => {
+    if (go) go.scrollIntoView({ block: 'start' });
+    if (tab === 'monitor' && productId) monitorUI.openProduct(productId);
+  }).catch(showError);
 }
 window.addEventListener('hashchange', showTab);
+// The row at the top of a page with several parts: straight to each one.
+$$('.jump [data-jump]').forEach((b) => b.addEventListener('click', () => {
+  const el = $(b.dataset.jump);
+  if (el) el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+}));
 
 // The tracked products (and the admins' drop watches' finds) know which are on your watchlist (☆ Watch adds one).
 const onWatchlist = (p) => state.items.find((it) => it.store === p.store && String(it.sku).toLowerCase() === String(p.sku).toLowerCase()) || null;
@@ -62,12 +86,12 @@ const dropsUI = setupDrops({
   buyUrl: (p) => `/buy?${new URLSearchParams(Object.entries({ store: p.store, sku: p.sku, url: p.url, name: p.name }).filter(([, v]) => v))}`,
 });
 
-// --- The lists on the Monitor page --------------------------------------------
+// --- The lists on the Drops page --------------------------------------------
 function savedList() {
   try { const v = localStorage.getItem(LIST_KEY); return LISTS.includes(v) ? v : null; } catch { return null; }
 }
 
-/** Show one of the Monitor page's lists. Members start at Tracked products; before a membership, your watchlist. */
+/** Show one of the Drops page's lists. Members start at Tracked products; before a membership, your watchlist. */
 async function showList(name, { load = true } = {}) {
   const member = state.me.entitlement.active;
   // (No choice yet: what the monitor tracks — or, before a membership, your watchlist.)
@@ -111,8 +135,41 @@ loaders.monitor = async () => {
   await Promise.all([loadItems(), loadRetailers()]);
   $('#pt-tracked').hidden = !state.me.entitlement.active;
   $('#pt-drops').hidden = !state.me.entitlement.active;
+  renderLoadout().catch(() => null);
   await Promise.all([monitorUI.load(), showList(state.list)]);
 };
+
+/**
+ * Your loadout, at the top of Drops: is everything ready for the next drop? Your membership,
+ * Auto-checkout (on, and how many armed), this browser's extension and your saved card — each a
+ * chip that says so, and takes you to where it's set up when it isn't.
+ */
+async function renderLoadout() {
+  const box = $('#loadout');
+  const me = state.me;
+  const [aco, ext] = await Promise.all([api('GET', '/api/aco?limit=1').catch(() => null), detectExtension()]);
+  const mine = ext.installed && ext.paired && ext.userId === me.user.id;
+  const card = mine ? ((await askExtension('cardStatus')) || {}).card : null;
+  const chip = (tone, icon, label, sub, href) => h('a', { class: `lo-chip ${tone}`, href }, h('span', { class: 'lo-ic', 'aria-hidden': 'true' }, icon),
+    h('span', { class: 'lo-tx' }, h('b', {}, label), sub ? h('small', {}, sub) : null));
+  const minV = (aco && aco.extensionVersion) || me.app.extensionVersion;
+  const chips = [
+    me.entitlement.active ? chip(me.entitlement.warning ? 'warn' : 'ok', '⭐', 'Membership', me.entitlement.label || 'Active', '#membership') : chip('warn', '⭐', 'Start your membership', 'to see every drop', '#membership'),
+    aco && aco.settings && aco.settings.enabled
+      ? chip('ok', '🤖', 'Auto-checkout on', `${aco.armed || 0} armed`, '#aco')
+      : chip('idle', '🤖', 'Auto-checkout off', aco && aco.armed ? `${aco.armed} armed` : 'arm an item to buy it the moment it drops', '#aco'),
+    !ext.installed ? chip('warn', '🧩', 'Install the extension', 'for ⚡ Buy in this browser', '#extension')
+      : !mine ? chip('warn', '🧩', 'Connect the extension', 'to your account', '#extension')
+        : versionBelow(ext.version, minV) ? chip('warn', '🧩', `Update the extension`, `v${ext.version} → ${minV}`, '#update')
+          : chip('ok', '🧩', 'Extension ready', `v${ext.version}`, '#extension'),
+    card && card.ready ? chip('ok', '💳', `${card.brand} •••• ${card.last4}`, 'saved in this browser', '#checkout')
+      : chip(mine ? 'warn' : 'idle', '💳', 'Save your card', 'it never leaves your browser', '#checkout'),
+  ];
+  box.replaceChildren(...chips);
+  box.hidden = false;
+  const stores = (state.retailers || []).filter((r) => !r.demo && r.id !== 'other').length;
+  if (stores) $('#side-stores').textContent = `${stores} stores`;
+}
 loaders['monitor-settings'] = () => monitorUI.loadSettings();
 loaders['monitor-log'] = () => monitorUI.loadChecks();
 initThemeToggle($('#theme-toggle'));
@@ -650,7 +707,7 @@ $('#w-demo').addEventListener('click', async () => {
   toast(r.added ? `Added ${r.added} dummy-store item${r.added === 1 ? '' : 's'}` : 'You already have the dummy-store items', `Change their stock at ${state.me.app.demoStoreUrl}`);
 });
 
-// Your watchlist, on the Monitor page.
+// Your watchlist, on the Drops page.
 async function loadWatch() {
   await Promise.all([renderExtStatus(), loadLogins().catch(() => null)]);
   renderItems();
@@ -761,8 +818,8 @@ async function renderCard() {
   const box = $('#card-state');
   const ext = state.ext || await detectExtension();
   state.ext = ext;
-  if (!ext.installed) { box.className = 'notice warn'; box.textContent = 'Install the extension (Extension tab) to save a card in this browser.'; return; }
-  if (!ext.paired || ext.userId !== state.me.user.id) { box.className = 'notice warn'; box.textContent = 'Connect the extension to your account (Extension tab) first.'; return; }
+  if (!ext.installed) { box.className = 'notice warn'; box.textContent = 'Install the extension (Setup page) to save a card in this browser.'; return; }
+  if (!ext.paired || ext.userId !== state.me.user.id) { box.className = 'notice warn'; box.textContent = 'Connect the extension to your account (Setup page) first.'; return; }
   const r = await askExtension('cardStatus');
   const c = r && r.card;
   const b = state.cardBackup;
@@ -780,11 +837,11 @@ async function renderCard() {
   box.textContent = ready ? `${label} — ready: ⚡ Buy fills it in at checkout${c.hasCvc === false ? ' (no CVV saved: you type that in)' : ''}.`
     : c.needsPassphrase ? `${label} — saved by an older version. Press Card settings and enter its passphrase once, and it stays ready from then on.`
       : c.unreadable ? `${label} — couldn't be read in this browser. Press Card settings and save it again.`
-        : `${label} — locked. Update the extension (Extension tab) and the card stays ready without unlocking.`;
+        : `${label} — locked. Update the extension (Setup page) and the card stays ready without unlocking.`;
 }
 $('#card-open').addEventListener('click', async () => {
   const r = await askExtension('openCardSettings');
-  if (!r) toast('Extension not found', 'Install and connect the extension first (Extension tab).', 'warn');
+  if (!r) toast('Extension not found', 'Install and connect the extension first (Setup page).', 'warn');
 });
 
 loaders.checkout = async () => {
@@ -873,7 +930,7 @@ function renderAcoItems() {
   if (!items.length) {
     body.append(h('tr', { class: 'empty' }, h('td', { colspan: '5' }, show === 'armed'
       ? 'Nothing armed yet — show every item and switch one on.'
-      : ['Your watchlist is empty — add SKUs on the ', h('a', { href: '#watch' }, 'Monitor page (My watchlist)'), ', then arm them here.'])));
+      : ['Your watchlist is empty — add SKUs on the ', h('a', { href: '#watch' }, 'Drops page (My watchlist)'), ', then arm them here.'])));
     return;
   }
   const lastRun = (id) => (state.aco.runs || []).find((r) => r.itemId === id);
@@ -994,11 +1051,11 @@ async function renderAcoChecks() {
   const isHere = !!(checkout && mine && ext.deviceId && checkout.id === ext.deviceId);
   const rows = [
     [state.me.entitlement.active, 'Membership active', 'Start your membership', '#membership'],
-    [extOk, extOk ? `Extension connected in this browser (v${ext.version})` : !ext.installed ? 'Install the extension in the browser you keep open' : !mine ? 'Connect the extension in this browser to your account' : `Update the extension to ${minV} or newer (this one is ${ext.version})`, 'Extension tab', '#extension'],
+    [extOk, extOk ? `Extension connected in this browser (v${ext.version})` : !ext.installed ? 'Install the extension in the browser you keep open' : !mine ? 'Connect the extension in this browser to your account' : `Update the extension to ${minV} or newer (this one is ${ext.version})`, 'Setup', '#extension'],
     [!!(card && card.ready), card && card.ready ? `${card.brand} •••• ${card.last4} saved in the extension`
       : backup ? `${backup.brand} •••• ${backup.last4} is backed up in your account — restore it in this browser with your card passphrase`
         : card && card.saved ? `${card.brand} •••• ${card.last4} saved in the extension — open Card settings once to make it ready` : 'Save your card in the extension (we never see it)', 'Card settings', '#checkout'],
-    [!!(profile && profile.address1 && profile.email), profile && profile.address1 ? `Delivery details: ${profile.label} (${profile.suburb || profile.postcode})` : 'Save your delivery details', 'Checkout details', '#checkout'],
+    [!!(profile && profile.address1 && profile.email), profile && profile.address1 ? `Delivery details: ${profile.label} (${profile.suburb || profile.postcode})` : 'Save your delivery details', 'Delivery & card', '#checkout'],
     [!!state.me.user.discord, state.me.user.discord ? 'Discord connected: a DM for every attempt' : 'Connect Discord to get a DM for every attempt (optional)', 'Discord', '#discord'],
   ];
   if (checkout) {
@@ -1038,7 +1095,7 @@ function renderAcoRemote() {
   const note = $('#aco-device-note');
   note.textContent = '';
   if (!browsers.length) {
-    note.append('Connect the extension in the browser on the computer you keep on (', h('a', { href: '#extension' }, 'Extension tab'), ').');
+    note.append('Connect the extension in the browser on the computer you keep on (', h('a', { href: '#extension' }, 'Setup page'), ').');
     return;
   }
   const old = checkout && versionBelow(checkout.version, state.aco.remoteVersion);
@@ -1061,17 +1118,80 @@ async function saveRemote(patch, done) {
   }
 }
 
+// --- Clear cart: your bag at each store, emptied in your checkout browser (server/bags.js) ----------
+async function loadBags() {
+  state.bags = await api('GET', '/api/bags');
+  return state.bags;
+}
+
+const BAG_TONE = { cleared: 'ok', empty: 'ok', busy: 'warn', failed: 'err', expired: 'err' };
+
+/** How a store's bag is: being emptied now, or how it went last time. */
+function bagMeta(s, deviceName) {
+  if (s.active) return s.status === 'queued' ? `⏳ Waiting for ${s.device || deviceName || 'your checkout browser'}…` : `🧹 Emptying it…${s.removed ? ` ${s.removed} removed so far` : ''}`;
+  if (!s.status) return 'Not emptied from here yet';
+  const at = s.at ? ` · ${ago(s.at)}` : '';
+  if (s.status === 'cleared') return `✓ Emptied — ${s.removed} item${s.removed === 1 ? '' : 's'} removed${at}`;
+  if (s.status === 'empty') return `✓ Already empty${at}`;
+  if (s.status === 'busy') return `Left alone: ${s.message}${at}`;
+  return `✗ ${s.statusText}: ${s.message}${at}`;
+}
+
+function renderBags() {
+  const d = state.bags;
+  const list = $('#bags');
+  if (!d || !list) return;
+  list.textContent = '';
+  const device = d.device;
+  const old = !!device && versionBelow(device.version, d.extensionVersion);
+  $('#bags-sum').textContent = !device ? "Connect the extension in the browser you check out with (Setup page), and its bags can be emptied from here."
+    : old ? `Update the extension in ${device.name} to ${d.extensionVersion} or newer to empty its bags from here (it has ${device.version || 'an older one'}).`
+      : `Emptied in ${device.name}, your checkout browser${device.listening ? ' (open now)' : " — it isn't open right now: it empties them when it next is"}.`;
+  $('#bags-all').disabled = !device || old;
+  for (const s of d.stores) {
+    const btn = h('button', { class: 'btn small', type: 'button', disabled: !device || old || s.active, 'aria-label': `Clear cart at ${s.name}` }, s.active ? 'Emptying…' : 'Clear cart');
+    btn.addEventListener('click', () => clearBags(s.id, `Empty your ${s.name} bag in ${device.name}?\n\nEverything in it is removed.`));
+    list.append(h('li', { class: `bag ${s.active ? 'active' : BAG_TONE[s.status] || 'none'}`, dataset: { store: s.id } },
+      h('span', { class: 'dot', 'aria-hidden': 'true' }),
+      h('div', { class: 'info' }, h('div', { class: 'name' }, s.name), h('div', { class: 'meta', title: s.message || '' }, bagMeta(s, device && device.name))),
+      btn));
+  }
+}
+
+/** Clear cart (a store) or Clear all ('all'), after asking. */
+async function clearBags(stores, question) {
+  if (!confirm(question)) return;
+  const msg = $('#bags-msg');
+  try {
+    const r = await api('POST', '/api/bags/clear', stores === 'all' ? { stores: 'all' } : { store: stores });
+    setMsg(msg, `${r.device.name} is emptying ${stores === 'all' ? 'your bags, one store at a time' : 'it'}${r.listening ? '.' : " — it isn't open right now: it does it when it next is (within a few minutes)."}`, true);
+    // (This browser, if it's the checkout browser, starts now rather than at its next check.)
+    askExtension('acoListen', {}, 4000);
+  } catch (e) {
+    setMsg(msg, e.message);
+  }
+  await loadBags().catch(() => null);
+  renderBags();
+}
+
+$('#bags-all').addEventListener('click', () => {
+  const d = state.bags;
+  if (!d || !d.device) return;
+  clearBags('all', `Empty your bags at all ${d.stores.length} stores in ${d.device.name}?\n\nEverything in them is removed — one store at a time. A store where a checkout of yours is going is left alone.`);
+});
+
 function renderAco() {
   if (!state.aco) return;
   renderAcoStats();
   renderAcoSettings();
   renderAcoRemote();
+  renderBags();
   renderAcoItems();
   renderAcoRuns();
 }
 
 loaders.aco = async () => {
-  await Promise.all([loadAco(), loadRetailers(), loadItems(), loadLogins().catch(() => null)]);
+  await Promise.all([loadAco(), loadRetailers(), loadItems(), loadLogins().catch(() => null), loadBags().catch(() => null)]);
   renderAco();
   renderAcoChecks().catch(() => null);
 };
@@ -1270,7 +1390,7 @@ function feedItem(ev) {
     h('time', { datetime: new Date(ev.createdAt).toISOString() }, when(ev.createdAt)),
     h('span', {}, ev.message, /^https?:\/\//i.test(ev.url || '') ? [' ', h('a', { href: ev.url, target: '_blank', rel: 'noopener' }, '↗')] : null));
 }
-// Your activity, on the Monitor page: 20 to a page, newest first.
+// Your activity, on the Drops page: 20 to a page, newest first.
 const FEED_PAGE_SIZE = 20;
 async function loadFeed(page = 1) {
   const r = await api('GET', `/api/events?limit=${FEED_PAGE_SIZE}&page=${page}`);
@@ -1364,6 +1484,13 @@ function connectStream() {
     clearTimeout(acoTimer);
     acoTimer = setTimeout(() => Promise.all([loadAco(), loadItems()]).then(renderAco).catch(() => null), 250);
   });
+  // Clear cart: a bag being emptied, or done.
+  let bagsTimer = null;
+  es.addEventListener('bags', () => {
+    if ($('[data-panel="aco"]').hidden) return;
+    clearTimeout(bagsTimer);
+    bagsTimer = setTimeout(() => loadBags().then(renderBags).catch(() => null), 200);
+  });
   es.addEventListener('monitor-feed', (e) => { monitorUI.onFeed(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });
   es.addEventListener('monitor-product', (e) => { monitorUI.onProduct(JSON.parse(e.data)); if (listOpen('drops')) dropsUI.refreshSoon(); });
   es.addEventListener('monitor-sweep', (e) => monitorUI.onSweep(JSON.parse(e.data)));
@@ -1393,4 +1520,4 @@ await loadMe();
 showTab();
 connectStream();
 if (state.me.entitlement.active) loadGates();
-if (new URLSearchParams(location.search).get('welcome')) toast('Welcome!', 'Start with Membership, then the Extension tab and Discord.', 'success', 10000);
+if (new URLSearchParams(location.search).get('welcome')) toast('Welcome!', 'Start with your membership (Account), then Setup: the extension and Discord.', 'success', 10000);

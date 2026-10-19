@@ -7,6 +7,7 @@
 
 import { parseHTML, walk, findAll, findFirst, textContent, identity } from './html.js';
 import { STATUS, combineStatuses } from './status.js';
+import { isAddLabel } from './words.js';
 
 // ---------------------------------------------------------------------------
 // Text classifiers
@@ -37,7 +38,6 @@ const IGNORE_ACTION_RE = /wish ?list|favou?rite|compare|registry|gift ?card|afte
 const SOON_RE = /\b(coming soon|notify me|email me|notify when|register (your )?interest|available soon|alert me|get notified|remind me|join (the )?wait ?list|back in stock alert)\b/i;
 const SOLD_RE = /\b(sold out|out of stock|currently unavailable|unavailable|no longer available|not available|in-?store only|not in stock|no stock|discontinued|unavailable online)\b/i;
 const PRE_RE = /\bpre-?\s?(order|sale)/i;
-const ATC_RE = /\b(add to (cart|bag|basket|trolley|order)|buy (it )?now|add to my (cart|bag))\b/i;
 
 /** Classify the label of a buy button. */
 export function classifyActionText(text) {
@@ -48,7 +48,8 @@ export function classifyActionText(text) {
   if (SOON_RE.test(s)) return STATUS.COMING_SOON;
   if (SOLD_RE.test(s)) return STATUS.OUT_OF_STOCK;
   if (PRE_RE.test(s)) return STATUS.PREORDER;
-  if (ATC_RE.test(s) || /^add$/i.test(s)) return STATUS.IN_STOCK;
+  // ("Add to cart", "Add to basket", "Buy now", "Buy"… the same words as every store's flow: words.js.)
+  if (isAddLabel(s)) return STATUS.IN_STOCK;
   return null;
 }
 

@@ -13,6 +13,8 @@
 //
 // Live sweeps from Mugibot's server: its search page (server-made, a tile per product with its
 // code, name and price; stock shows on the product page itself, which the monitor reads).
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'citybeach',
   name: 'City Beach',
@@ -34,7 +36,7 @@ export default {
   monitor: { server: true, browser: true, hostGapSeconds: 2 },
   flow: {
     product: {
-      add: [/^add to bag$/i, /^pre-?order\b/i],
+      add: ADD_WORDS,
       waitMs: 12000,
     },
     added: {

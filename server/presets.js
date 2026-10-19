@@ -79,6 +79,34 @@ export const DUMMY_PRODUCTS = {
     { sku: 'N2903432001', name: 'ONE PIECE CARD GAME Premium Card Collection -29th Anniversary Edition-', price: 25, status: 'in_stock' },
     { sku: 'N2863373001', name: 'ONE PIECE CARD GAME Official Playmat Limited Edition vol.6', price: 51, status: 'out_of_stock' },
   ],
+  // Pokébox, Good Games, Collectible Madness, Cherry Collectables (Shopify card shops) — named the way each names its products.
+  pokebox: [
+    { sku: 'pokemon-tcg-30th-celebration-elite-trainer-box-etb', name: 'Pokemon TCG: 30th Celebration Elite Trainer Box (ETB)', price: 289.99, status: 'in_stock' },
+    { sku: 'one-piece-card-game-op-15-booster-box-japanese', name: 'One Piece Card Game - OP-15: Adventure on KAMI’s Island Booster Box [Japanese]', price: 134.99, status: 'out_of_stock' },
+  ],
+  goodgames: [
+    { sku: 'pokemon-tcg-mega-lucario-ex-league-battle-deck', name: 'Pokemon TCG - Mega Lucario ex League Battle Deck', price: 60, status: 'in_stock' },
+    { sku: 'one-piece-card-game-op-14-booster-box', name: 'One Piece Card Game - OP-14 Booster Box', price: 189.95, status: 'out_of_stock' },
+  ],
+  collectiblemadness: [
+    { sku: 'pokemon-tcg-mega-zygarde-ex-premium-collection', name: 'Pokemon - TCG - Mega Zygarde ex Premium Collection', price: 95, status: 'in_stock' },
+    { sku: 'pokemon-tcg-delta-reign-booster-box', name: 'Pokemon - TCG - Delta Reign Booster Box', price: 339, status: 'out_of_stock' },
+  ],
+  cherrycollectables: [
+    { sku: 'pokemon-tcg-mega-evolution-phantasmal-flames-booster-pack', name: 'Pokemon TCG ME02 Mega Evolution - Phantasmal Flames Booster Pack', price: 17.99, status: 'in_stock' },
+    { sku: 'pokemon-tcg-30th-celebration-elite-trainer-box', name: 'Pokemon TCG 30th Celebration Elite Trainer Box', price: 299.99, status: 'out_of_stock' },
+  ],
+  // The Gamesmen (Magento): its links are the product's name; its item codes are numbers.
+  gamesmen: [
+    { sku: 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box', code: '258811', name: 'Pokemon TCG: Mega Evolution Perfect Order Elite Trainer Box', price: 119.95, status: 'in_stock' },
+    { sku: 'pokemon-tcg-mega-evolution-pitch-black-elite-trainer-box', code: '249543', name: 'Pokemon TCG: Mega Evolution: Pitch Black Elite Trainer Box', price: 139.95, status: 'out_of_stock' },
+    { sku: 'one-piece-card-game-op-16-the-time-of-battle-booster-box', code: '261002', name: 'One Piece Card Game: OP-16 The Time of Battle Booster Box', price: 199.95, status: 'preorder' },
+  ],
+  // Games World (WooCommerce): its links are /product/<name>/; the add-to-cart link takes the product's id.
+  gamesworld: [
+    { sku: 'one-piece-carrying-on-his-will-op-13-sealed-booster-box-24', name: 'ONE PIECE CARRYING ON HIS WILL [OP-13] SEALED BOOSTER BOX (24)', price: 240, status: 'in_stock' },
+    { sku: 'pokemon-tcg-mega-evolution-elite-trainer-box', name: 'POKEMON TCG MEGA EVOLUTION ELITE TRAINER BOX', price: 89.99, status: 'out_of_stock' },
+  ],
 };
 
 export const slugify = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -99,6 +127,9 @@ export function dummyProductPath(store, p) {
     case 'target': return `/target/p/${slugify(p.name)}/${p.sku}`;
     case 'amazon': return `/amazon/dp/${p.sku}`;
     case 'citybeach': return `/citybeach/${slugify(p.name)}/${p.sku}.html`;
+    case 'pokebox': case 'goodgames': case 'collectiblemadness': case 'cherrycollectables': return `/${store}/products/${p.sku}`;
+    case 'gamesmen': return `/gamesmen/${p.sku}`;
+    case 'gamesworld': return `/gamesworld/product/${p.sku}/`;
     default: return null;
   }
 }

@@ -91,7 +91,7 @@ test('arming an item needs a max price, at a store Mugibot can check out at', as
   ashBrowser = await Device.pair(env.url, ash, 'Ash laptop');
   const ext = (await ashBrowser.call('GET', '/api/ext/items')).body;
   // (listen: it's the checkout browser, the only one connected — Discord's ⚡ Buy may start a run here any time.)
-  assert.deepEqual(ext.aco, { enabled: true, armed: 1, pending: 0, listen: true });
+  assert.deepEqual(ext.aco, { enabled: true, armed: 1, pending: 0, listen: true, clears: 0 });
   assert.equal(ext.items.find((x) => x.id === it.id).aco, true);
 });
 

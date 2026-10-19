@@ -13,12 +13,18 @@
 
 import amazon from './amazon.js';
 import bigw from './bigw.js';
+import cherrycollectables from './cherrycollectables.js';
 import citybeach from './citybeach.js';
+import collectiblemadness from './collectiblemadness.js';
 import ebgames from './ebgames.js';
 import gamerholic from './gamerholic.js';
+import gamesmen from './gamesmen.js';
+import gamesworld from './gamesworld.js';
+import goodgames from './goodgames.js';
 import jbhifi from './jbhifi.js';
 import kmart from './kmart.js';
 import pbandai from './pbandai.js';
+import pokebox from './pokebox.js';
 import pokemoncenter from './pokemoncenter.js';
 import target from './target.js';
 import thegamescube from './thegamescube.js';
@@ -26,7 +32,8 @@ import toysrus from './toysrus.js';
 import trainertown from './trainertown.js';
 import zing from './zing.js';
 
-export const RETAILER_DEFS = [kmart, bigw, target, ebgames, zing, jbhifi, toysrus, trainertown, amazon, thegamescube, gamerholic, pokemoncenter, pbandai, citybeach];
+export const RETAILER_DEFS = [kmart, bigw, target, ebgames, zing, jbhifi, toysrus, trainertown, amazon, thegamescube, gamerholic, pokemoncenter, pbandai, citybeach,
+  pokebox, goodgames, collectiblemadness, cherrycollectables, gamesmen, gamesworld];
 
 // Card boxes are often in a frame hosted by the store's payment provider.
 export const PAYMENT_HOSTS = [
@@ -52,6 +59,12 @@ export const PAYMENT_HOSTS = [
   'https://*.pmnts.io/*',
   // Global-e (Premium Bandai's checkout): the whole checkout is in its frame, delivery details too.
   'https://*.global-e.com/*',
+  // Card forms Australian Magento and WooCommerce stores use (The Gamesmen's, Games World's — Stripe's
+  // is above): PayPal's own card fields, Square's, Tyro's and Pin Payments'.
+  'https://*.paypal.com/*',
+  'https://*.squarecdn.com/*',
+  'https://*.tyro.com/*',
+  'https://cdn.pinpayments.com/*',
 ];
 
 export const OTHER_STORE = { id: 'other', name: 'Other website', flowStatus: 'none', monitor: { server: true, browser: false }, hosts: [] };
@@ -205,7 +218,7 @@ export class Retailers {
   /** What the browser extension needs: where each flow applies and the flow itself. */
   forExtension() {
     return this.list.filter((r) => this.enabled(r)).map((r) => serialize({
-      id: r.id, name: r.name, hosts: r.hosts, pathPrefix: r.pathPrefix || null, flowStatus: r.flowStatus,
+      id: r.id, name: r.name, hosts: r.hosts, pathPrefix: r.pathPrefix || null, flowStatus: r.flowStatus, platform: r.platform || null,
       skuFromPath: r.skuFromPath, productPath: r.productPath, cartPath: r.cartPath || null, flow: r.flow,
       // The store login monitor: the store's address, and how to tell you're signed in there.
       base: r.base, account: r.account || null,

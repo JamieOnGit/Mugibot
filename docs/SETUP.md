@@ -107,16 +107,16 @@ http://localhost:5055, and opens the dashboard. On a Mac you can instead
 double-click `start-demo-mac.command` in the Mugibot folder (Windows:
 `start-demo-windows.bat`).
 
-1. **Install the extension.** Dashboard → **Extension** tab → **Download the
+1. **Install the extension.** Dashboard → **🧰 Setup** → **Download the
    extension** → unzip it somewhere you'll keep it. Open `chrome://extensions`,
    turn on **Developer mode** (top right), click **Load unpacked**, and choose
    the unzipped `mugibot-extension` folder. Reload the dashboard.
 2. Press **Connect this browser**. The notice turns green: "✓ Extension connected".
-3. **Checkout details** tab: fill in your name, email, mobile and address, then
+3. **⚡ Checkout** → **Delivery details & card** (at the bottom): fill in your name, email, mobile and address, then
    **Save delivery details**. Press **Add your card** and save a test card
    (`4242 4242 4242 4242`, expiry `12/30`, CVV `123`). That's all: it stays
    ready for every ⚡ Buy, even after you restart the browser.
-4. **Monitor** → **My watchlist** → **Add dummy-store test items**. You get two products from
+4. **🔥 Drops** → **My watchlist** → **Add dummy-store test items**. You get two products from
    each dummy shop, e.g. "30th Celebration Ultra-Premium Collection (dummy
    kmart)". The sold-out ones show **Sold out** within a minute.
 5. Open http://localhost:5055 (the control panel). Next to a sold-out dummy
@@ -134,7 +134,7 @@ double-click `start-demo-mac.command` in the Mugibot folder (Windows:
 
 Want to see in-browser checks? In the control panel press **Refuse server
 checks (like Kmart)**. The server's checks get "Blocked by site", and your
-browser takes over checking your dummy SKUs (Extension tab → **Check my SKUs
+browser takes over checking your dummy SKUs (Setup page → **Check my SKUs
 now** to do it immediately).
 
 **Done when:** ⚡ Buy reaches the final button on all four dummy shops.
@@ -326,7 +326,7 @@ Follow **[WHOP.md](WHOP.md)**. In short, you'll:
 fly secrets set WHOP_API_KEY=… WHOP_PLAN_ID=plan_… WHOP_PRODUCT_ID=prod_… WHOP_WEBHOOK_SECRET=ws_…
 ```
 
-**Done when:** a test account → **Membership** → **Become a member** opens Whop's
+**Done when:** a test account → **👤 Account** → **Become a member** opens Whop's
 checkout, and after paying (use a 100%-off promo code for the test) the account
 shows **Member** and the Discord role appears.
 
@@ -358,10 +358,10 @@ Discord channels get new drops, restocks and price drops. Follow
    the bot post there.
 2. Admin → Setup check → **Register slash commands**. This adds `/monitor` and
    `/restocks`.
-3. Dashboard → **Monitor** → **Discord alert channels** → **+ Add rule**, once
+3. Dashboard → **🔥 Drops** → **Settings** → **Discord alert channels** → **+ Add rule**, once
    per channel (tick 🆕, 🟢 and 📉 for the kinds it should get). Then **Test**
    each rule.
-4. Dashboard → **Monitor** → **Live sweeps** → **Settings**: your keywords.
+4. Dashboard → **🔥 Drops** → **Settings**: your keywords.
    The sweeps run by themselves.
 5. Keep Chrome open with the extension connected to an **admin** account: it
    searches Kmart, BIG W, EB Games and Zing, which refuse servers.
@@ -382,7 +382,7 @@ Open `https://<your address>/admin`:
 
 ## 8. Give members the extension
 
-- **To start:** members download it from their dashboard (**Extension** tab).
+- **To start:** members download it from their dashboard (**🧰 Setup**).
   It's already set up for your address. They load it with Developer mode, as in
   step 2. Write this up in a pinned message in your Discord.
 - **Then, the Chrome Web Store (recommended): the extension updates itself.**
@@ -469,7 +469,7 @@ Set these with `fly secrets set NAME=value` (or in `.env` on your computer).
 | `DISCORD_MEMBER_ROLE_ID` | recommended | Role given to members, taken away when their membership ends. |
 | `DISCORD_RESTOCK_CHANNEL_ID` | optional | Channel for announced restocks. |
 | `DISCORD_RESTOCK_ROLE_ID` | optional | Role @mentioned in restock posts. |
-| `DISCORD_INVITE_URL` | optional | Shown on members' Discord tab. |
+| `DISCORD_INVITE_URL` | optional | Shown to members under Setup → Discord & pings. |
 | `DISCORD_KICK_ON_EXPIRE` | | `1` = remove people from the server when their membership ends. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | optional | Email. |
 | `MONITOR_URL_INTERVAL` | | Seconds between server checks of a page (default 60). |
@@ -485,13 +485,13 @@ Set these with `fly secrets set NAME=value` (or in `.env` on your computer).
 | Problem | Fix |
 |---|---|
 | "Request blocked (cross-site)" | You opened the site at a different address from `BASE_URL`. Use the address in the yellow banner. |
-| Extension says "Not connected" | Dashboard → Extension → **Connect this browser**. If you changed `BASE_URL`, download the extension again. |
+| Extension says "Not connected" | Dashboard → Setup → **Connect this browser**. If you changed `BASE_URL`, download the extension again. |
 | ⚡ Buy opens the product but nothing happens | Is the extension connected in **this** browser? Is the membership active? Is the store switched on (Admin → Stores & flows)? |
 | Checkout stops early: "Stuck at …" | Something on the page needs you (e.g. a store login, a CAPTCHA). Finish it yourself. If it's every time, send the flow ([RETAILER-FLOWS.md](RETAILER-FLOWS.md)). |
-| Card not filled in | Extension icon → Card should say "ready for checkout". "Open Card settings once" means it was saved by an older version: enter its old passphrase once, or save it again. No CVV saved → type it in. If the panel says the card didn't go in, or couldn't reach the card boxes, the member's **Activity** tab has a line starting "Card not filled in" that names the payment form's address and what happened in each box: send that line to whoever looks after the store flows. |
-| SKU shows "Blocked by site" | The store refuses server checks. Members' browsers take over (Extension tab → In-browser checks). Admins can send manual restock pings. |
-| Member paid on Whop but isn't a member here | Admin → Whop memberships (look for "not linked") → Members → **Link Whop** on their row. Or they paste their membership ID / license key on their Membership tab. |
-| Member isn't in the Discord server | Their Discord tab → **Join the server**. Admin → Members → **Sync Discord** shows the exact error. Usually the bot's role is below `Member`. |
-| No DM pings | Discord → Privacy Settings → allow DMs from server members (for your server). Their Discord tab shows the error. |
+| Card not filled in | Extension icon → Card should say "ready for checkout". "Open Card settings once" means it was saved by an older version: enter its old passphrase once, or save it again. No CVV saved → type it in. If the panel says the card didn't go in, or couldn't reach the card boxes, the member's **My activity** (Drops page) has a line starting "Card not filled in" that names the payment form's address and what happened in each box: send that line to whoever looks after the store flows. |
+| SKU shows "Blocked by site" | The store refuses server checks. Members' browsers take over (Setup page → In-browser checks). Admins can send manual restock pings. |
+| Member paid on Whop but isn't a member here | Admin → Whop memberships (look for "not linked") → Members → **Link Whop** on their row. Or they paste their membership ID / license key on their Account page. |
+| Member isn't in the Discord server | Their Setup page → Discord & pings → **Join the server**. Admin → Members → **Sync Discord** shows the exact error. Usually the bot's role is below `Member`. |
+| No DM pings | Discord → Privacy Settings → allow DMs from server members (for your server). Their Setup page (Discord & pings) shows the error. |
 | Forgot password, no email | Admin → Members → **Reset link**, then send it to them. Or on the server: `fly ssh console -C "node /app/scripts/reset-link.js theirname"`. |
 | Logs | `fly logs` |

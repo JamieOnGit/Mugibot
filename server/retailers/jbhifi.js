@@ -10,6 +10,8 @@
 //   shipping method, card frames) → STOP at "Pay now". (From the product page by
 //   hand: "Add to cart" → cart → "Check out".)
 
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'jbhifi',
   name: 'JB Hi-Fi',
@@ -54,7 +56,7 @@ export default {
   },
   flow: {
     product: {
-      add: [/\badd to cart\b/i, /\bpre-?order\b/i],
+      add: ADD_WORDS,
       waitMs: 12000,
     },
     added: {
@@ -69,6 +71,8 @@ export default {
       path: /\/checkouts?\//i,
       steps: [/^continue to shipping$/i, /^continue to payment$/i],
       final: [/\bpay now\b/i, /\bcomplete order\b/i],
+      // "Use shipping address as billing address": ticked (it comes ticked; ticked again if it isn't).
+      tick: [/use (my |the )?shipping address as (my |the )?billing address/i],
       delivery: 'home',
       payment: 'card',
       done: /thank[-_]?you|orders?\/\w+$/i,

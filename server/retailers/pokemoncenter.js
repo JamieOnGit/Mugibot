@@ -14,6 +14,8 @@
 // window and reads it (like BIG W's). Imperva's check may reload the page first: the extension
 // keeps looking until the products are there (from 1.8.1; 1.8.0 gave up at the reload).
 
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'pokemoncenter',
   name: 'Pokémon Center',
@@ -49,7 +51,7 @@ export default {
   },
   flow: {
     product: {
-      add: [/^add to (cart|bag)$/i, /\bpre-?order\b/i],
+      add: ADD_WORDS,
       waitMs: 15000,
     },
     added: {

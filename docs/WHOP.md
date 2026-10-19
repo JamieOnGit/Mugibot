@@ -6,7 +6,7 @@ Members pay on Whop. Mugibot keeps each account's membership in step with Whop:
   that carries the member's Mugibot account ID. After paying they're sent back
   to Mugibot, and the account switches on by itself.
 - **Bought on Whop first?** The member pastes their membership ID (`mem_…`) or
-  license key on their Membership tab, or an admin links it for them.
+  license key on their Account page, or an admin links it for them.
 - **Webhooks** keep it current: activated, renewed, payment failed (access
   continues while Whop retries), cancelled or expired (monitoring, ⚡ Buy and the
   Discord role stop; the watchlist and details are kept).
@@ -91,7 +91,7 @@ and point a second webhook at it.
    a test purchase costs nothing.
 3. In a private window, sign up a test account → **Membership** → **Become a
    member** → Whop checkout → use the promo code → you come back to Mugibot
-   and the Membership tab shows **Member** with the `mem_…` ID.
+   and the Account page shows **Member** with the `mem_…` ID.
 4. If that test account has connected Discord, it now has the `Member` role.
 5. On Whop, cancel the test membership with immediate effect. The account
    shows "Membership ended" and the Discord role is removed.

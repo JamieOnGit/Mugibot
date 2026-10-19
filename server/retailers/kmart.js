@@ -12,6 +12,8 @@
 // nothing added, Oct 2026): Mugibot sees its cart refuse it, waits for the page to finish loading,
 // and presses Add once more — the same flow as signed in from there.
 
+import { ADD_WORDS } from '../monitor/words.js';
+
 export default {
   id: 'kmart',
   name: 'Kmart',
@@ -47,7 +49,7 @@ export default {
   monitor: { server: true, browser: true },
   flow: {
     product: {
-      add: [/\badd to (bag|cart)\b/i, /\bpre-?order\b/i],
+      add: ADD_WORDS,
       waitMs: 12000,
       // kmart.com.au shows "Add to bag" before its own code has started; pressing it that
       // early does nothing. ⚡ Buy presses it the moment Kmart's code has wired it up (it
