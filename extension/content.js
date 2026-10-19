@@ -119,6 +119,13 @@
   }
 
   const store = MGBQuick.sessionStore('mgbFlow');
+  // Waiting at the store's checkpoint (or in its queue) partway through a checkout: on the page after
+  // it, your account hears it's through before anything else happens (endedElsewhere()).
+  const gateWaitFlag = {
+    on: (kind) => { try { sessionStorage.setItem('mgbGateWait', kind); } catch { /* ignore */ } },
+    read: () => { try { return sessionStorage.getItem('mgbGateWait'); } catch { return null; } },
+    clear: () => { try { sessionStorage.removeItem('mgbGateWait'); } catch { /* ignore */ } },
+  };
   const assistFlag = {
     on: (profileId) => { try { sessionStorage.setItem(ASSIST_KEY, JSON.stringify({ until: Date.now() + ASSIST_TTL, profileId: profileId || null })); } catch { /* ignore */ } },
     off: () => { try { sessionStorage.removeItem(ASSIST_KEY); } catch { /* ignore */ } },
@@ -575,6 +582,20 @@
   }
 
   /**
+   * Your account ended this tab's checkout meanwhile (finished on your phone instead, while it waited
+   * at the checkpoint): it stops here, and nothing on the page is pressed.
+   */
+  function endedElsewhere(text) {
+    store.clear();
+    assistFlag.off();
+    holdStore.clear();
+    gateWaitFlag.clear();
+    ask({ type: 'turnEnd' });
+    panel.setNote('📱 Stopped');
+    panel.setStatus(text || 'Your account stopped this checkout — you finished it somewhere else. Nothing was pressed here.');
+  }
+
+  /**
    * On the gate's page with a ⚡ Buy or Auto-checkout run going: wait there — keeping the run, your
    * checkout pass and the flow's progress alive — and say so (the run says it's waiting). Nothing on
    * the page is pressed and the page is never reloaded: the queue page moves on by itself, and the
@@ -585,7 +606,10 @@
     panel.setNote(queue ? `🚦 In ${retailer.name}'s virtual queue${aco ? ' — 🤖 Auto-checkout waits in line' : ''}` : `🛡️ ${retailer.name}'s checkpoint${aco ? ' — 🤖 Auto-checkout waits for you' : ''}`);
     let saidAt = 0;
     let said = '';
+    let ended = false;
+    gateWaitFlag.on(g.kind);
     const beat = (now) => {
+      if (ended) return;
       const flow = store.read();
       if (flow) store.save({ ...flow, startedAt: Date.now() });
       const a = assistFlag.read();
@@ -598,7 +622,10 @@
       if (aco && (msg !== said || Date.now() - saidAt > 150 * 1000)) {
         said = msg;
         saidAt = Date.now();
-        acoReport('waiting', g.kind, msg);
+        // (Ended on your account's side meanwhile — finished on your phone: it stops waiting.)
+        acoReport('waiting', g.kind, msg).then((r) => {
+          if (r && r.over && !ended) { ended = true; endedElsewhere(r.text); }
+        });
       }
     };
     beat(g);
@@ -630,6 +657,7 @@
     }
     panel.setNote(!state || !state.paired ? 'This browser isn\'t connected to your account — click the Mugibot icon to connect, then press ⚡ Buy again.'
       : claim && claim.status === 402 ? (claim.error || 'Your membership isn\'t active — start it to use ⚡ Buy.')
+        : claim && claim.status === 409 ? (claim.error || 'You finished this one somewhere else — nothing to do here.')
         : claim === null || (claim && claim.status === 0) ? 'Couldn\'t reach your account to confirm the ⚡ Buy — check your connection.'
           : 'That ⚡ Buy link has expired or belongs to another account — press ⚡ Buy again.');
   }
@@ -668,12 +696,25 @@
       if (aco) acoReport('started', '', `Its turn at ${retailer.name} — carrying on`);
     } else if (held.kind) {
       report('step', `Through ${retailer.name}'s ${held.kind === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — carrying on`, product);
-      if (aco) acoReport('started', '', `Through ${retailer.name}'s ${held.kind === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — carrying on`);
+      gateWaitFlag.clear();
+      // Your account hears it's through first: one it ended meanwhile (finished on your phone) stops here.
+      if (aco) {
+        const r = await acoReport('started', '', `Through ${retailer.name}'s ${held.kind === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — carrying on`);
+        if (r && r.over) { endedElsewhere(r.text); return; }
+      }
     }
     startClaimed(held.claim, product);
     return;
   }
 
+  // Through the store's checkpoint (or queue) partway through a checkout: your account hears it first,
+  // and one it ended meanwhile (finished on your phone instead) stops here. (No run: carries on.)
+  const through = gateWaitFlag.read();
+  if (through && !gate) {
+    gateWaitFlag.clear();
+    const r = await acoReport('started', '', `Through ${retailer.name}'s ${through === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — carrying on`);
+    if (r && r.over) { endedElsewhere(r.text); return; }
+  }
   // Carry on where we left off after the store changed page (an Auto-checkout run: still this tab's).
   if (store.read() || assistFlag.active()) aco = await ask({ type: 'acoInfo' });
   if (aco) panel.setNote('🤖 Auto-checkout');

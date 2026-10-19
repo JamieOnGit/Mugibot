@@ -238,6 +238,23 @@ export function register(router, ctx) {
     return out;
   }, { entitled: true });
 
+  // "📱 Finish on this phone" (server/aco.js toPhone()): the link in Discord's ⚡ Buy reply and the DM
+  // says which checkout it is (signed: only its member is given it), so the phone needn't be signed in.
+  // Opening it only shows what it does (link checkers and previews open links too); pressing its
+  // button stops the computer's checkout and sends the phone to the store.
+  router.get('/api/phone/:id', async (req) => {
+    if (!limiter.hit(`phone:${req.ip}`, 60, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const info = ctx.aco.phoneInfo(str(req.params.id, 40), str(req.query.get('t'), 100));
+    if (!info) throw new HttpError(404, 'This link has run out — press ⚡ Buy in Discord again.');
+    return info;
+  }, { auth: 'none' });
+  router.post('/api/phone/:id', async (req) => {
+    if (!limiter.hit(`phone:${req.ip}`, 60, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const out = await ctx.aco.toPhone(str(req.params.id, 40), str(req.body && req.body.t, 100));
+    if (out.error) throw new HttpError(409, out.error);
+    return out;
+  }, { auth: 'none' });
+
   // Trigger ACO: a test run for one item, now — as if it had just dropped (the same limits and checks).
   router.post('/api/aco/test/:id', async (req) => {
     if (!limiter.hit(`aco-test:${req.user.id}`, 10, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
@@ -312,11 +329,19 @@ export function startBuy(ctx, user, it, { runId = null, variantId = null } = {})
   const profile = ctx.repo.profileFor(user.id, it.profileId);
   // runId: an Auto-checkout run (server/aco.js) — the code says so when the extension claims it.
   const code = ctx.repo.createGoCode(user.id, it, 1, profile ? profile.id : null, runId);
+  return { url: `${productLink(ctx, it, variantId)}#mgb-go=${code}`, item: it };
+}
+
+/**
+ * The store's page for a product: its cart link with the product in it where the store has one and
+ * the option is known (Shopify's /cart/<variant>:1), else the product page. (variantId: an Auto-checkout
+ * run's, from the search that saw it drop — the catalogue's, when it has one.) Also for the phone that
+ * finishes a checkout itself (server/aco.js toPhone()).
+ */
+export function productLink(ctx, it, variantId = null) {
   const r = ctx.retailers.get(it.store);
   const carts = !!(r && r.cartPath && r.cartPath.includes('{variant}'));
   const known = carts && ctx.catalog ? ctx.catalog.productFor(it.store, it.sku) : null;
-  // (variantId: an Auto-checkout run's, from the search that saw it drop — the catalogue's, when it has one.)
   const variant = (known && known.variant_id) || (carts && variantId) || null;
-  const cart = variant ? ctx.retailers.cartUrl(it.store, { sku: it.sku, variantId: variant, qty: 1 }) : null;
-  return { url: `${cart || it.url}#mgb-go=${code}`, item: it };
+  return (variant && ctx.retailers.cartUrl(it.store, { sku: it.sku, variantId: variant, qty: 1 })) || it.url;
 }

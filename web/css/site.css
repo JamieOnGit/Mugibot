@@ -71,7 +71,7 @@ input[type="checkbox"], input[type="radio"] { width: auto; margin: 0 6px 0 0; pa
 .card + .card { margin-top: 16px; }
 .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 12px; font-weight: 700; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .pill.ok, .pill.in_stock, .pill.preorder { background: var(--ok-bg); color: var(--ok); }
-.pill.warn, .pill.blocked, .pill.coming_soon { background: var(--warn-bg); color: var(--warn); }
+.pill.warn, .pill.blocked, .pill.coming_soon, .pill.in_store { background: var(--warn-bg); color: var(--warn); }
 .pill.err, .pill.error, .pill.not_found { background: var(--err-bg); color: var(--err); }
 .pill.out_of_stock { background: var(--surface-2); color: var(--muted); }
 .notice { border-radius: 10px; padding: 10px 14px; margin: 0 0 16px; background: var(--info-bg); color: var(--fg); border: 1px solid transparent; }

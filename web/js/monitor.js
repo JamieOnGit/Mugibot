@@ -14,7 +14,7 @@ const KINDS = {
   price_rise: { emoji: '📈', label: 'Price up' },
 };
 const STATUS = {
-  in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', not_listed: 'Not listed yet',
+  in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', in_store: 'In store only', not_listed: 'Not listed yet',
   not_found: 'Page gone', blocked: 'Blocked by site', error: 'Check failed', unknown: 'Unknown', pending: 'Waiting for first check',
 };
 const CATEGORY = { pokemon: 'Pokémon', onepiece: 'One Piece', other: 'Other', nontcg: 'Non-TCG' };

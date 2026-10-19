@@ -2281,6 +2281,8 @@ ${body}
               // (oosStates: in stock, but not in these states — e.g. only NSW and VIC have it.)
               ...(Array.isArray(x.oosStates) && (x.status === 'in_stock' || x.status === 'preorder') ? { stateOOS: Object.fromEntries(x.oosStates.map((st) => [st, '6'])) }
                 : x.status === 'in_stock' || x.status === 'preorder' ? {} : { stateOOS: Object.fromEntries(states.map((st) => [st, '6'])) }),
+              // (inStoreOnly: Kmart's "In store only" — FulfilmentChannel 2; 3 is delivery and click & collect.)
+              FulfilmentChannel: x.inStoreOnly ? 2 : 3,
             },
           })),
         },

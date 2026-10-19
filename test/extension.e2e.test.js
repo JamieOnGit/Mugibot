@@ -2716,6 +2716,38 @@ test("🛡️ Auto-checkout at JB Hi-Fi's checkpoint: the run waits for you (it 
   await browserApi('PUT', '/api/aco', { enabled: false });
 });
 
+test("📱 Auto-checkout at JB Hi-Fi's checkpoint, finished on the phone instead: the computer's tab stops — solved there afterwards, it doesn't carry on, and nothing is pressed", async () => {
+  await browserApi('PUT', '/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
+  const handle = 'pokemon-tcg-30th-celebration-etb';
+  await useItems([{ store: 'demo-jbhifi', sku: handle, name: 'ACO JB phone', maxPrice: 120 }]);
+  const S = store.shop('jbhifi');
+  S.checkpoint.on = true;
+  const orders = S.orders.length;
+  await testRun('ACO JB phone');
+  await waitFor(async () => (await lastRun()).status === 'waiting', { timeout: 30000, message: 'the run waiting at the checkpoint' });
+  const waiting = await lastRun();
+  // "📱 Finish on this phone", pressed on the phone (its signed link, as the DM and the ⚡ Buy reply give it).
+  const userId = env.app.db.get('SELECT user_id FROM aco_runs WHERE id = :id', { id: waiting.id }).user_id;
+  const t = new URL(env.app.aco.phoneLink(userId, waiting.id)).searchParams.get('t');
+  const out = await env.app.aco.toPhone(waiting.id, t);
+  assert.equal(out.stopped, true, JSON.stringify(out));
+  // Someone solves the check on the computer anyway (Remote Desktop, say): the tab goes on to checkout…
+  const shop = ctx.pages().find((pg) => /\/jbhifi\/checkpoint/.test(pg.url()));
+  assert.ok(shop, 'the checkpoint, open in its tab');
+  await shop.click('#hcaptcha-box');
+  await shop.click('#checkpoint-submit');
+  // …and stops there: its account said the run's over.
+  await shop.waitForFunction(() => /📱 Stopped/.test(document.querySelector('#mugibot-qc')?.textContent || '')
+    && /You finished it on your phone instead/.test(document.querySelector('#mugibot-qc').textContent), null, { timeout: 20000 });
+  await new Promise((r) => setTimeout(r, 4000));
+  assert.equal(S.orders.length, orders, 'no order placed on the computer');
+  assert.equal(ordersPlaced(), 0, '"Pay now" was not pressed');
+  const run = await lastRun();
+  assert.deepEqual([run.status, run.reason], ['skipped', 'phone']);
+  await closeStorePages('jbhifi');
+  await browserApi('PUT', '/api/aco', { enabled: false });
+});
+
 test("🚦 EB Games' virtual queue: an Auto-checkout run opens the store into the queue, waits its turn — never refreshing the page, nothing else asking EB for anything — and places the order once it's through", async () => {
   await browserApi('PUT', '/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
   await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'ACO EB queue', maxPrice: 120 }]);

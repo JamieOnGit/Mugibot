@@ -27,6 +27,7 @@ const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '—');
 const KIND = {
   restock: { emoji: '🟢', label: 'In stock', color: 0x16a34a },
   preorder: { emoji: '🟣', label: 'Pre-order open', color: 0x7c3aed },
+  in_store: { emoji: '🏬', label: 'In store only', color: 0xd97706 },
   listed: { emoji: '🆕', label: 'New drop', color: 0x2563eb },
   sold_out: { emoji: '🔴', label: 'Sold out', color: 0xdc2626 },
   price_drop: { emoji: '📉', label: 'Price drop', color: 0x0d9488 },
@@ -145,7 +146,9 @@ export class Feed {
     }
     if (!manual) {
       const last = this.catalog.lastAlert(product.id, kind);
-      if (last && this.now() - last.at < this.cfg.monitor.alertCooldownSeconds * 1000) return null;
+      // (Online after an alert that it was in the store's shops only: the restock that counts — no cooldown.)
+      const online = kind === 'restock' && last && last.status === STATUS.IN_STORE && product.status !== STATUS.IN_STORE;
+      if (last && !online && this.now() - last.at < this.cfg.monitor.alertCooldownSeconds * 1000) return null;
     }
     const row = this.catalog.addAlert({
       product_id: product.id, kind, store: product.store, sku: product.sku, name: productName(product), url: product.url || '',
@@ -219,16 +222,19 @@ export class Feed {
 
   /** The Discord embed: image, store, price, stock, SKU, category, time; ⚡ Buy and quick links. */
   message(alert, product = {}, { mention = '' } = {}) {
-    const k = alert.kind === 'restock' && alert.status === STATUS.PREORDER ? KIND.preorder : KIND[alert.kind] || KIND.restock;
+    const k = alert.kind === 'restock' && alert.status === STATUS.PREORDER ? KIND.preorder
+      : alert.kind === 'restock' && alert.status === STATUS.IN_STORE ? KIND.in_store : KIND[alert.kind] || KIND.restock;
+    // In the store's shops only (Kmart's "In store only"): nothing to buy online — no ⚡ Buy, no cart link.
+    const online = alert.kind !== 'sold_out' && alert.status !== STATUS.IN_STORE;
     const storeName = this.retailers.siteName(alert.store, alert.url);
     const buttons = [];
     // Whoever presses it checks out in their own checkout browser, wherever they pressed it — their
     // phone included (routes/discord.js). As a link (no Discord interactions set up): one click to the
     // store, with their own checkout (signed: see Notifier.alertBuyLink). Only where Mugibot has a
     // checkout: another website's drop (monitor/drops.js) is "Open product".
-    if (alert.kind !== 'sold_out' && this.retailers.canBuy(alert.store)) buttons.push({ label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(alert), action: alert.id ? buyAction('a', alert.id) : null });
+    if (online && this.retailers.canBuy(alert.store)) buttons.push({ label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(alert), action: alert.id ? buyAction('a', alert.id) : null });
     if (alert.url) buttons.push({ label: 'Open product', url: alert.url });
-    const cart = alert.kind !== 'sold_out' && this.retailers.cartUrl(alert.store, { sku: alert.sku, variantId: product.variant_id || product.variantId });
+    const cart = online && this.retailers.cartUrl(alert.store, { sku: alert.sku, variantId: product.variant_id || product.variantId });
     if (cart) buttons.push({ label: 'Add to cart', url: cart });
     if (alert.productId) buttons.push({ label: 'Price history', url: `${this.cfg.baseUrl}/app#monitor/${alert.productId}` });
     const was = typeof alert.previousPrice === 'number' && alert.previousPrice !== alert.price ? ` (was ${money(alert.previousPrice)})` : '';

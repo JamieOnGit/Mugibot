@@ -5,6 +5,7 @@ export const STATUS = Object.freeze({
   PREORDER: 'preorder',
   OUT_OF_STOCK: 'out_of_stock',
   COMING_SOON: 'coming_soon',
+  IN_STORE: 'in_store', // in stock in the store's shops only: it can't be ordered online (Kmart's "In store only")
   NOT_LISTED: 'not_listed', // keyword/SKU watch: no matching listing yet
   NOT_FOUND: 'not_found', // product URL returns 404 / removed
   BLOCKED: 'blocked', // retailer refused the request (bot protection / rate limit)
@@ -17,6 +18,7 @@ export const STATUS_LABEL = Object.freeze({
   preorder: 'Pre-order open',
   out_of_stock: 'Out of stock',
   coming_soon: 'Coming soon',
+  in_store: 'In store only',
   not_listed: 'Not listed yet',
   not_found: 'Page not found',
   blocked: 'Blocked by site',

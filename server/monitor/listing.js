@@ -176,7 +176,9 @@ export function parseShopifyProducts(text, { base } = {}) {
 // ---------------------------------------------------------------------------
 // Kmart's search page has no products in it: the page asks Kmart's search provider,
 // Constructor.io, for them once it's open. Its answer has every product's code, name, price,
-// picture, sellers, pre-order flag, and the states it's out of stock in ("stateOOS").
+// picture, sellers, pre-order flag, the states it's out of stock in ("stateOOS"), and how it's sold
+// ("FulfilmentChannel"): 2 is Kmart's "In store only" — not for delivery or ordering online, a
+// pre-order too (checked on kmart.com.au, Oct 2026); 3 is delivery and click & collect, 5 a Target sale.
 export const AU_STATES = ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'];
 const storeLink = (root, path) => {
   if (typeof path !== 'string' || !path.trim()) return '';
@@ -204,6 +206,8 @@ export function parseConstructor(text, { base, storeBase } = {}) {
       // In stock in some states only: which (its alerts say so).
       ...(oos.length && !AU_STATES.every((s) => oos.includes(s)) ? { states: AU_STATES.filter((s) => !oos.includes(s)) } : {}),
       preorder: d.isPreOrderActive === true, url: storeLink(storeBase || base, d.url || d.uri), image: httpsUrl(d.image_url, base),
+      // In Kmart's shops only: in stock there, but it can't be bought online (sweep.js: its own status).
+      ...(Number(d.FulfilmentChannel) === 2 ? { inStoreOnly: true } : {}),
       marketplace: sellers.length > 0 && sellers.every((s) => /market ?place/i.test(s)),
     });
   }

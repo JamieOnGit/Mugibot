@@ -4,7 +4,7 @@ import { setupDrops } from './drops.js';
 import { setupMonitor } from './monitor.js';
 
 const STATUS = {
-  in_stock: 'In stock', preorder: 'Pre-order open', out_of_stock: 'Sold out', coming_soon: 'Coming soon', not_listed: 'Not listed yet',
+  in_stock: 'In stock', preorder: 'Pre-order open', out_of_stock: 'Sold out', coming_soon: 'Coming soon', in_store: 'In store only', not_listed: 'Not listed yet',
   not_found: 'Page gone', blocked: 'Blocked by site', error: 'Error', unknown: 'Unknown', pending: 'Checking soon', paused: 'Paused',
 };
 const FLOW = { verified: 'verified flow', beta: 'beta flow', draft: 'draft flow', none: 'alerts only' };

@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 const ask = (msg) => new Promise((resolve) => chrome.runtime.sendMessage(msg, (r) => resolve(chrome.runtime.lastError ? null : r)));
 const CONFIG = globalThis.MGB_CONFIG;
 const dash = `${CONFIG.server}/app`;
-const STATUS = { in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', not_listed: 'Not listed', not_found: 'Gone', blocked: 'Blocked', error: 'Error', pending: '…' };
+const STATUS = { in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', in_store: 'In store only', not_listed: 'Not listed', not_found: 'Gone', blocked: 'Blocked', error: 'Error', pending: '…' };
 
 function cardText(c, backup) {
   // A new install: the card in the account's backup, one passphrase away.

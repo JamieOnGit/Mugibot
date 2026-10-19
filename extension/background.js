@@ -1693,7 +1693,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return { ok: true };
         }
         const res = await post();
-        return res.status === 200 ? { ok: true } : { ok: false, status: res.status };
+        // Over on your account's side (finished on your phone instead, while this tab waited at the
+        // checkpoint): this tab's run stops here — it never carries on to the final button.
+        const over = res.status === 200 && !!(res.body && res.body.run && res.body.run.active === false) && (status === 'waiting' || status === 'started');
+        if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...run, done: true } } });
+        return res.status === 200 ? { ok: true, over, text: over ? String(res.body.run.message || '') : '' } : { ok: false, status: res.status };
       }
       case 'acoInfo': {
         // The store page: is this tab running an Auto-checkout run (and how far has it got)?

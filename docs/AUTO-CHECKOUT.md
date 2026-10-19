@@ -225,6 +225,30 @@ like you would.
   the way. Once you've solved it, the store sends you on to checkout and the
   run carries on: details, card, the total checked, the final button. It waits
   up to 20 minutes.
+- **A checkpoint while you're on your phone** (Discord's ⚡ Buy, or an armed
+  item's drop): the check is for the browser that's buying, so solving it on
+  your phone can't let your computer through, and Mugibot never moves a pass
+  from one browser to another. Discord's ⚡ Buy reply and your DM give you two
+  buttons instead (from the moment you press ⚡ Buy when the checkpoint is
+  already up):
+  - **🖥️ Solve it on my computer** opens
+    [Chrome Remote Desktop](https://remotedesktop.google.com/access). The
+    checkout's tab is in front, waiting; solve the check there and the run
+    carries on by itself. Set it up once: install it on your computer from that
+    page, then sign in to the Chrome Remote Desktop app on your phone with the
+    same Google account.
+  - **📱 Finish on this phone** opens a page that says what it does. Pressing
+    its button stops your computer's checkout and opens the store on your
+    phone with the product in the cart (JB Hi-Fi's cart link), for you to pass
+    the check and pay there (Shop Pay or your card). The item is disarmed:
+    one purchase per arming. It works before your computer has started, or
+    while it waits at the checkpoint; never once it's past the check and
+    checking out, or has pressed the final button (the page says so, so you
+    don't buy it twice). The link is only in your own reply and DM, and lasts
+    30 minutes.
+  - Your computer's tab stops for good: even if the check is solved there
+    afterwards, it doesn't carry on (extension **1.21.0** or later; with an
+    older one, only 🖥️ is offered once it's waiting at the check).
 - **In a virtual queue** the run waits its turn. The queue page refreshes
   itself; Mugibot **never refreshes it**, because refreshing it yourself can
   lose your place. Your ⚡ Buy, checkout pass and Auto-checkout limits are kept

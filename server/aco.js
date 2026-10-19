@@ -21,12 +21,21 @@
 // on from there. A queue going up puts the checkout browser of every member armed at that store in
 // line straight away (a lobby: one tab at the store, waiting its turn), and Discord's "Join the
 // queue on my computer" does the same for anyone.
+//
+// A checkpoint from your phone (Discord's ⚡ Buy pressed away from the computer): the check is for the
+// browser that checks out, so solving it on the phone wouldn't let the computer through — and Mugibot
+// never moves a pass from one browser to another. Two ways instead, both offered under the ⚡ Buy reply
+// and in the member's DM: solve it on the computer from the phone (Chrome Remote Desktop: the tab is in
+// front, waiting), or "📱 Finish on this phone" — the computer's checkout stops, and the phone opens the
+// store with the product (its cart link) for the member to pass the check and pay there: toPhone().
 
 import { entitlement } from './entitlement.js';
-import { newId } from './crypto.js';
+import { newId, purposeKey, signParts, verifyParts } from './crypto.js';
+import { PHONE_EXTENSION_VERSION } from './extension.js';
+import { olderVersion } from './monitor/sweep.js';
 import { buyAction } from './notifier.js';
 import { DEFAULT_ACO } from './schema.js';
-import { startBuy } from './routes/user.js';
+import { productLink, startBuy } from './routes/user.js';
 
 // Still on its way: waiting for a browser, opening the store, at checkout, pressing the final button.
 const ACTIVE = ['queued', 'sent', 'started', 'waiting', 'checkout', 'placing'];
@@ -52,6 +61,10 @@ const LOBBY_MS = 3 * 60 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
 // After this many failed runs in a day, an item stops trying until it's armed again.
 const MAX_FAILS = 3;
+// "📱 Finish on this phone": its link lasts as long as a run may wait at a checkpoint, and a bit more.
+const PHONE_LINK_MS = 30 * 60 * 1000;
+// Google's Chrome Remote Desktop, on the phone: the member's own computer, to solve the check there.
+export const REMOTE_DESKTOP_URL = 'https://remotedesktop.google.com/access';
 
 /** Why a run stopped, in words (the extension and this file give the code). */
 export const REASONS = {
@@ -84,6 +97,7 @@ export const REASONS = {
   stopped: 'You stopped it',
   queue: "In the store's virtual queue",
   checkpoint: "The store's checkpoint wants a human to solve it",
+  phone: 'You finished it on your phone instead',
   turn: 'Next in line: your other checkout at this store goes first (a store has one bag)',
   timeout: 'It took too long',
   error: 'Something went wrong',
@@ -101,6 +115,12 @@ const parseSteps = (v) => { try { const a = JSON.parse(v || '[]'); return Array.
 export function tookMs(steps) {
   const placed = steps.find((x) => x.status === 'placed');
   return placed && steps.length && typeof steps[0].at === 'number' ? Math.max(0, placed.at - steps[0].at) : null;
+}
+
+/** Link buttons as Discord's message components (an empty list clears them). */
+export function linkRows(buttons) {
+  const b = (buttons || []).filter((x) => x && /^https?:\/\//.test(x.url)).slice(0, 5);
+  return b.length ? [{ type: 1, components: b.map((x) => ({ type: 2, style: 5, label: String(x.label).slice(0, 80), url: x.url })) }] : [];
 }
 
 export function toRun(r) {
@@ -127,6 +147,7 @@ export class Aco {
     this.lobbies = new Map(); // userId → Map(store → { id, store, url, by, at, sent }): browsers told to get in line
     this.cards = new Map(); // deviceId → { state, at }: what each browser says of its card (from 1.20) — never the card
     this.variants = new Map(); // runId → the listing's only option (a drop's run opens the store's add-to-cart link)
+    this.phoneKey = purposeKey(cfg.dataKey, 'phone-handover');
     this.timer = null;
   }
 
@@ -405,7 +426,7 @@ export class Aco {
       waiting: run.reason === 'turn'
         ? `⏳ Next in line at ${where} in **${deviceName}**: your other checkout there goes first (${where} keeps one bag), then this one goes straight away.`
         : run.reason === 'checkpoint'
-        ? `🛡️ ${where}'s checkpoint wants a human: solve it in **${deviceName}**, and it carries on to checkout.`
+        ? `🛡️ ${where}'s checkpoint wants a human, in **${deviceName}** (its tab is in front, waiting). The check is for that browser, so solving it on your phone wouldn't let it through. From here: **🖥️ Solve it on my computer** (Chrome Remote Desktop) and it carries on to checkout — or **📱 Finish on this phone**: your computer stops, and the store opens here for you to pass the check and pay.`
         : `🚦 In ${where}'s virtual queue in **${deviceName}**${run.message && /about \d+ min/.test(run.message) ? ` — ${run.message.match(/about \d+ min\w*/)[0]}` : ''}. It waits its turn (never refreshing the page), then checks out.`,
       checkout: `🛒 At ${where}'s checkout in **${deviceName}** — filling it in…`,
       placing: `💳 Placing the order at ${where}…`,
@@ -414,7 +435,7 @@ export class Aco {
       needs_you: `⚠️ **It needs you** in ${deviceName}: ${run.message || run.reasonText}`,
       failed: `❌ **Didn't buy it**: ${run.message || run.reasonText}`,
       expired: `❌ **Didn't start**: ${run.reason === 'no_browser' ? `${deviceName} didn't pick it up within 2 minutes — is it open, with the extension connected?` : run.message || run.reasonText}`,
-      skipped: `⏭️ **Didn't start**: ${run.message || run.reasonText}`,
+      skipped: run.reason === 'phone' ? `📱 **Finishing it on your phone** — **${deviceName}** stopped. Pass ${where}'s check and pay there.` : `⏭️ **Didn't start**: ${run.message || run.reasonText}`,
     };
     return `**${run.name}**\n${lines[run.status] || run.statusText}`;
   }
@@ -612,9 +633,10 @@ export class Aco {
         type: 'aco', level: 'urgent', channel: 'aco',
         title: reason === 'checkpoint' ? `🛡️ ${where}'s checkpoint needs you: ${row.name}` : `🚦 In ${where}'s queue: ${row.name}`,
         message: reason === 'checkpoint'
-          ? `${where} wants a human check (hCaptcha) before checkout. Solve it in the tab that opened, and Mugibot carries on to checkout — it never touches the check itself.`
+          ? `${where} wants a human check (hCaptcha) before checkout, in the browser that's checking out — Mugibot never touches the check itself. At the computer: solve it in the tab that opened, and it carries on to checkout. On your phone: solve it on the computer with Chrome Remote Desktop (the tab's in front), or finish it on the phone instead — the computer stops, and the store opens on the phone for you to pass the check and pay.`
           : `${text}\nYour browser is waiting its turn and carries on when it's through. Leave the queue page alone: it refreshes itself.`,
-        name: row.name, sku: row.sku, url: row.url || null, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
+        name: row.name, sku: row.sku, url: row.url || null,
+        buttons: [...(reason === 'checkpoint' ? this.phoneButtons(this.get(userId, row.id)) : []), { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
       }).catch(() => null);
     }
     return run;
@@ -627,6 +649,102 @@ export class Aco {
     const item = row.item_id ? this.repo.getItem(user.id, row.item_id) : null;
     if (!item || !item.url) return null;
     return startBuy(this.ctx, user, { ...item, quantity: 1 }, { runId: row.id, variantId: this.variants.get(row.id) || null }).url;
+  }
+
+  // ---------------------------------------------------------------------------
+  // A checkpoint from the phone: finish it there instead (see the top of this file)
+  // ---------------------------------------------------------------------------
+  /** "📱 Finish on this phone": a link only this run's member is given (Discord's ⚡ Buy reply, their DM). */
+  phoneLink(userId, runId) {
+    const t = signParts(this.phoneKey, [userId, runId], this.now() + PHONE_LINK_MS);
+    return `${this.cfg.baseUrl}/phone/${encodeURIComponent(runId)}?t=${t}`;
+  }
+
+  /** The run a phone link is for (null: not one Mugibot made, or it's run out). */
+  phoneRow(runId, t) {
+    const row = this.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: String(runId || '').slice(0, 40) });
+    return row && verifyParts(this.phoneKey, [row.user_id, row.id], t, this.now()) ? row : null;
+  }
+
+  /**
+   * Can the phone take this checkout over now? { can, stop (the computer's checkout is stopped first),
+   * note (why not) }. Only before the computer has started it, or while it waits at the checkpoint (an
+   * extension that stops there when told: PHONE_EXTENSION_VERSION) — never once it may be paying.
+   * Over already (filled in for you, stopped, didn't start): nothing to stop, the store's link is all.
+   */
+  phoneState(row) {
+    const where = this.retailers.name(row.store);
+    if (row.status === 'queued' || row.status === 'sent') return { can: true, stop: true };
+    if (row.status === 'waiting' && row.reason === 'checkpoint') {
+      const device = row.device_id ? this.repo.listDevices(row.user_id).find((d) => d.id === row.device_id) : null;
+      if (device && olderVersion(device.version, PHONE_EXTENSION_VERSION)) {
+        return { can: false, note: `${device.name} has an older copy of ${this.cfg.appName}'s extension (${device.version || 'version unknown'}), which can't be stopped at the checkpoint from here. Solve the check on your computer (from your phone: Chrome Remote Desktop), and update the extension to ${PHONE_EXTENSION_VERSION} for next time.` };
+      }
+      return { can: true, stop: true };
+    }
+    const pressed = row.status === 'placing' || parseSteps(row.steps).some((x) => x.status === 'placing');
+    if (row.status === 'placed') return { can: false, note: `Your computer already placed the order at ${where} — the store emails you the confirmation. Don't buy it again.` };
+    if (pressed) return { can: false, note: `Your computer pressed ${where}'s final button — check your email from the store before you buy it again.` };
+    if (ACTIVE.includes(row.status)) return { can: false, note: `Your computer is checking it out at ${where} right now — let it finish. (If it stops at the checkpoint, this link works then.)` };
+    return { can: true, stop: false };
+  }
+
+  /** What the phone's page shows before it's pressed (routes/user.js). Null: an expired or unknown link. */
+  phoneInfo(runId, t) {
+    const row = this.phoneRow(runId, t);
+    if (!row) return null;
+    const st = this.phoneState(row);
+    return { name: row.name, store: row.store, storeName: this.retailers.name(row.store), status: row.status, statusText: toRun(row).statusText, checkpoint: row.status === 'waiting' && row.reason === 'checkpoint', can: st.can, stop: !!st.stop, note: st.note || '' };
+  }
+
+  /**
+   * "📱 Finish on this phone" pressed: the computer's checkout stops — in one step, and only if it's
+   * still where it was (one that got through the checkpoint a moment ago carries on) — and the phone
+   * gets the store's link with the product: { url, stopped } or { error }.
+   */
+  async toPhone(runId, t) {
+    let row = this.phoneRow(runId, t);
+    if (!row) return { error: 'This link has run out — press ⚡ Buy in Discord again.' };
+    let st = this.phoneState(row);
+    if (!st.can) return { error: st.note };
+    const url = this.storeLink(row);
+    if (!st.stop) return { url, stopped: false };
+    const where = this.retailers.name(row.store);
+    const text = row.status === 'waiting' ? `You finished it on your phone instead — your computer stopped at ${where}'s checkpoint` : 'You finished it on your phone instead — your computer didn\'t start it';
+    const n = this.db.run("UPDATE aco_runs SET status = 'skipped', reason = 'phone', message = :m, updated_at = :t WHERE id = :id AND status = :st AND reason = :r",
+      { m: text, t: this.now(), id: row.id, st: row.status, r: row.reason || '' }).changes;
+    if (!n) {
+      // (It moved on meanwhile: whatever it is now decides.)
+      row = this.get(row.user_id, row.id);
+      st = this.phoneState(row);
+      return st.can && !st.stop ? { url, stopped: false } : { error: st.note || `Your computer just moved on at ${where} — press the link again in a moment.` };
+    }
+    this.step(row.id, 'skipped', text);
+    // One purchase per arming: it's being bought on the phone, so it isn't armed any more (arm it again for the next drop).
+    const disarmed = this.disarm(row.user_id, row.item_id);
+    this.publish(row.user_id, row.id);
+    this.repo.addEvent(row.user_id, { type: 'aco', level: 'info', message: `📱 ${row.name}: finishing it on your phone — your computer's checkout at ${where} stopped${disarmed ? ', and it\'s disarmed (arm it again for the next drop)' : ''}`, name: row.name, sku: row.sku, url: row.url || null });
+    return { url, stopped: true };
+  }
+
+  /** Was this run handed to the phone? (Its ⚡ Buy code then opens nothing on the computer: routes/ext.js /claim.) */
+  handedOff(userId, runId) {
+    const row = this.get(userId, runId);
+    return !!row && row.status === 'skipped' && row.reason === 'phone';
+  }
+
+  /** The store's page for the phone: its cart link with the product where it has one (Shopify's), else the product. */
+  storeLink(row) {
+    const item = row.item_id ? this.repo.getItem(row.user_id, row.item_id) : null;
+    return productLink(this.ctx, { store: row.store, sku: row.sku, url: (item && item.url) || row.url }, this.variants.get(row.id) || null);
+  }
+
+  /** Under a checkpoint's message (the ⚡ Buy reply, the DM): finish on the phone, or solve it on the computer from there. */
+  phoneButtons(row) {
+    const out = [];
+    if (this.phoneState(row).can) out.push({ label: '📱 Finish on this phone', url: this.phoneLink(row.user_id, row.id) });
+    out.push({ label: '🖥️ Solve it on my computer', url: REMOTE_DESKTOP_URL });
+    return out;
   }
 
   // ---------------------------------------------------------------------------
@@ -747,22 +865,26 @@ export class Aco {
   }
 
   publish(userId, id) {
-    const run = toRun(this.db.get('SELECT * FROM aco_runs WHERE id = :id', { id }));
+    const row = this.db.get('SELECT * FROM aco_runs WHERE id = :id', { id });
+    const run = toRun(row);
     if (run) this.hub.publish(userId, 'aco', run);
-    if (run) this.followUp(run);
+    if (run) this.followUp(run, row);
     return run;
   }
 
   /** The run moved on: its Discord ⚡ Buy reply says so (only that member sees it). */
-  followUp(run) {
+  followUp(run, row = null) {
     const f = this.follows.get(run.id);
     if (!f) return;
     if (this.now() > f.until) { this.follows.delete(run.id); return; }
     const content = `${this.remoteText(run, f.deviceName)}${run.active && f.note ? `\n${f.note}` : ''}`;
-    if (content === f.last) return;
-    f.last = content;
+    // (At the checkpoint: its two ways through from the phone, as buttons. Otherwise none.)
+    const buttons = row && run.status === 'waiting' && run.reason === 'checkpoint' ? this.phoneButtons(row) : [];
+    const key = `${content}|${buttons.map((b) => b.label).join(',')}`;
+    if (key === f.last) return;
+    f.last = key;
     if (!run.active) this.follows.delete(run.id);
-    if (this.ctx.discord) this.ctx.discord.editReply(f.token, { content, allowed_mentions: { parse: [] } }).catch(() => null);
+    if (this.ctx.discord) this.ctx.discord.editReply(f.token, { content, components: linkRows(buttons), allowed_mentions: { parse: [] } }).catch(() => null);
   }
 
   /** Runs nobody picked up, or that never finished. */

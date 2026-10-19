@@ -282,6 +282,18 @@ npm test
   a list that fails falling back to each keyword at once, a refusal still the
   store's); searches on the pace from the start of the last one; members' alerts
   still sent when a search or page check fails partway through.
+- **Kmart's "In store only"**: its own status — the alert says it can't be
+  ordered online, with no ⚡ Buy, and nobody's Auto-checkout starts; online
+  later that day, it alerts as a restock all the same.
+- **A checkpoint from the phone** (`test/phone.test.js`, and the 📱 end-to-end
+  test): ⚡ Buy while JB Hi-Fi's checkpoint is up says so, with 🖥️ Solve it on
+  my computer and 📱 Finish on this phone; the reply and DM at the checkpoint
+  carry both; opening the phone's link changes nothing, pressing it stops the
+  computer and opens the store's cart link; never once the computer is
+  checking out, has pressed the final button or placed it, nor with an older
+  extension at the check; the computer's tab stops even if the check is then
+  solved there, nothing pressed; an armed item finished on the phone is
+  disarmed.
 - **Server first** (dummy stores): every store searched from the server; an
   admin's browser stands in after 3 refusals (1 at stores known to refuse
   servers, or a page the server can't read, with no flood of "new"), the
