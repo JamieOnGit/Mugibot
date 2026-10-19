@@ -154,7 +154,7 @@
 
   // (The checks themselves: checks.js, shared with checkouts that run in a frame.)
   const orderTotal = () => MGBChecks.orderTotal(document);
-  const pageError = () => MGBChecks.pageError(document);
+  const pageError = () => MGBChecks.pageError(document, checkoutFlow && checkoutFlow.ignoreErrors);
   const outcome = () => MGBChecks.outcome(document, checkoutFlow && checkoutFlow.done, retailer.name);
   const cardBoxesOnPage = () => [...document.querySelectorAll('input, select')]
     .filter((el) => /^card(Number|Expiry|ExpMonth|Cvc)$/.test(MGBFill.classifyField(el, checkoutFlow) || '') && MGBFill.isVisible(el));
@@ -250,8 +250,32 @@
     return false;
   }
 
+  /**
+   * A checkout that goes on to another address once its final button's pressed (checkout.leaves: Shop's,
+   * on to the store's own order page — where Mugibot doesn't run): where it goes says how it went. The
+   * store's order page: placed. Anywhere else: for you to check. (On to another page here: that page says.)
+   */
+  function watchLeaving(label, total) {
+    const nav = globalThis.navigation;
+    if (!nav || !nav.addEventListener) return;
+    let said = false;
+    const done = checkoutFlow.done instanceof RegExp ? checkoutFlow.done : /thank[-_]?you/i;
+    nav.addEventListener('navigate', (e) => {
+      let to = null;
+      try { to = new URL(e.destination.url); } catch { return; }
+      // (Another page of this checkout: that page says how it went.)
+      if (said || MGBFlows.forLocation(retailers, to) === retailer) return;
+      said = true;
+      if (done.test(to.pathname)) acoReport('placed', '', `Order placed — ${retailer.name} went on to ${to.host}'s order page`, total);
+      else acoReport('needs_you', 'unconfirmed', `"${label}" was pressed and ${retailer.name} went on to ${to.host} — check your email for the order confirmation before buying it again.`, total);
+    });
+  }
+
   /** At the final button of an Auto-checkout run: check the order, then press it — once. */
   async function acoFinish(run, fin, data) {
+    // The store says it won't sell it now (Shop checkout links: "This Product is not available for purchase"): nothing's bought.
+    const refused = MGBChecks.unavailable(document, checkoutFlow);
+    if (refused) return acoStop('failed', 'sold_out', `${retailer.name} says "${refused}" — nothing was bought.`, fin);
     // A store that only takes PayPal at checkout (The Games Cube): Auto-checkout can't pay there.
     if (checkoutFlow && checkoutFlow.payment === 'paypal') {
       return acoStop('needs_you', 'paypal_only', `${retailer.name} only takes PayPal at checkout — your details are in; press "${fin.text}" and pay with PayPal yourself.`, fin);
@@ -291,6 +315,7 @@
     await acoReport('placing', '', `Pressing "${fin.text}" — total $${total.toFixed(2)}`, total);
     panel.setStatus(`🤖 Placing your order ($${total.toFixed(2)})…`);
     report('step', `Auto-checkout pressed "${fin.text}" (total $${total.toFixed(2)})`, null);
+    if (checkoutFlow.leaves) watchLeaving(fin.text, total);
     btn.click();
     watchOutcome(run, total);
   }
@@ -500,7 +525,8 @@
     const turn = await ask({ type: 'turn', name: product && product.name });
     if (turn && turn.go === false) { waitTurn(claim, product, turn); return; }
     // Auto-checkout only ever buys the one item: a bag with other things in it is left for you.
-    const inBag = aco ? MGBQuick.bagCount() : null;
+    // (A Shop checkout link is its own order: no bag of yours behind it.)
+    const inBag = aco && !retailer.cartLinks ? MGBQuick.bagCount() : null;
     if (aco && inBag) {
       panel.setNote('🤖 Auto-checkout');
       panel.setStatus(`Your ${retailer.name} bag already has ${inBag} item${inBag === 1 ? '' : 's'} in it — Auto-checkout only buys the one item. Empty it, or buy this yourself.`);

@@ -24,15 +24,21 @@
     return null;
   }
 
-  /** From a store's page (its HTML and address) and the store's account.check: 'in', 'out' or null. */
+  /**
+   * From a store's page (its HTML and address) and the store's account.check: 'in', 'out' or null.
+   * check.signedInPage: the store's account page itself, when it doesn't say "signed out" (Shop's:
+   * shop.app/account asks you to sign in there while you're signed out).
+   */
   function fromHtml(html, url, check) {
     if (!check) return null;
     var outUrl = rx(check.signedOutUrl);
     var signedIn = rx(check.signedIn);
     var signedOut = rx(check.signedOut);
+    var inPage = rx(check.signedInPage);
     if (outUrl && outUrl.test(String(url || ''))) return 'out';
     if (signedIn && signedIn.test(html)) return 'in';
     if (signedOut && signedOut.test(html)) return 'out';
+    if (inPage && inPage.test(html)) return 'in';
     return null;
   }
 

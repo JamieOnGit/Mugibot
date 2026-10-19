@@ -27,6 +27,9 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // link, and a card Stripe's Link has for you.
 // 1.21.0: a checkout your account ended while it waited at a checkpoint (finished on your phone
 // instead) stops once through the check, never carrying on to the final button.
+// 1.22.0: Shop checkout links (retailers/shoplink.js) — runs on Shop's checkout (shop.app): the store's
+// required boxes ticked, "Pay now", the order seen placed as Shop goes on to the store's order page; and
+// a link that never reaches Shop (signed out of it) said in seconds. The store's acoVersion says so.
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.

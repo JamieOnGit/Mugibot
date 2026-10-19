@@ -937,3 +937,11 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 .hero h1 { font-weight: 900; }
 .feature, .steps .card { transition: transform .15s ease, box-shadow .15s ease; }
 .feature:hover, .steps .card:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(91, 63, 191, .12); }
+
+/* 🛍️ Shop checkout links (My watchlist): their own section, with the Shop sign-in line */
+.sl-box { margin-top: 18px; }
+.sl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.sl-head h3 { margin: 0; }
+.sl-box code { overflow-wrap: anywhere; }
+.sl-box #sl-signin { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; justify-content: space-between; }
+.sl-box #sl-signin:empty { display: none; }

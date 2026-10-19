@@ -23,7 +23,11 @@ export function register(router, ctx) {
     const C = r && r.flow && r.flow.checkout;
     const places = !!(C && (!C.inFrame || (C.frames && C.frames.length)) && C.payment !== 'paypal');
     const acoStops = !C || places ? null : C.payment === 'paypal' ? 'paypal' : 'frame';
-    return { ...it, storeName: r ? retailers.siteName(it.store, it.url) : it.store, flowStatus: r ? r.flowStatus : 'none', acoCan: !!(r && r.flow), acoPlaces: places, acoStops };
+    // shopLink: a Shop checkout link (its own section; Shop has the address and card). acoVersion: the extension it needs.
+    return {
+      ...it, storeName: r ? retailers.siteName(it.store, it.url) : it.store, flowStatus: r ? r.flowStatus : 'none', acoCan: !!(r && r.flow), acoPlaces: places, acoStops,
+      shopLink: !!(r && r.cartLinks), acoVersion: (r && r.acoVersion) || null,
+    };
   };
   const isAdmin = (req) => req.user.role === 'admin';
 
@@ -300,7 +304,7 @@ export function register(router, ctx) {
         if (l && (!best || l.at > best.at)) best = { ...l, device: d.name };
       }
       return {
-        id: r.id, name: r.name, demo: !!r.demo, signInUrl: `${r.base}${r.account.signIn || ''}`,
+        id: r.id, name: r.name, demo: !!r.demo, signInUrl: `${r.base}${r.account.signIn || ''}`, cartLinks: !!r.cartLinks,
         // required: the store only sells to signed-in customers (Amazon: no guest checkout).
         required: !!r.account.required, checked: !!r.account.check, status: best ? best.status : null, at: best ? best.at : null, how: best ? best.how : null, device: best ? best.device : null,
       };

@@ -98,6 +98,8 @@ export const REASONS = {
   queue: "In the store's virtual queue",
   checkpoint: "The store's checkpoint wants a human to solve it",
   phone: 'You finished it on your phone instead',
+  no_shop: "Shop's checkout didn't open — this browser isn't signed in to Shop",
+  old_extension: 'The extension in your checkout browser is too old for this store',
   turn: 'Next in line: your other checkout at this store goes first (a store has one bag)',
   timeout: 'It took too long',
   error: 'Something went wrong',
@@ -329,6 +331,9 @@ export class Aco {
     // Stores that only check out signed in (Amazon): not while you're seen signed out there.
     if (r.account && r.account.required && this.loginStatus(userId, item.store) === 'out') return skip('signed_out', `${r.name} only checks out signed in — sign in there in the browser with the extension.`);
     if (!this.repo.listDevices(userId).length) return skip('no_browser', 'Connect the extension in the browser you keep open.');
+    // A store the extension only checks out at from a version on (Shop checkout links: 1.22.0, on Shop's checkout).
+    const device = this.checkoutDevice(userId);
+    if (r.acoVersion && device && olderVersion(device.version, r.acoVersion)) return skip('old_extension', `${device.name} has ${device.version || 'an older version'} — update it to ${r.acoVersion} (Setup → Extension).`);
 
     const run = this.create(base, 'queued', '', `Dropped at ${r.name}${price !== null ? ` for ${money(price)}` : ''} — waiting for your browser to check out.`);
     // (The search's listing says its only option: the run goes straight to the store's add-to-cart link
@@ -389,6 +394,7 @@ export class Aco {
     if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension, and ⚡ Buy runs there from anywhere.` };
     if (this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return { error: `It's already checking out in ${device.name}.` };
     if (r.account && r.account.required && this.loginStatus(userId, item.store) === 'out') return { error: `${r.name} only sells to signed-in customers — sign in there in ${device.name} first.` };
+    if (r.acoVersion && olderVersion(device.version, r.acoVersion)) return { error: `${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}) — update it to ${r.acoVersion} to buy from ${r.name} (${this.cfg.baseUrl}/app#update).` };
 
     // Place the order, or fill checkout in and stop at the final button (and why).
     const known = [price, item.lastPrice, item.price].find((p) => typeof p === 'number' && p > 0);
@@ -604,6 +610,9 @@ export class Aco {
       return this.publish(userId, row.id);
     }
     if (!['ready', 'placed', 'needs_you', 'failed'].includes(status)) return toRun(row);
+    // (A Shop link's tab that never reached Shop's checkout, as the browser saw it: only while the run's
+    // still not picked up there — a checkout that got going is reporting for itself.)
+    if (reason === 'no_shop' && !['sent', 'queued'].includes(row.status)) return toRun(row);
     // (pressed: the browser pressed the final button — its "placing", sent without waiting, may not be here yet.)
     if (pressed && row.status !== 'placing' && !parseSteps(row.steps).some((x) => x.status === 'placing')) {
       this.step(row.id, 'placing', 'Final button pressed');

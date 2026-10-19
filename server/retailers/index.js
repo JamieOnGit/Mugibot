@@ -26,6 +26,7 @@ import kmart from './kmart.js';
 import pbandai from './pbandai.js';
 import pokebox from './pokebox.js';
 import pokemoncenter from './pokemoncenter.js';
+import shoplink, { cartLines } from './shoplink.js';
 import target from './target.js';
 import thegamescube from './thegamescube.js';
 import toysrus from './toysrus.js';
@@ -33,7 +34,7 @@ import trainertown from './trainertown.js';
 import zing from './zing.js';
 
 export const RETAILER_DEFS = [kmart, bigw, target, ebgames, zing, jbhifi, toysrus, trainertown, amazon, thegamescube, gamerholic, pokemoncenter, pbandai, citybeach,
-  pokebox, goodgames, collectiblemadness, cherrycollectables, gamesmen, gamesworld];
+  pokebox, goodgames, collectiblemadness, cherrycollectables, gamesmen, gamesworld, shoplink];
 
 // Card boxes are often in a frame hosted by the store's payment provider.
 export const PAYMENT_HOSTS = [
@@ -91,7 +92,8 @@ function demoCopy(def, demoUrl) {
     pathPrefix: def.devPath,
     demo: true,
     realId: def.id,
-    monitor: { server: true, browser: true },
+    // (A store whose items are checked more often — Shop checkout links — is in the dummy store too.)
+    monitor: { server: true, browser: true, ...(def.monitor && def.monitor.intervalSeconds ? { intervalSeconds: def.monitor.intervalSeconds } : {}) },
   };
 }
 
@@ -139,14 +141,21 @@ export class Retailers {
     return !!r && this.settings(r).enabled;
   }
 
-  /** The retailer a link belongs to (null for any other website). */
+  /**
+   * The retailer a link belongs to (null for any other website). A cart link (/cart/<variant>:<qty>) at
+   * a store Mugibot doesn't know is a Shop checkout link (retailers/shoplink.js) — the dummy store's
+   * copy for a link on the dummy store's address.
+   */
   forUrl(url) {
     let u;
     try { u = url instanceof URL ? url : new URL(url); } catch { return null; }
     const host = u.host.toLowerCase();
     const p = pathOf(u);
-    return this.list.find((r) => r.hosts.some((h) => host === h || host.endsWith(`.${h.replace(/^www\./, '')}`))
-      && (!r.pathPrefix || p === r.pathPrefix || p.startsWith(`${r.pathPrefix}/`))) || null;
+    const hostOk = (r) => r.hosts.some((h) => host === h || host.endsWith(`.${h.replace(/^www\./, '')}`));
+    const known = this.list.find((r) => hostOk(r) && (!r.pathPrefix || p === r.pathPrefix || p.startsWith(`${r.pathPrefix}/`)));
+    if (known) return known;
+    if (!/^https?:$/.test(u.protocol) || !cartLines(p)) return null;
+    return this.list.find((r) => r.cartLinks && (!r.demo || hostOk(r))) || null;
   }
 
   /** Best guess at the product code in a product link. */
@@ -155,6 +164,8 @@ export class Retailers {
     try { u = new URL(url); } catch { return ''; }
     const p = pathOf(u);
     const r = this.forUrl(u);
+    // A Shop checkout link: its options and quantities ("48835830579405:2,40653613531341:1").
+    if (r && r.cartLinks && cartLines(p)) return cartLines(p).map((x) => `${x.id}:${x.qty}`).join(',');
     if (r && r.skuFromPath) {
       const m = p.match(r.skuFromPath);
       if (m) return m[1];
@@ -170,10 +181,11 @@ export class Retailers {
     return r ? r.name : storeId;
   }
 
-  /** A store's name — or, for another website, its address ("shop.example.com"). */
+  /** A store's name — or, for another website, its address ("shop.example.com"); a Shop checkout link's, its store's ("creations.mattel.com · Shop"). */
   siteName(storeId, url = '') {
-    if (storeId === 'other' && url) {
-      try { return new URL(url).host.replace(/^www\./, ''); } catch { /* not a link */ }
+    const r = this.get(storeId);
+    if ((storeId === 'other' || (r && r.cartLinks)) && url) {
+      try { const host = new URL(url).host.replace(/^www\./, ''); return storeId === 'other' ? host : `${host} · ${r.name}`; } catch { /* not a link */ }
     }
     return this.name(storeId);
   }
@@ -212,6 +224,8 @@ export class Retailers {
     return this.list.filter((r) => all || this.enabled(r)).map((r) => ({
       id: r.id, name: r.name, base: r.base, flowStatus: r.flowStatus, flowNote: r.flowNote, skuLabel: r.skuLabel, skuHint: r.skuHint,
       demo: !!r.demo, searchable: !!(r.searchPath || r.productPathFromSku), ...this.settings(r),
+      // (Shop checkout links: added by their link only, in a section of their own.)
+      cartLinks: !!r.cartLinks,
     }));
   }
 
@@ -224,6 +238,8 @@ export class Retailers {
       base: r.base, account: r.account || null,
       // Its checkpoint or virtual queue (monitor/gate.js): what one of its pages looks like.
       gate: r.gate ? { kind: r.gate.kind, label: r.gate.label, page: r.gate.page } : null,
+      // Shop checkout links: each its own checkout (no bag shared with another), opened by the link itself.
+      cartLinks: !!r.cartLinks,
     }));
   }
 }

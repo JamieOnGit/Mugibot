@@ -41,6 +41,14 @@
 //             checkout at /spc/order: guest → home delivery → card → "Place order";
 //             its search page's product data in __NEXT_DATA__ (the live sweeps)
 //
+//   /creations + /shopapp  a Shopify store that checks out with Shop (Mattel Creations-style: its
+//             cart links /cart/<variant>:<qty>,… and /variants/<id>.js), and Shop's own checkout
+//             (shop.app-style: /shopapp/checkout/<shop>/cn/<token>/en-us/shoppay) with your Shop
+//             address, delivery and card in, the store's membership agreement box, "Pay now" and
+//             "Check out as guest". Signed out of Shop (shopapp.signedIn false), Shop sends the
+//             link back to the store's own guest checkout, as the real one does. Shop's account
+//             page (/shopapp/account) says whether you're signed in.
+//
 // Placing an order: each shop's `decline` (the card is declined) and `threeDS` (the
 // bank's "verify it's you" check, in a frame) options, for Auto-checkout's tests.
 //
@@ -166,6 +174,26 @@ export function defaultAcme() {
   };
 }
 
+// The Shop-style checkout (/shopapp) and the store that checks out with it (/creations).
+export function defaultShopApp() {
+  return {
+    // Signed in to Shop in this browser (its cookie): the link opens Shop's checkout; otherwise the store's guest checkout.
+    signedIn: false,
+    // The store's options (what /creations/variants/<id>.js says), Mattel Creations' two from a member's link.
+    variants: [
+      { id: 48835830579405, name: 'Hot Wheels RLC Exclusive RWB Porsche 930', price: 38, available: true },
+      { id: 40653613531341, name: 'Hot Wheels Red Line Club 1-Year Digital Membership', price: 9.99, available: true },
+    ],
+    // Its "By selecting, you indicate your acceptance of the Membership Agreement" box (required), and
+    // the notice about it at the top (shown from the start, as in a member's screenshot, and staying up).
+    agreement: true, agreeNotice: true,
+    // "This Product is not available for purchase" (the store won't sell it now).
+    unavailable: false,
+    shipping: 32,
+    checkouts: {}, orders: [], refused: [], shown: 0, guestViews: 0, accountViews: 0,
+  };
+}
+
 function page(shop, title, body, { head = '', bagCount = null, noBag = false } = {}) {
   const s = SHOPS[shop] || { name: 'Dummy store', color: '#444' };
   const base = shop ? `/${shop}` : '';
@@ -253,6 +281,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     requests: [],
     // Acme Collectibles: another website (see acme() below).
     acme: defaultAcme(),
+    // Shop's checkout and the store that checks out with it (see shopApp() below).
+    shopapp: defaultShopApp(),
   };
   let cardOrigin = '';
 
@@ -1950,6 +1980,95 @@ ${body}
     return html(200, shell(x.name, `<script type="application/ld+json">${JSON.stringify(ld)}</script><div class="product"><h1>${esc(x.name)}</h1><p class="price">$${x.price.toFixed(2)}</p>${buy}</div>`));
   }
 
+  // -------------------------------------------------------------------- Shop checkout links
+  // A store that checks out with Shop (Mattel Creations-style, /creations): its options' JSON, and its
+  // cart links — straight on to Shop's checkout (/shopapp), which sends a browser not signed in to Shop
+  // back to the store's own guest checkout (its ur_back_url), as the real ones do.
+  const SHOP_ID = '56811323597';
+  const shopMoney = (n) => `$${n.toFixed(2)}`;
+  function creations(sub, u, req, res, { html, json, redirect }) {
+    const A = state.shopapp;
+    const shell = (title, body) => `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)} — Creations (dummy)</title></head><body><div class="dummy">⚠ Dummy store for testing Mugibot — nothing here is real.</div><header><a href="/creations/">Creations (dummy)</a></header><main>${body}</main></body></html>`;
+    const v = sub.match(/^\/variants\/(\d+)\.js$/);
+    if (v) {
+      const x = A.variants.find((y) => String(y.id) === v[1]);
+      if (!x) return html(404, shell('Not found', '<h1>Page not found</h1>'));
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
+      return res.end(JSON.stringify({ id: x.id, title: 'Default Title', available: !!x.available, name: x.name, price: Math.round(x.price * 100), featured_image: null }));
+    }
+    const c = sub.match(/^\/cart\/(\d+:\d+(?:,\d+:\d+)*)$/);
+    if (c) {
+      const lines = c[1].split(',').map((x) => { const [id, qty] = x.split(':'); return { id, qty: Number(qty) || 1 }; });
+      if (!lines.every((l) => A.variants.some((y) => String(y.id) === l.id))) return html(404, shell('Not found', '<h1>Page not found</h1>'));
+      const token = `hWNI${Object.keys(A.checkouts).length + 1}x`;
+      A.checkouts[token] = lines;
+      const back = `/creations/checkouts/cn/${token}/en-us?skip_shop_pay=true`;
+      return redirect(`/shopapp/checkout/${SHOP_ID}/cn/${token}/en-us/shoppay?redirect_source=checkout_universal_redirect&ur_back_url=${encodeURIComponent(back)}`);
+    }
+    const g = sub.match(/^\/checkouts\/cn\/(\w+)\/(en-us|thank-you)$/);
+    if (g && g[2] === 'thank-you') return html(200, shell('Thank you', `<h1>Thank you for your purchase!</h1><p>Order #M${1000 + A.orders.length} is confirmed.</p>`));
+    if (g) {
+      A.guestViews += 1;
+      return html(200, shell('Checkout', '<h1>Checkout</h1><h3>Contact</h3><input name="email" type="email" placeholder="Email"><button type="button">Continue to shipping</button>'));
+    }
+    return html(404, shell('Not found', '<h1>Page not found</h1>'));
+  }
+
+  function shopApp(sub, u, req, res, { html, json, redirect }) {
+    const A = state.shopapp;
+    if (sub === '/account') {
+      A.accountViews += 1;
+      return html(200, `<!doctype html><html><head><meta charset="utf-8"><title>Manage account - Shop</title></head><body><div class="dummy">⚠ Dummy Shop — nothing here is real.</div>
+        ${A.signedIn ? '<h1>Manage account</h1><p>ash.shop@example.com</p><button type="button">Sign out</button>' : '<h2>Sign in to your account</h2><button type="button">Continue with email</button>'}</body></html>`);
+    }
+    const m = sub.match(/^\/checkout\/(\d+)\/cn\/(\w+)\/en-us\/(shoppay|pay)$/);
+    const lines = m && A.checkouts[m[2]];
+    if (!lines) return html(404, '<!doctype html><title>Page not found - Shop</title><h1>Page not found</h1>');
+    const priced = lines.map((l) => ({ ...l, v: A.variants.find((y) => String(y.id) === l.id) }));
+    const subtotal = priced.reduce((n, l) => n + l.v.price * l.qty, 0);
+    const total = Math.round((subtotal + A.shipping) * 100) / 100;
+    if (m[3] === 'pay' && req.method === 'POST') {
+      return parseBody(req).then((b) => {
+        const why = A.unavailable ? 'This Product is not available for purchase' : A.agreement && !b.agreed ? 'You must accept membership agreement before checking out' : '';
+        if (why) { A.refused.push(why); return json(422, { error: why }); }
+        A.orders.push({ token: m[2], lines: lines.map((l) => [l.id, l.qty]), total, agreed: !!b.agreed, marketing: !!b.marketing, at: Date.now() });
+        return json(200, { ok: true, next: `/creations/checkouts/cn/${m[2]}/thank-you` });
+      });
+    }
+    const back = String(u.searchParams.get('ur_back_url') || '');
+    // Not signed in to Shop here: on to the store's own checkout, as a guest.
+    if (!A.signedIn) return redirect(back.startsWith('/creations/') ? back : `/creations/checkouts/cn/${m[2]}/en-us`);
+    A.shown += 1;
+    const banner = (t, id = '', hidden = false) => `<div class="banner"${id ? ` id="${id}"` : ''} role="alert"${hidden ? ' hidden' : ''}>${t}</div>`;
+    return html(200, `<!doctype html><html><head><meta charset="utf-8"><title>Checkout - Creations (dummy) - Shop</title>
+<style>body{font:15px system-ui;margin:0;background:#f5f3ff;color:#111}header{background:#5a31f4;color:#fff;padding:10px 20px;display:flex;justify-content:space-between}main{max-width:560px;margin:20px auto;padding:0 20px}
+section{background:#fff;border-radius:10px;padding:10px 14px;margin:10px 0}.banner{background:#fde8e8;color:#9b1c1c;border-radius:8px;padding:10px;margin:8px 0}#pay{background:#5a31f4;color:#fff;border:0;border-radius:8px;padding:14px;width:100%;font-size:16px}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style></head>
+<body><div class="dummy">⚠ Dummy Shop checkout for testing Mugibot — nothing here is real.</div>
+<header><b>shop</b><span class="acct">ash.shop@example.com</span></header><main>
+${A.unavailable ? banner('This Product is not available for purchase') : ''}
+${A.agreement ? banner('You must accept membership agreement before checking out', 'agree-err', !A.agreeNotice) : ''}
+<section><h3>Ship to</h3><p>Ash Ketchum, 1 Pallet Town Rd, Sydney NSW 2000, AU</p></section>
+<section><h3>Shipping method</h3><p>Standard Courier · ${shopMoney(A.shipping)}</p></section>
+<section><h3>Payment</h3><p>Commonwealth Bank •••• 2387</p></section>
+<section class="lines">${priced.map((l) => `<p class="line">${esc(l.v.name)}${l.qty > 1 ? ` × ${l.qty}` : ''} <span>${shopMoney(l.v.price * l.qty)}</span></p>`).join('')}
+  <p>Subtotal <span>${shopMoney(subtotal)}</span></p><p>Shipping <span>${shopMoney(A.shipping)}</span></p><p class="total"><b>Total</b> AUD <b>${shopMoney(total)}</b></p></section>
+${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" name="membership" required> By selecting, you indicate your acceptance of the <a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></label>' : ''}
+<label><input type="checkbox" id="marketing" name="marketing"> Email me with news and offers</label>
+<p><button type="button" id="pay">Pay now</button></p>
+<p><a href="${esc(back)}" id="guest">Check out as guest</a></p>
+</main>
+<script>
+  document.getElementById('pay').addEventListener('click', async () => {
+    const box = document.getElementById('membership');
+    if (box && !box.checked) { document.getElementById('agree-err').hidden = false; return; }
+    const r = await fetch(location.pathname.replace(/shoppay$/, 'pay'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agreed: !!(box && box.checked), marketing: document.getElementById('marketing').checked }) });
+    const d = await r.json();
+    if (!r.ok) { const b = document.createElement('div'); b.className = 'banner'; b.setAttribute('role', 'alert'); b.textContent = d.error; document.querySelector('main').prepend(b); return; }
+    location.href = d.next;
+  });
+</script></body></html>`);
+  }
+
   // -------------------------------------------------------------------- store server
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
@@ -1987,6 +2106,9 @@ ${body}
 
     // ---------------- Acme: a website Mugibot doesn't know (drop watches: monitor/drops.js)
     if (p === '/acme' || p.startsWith('/acme/')) return acme(p.slice('/acme'.length) || '/', u, req, res, { html, json });
+    // ---------------- Shop checkout links: a store that checks out with Shop, and Shop's checkout
+    if (p === '/creations' || p.startsWith('/creations/')) return creations(p.slice('/creations'.length) || '/', u, req, res, { html, json, redirect });
+    if (p === '/shopapp' || p.startsWith('/shopapp/')) return shopApp(p.slice('/shopapp'.length) || '/', u, req, res, { html, json, redirect });
 
     // ---------------- control panel
     if (p === '/__admin/state') return json(200, { ...state, requests: undefined });
@@ -2701,10 +2823,14 @@ ${body}
     /** Acme Collectibles (another website): its address, and a product's page. */
     acmeUrl: (handle = '') => `${url}/acme${handle ? `/products/${handle}` : ''}`,
     setAcme(handle, fields) { Object.assign(state.acme.products.find((x) => x.handle === handle), fields); },
+    /** The store that checks out with Shop: a cart link for its options ([[variantId, qty], …]), and an option's stock. */
+    cartLink: (lines) => `${url}/creations/cart/${lines.map(([id, qty]) => `${id}:${qty}`).join(',')}`,
+    setVariant(id, fields) { Object.assign(state.shopapp.variants.find((x) => String(x.id) === String(id)), fields); },
     reset() {
       const fresh = defaultShops();
       for (const id of Object.keys(fresh)) state.shops[id] = fresh[id];
       state.acme = defaultAcme();
+      state.shopapp = defaultShopApp();
       state.account = null;
       state.cardInIframe = false;
       state.blockNonBrowsers = false;
