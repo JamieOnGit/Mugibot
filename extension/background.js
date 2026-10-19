@@ -680,6 +680,9 @@ function readSweepPage(path) {
   const rx = path ? new RegExp(path[0], path[1]) : /\/(p|product|products)\//i;
   let products = 0;
   for (const a of document.querySelectorAll('a[href]')) {
+    // (Not the site's menus: at a store whose products are /<name> — The Gamesmen's — its menu's links
+    // look like product links, and the page was read before its results were drawn.)
+    if (a.closest('header, nav, footer, [role="navigation"], [role="banner"], [role="contentinfo"]')) continue;
     try { if (rx.test(new URL(a.href, location.href).pathname)) products += 1; } catch { /* not a link */ }
   }
   const data = performance.getEntriesByType('resource')
@@ -820,7 +823,10 @@ async function sweepOne(t) {
     }
     if (!page) return { ...base, ok: false, error: "This browser couldn't read the store's page", ms: Date.now() - started };
     const parsed = parseListing(t.parser, page.html.slice(0, 8_000_000), opts(page.url));
-    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem: page.challenge ? 'blocked' : parsed.problem, products: parsed.products.slice(0, 300) };
+    const problem = page.challenge ? 'blocked' : parsed.problem;
+    // (A page it couldn't read: what it was, for the live monitor — its title, size and product links.)
+    const seen = problem === 'layout' ? { title: String(page.title || '').slice(0, 200), bytes: page.html.length, links: page.products } : undefined;
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, products: parsed.products.slice(0, 300) };
   }
   if (t.inPage) {
     let res;
@@ -833,7 +839,9 @@ async function sweepOne(t) {
     if (!res || !res.status) return { ...base, ok: false, error: "This browser couldn't reach the store", ms: Date.now() - started };
     if (res.status !== 200) return { ...base, ok: false, status: res.status, blocked: [401, 403, 429, 503].includes(res.status), ms: Date.now() - started };
     const parsed = parseListing(t.parser, res.text, opts(res.url));
-    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem: parsed.problem, products: parsed.products.slice(0, 300) };
+    const title = parsed.problem === 'layout' ? /<title[^>]*>([^<]{0,200})/i.exec(res.text || '') : null;
+    const seen = parsed.problem === 'layout' ? { title: title ? title[1] : String(res.type || ''), bytes: String(res.text || '').length } : undefined;
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem: parsed.problem, seen, products: parsed.products.slice(0, 300) };
   }
   let res;
   try {

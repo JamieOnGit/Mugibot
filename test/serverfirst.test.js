@@ -65,6 +65,7 @@ async function browserRead(id, keyword = 'pokemon') {
 test("every store is server first unless an admin says otherwise; the dummy stores' copies are off", () => {
   for (const id of ['target', 'kmart', 'bigw', 'amazon', 'ebgames', 'pbandai', 'pokemoncenter', 'jbhifi']) assert.equal(sw.defaultMode(R(id)), 'auto', id);
   assert.equal(sw.defaultMode(R('zing')), 'off');
+  assert.equal(sw.modeFor(R('zing')), 'off', "Zing's site sends you to EB Games: never searched, whatever was saved");
   assert.equal(sw.defaultMode(R('demo-kmart')), 'off');
   assert.equal(sw.modeFor(R('demo-kmart')), 'auto');
   assert.equal(sw.sourceOf(R('demo-kmart')), 'server');

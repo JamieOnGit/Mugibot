@@ -247,6 +247,8 @@ export function parsePBandai(text, { base, storeBase } = {}) {
   const j = typeof text === 'string' ? shopifyJson(text) : text;
   if (j === undefined) return { products: [], problem: pageProblem(text) || 'layout' };
   const r = j && j.productResults;
+  // (A search with nothing found has no products list at all, only its count: 0.)
+  if (r && !Array.isArray(r.products) && r.totalCount === 0) return { products: [], total: 0, perPage: 0, problem: null };
   if (!r || !Array.isArray(r.products)) return { products: [], problem: 'layout' };
   const site = (() => { try { return new URL(storeBase || base).origin; } catch { return ''; } })();
   const products = [];
@@ -433,7 +435,7 @@ export function parseWoo(text, { base } = {}) {
 // (li.product-item, or a Hyvä form.product-item) with its link (a.product-item-link), its price
 // (data-price-amount), and "Add to Cart" / "Pre-order" — or "Out of stock".
 // ---------------------------------------------------------------------------
-export function parseMagento(html, { base, skuFromPath = null } = {}) {
+export function parseMagento(html, { base, skuFromPath = null, productPath = null, storeName = '' } = {}) {
   const s = String(html || '');
   const problem = pageProblem(s);
   if (problem) return { products: [], problem };
@@ -442,7 +444,14 @@ export function parseMagento(html, { base, skuFromPath = null } = {}) {
   const tilesFound = findAll(doc, (n) => ['li', 'div', 'form', 'article'].includes(n.tag) && / product-item /.test(cls(n)) && !!findFirst(n, (x) => x.tag === 'a' && / product-item-link /.test(cls(x))));
   // (Only the outermost tile: Luma's li.product-item holds a div.product-item-info.)
   const tiles = tilesFound.filter((t) => !tilesFound.some((o) => o !== t && findFirst(o, (x) => x === t)));
-  if (!tiles.length) return { products: [], problem: /returned no results|no results|did not match any/i.test(s) ? 'empty' : 'layout' };
+  if (!tiles.length) {
+    // Results drawn some other way (a search provider's own tiles, or its answer the browser asked for
+    // again: see the extension's renderedPage): any product with its link and a price. Only priced
+    // ones — the site's menu links look like product links at a store whose products are /<name>.
+    const other = parseGeneric(s, { base, productPath, skuFromPath, storeName }).products.filter((p) => p.price !== null);
+    if (other.length) return { products: other, total: null, problem: null };
+    return { products: [], problem: /returned no results|no results|did not match any/i.test(s) ? 'empty' : 'layout' };
+  }
   const products = [];
   const seen = new Set();
   for (const t of tiles) {
@@ -636,19 +645,26 @@ function tileText(node) {
 function tiles(doc, ctx) {
   const out = [];
   const seen = new Set();
-  for (const a of findAll(doc, (n) => n.tag === 'a' && n.attrs.href)) {
-    const url = httpsUrl(a.attrs.href, ctx.base);
-    if (!url) continue;
+  // A link's product (its path), or null: not a product link at this store.
+  const keyOf = (n) => {
+    const url = n.tag === 'a' && n.attrs.href ? httpsUrl(n.attrs.href, ctx.base) : null;
+    if (!url) return null;
     const u = new URL(url);
-    if (ctx.host && u.hostname.replace(/^www\./, '') !== ctx.host) continue;
-    if (!(ctx.productPath || /\/(p|product|products)\//i).test(u.pathname)) continue;
+    if (ctx.host && u.hostname.replace(/^www\./, '') !== ctx.host) return null;
+    if (!(ctx.productPath || /\/(p|product|products)\//i).test(u.pathname)) return null;
+    return u.pathname.replace(/\/+$/, '').toLowerCase();
+  };
+  for (const a of findAll(doc, (n) => n.tag === 'a' && n.attrs.href)) {
+    const key = keyOf(a);
+    if (!key || seen.has(key)) continue;
+    const u = new URL(httpsUrl(a.attrs.href, ctx.base));
     u.search = '';
     u.hash = '';
-    const key = u.pathname.replace(/\/+$/, '').toLowerCase();
-    if (seen.has(key)) continue;
-    // The tile: the nearest container that looks like one (or a few levels up).
+    // The tile: the nearest container that looks like one (or a few levels up) — never one holding
+    // another product too (that's the list: its first price isn't this one's).
     let tile = a;
     for (let p = a.parent, i = 0; p && p.tag !== '#root' && p.tag !== 'body' && i < 6; p = p.parent, i++) {
+      if (findFirst(p, (n) => { const k = n !== a ? keyOf(n) : null; return !!k && k !== key; })) break;
       tile = p;
       const id = `${p.attrs.class || ''} ${p.attrs['data-testid'] || ''} ${p.attrs.id || ''}`;
       if (p.tag === 'article' || p.tag === 'li' || TILE_RE.test(id)) break;
