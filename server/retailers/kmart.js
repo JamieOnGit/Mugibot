@@ -44,6 +44,11 @@ export default {
     // not just Trading Cards — still Kmart's and Target's own, newest first.
     wordsPath: '/search/{q}?key=key_GZTqlLr41FS2p7AY&c=mugibot-1.0&i=mugibot-monitor&s=1&section=Products&num_results_per_page=100'
       + '&sort_by=numberOfDaysSinceStartDate&sort_order=ascending&filters%5BSeller%5D=Kmart&filters%5BSeller%5D=Target',
+    // Every trading card it sells in one list — what its own Trading Cards page asks Constructor.io for
+    // (177 products in October 2026, 200 to a page), newest first: each search sees every keyword's
+    // products, so each product is looked at every few seconds, not one keyword in turn.
+    allPath: '/browse/group_id/65839471a7eefbf864519e8c4009fc29?key=key_GZTqlLr41FS2p7AY&c=mugibot-1.0&i=mugibot-monitor&s=1&section=Products&num_results_per_page=200'
+      + '&sort_by=numberOfDaysSinceStartDate&sort_order=ascending&filters%5BSeller%5D=Kmart&filters%5BSeller%5D=Target',
     pagePath: '&page={page}',
     pages: 3,
   },

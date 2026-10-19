@@ -36,6 +36,7 @@ const KIND = {
 export class Feed {
   constructor({ cfg, repo, catalog, retailers, notifier, discord, hub, now = () => Date.now() }) {
     Object.assign(this, { cfg, repo, catalog, retailers, notifier, discord, hub, now });
+    this.toDiscord = []; // ms from a store's answer to its alert being in Discord, the latest alerts
   }
 
   get browserInterval() {
@@ -127,10 +128,12 @@ export class Feed {
    *         sweep (a live sweep found it: no monitor needed, the sweep settings decide), note, pct,
    *         detectedAt (when the store's answer came in: the alert says how long it took to reach dashboards),
    *         vip (a VIP watch found it: monitor/vip.js — a product with a VIP monitor is one too),
-   *         dropWatch (an admin's drop watch found it: monitor/drops.js — a product with its monitor is one too) }
+   *         dropWatch (an admin's drop watch found it: monitor/drops.js — a product with its monitor is one too),
+   *         wait: false — back as soon as it's saved and on the dashboards, its Discord posts still going:
+   *         alert.posting says when they're done (a sweep's alerts don't wait on one another) }
    * Returns the saved alert, or null when a monitor isn't asking for it or the cooldown is running.
    */
-  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null, vip = false, dropWatch = null } = {}) {
+  async alert(product, kind, { manual = false, announce = false, sweep = false, note = '', pct = null, detectedAt = null, vip = false, dropWatch = null, wait = true } = {}) {
     // On the blacklist (Admin → Blacklist): never alerts. (An admin's own restock ping still goes out.)
     if (!manual && this.catalog.isBlocked(product.store, product.sku)) return null;
     const monitor = this.catalog.monitorForProduct(product.id);
@@ -153,9 +156,25 @@ export class Feed {
     this.broadcast('feed', alert);
     // (Found by an admin's drop watch for everyone with a channel of its own: posted there.)
     const drop = this.drops ? this.drops.routeFor(dropWatch || (monitor && monitor.drop_watch)) : null;
-    const posted = await this.post(alert, product, { drop });
-    if (posted.length) this.catalog.setPosted(row.id, posted);
-    return { ...alert, posted };
+    const posting = this.post(alert, product, { drop }).then((posted) => {
+      if (posted.length) {
+        this.catalog.setPosted(row.id, posted);
+        if (detectedAt) {
+          this.toDiscord.push(Math.max(0, this.now() - detectedAt));
+          if (this.toDiscord.length > 50) this.toDiscord.shift();
+        }
+      }
+      return posted;
+    }, (e) => { this.cfg.log('[feed] post failed:', e.message); return []; });
+    if (!wait) return { ...alert, posted: [], posting };
+    return { ...alert, posted: await posting };
+  }
+
+  /** How long the latest alerts took from the store's answer to Discord: { meanMs, medianMs } (nulls with none yet). */
+  discordTimes() {
+    const t = [...this.toDiscord].sort((a, b) => a - b);
+    if (!t.length) return { meanMs: null, medianMs: null };
+    return { meanMs: Math.round(t.reduce((a, b) => a + b, 0) / t.length), medianMs: t[Math.floor((t.length - 1) / 2)] };
   }
 
   /**
@@ -189,15 +208,13 @@ export class Feed {
     return taken.length ? taken : routes.filter((r) => r.fallback && wants(r));
   }
 
+  /** Every channel whose rule wants it, all at once and first in Discord's line (urgent). The channels it's in. */
   async post(alert, product, { drop = null } = {}) {
     if (!this.discord.botReady) return [];
     const routes = this.routesFor(alert, { drop });
-    const posted = [];
-    for (const r of routes) {
-      const ok = await this.discord.post(r.channelId, this.message(alert, product, { mention: r.roleId ? `<@&${r.roleId}>` : '' }));
-      if (ok && !posted.includes(r.channelId)) posted.push(r.channelId);
-    }
-    return posted;
+    const sent = await Promise.all(routes.map((r) => this.discord.post(r.channelId, this.message(alert, product, { mention: r.roleId ? `<@&${r.roleId}>` : '' }), { urgent: true })
+      .then((ok) => (ok ? r.channelId : null), () => null)));
+    return [...new Set(sent.filter(Boolean))];
   }
 
   /** The Discord embed: image, store, price, stock, SKU, category, time; ⚡ Buy and quick links. */

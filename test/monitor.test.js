@@ -109,6 +109,28 @@ test('one request per page however many watch it; honest User-Agent; alerts only
   assert.match(env.webhooks.at(-1).body.embeds[0].title, /Pre-order open/);
 });
 
+test("a page check whose shared feed fails partway still sends the watching members' alerts", async () => {
+  const url = store.addProduct('ebgames', { sku: '312399', name: 'Feed Fail Booster Box', price: 159, status: 'out_of_stock' });
+  const c = await member('feedfail');
+  await c.put('/api/alerts', { discordWebhook: 'https://discord.com/api/webhooks/1/feedfail' });
+  assert.equal((await c.post('/api/items', { url, name: 'Feed Fail Box' })).status, 200);
+  await advance();
+  store.set('ebgames', '312399', { status: 'in_stock' });
+  // A product of the shared feed on that page, whose update breaks (whatever the reason).
+  const { catalog, feed } = env.app;
+  catalog.productsForPage = (u) => (u === url ? [{ id: 0 }] : Object.getPrototypeOf(catalog).productsForPage.call(catalog, u));
+  feed.applyCheck = async () => { throw new Error('the shared feed broke'); };
+  const hooks = env.webhooks.length;
+  clock.offset += 61 * 1000;
+  try {
+    await assert.rejects(env.app.monitor.tick(), /the shared feed broke/);
+  } finally {
+    delete catalog.productsForPage;
+    delete feed.applyCheck;
+  }
+  assert.ok(env.webhooks.slice(hooks).some((h) => /In stock: Feed Fail Box/.test(h.body.embeds[0].title)), "the member's alert went out all the same");
+});
+
 test('a SKU before it is listed: "not listed yet", found on the search page when it goes up, then "listed" and restock pings', async () => {
   store.set('bigw', '6012345', { listed: false, status: 'out_of_stock' });
   const c = await member('early');

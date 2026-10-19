@@ -247,7 +247,7 @@ the passphrase backup.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 360 tests in about sixteen minutes:
+the 367 tests in about sixteen minutes:
 
 ```bash
 npm install
@@ -272,6 +272,16 @@ npm test
   to members watching the SKU; the filters; refused searches back off; new
   keywords set the scene again; admins' browsers sweep the stores that refuse
   servers (members' never do); the per-store loops; the store client.
+- **Speed** (dummy stores, a fake Discord as slow as from Sydney): a restock ten
+  members watch, one of them armed — the armed member's Auto-checkout run made
+  first, the channel ping next (in Discord within a second of the store's
+  answer, before any DM), the DMs a few at a time; Discord's line (a drop's
+  channel post ahead of queued DMs, a "slow down" holding no place in line, a
+  route with nothing left waiting for its reset); Kmart's whole range in one
+  request (both keywords' products, a restock in some states only saying which,
+  a list that fails falling back to each keyword at once, a refusal still the
+  store's); searches on the pace from the start of the last one; members' alerts
+  still sent when a search or page check fails partway through.
 - **Server first** (dummy stores): every store searched from the server; an
   admin's browser stands in after 3 refusals (1 at stores known to refuse
   servers, or a page the server can't read, with no flood of "new"), the

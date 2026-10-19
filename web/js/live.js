@@ -126,7 +126,7 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
     box.append(
       tile('Drops today', String((o.drops24h || 0) + (o.restocks24h || 0)), `${o.drops24h || 0} new · ${plural(o.restocks24h || 0, 'restock')} · 24 h`, 'brand'),
       tile('Available now', String(o.available || 0), `of ${o.tracked || 0} tracked products`),
-      tile('Alert speed', mean === null ? '—' : [String(mean), h('small', {}, ' ms')], 'store to your screen'),
+      tile('Alert speed', mean === null ? '—' : [String(mean), h('small', {}, ' ms')], `store to your screen${typeof d.discordMs === 'number' ? ` · to Discord ${msText(d.discordMs)}` : ''}`),
       tile('Searches', [per.toLocaleString(), h('small', {}, ' / hour')], t.errors ? `${t.errors.toLocaleString()} failed · ${t.streak.toLocaleString()} OK in a row` : `${t.searches.toLocaleString()} since ${d.startedAt ? clockOf(d.startedAt) : 'start'}`),
     );
   }

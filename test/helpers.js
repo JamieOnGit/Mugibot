@@ -62,11 +62,14 @@ export async function startFakeDiscord() {
     roles: [{ id: 'guild-1', name: '@everyone', position: 0, permissions: '0' }, { id: 'role-member', name: 'Member', position: 1, permissions: '0' }, { id: 'role-bot', name: 'Mugibot', position: 5, managed: true, permissions: String(1n | (1n << 10n) | (1n << 11n) | (1n << 14n) | (1n << 28n)) }],
     botRoles: ['role-bot'],
     rateLimitNext: 0,
+    // How long each answer takes (ms) — Discord's few hundred from Sydney, for tests of what goes first.
+    delayMs: 0,
     // The server's channels (text 0, category 4); the bot may make more when it can Manage Channels.
     channels: [{ id: '700000000000000001', name: 'general', type: 0 }],
     canManageChannels: true,
   };
   const fake = jsonServer(async (c, reply, res) => {
+    if (state.delayMs) await new Promise((r) => setTimeout(r, state.delayMs));
     if (state.rateLimitNext > 0 && c.path.includes('/messages')) {
       state.rateLimitNext -= 1;
       return reply(429, { message: 'You are being rate limited.', retry_after: 0.05, global: false });
@@ -137,7 +140,7 @@ export async function startFakeDiscord() {
     if ((m = p.match(/^\/channels\/([^/]+)\/messages$/)) && c.method === 'POST') {
       const recipient = m[1].startsWith('dm-') ? m[1].slice(3) : null;
       if (recipient && state.dmsClosed.has(recipient)) return reply(403, { message: 'Cannot send messages to this user', code: 50007 });
-      state.messages.push({ channel: m[1], to: recipient, body: c.body });
+      state.messages.push({ channel: m[1], to: recipient, body: c.body, at: Date.now() });
       return reply(200, { id: `msg-${state.messages.length}`, channel_id: m[1] });
     }
     if ((m = p.match(/^\/channels\/([^/]+)$/))) return reply(200, { id: m[1], name: 'restocks' });
