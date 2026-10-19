@@ -289,7 +289,8 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   // Server first, every store: Mugibot's server searches it, and an admin's browser stands in only
   // while the store refuses the server (Amazon, BIG W, Pokémon Center and Premium Bandai often do).
   for (const id of ['target', 'jbhifi', 'trainertown', 'kmart', 'amazon', 'bigw', 'ebgames', 'pokemoncenter', 'pbandai']) assert.equal(mode(id), 'auto', id);
-  assert.equal(mode('zing'), 'off', "Zing: EB Games' search, already searched there");
+  // Zing: its site sends you to EB Games, already searched there — not in the live sweeps at all.
+  assert.equal(r.body.stores.some((s) => s.store === 'zing'), false, 'no Zing');
   assert.equal(mode('demo-kmart'), 'off');
   assert.equal((await boss.put('/api/monitor/sweep', { keywords: '' })).status, 400, 'at least one keyword');
   assert.equal((await boss.put('/api/monitor/sweep', { everySeconds: 1 })).body.settings.everySeconds, 3, 'never faster than every 3 seconds');
@@ -1121,6 +1122,12 @@ test("Premium Bandai: its search JSON (/api/search) — on sale, pre-orders, clo
   ]);
   assert.equal(r.products[0].url, 'https://p-bandai.com/au/item/N2903432001');
   assert.equal(r.products[0].image, 'https://p-bandai.com/files/seller-products/N2903432001/a.webp');
+  // A search that finds nothing ("pokemon" there): no products list at all, only its count — an
+  // empty search, not a changed page (it read as "the store may have changed it", for every round).
+  const none = parseListing('pbandai', '{"text":"pokemon","productResults":{"sortType":"NewArrival","limit":100,"offset":0,"totalCount":0,"productStatusWaitingCount":0,"productStatusOnCount":0,"productStatusEndCount":0},"aggs":{}}', { base: 'https://p-bandai.com/api/search?keyword=pokemon', storeBase: 'https://p-bandai.com/au' });
+  assert.equal(none.problem, null);
+  assert.equal(none.products.length, 0);
+  assert.equal(none.total, 0);
   // Without the region header the site answers with an error, not a list.
   assert.equal(parseListing('pbandai', '{"timestamp":"2026-10-16T13:27:22.023Z","status":500,"error":"Internal Server Error","path":"/api/search"}', { storeBase: 'https://p-bandai.com/au' }).problem, 'layout');
   // Each one counts as Premium Bandai's own (the sweeps keep only the store's own links).
@@ -1201,4 +1208,37 @@ test('WooCommerce and Magento results, read: entities decoded, cents to dollars,
   assert.deepEqual(m.products.map((p) => [p.sku, p.price, p.wasPrice, p.inStock]), [['pokemon-tcg-booster-bundle-mega', 54.95, 64.95, true], ['one-piece-op-14-box-display', 199, null, false]]);
   assert.equal(parseMagento('<div class="message notice"><div>Your search returned no results.</div></div>').problem, 'empty');
   assert.equal(parseMagento('<html><head><title>Attention Required! | Cloudflare</title></head><body>Sorry, you have been blocked</body></html>').problem, 'blocked');
+
+  // Results drawn some other way (a search provider's own tiles): any product with its link and a
+  // price, each with its own price — never the menu's links, which look like products at The Gamesmen.
+  const opts = { base: 'https://www.gamesmen.com.au/catalogsearch/result/?q=pokemon', productPath: R('gamesmen').productPath, skuFromPath: R('gamesmen').skuFromPath, storeName: 'The Gamesmen' };
+  const card = (slug, name, price, add) => `<div class="kuProd"><a class="kuName" href="/${slug}">${name}</a><img src="/i.jpg" alt="${name}"><div class="kuSalePrice">$${price}</div>${add ? '<button>Add to cart</button>' : '<span>Out of stock</span>'}</div>`;
+  const menu = '<header><nav><a href="/pokemon-trading-card-game">Pokemon Trading Card Game</a><a href="/one-piece-card-game">One Piece Card Game</a></nav></header>';
+  const provider = parseMagento(`<html><body>${menu}<main><div class="kuResults">${card('pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box', 'Pokemon TCG: Mega Evolution Perfect Order Elite Trainer Box', '119.95', true)}${card('pokemon-tcg-151-booster-bundle', 'Pokemon TCG: 151 Booster Bundle', '59.95', false)}</div></main></body></html>`, opts);
+  assert.equal(provider.problem, null);
+  assert.deepEqual(provider.products.map((p) => [p.sku, p.price, p.inStock]), [['pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box', 119.95, true], ['pokemon-tcg-151-booster-bundle', 59.95, false]]);
+  // Only the menu (the results not drawn yet): no products made up from it — the page isn't read.
+  assert.deepEqual(parseMagento(`<html><body>${menu}<main><p>Loading…</p></main></body></html>`, opts), { products: [], problem: 'layout' });
+});
+
+test("a page Mugibot couldn't read says what it was; a bot check in an admin's browser says what to do (Mugibot never answers one)", async () => {
+  const admin = { role: 'admin', username: 'boss' };
+  const saved = { ...sw.settings.stores };
+  sw.save({ stores: { ...saved, 'demo-gamesmen': 'browser', 'demo-pokemoncenter': 'browser' } }, null);
+  try {
+    const due = sw.browserDue(admin, { version: '1.19.1' }).terms;
+    const gm = due.find((t) => t.store === 'demo-gamesmen');
+    assert.ok(gm, 'The Gamesmen, from a browser with 1.19.1');
+    await sw.browserResults(admin, [{ store: 'demo-gamesmen', keyword: gm.keyword, page: gm.page, ok: true, status: 200, ms: 900, problem: 'layout', products: [], seen: { title: "Search results for: 'pokemon' &amp; more", bytes: 312000, links: 0 } }]);
+    assert.equal(sw.stat('demo-gamesmen').lastError, "The page didn't have the product list Mugibot reads — the store may have changed it (it was “Search results for: 'pokemon' & more”, 305 KB, 0 product links)");
+    const pc = due.find((t) => t.store === 'demo-pokemoncenter');
+    await sw.browserResults(admin, [{ store: 'demo-pokemoncenter', keyword: pc.keyword, page: pc.page, ok: true, status: 200, ms: 15000, problem: 'blocked', products: [] }]);
+    assert.match(sw.stat('demo-pokemoncenter').lastError, /^The store showed its bot check in the admin's browser — open Pokémon Center \(dummy store\) in that browser and pass the check yourself, once/);
+    // An admin's browser with 1.19.0 isn't given The Gamesmen (it read the page before its results were drawn).
+    sw.stat('demo-gamesmen').browserNext = 0;
+    assert.equal(sw.browserDue(admin, { version: '1.19.0' }).terms.some((t) => t.store === 'demo-gamesmen'), false);
+  } finally {
+    sw.save({ stores: saved }, null);
+    for (const id of ['demo-gamesmen', 'demo-pokemoncenter']) Object.assign(sw.stat(id), { fails: 0, lastError: '', browserNext: 0, needsUpdateAt: 0 });
+  }
 });

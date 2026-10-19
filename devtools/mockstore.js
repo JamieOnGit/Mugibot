@@ -30,7 +30,9 @@
 //   /gamesmen  Magento-style (The Gamesmen): "Add to Cart" by AJAX ("You added … to your shopping
 //             cart"), the mini cart, its one-page checkout (shipping address, shipping methods table,
 //             "Credit card" with Braintree-style card fields, the terms box) → "CONFIRM AND PAY"; its
-//             search page (Cloudflare-style "Sorry, you have been blocked" for servers, when refuseServers)
+//             search page (Cloudflare-style "Sorry, you have been blocked" for servers, when refuseServers;
+//             drawn a moment after loading by a search provider, under a menu of look-alike links, when
+//             searchProvider)
 //   /gamesworld  WooCommerce-style (Games World): the product form, its add-to-cart link
 //             (?add-to-cart=<id>), "× Remove" cart links, its checkout (selectWoo drop-downs, "Deliver to
 //             a different address?" ticked, Stripe's card form or Link) → "Place order"; its product API
@@ -140,9 +142,11 @@ export function defaultShops() {
       banner: '',
       // Shopify: "Use shipping address as billing address" comes unticked. The Gamesmen: "I have a
       // different billing address" comes ticked (billingTicked), no "Standard" shipping (noStandard),
-      // servers refused like its Cloudflare (refuseServers). Games World: "Deliver to a different
-      // address?" comes ticked (shipToDifferent), Stripe's Link connected (link: the saved card, Confirm).
-      billingUnticked: false, billingTicked: false, noStandard: false, refuseServers: false, shipToDifferent: id === 'gamesworld', link: false,
+      // servers refused like its Cloudflare (refuseServers), its search results drawn by a search
+      // provider after the page has loaded, under a menu of /<name> links (searchProvider). Games World:
+      // "Deliver to a different address?" comes ticked (shipToDifferent), Stripe's Link connected (link:
+      // the saved card, Confirm).
+      billingUnticked: false, billingTicked: false, noStandard: false, refuseServers: false, searchProvider: false, shipToDifferent: id === 'gamesworld', link: false,
       // (log: every request while it's on — { id, at, path, what } — to show nothing asked again too soon.)
       queue: { on: false, admitAfterMs: 4000, refreshMs: 1500, tooSoonMs: 700, wait: 23, lateMs: 0, places: {}, admittedIds: [], kicks: 0, shown: 0, admitted: 0, cookieless: 0, log: [] },
     };
@@ -1280,6 +1284,19 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     ? `<form data-role="tocart-form" data-product-sku="${esc(x.code || '')}" action="/gamesmen/checkout/cart/add/" method="post"><button type="submit" title="${x.status === 'preorder' ? 'Pre-order' : 'Add to Cart'}" class="action tocart primary"><span>${x.status === 'preorder' ? 'Pre-order' : 'Add to Cart'}</span></button></form>`
     : '<div class="stock unavailable"><span>Out of stock</span></div>'}</div></div></div></div></li>`;
     };
+    // (searchProvider: its menu's links look like product links — /<name>, like its products — and the
+    // results are drawn a moment after the page has loaded, by a search provider's own code, in its
+    // own tiles: no Magento product-item at all.)
+    if (shopOf('gamesmen').searchProvider) {
+      const card = (x) => `<div class="kuProd"><a class="kuName" href="${pathFor('gamesmen', x)}">${esc(x.name)}</a>
+        <img src="${imagePath('gamesmen', x)}" alt="${esc(x.name)}" width="200"><div class="kuSalePrice">$${x.price.toFixed(2)}</div>
+        ${x.status === 'in_stock' || x.status === 'preorder' ? `<button type="button" class="kuAddtocart">${x.status === 'preorder' ? 'Pre-order' : 'Add to cart'}</button>` : '<span class="kuOutOfStock">Out of stock</span>'}</div>`;
+      return page('gamesmen', `Search results for: '${q}'`, `<nav class="navigation" role="navigation"><ul>
+          <li><a href="/gamesmen/pokemon-trading-card-game">Pokemon Trading Card Game</a></li><li><a href="/gamesmen/one-piece-card-game">One Piece Card Game</a></li>
+          <li><a href="/gamesmen/trading-card-accessories">Trading Card Accessories</a></li></ul></nav>
+        <h1 class="page-title"><span class="base">Search results for: '${esc(q)}'</span></h1><div id="ku-search-results"></div>
+        <script>setTimeout(() => { document.getElementById('ku-search-results').innerHTML = ${JSON.stringify(hits.length ? `<div class="kuResults">${hits.map(card).join('')}</div>` : '<div class="kuNoResults">No results</div>')}; }, 2500);</script>`, { bagCount: bagCount('gamesmen') });
+    }
     return page('gamesmen', `Search results for: '${q}'`, `<h1 class="page-title"><span class="base">Search results for: '${esc(q)}'</span></h1>${hits.length
       ? `<div class="search results"><div class="products wrapper grid products-grid"><ol class="products list items product-items">${hits.map(tile).join('')}</ol></div></div>`
       : '<div class="message notice"><div>Your search returned no results.</div></div>'}`, { bagCount: bagCount('gamesmen') });
@@ -2178,13 +2195,14 @@ ${body}
         text: u.searchParams.get('keyword'),
         productResults: {
           sortType: u.searchParams.get('sortType') || 'Recommended', limit: Number(u.searchParams.get('limit')) || 20, offset: 0, totalCount: all.length,
-          products: all.map((x) => ({
+          // (Nothing found: no products list at all, only the count — like the real site.)
+          products: all.length ? all.map((x) => ({
             areaProductNo: `NAP${x.sku}AU`, productCode: x.sku, areaCode: 'AU', productName: { en: x.name },
             productType: x.status === 'preorder' ? 'PreOrder' : 'Normal', fixedListPrice: { amount: x.price, currency: 'AUD' },
             saleStatus: x.status === 'coming_soon' ? 'Waiting' : 'On', displayStatus: 'On',
             productImages: [{ fileUrl: imagePath(shop, x).slice(1), mediaType: 'Image' }],
             flags: [...(x.status === 'preorder' ? ['PRE_ORDER'] : []), ...(x.status === 'out_of_stock' ? ['OUT_OF_STOCK'] : [])],
-          })),
+          })) : undefined,
         },
         aggs: {},
       });

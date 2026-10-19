@@ -46,6 +46,7 @@ import { categoryFor, toProduct } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { serialize } from '../retailers/index.js';
 import { bad, bool, num, str } from '../schema.js';
+import { decodeEntities } from './html.js';
 import { dropConnections, storeFetch } from './http.js';
 import { mentions, norm, parseListing, termsRegex } from './listing.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
@@ -114,9 +115,19 @@ const SERVER_RETRY_MS = 5 * 60 * 1000;
 const SERVER_RETRY_MAX_MS = 30 * 60 * 1000;
 const minutes = (ms) => `${Math.max(1, Math.round(ms / 60000))} min`;
 
+/** " (it was “Search results for: 'pokemon'”, 312 KB, 0 product links)" — what a page Mugibot couldn't read was. */
+function seenText(seen) {
+  if (!seen || typeof seen !== 'object') return '';
+  const title = str(decodeEntities(String(seen.title || '')).replace(/\s+/g, ' ').trim(), 80);
+  const bytes = num(seen.bytes, { min: 0, max: 1e9, int: true, def: null });
+  const links = num(seen.links, { min: 0, max: 100000, int: true, def: null });
+  const parts = [title ? `“${title}”` : 'a page with no title', bytes !== null ? `${Math.max(1, Math.round(bytes / 1024))} KB` : null, links !== null ? `${links} product link${links === 1 ? '' : 's'}` : null];
+  return ` (it was ${parts.filter(Boolean).join(', ')})`;
+}
+
 /** Where a store is searched from unless an admin says otherwise: server first (dummy-store copies: off). */
 export function defaultModeOf(r) {
-  return r.demo || r.sweep.from === 'off' ? 'off' : 'auto';
+  return !r.sweep || r.demo || r.sweep.from === 'off' ? 'off' : 'auto';
 }
 const REBASELINE_MS = 6 * 3600 * 1000;
 const MAX_BACKOFF_MS = 15 * 60 * 1000;
@@ -468,7 +479,8 @@ export class Sweeper {
       });
     }
     const parsed = parseListing(r.sweep.parser, text, { base: url, storeBase: r.base, productPath: r.productPath, skuFromPath: r.skuFromPath, storeName: r.name });
-    return this.ingest(r, term, parsed, { source: 'server', url, ms });
+    const title = /<title[^>]*>([^<]{0,300})/i.exec(text);
+    return this.ingest(r, term, parsed, { source: 'server', url, ms, seen: { title: title ? title[1] : '', bytes: text.length } });
   }
 
   /** Which products count (from MugiWatch): the keyword in the name, trading cards only, not a marketplace seller. */
@@ -503,9 +515,16 @@ export class Sweeper {
   }
 
   /** What one search found. parsed: { products, total, problem } */
-  async ingest(r, term, parsed, { source, url, ms = null }) {
-    if (parsed.problem === 'blocked') return this.record(r, term, { ok: false, blocked: true, url, source, ms, error: 'The store showed a bot check instead of results' });
-    if (parsed.problem === 'layout') return this.record(r, term, { ok: false, url, source, ms, error: "The page didn't have the product list Mugibot reads — the store may have changed it" });
+  async ingest(r, term, parsed, { source, url, ms = null, seen = null }) {
+    // A person's check in an admin's browser: only that person passes it (Mugibot never answers one).
+    if (parsed.problem === 'blocked') {
+      return this.record(r, term, {
+        ok: false, blocked: true, url, source, ms,
+        error: source === 'browser' ? `The store showed its bot check in the admin's browser — open ${r.name} in that browser and pass the check yourself, once (searches back off meanwhile)` : 'The store showed a bot check instead of results',
+      });
+    }
+    // (What the page was — its title and size — so whoever looks can tell what the store sent.)
+    if (parsed.problem === 'layout') return this.record(r, term, { ok: false, url, source, ms, error: `The page didn't have the product list Mugibot reads — the store may have changed it${seenText(seen)}` });
     const s = this.settings;
     const now = this.now();
     const row = this.db.get('SELECT * FROM sweep_terms WHERE store = :s AND keyword = :k AND page = :p', { s: r.id, k: term.keyword, p: term.page });
@@ -1115,7 +1134,9 @@ export class Sweeper {
       }
       const products = (Array.isArray(res.products) ? res.products : []).slice(0, 300).map((p) => this.cleanProduct(r, p)).filter(Boolean);
       const problem = ['blocked', 'layout', 'empty'].includes(res.problem) ? res.problem : null;
-      out.push(await this.ingest(r, term, { products, total: null, problem }, { source: 'browser', url, ms }));
+      // (Extension 1.19.1: what the page it couldn't read was.)
+      const seen = res.seen && typeof res.seen === 'object' ? { title: res.seen.title, bytes: res.seen.bytes, links: res.seen.links } : null;
+      out.push(await this.ingest(r, term, { products, total: null, problem }, { source: 'browser', url, ms, seen }));
     }
     return out;
   }

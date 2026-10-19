@@ -1298,6 +1298,30 @@ test("The Gamesmen: its Cloudflare turns Mugibot's server away — refused once,
   }
 });
 
+test("The Gamesmen's results drawn a moment after its page loads, by a search provider in its own tiles, under a menu whose links look like products: read once they're there — each product with its own price, never the menu", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-gamesmen': 'browser' } }, null);
+  Object.assign(sweeper.stat('demo-gamesmen'), { backup: null, serverMisses: 0, fails: 0, lastError: '', slowUntil: 0, retryAt: 0, browserNext: 0 });
+  env.app.db.run("DELETE FROM products WHERE store = 'demo-gamesmen'");
+  store.shop('gamesmen').searchProvider = true;
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => env.app.catalog.productFor('demo-gamesmen', 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box'), { timeout: 30000, message: `its results read in this browser (${sweeper.stat('demo-gamesmen').lastError})` });
+    const etb = env.app.catalog.productFor('demo-gamesmen', 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box');
+    assert.deepEqual([etb.status, etb.price], ['in_stock', 119.95]);
+    for (const menu of ['pokemon-trading-card-game', 'one-piece-card-game', 'trading-card-accessories']) assert.equal(env.app.catalog.productFor('demo-gamesmen', menu), null, `the menu's ${menu} isn't a product`);
+    assert.equal(sweeper.stat('demo-gamesmen').fails, 0, sweeper.stat('demo-gamesmen').lastError);
+  } finally {
+    store.shop('gamesmen').searchProvider = false;
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: off }, null);
+    for (const pg of ctx.pages()) if (pg.url().includes('/gamesmen/')) await pg.close().catch(() => null);
+  }
+});
+
 test("EB Games: its search JSON, asked for from inside an EB Games page in the sweep window (servers refused, like its Cloudflare)", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;
