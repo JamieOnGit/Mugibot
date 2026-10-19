@@ -327,8 +327,11 @@ export class Monitor {
       this.hub.publish(item.user_id, 'watch', { id: item.id, status, source, checkedAt: now, price: r.price ?? item.last_price, error });
     }
     // Your own drop watch's find — at any store or website: its price going down is news too (monitor/drops.js).
+    // (With the other alerts, after every member's Auto-checkout run is made: applyAll.)
     if (item.drop_watch && this.drops && !failed && typeof r.price === 'number') {
-      await this.drops.priceDropped(item, r.price, status).catch((e) => this.cfg.log('[drops]', e.message));
+      const drop = () => this.drops.priceDropped(item, r.price, status).catch((e) => this.cfg.log('[drops]', e.message));
+      if (later) later.push(drop);
+      else await drop();
     }
     if (!changed) return status;
     const fresh = { ...item, status, last_price: r.price ?? item.last_price, title: r.title || item.title };

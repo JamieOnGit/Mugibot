@@ -27,14 +27,31 @@ is bought for an item until they **arm** it, and each arming buys **once**.
    - **Only at stores where this browser is signed in** (optional). Signed in,
      checkout is faster because the store fills in your saved details.
      The sign-in status comes from the store login monitor.
-4. **Arm items.** In the "Armed items" table on the same page (10 to a page;
-   "Armed only" shows just those), or with "🤖 Auto-checkout this item when it
-   drops" when you add or edit an item on your watchlist (Drops → **My
-   watchlist**). Each armed item needs a **max price**. Mugibot never starts if
-   the price is over it. The live searches, the store switches and the watchlist
-   all live on the Drops page; the Checkout page is for what Auto-checkout does
-   with your armed items, then (at the bottom) the delivery details and card
-   every checkout uses.
+4. **Arm items.** On the Drops page's **🤖 Armed** list (the tab next to My
+   watchlist: 10 to a page; "Armed only" shows just those), or with "🤖
+   Auto-checkout this item when it drops" when you add or edit an item on your
+   watchlist. Each armed item needs a **max price**. Mugibot never starts if the
+   price is over it. Every row is laid out the same way — the switch, the item,
+   its max price and its buttons (**Trigger ACO**, **Clear bag**), each in its own
+   column — with the item's **checks** under its name, always in the same order:
+   - **Bag**: emptied (Clear cart) and nothing left in it since — a run that got
+     to the store and ended without an order may have left its item there;
+   - **Sign-in**: whether your checkout browser is signed in at the store (needed
+     at Amazon, or with "Only at stores where this browser is signed in");
+   - **Card**: ready in your checkout browser (that browser says so, from
+     extension 1.20, so you can see it from your phone too);
+   - **Address**: the item's delivery details complete (its own address, else
+     your default);
+   - **Browser**: your checkout browser connected, up to date, open and listening.
+
+   ✓ is ready, ✗ stops the run (or makes it stop for you), ! slows it, – is
+   nothing to do (or can't be told from here). An armed item that isn't ready
+   says **"To fix: …"** under it, and the line at the top counts how many armed
+   items are ready. **🧹 Get ready** empties your bag at every store with
+   something armed (in your checkout browser) and checks your sign-ins again;
+   **↻ Check again** looks again now. The Checkout page is for your switch and
+   limits, ⚡ Buy from your phone, your bags and the run history; your delivery
+   details and card are on the Setup page.
    - **Not trading cards too:** a console, a collectible — any product at a
      store Mugibot checks out at is bought the same way. On the Monitor page's
      **🎯 Drop watches** tab, paste its link (or the words in its name and the
@@ -49,8 +66,9 @@ is bought for an item until they **arm** it, and each arming buys **once**.
    - the newest extension in this browser (1.14.0 or newer: Shopify's, Target's
      and Global-e's checkouts, tile choices, address finders, Amazon's "Buy Now";
      1.15.0 for ⚡ Buy from your phone to start the moment you press it);
-   - a card saved in the extension (or backed up in your account: after a new
-     install, restore it with your card passphrase, see "Card backup" below);
+   - a card saved in the extension (after an update or a new install it comes
+     back by itself once the extension's connected: "Your card through extension
+     updates" below);
    - your delivery details;
    - Discord, for a DM on every attempt (optional);
    - which browser is your **checkout browser** (below), and whether this one is
@@ -58,7 +76,7 @@ is bought for an item until they **arm** it, and each arming buys **once**.
 
 ### Trigger ACO: try it now
 
-Each row of the Armed items table has a **Trigger ACO** button. It runs
+Each row of the Armed list has a **Trigger ACO** button. It runs
 Auto-checkout for that item **now**, as if it had just dropped. Use it to see it
 work before a real drop.
 
@@ -247,6 +265,12 @@ keeps restocking the same item never buys it over and over.
 If a run fails **before** the final button (sold out by the time the browser got
 there, the store wouldn't add it…), the item stays armed for the next drop.
 
+**One purchase per drop watch, too.** A drop watch with Auto-checkout on
+(docs/MONITORING.md → Drop watches) is one arming: once one of its finds is
+bought (or its final button was pressed and no confirmation showed), its other
+finds are disarmed and what it finds from then on isn't armed. A broad watch
+("xbox series x") never buys two consoles. Arm it again for another.
+
 **When the store doesn't add it.** Some stores (Kmart's, for one) don't show
 anything Mugibot can read after "Add to bag": no number on the bag icon, no
 "Added" message. Mugibot then goes to checkout, and a store with an empty bag
@@ -307,8 +331,10 @@ history**, even when Auto-checkout didn't start. It's 10 runs to a page, with
 page buttons underneath (no endless scrolling). Each entry shows:
 
 - what triggered it;
-- each step, with the time;
-- how it ended, and **why**.
+- each step, with the time — and how long after the drop it came (**+2.1 s**);
+- how it ended, and **why**; an order placed says how long it took from the drop
+  to the order (**⏱ 11.0 s drop to order**), and the **Orders placed** tile says
+  the typical time (and the fastest) over the last 30 days.
 
 The filter shows orders placed, needed you, failed or didn't start, and goes
 back to the first page. Your general activity (restocks, alerts, sign-ins) is on
@@ -324,7 +350,39 @@ ending, and an email if "Email me when checkout is waiting for me" is on (Setup 
 | ❌ Failed | Sold out by the time your browser got there, not added to the bag, couldn't reach checkout, card declined, the card didn't go in, another item in the bag, it took too long |
 | ⏭️ Didn't start | Over the item's max price, over your order or daily limits, 3 failures today, signed out (if you chose that, or at a store that only sells signed in: Amazon), no browser with the extension open, membership not active |
 
-### Card backup: no typing the card again after a new install
+### Your card through extension updates: no passphrase, nothing to type
+
+From extension 1.20 (on unless you switch it off: Setup → Delivery & card), your
+card survives an update of the extension — even removing it and loading a new
+copy from another folder, which starts with empty storage:
+
+1. With the card saved, the dashboard hands the extension a **restore key** it
+   keeps in this browser (the dashboard's own storage, which outlives the
+   extension). The extension locks the card with it and sends your account
+   **only that locked copy** (AES-256-GCM, tied to your account and that key),
+   plus the brand, last 4 digits and expiry so it can show which card it is.
+2. After an update (or a fresh copy), press **Connect this browser** (Setup →
+   Extension). The dashboard hands the new copy the same key: it fetches the
+   locked copy, opens it, and keeps the card encrypted with its own key, ready
+   for every ⚡ Buy and Auto-checkout. "Your card is back" says so. Your delivery
+   details were never in the extension: they come from your account as always.
+
+How it's kept safe:
+
+- Mugibot's server has the locked copy but **never the key**, so it can't open it
+  by itself; the key never leaves this browser. Someone with your Mugibot
+  password can't get it either: the copy is only ever given to a connected
+  extension.
+- One copy per browser (and per address of the site): each keeps its own key.
+  Clearing this site's data in your browser loses the key; the extension, which
+  still has the card, makes a new copy.
+- **Removing the card** in the extension's Card settings deletes the copies too,
+  so it never comes back by itself. **Delete the copies** on Setup → Delivery &
+  card does the same; switching it **off** deletes them and the key.
+- For **another browser or computer**, use the card backup below (locked with a
+  passphrase you choose).
+
+### Card backup: for another browser or computer
 
 The card is saved in the extension, so a fresh install (or another browser) starts
 without it. From extension 1.13.0 you can back it up to your Mugibot account:
@@ -333,10 +391,11 @@ without it. From extension 1.13.0 you can back it up to your Mugibot account:
    account** when you save the card, or use **Back up my card** under a card
    that's already saved. Pick a **card passphrase** (10 characters or more, a few
    words is easiest) and type it twice.
-2. **Restore it.** After a new install, connect the extension to your account
-   and open Card settings (the popup and the dashboard's Checkout details say
-   "Restore your card"). Type the card passphrase once: the card is ready for
-   every ⚡ Buy and Auto-checkout in that browser, with nothing to unlock again.
+2. **Restore it.** In the other browser, connect the extension to your account
+   and open Card settings (the popup and Setup → Delivery & card say "Restore
+   your card"). Type the card passphrase once: the card is ready for every ⚡ Buy
+   and Auto-checkout in that browser, with nothing to unlock again. (After an
+   update in the same browser, the card comes back by itself: above.)
 
 How it's kept safe:
 
@@ -347,7 +406,7 @@ How it's kept safe:
 - The passphrase never leaves your browser. **Mugibot can't open the backup or
   tell you the passphrase.** Forget it, and save the card again (and back it up
   with a new passphrase).
-- Delete the backup any time: **Delete the backup** on Checkout details or in
+- Delete the backup any time: **Delete the backup** on Setup → Delivery & card or in
   the extension's Card settings. It's deleted with your account too. Removing the
   card from one browser leaves the backup alone.
 - **Download my data** lists the backup's brand, last 4 and expiry, not the

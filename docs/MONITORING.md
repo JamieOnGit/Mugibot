@@ -78,7 +78,7 @@ stick.
 | Premium Bandai (Australia) | Server first: **an admin's browser** (the extension, 1.8.1 or later) stands in at the first refusal | The site's own search JSON (`/api/search?keyword=…`, newest arrivals first, up to 100), asked for from inside a Premium Bandai page in the extension's window with the region its own code sends (`x-g1-area-code: au`), like EB Games'. It answers Mugibot's server too now (Oct 2026), so the server reads it. A search that finds nothing ("pokemon" there) comes back with no products list at all, only its count: that's an empty search, not a changed page. At most one search every 30 seconds |
 | Pokébox | Server first | Each keyword's search (Shopify's search suggestions, 10 a search with stock), "tcg" added ("pokemon tcg": its sealed products first — Pokébox names its hundreds of singles after the card), and as every keyword's **second page** the store's **newest 30 products** (Shopify's product list, most recently changed first, `sweep.feedPath`): a new drop shows up there the moment it's listed. At most one read every 10 seconds |
 | Good Games, Collectible Madness, Cherry Collectables | Server first | The same as Pokébox (Shopify card shops) |
-| The Gamesmen | Server first: **an admin's browser** (the extension, **1.19.1** or later) stands in at the first refusal | Its search page, opened in the extension's window and read once its results are drawn, 2 pages: Magento's tiles (name, price, "Add to Cart", "Pre-order" or "Out of stock"), or — drawn some other way, e.g. by a search provider — any product on the page with its link and a price. Its menu's links look like product links (its products are `/<name>`), so 1.19.1 doesn't count the site's menus as the results (1.19.0 read the page before they were drawn). Its Cloudflare turns servers away ("Sorry, you have been blocked") |
+| The Gamesmen | Server first: **an admin's browser** (the extension, **1.19.1** or later) stands in at the first refusal | Its search page **newest first** ("Recently Listed": a new listing is on page 1 the moment it's up), opened in the extension's window and read once its results are drawn, 2 pages: its own tiles (its Hyvä theme, read from a copy of its real page — from 1.20: the name, the price shown with GST, a struck-through old price, "Add to Cart" or "Pre-Order", the product's id), or Magento's usual ones, or — drawn some other way — any product on the page with its link and a price. Its menu's links look like product links (its products are `/<name>`), so 1.19.1 doesn't count the site's menus as the results (1.19.0 read the page before they were drawn). Its Cloudflare turns servers away ("Sorry, you have been blocked") |
 | Games World | Server first | WooCommerce's own product API (`/wp-json/wc/store/v1/products?search=…`, newest first, 30 a search): stock, price, pre-orders (backorders) and the product's id for its add-to-cart link — only the fields Mugibot reads (about 100 KB a search). At most one search every 15 seconds |
 
 BIG W, EB Games, Pokémon Center, Premium Bandai and The Gamesmen have refused
@@ -334,16 +334,20 @@ Settings (environment variables): `VIP_FAST_SECONDS` (5), `VIP_SLOW_SECONDS`
 
 ### 🎯 Drop watches: anything that isn't the card keywords
 
-**Monitor → 🎯 Drop watches** (the tab next to My watchlist, for everyone with
-a membership) watches anything outside the card keywords: a console, a
-collectible, a product at any shop. One box takes either:
+**Drops → 🎯 Drop watches** (a tab of the lists, for everyone with a
+membership) watches anything outside the card keywords: a console, a
+collectible, a product at any shop — Garmin's, a sneaker store's. You're told
+when it **drops** (a new listing, or its page going up), comes **back in
+stock**, opens for **pre-order**, or its **price drops**. One box takes either
+(a link pasted without `https://` is a link too):
 
 - **A product's link.** At a store Mugibot knows (JB Hi-Fi, Kmart, any of
   them) its page is checked like any monitored product, and ⚡ Buy and
   Auto-checkout work there exactly as they do for cards. At **another
-  website** its page is read for its stock every minute (Shopify's product
-  data where the site is a Shopify shop, else the page itself): you're told
-  when it's back in stock, and buy it there yourself. There's no ⚡ Buy and no
+  website** its page is read for its stock and price every minute (Shopify's
+  product data where the site is a Shopify shop, else the page itself): you're
+  told when its page goes up, when it's back in stock or open for pre-order, and
+  when it gets cheaper — and buy it there yourself. There's no ⚡ Buy and no
   Auto-checkout at other websites. The whole link you gave is what's read; its
   SKU (the website and the link's last part, e.g. `microsoft.com/8wg5vqp0x4h3`)
   is only Mugibot's own code for it. Until its page answers, it's called by the
@@ -366,15 +370,23 @@ collectible, a product at any shop. One box takes either:
     read. A site that turns Mugibot away is asked again later, waiting longer
     each time.
 
-  Anything whose name has **every** word counts, trading cards or not.
+  Anything whose name has **every** word counts, trading cards or not. A short
+  word (three letters or fewer) or a number has to be a whole word in the name —
+  "xbox series x" isn't the Series S, "playstation 5 pro" isn't a PlayStation 5
+  "Promo Bundle", "switch 2" isn't a 2024 edition (a plural's fine: "box" →
+  "Boxes"); a longer one counts at the start of a word ("skate" → "Skateboard").
+  At **Kmart**, whose card searches are kept to its Trading Cards, a watch's
+  words (and a VIP watch's) are searched across the whole store.
   Mugibot's first look is the "before" picture: what's there already isn't a
   drop. What shows up after it is.
 
 **An admin's drop watch is for everyone** (the 📣 box, on unless you untick it):
 - What it finds is a monitored product in everyone's **Tracked products**, in
   category **Non-TCG**, posted in **`#non-tcg-alerts`** (🆕 a new listing, 🟢 in
-  stock again) with ⚡ Buy where Mugibot checks out, and in every dashboard's live
-  feed.
+  stock again, 🟣 pre-orders open, 📉 a price drop) with ⚡ Buy where Mugibot
+  checks out, and in every dashboard's live feed. (`#non-tcg-alerts` posts price
+  drops from this release: its rule got 📉 Price drops once, when the update
+  started — take them off in its rule if you'd rather not.)
 - Members ☆ Watch it from the drop watch (or Tracked products) for their own DM,
   and arm 🤖 Auto-checkout on it from their watchlist, as with any product.
 - **`#non-tcg-alerts`**: **Set up store channels** makes it (or press **Make
@@ -385,19 +397,28 @@ collectible, a product at any shop. One box takes either:
 - **Where it posts, and who it pings** (admins only): **Post its drops and
   restocks in** lists the Discord server's text channels (by category) — leave it
   on **The usual** for `#non-tcg-alerts` — and **Ping** its roles (or no one).
-  Its 🆕 new listings and 🟢 restocks then go **only** to that channel, with
-  that role pinged, instead of `#non-tcg-alerts`; anything else about them
-  (a price drop) goes the usual way. A monitor an admin had already made on
+  Its 🆕 new listings, 🟢 restocks and 📉 price drops then go **only** to that
+  channel, with that role pinged, instead of `#non-tcg-alerts`. A monitor an admin had already made on
   something the watch finds is taken on (its drops and restocks go there too),
   and is left as it was when the watch is removed. Change it any time with
   **✎** on the watch. A VIP drop still goes to `#vip-drop`. Members never see
   where a watch posts; their own watches are only ever a DM.
 
 **Anyone's own drop watch is theirs alone** (members' always are):
-- What it finds goes on **their watchlist** (marked 🎯), up to 10 products a
-  watch. Only they're told: their DM, webhook or email, as they've set it.
+- What it finds goes on **their watchlist** (marked 🎯): up to 10 of what was
+  listed already at its first look, and up to 10 that drop after it — each its
+  own room, so a broad watch whose first look found plenty still hears of what
+  drops (taking a find off your watchlist makes room; when it's found its most,
+  it says so in your activity, once a day). Only they're told: their DM,
+  webhook or email, as they've set it.
 - What was there at its first look goes on quietly; anything new is a DM the
-  moment it's found, and anything coming back in stock is a DM as usual.
+  moment it's found, anything coming back in stock (or open for pre-order) is a
+  DM as usual, and a find that gets **cheaper** is a 📉 DM: "Was $649.00 — now
+  $549.00 (15% lower)", with ⚡ Buy where Mugibot checks out, else Open product.
+  A price drop is at least 1% (and a dollar) below the read before; it's said
+  again only when it goes lower still, or half a day later. (Its first read
+  after it's found only notes the price: a listing's price and its page's can
+  differ.)
 - Nobody else sees it, nor its words in the live searches.
 - Removing it removes what it put on the watchlist.
 
@@ -410,6 +431,9 @@ switched on, Chrome open with the extension, your limits apply):
   (bought when it goes on sale). What was already on sale is never bought — a
   broad watch would otherwise buy everything that matches. (The same rule as VIP
   drops.)
+- **One purchase per watch:** once one of its finds is bought, its other finds
+  are disarmed and what it finds from then on isn't armed (docs/AUTO-CHECKOUT.md →
+  One purchase per arming).
 
 Each watch shows what it found, with its stock, price, ⚡ Buy (where there's
 one) and whether it's armed; **↻** looks again now. Members can have 10 drop
@@ -649,7 +673,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
 | Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
 | What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
-| 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find, where they post); `drop_watches` (with `channel_id`, `role_id`: migration 12), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11); `GET/POST /api/drops`, `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
+| 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find — `hasWords`, `room` — where they post, and your own finds' price drops: `priceDropped`); `drop_watches` (with `channel_id`, `role_id`: migration 12), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11), `items.price_alert_at`/`price_alert_price` (migration 13); `GET/POST /api/drops`, `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |

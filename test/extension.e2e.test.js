@@ -49,8 +49,13 @@ async function launch(dir = extDir) {
     viewport: { width: 1200, height: 900 },
     args: [`--disable-extensions-except=${dir}`, `--load-extension=${dir}`, ...NO_STORES],
   });
-  sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
+  // (Mugibot's own worker — not one of the browser's built-in extensions', which can start first in a
+  // profile that's been used before.)
+  const ours = (w) => /^chrome-extension:\/\/[a-p]{32}\/background\.js$/.test(w.url());
+  sw = ctx.serviceWorkers().find(ours) || await ctx.waitForEvent('serviceworker', { predicate: ours });
   extId = new URL(sw.url()).host;
+  // (A copy just installed in this profile: its worker is up a moment before its extension APIs are.)
+  await waitFor(async () => (await sw.evaluate(() => typeof chrome.storage).catch(() => '')) === 'object', { message: "the extension's APIs ready", timeout: 15000 });
 }
 
 before(async () => {

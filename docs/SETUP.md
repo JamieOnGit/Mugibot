@@ -403,8 +403,12 @@ Open `https://<your address>/admin`:
 site moves to a new address), the extension's toolbar icon shows **NEW** and
 its popup shows an **Update** button. It opens the dashboard's update steps:
 download, copy the new files over the old folder, then press **Reload** in the
-popup. Their saved card and connection stay. Copies from the Chrome Web Store
-update by themselves.
+popup. Their saved card and connection stay. From 1.20, even a new copy loaded
+from another folder ("start fresh") gets the card back by itself: the member
+presses **Connect this browser** and the dashboard hands the new copy the key to
+the locked copy of their card kept in their account (docs/AUTO-CHECKOUT.md →
+Your card through extension updates). Copies from the Chrome Web Store update by
+themselves.
 
 ---
 
