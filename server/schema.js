@@ -176,7 +176,7 @@ export const DEFAULT_ACO = {
   maxOrder: 400, // the most one order may cost, delivery included
   perDay: 2, // orders a day (24 hours)
   spendPerDay: 600, // dollars a day
-  signedInOnly: false, // only at stores this browser is signed in to
+  signedInOnly: false, // (no longer used: a run starts signed in or not — aco.js)
   remoteBuy: true, // Discord's ⚡ Buy (pressed on your phone or anywhere) checks out in your checkout browser
   deviceId: '', // the checkout browser: the one browser runs go to ('' = the newest one connected)
 };

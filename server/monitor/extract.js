@@ -236,6 +236,27 @@ const NOT_FOUND_RE = /\b(page|product) (not found|cannot be found|could not be f
 // ---------------------------------------------------------------------------
 
 /**
+ * What the store's own page data says, where it says more than the structured data for search engines.
+ * Target's (Next.js __NEXT_DATA__, product.deliveryModes): a product you can't order online has neither
+ * home delivery nor click & collect — its "Add To Basket" greyed out — while its JSON-LD still says
+ * "InStock" (a member's pre-order, Oct 2026). (Target's page draws every Add To Basket greyed out, and its
+ * own code turns the button on from this: the button in the page's HTML says nothing either way.)
+ * { status, detail } or null.
+ */
+function storePageData(html) {
+  const m = String(html).match(/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (!m) return null;
+  let p = null;
+  try { p = JSON.parse(m[1]).props.pageProps.product; } catch { return null; }
+  const modes = p && p.deliveryModes;
+  if (!modes || typeof modes !== 'object') return null;
+  const home = modes.homeDelivery && modes.homeDelivery.available;
+  const collect = modes.clickAndCollect && modes.clickAndCollect.available;
+  if (home === false && collect === false) return { status: STATUS.OUT_OF_STOCK, detail: 'no home delivery or click & collect (its Add button greyed out)' };
+  return null;
+}
+
+/**
  * @param {string} html
  * @param {{url?: string, sku?: string, hints?: object}} opts
  * @returns {{status, title, price, currency, sku, image, signals, decidedBy, blocked}}
@@ -257,6 +278,10 @@ export function extractProduct(html, { url = '', sku = '', hints = {} } = {}) {
     out.image = main.image;
     if (main.status) signals.push({ source: 'json-ld', status: main.status, detail: main.availabilityRaw });
   }
+
+  // (The store's own page data, where it can't be ordered online: before anything else.)
+  const own = storePageData(html);
+  if (own) signals.push({ source: 'store-data', status: own.status, detail: own.detail });
 
   // 2. Meta tags (OpenGraph / Facebook product tags).
   const meta = {};
@@ -337,7 +362,7 @@ export function extractProduct(html, { url = '', sku = '', hints = {} } = {}) {
   }
 
   // Decide.
-  const order = hints.priority || ['json-ld', 'meta', 'microdata', 'availability', 'button', 'class'];
+  const order = hints.priority || ['store-data', 'json-ld', 'meta', 'microdata', 'availability', 'button', 'class'];
   for (const src of order) {
     const s = signals.find((x) => x.source === src);
     if (s) { out.status = s.status; out.decidedBy = src; break; }

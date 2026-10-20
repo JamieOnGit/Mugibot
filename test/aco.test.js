@@ -243,16 +243,14 @@ test("over the item's max price or the order limit: skipped, still armed", async
   await ash.put(`/api/items/${item.id}`, { aco: false });
 });
 
-test('"only where signed in": a drop at a store the browser is signed out of is skipped', async () => {
+test('signed in or not, a drop starts the run (the store\'s checkout goes either way, and a reading can be old or wrong)', async () => {
+  // (An account saved with "only where signed in" from before: no longer holds a run back.)
   await ash.put('/api/aco', { signedInOnly: true });
   const item = await arm(ashItems[5], 100);
   const deviceId = (await ash.get('/api/devices')).body.devices[0].id;
   env.app.repo.setDeviceLogins(ash.user.id, deviceId, { kmart: { status: 'out', at: Date.now(), how: 'page' } });
   await drop(item.id, 65);
-  assert.equal(lastRun(item.id).reason, 'signed_out');
-  env.app.repo.setDeviceLogins(ash.user.id, deviceId, { kmart: { status: 'in', at: Date.now(), how: 'page' } });
-  await drop(item.id, 65);
-  assert.equal(lastRun(item.id).status, 'queued');
+  assert.equal(lastRun(item.id).status, 'queued', 'started, signed out');
   // Switched off before the store opened: the run doesn't start, and the store opens as a plain ⚡ Buy.
   await ash.put('/api/aco', { enabled: false, signedInOnly: false });
   const next = (await ashBrowser.call('GET', '/api/ext/aco/next')).body;
@@ -369,17 +367,13 @@ test('Trigger ACO: a test run now, armed or not — the same limits, its failure
   await ash.put('/api/aco', { enabled: true });
 });
 
-test('stores that only check out signed in (Amazon): not while the browser says you are signed out there', async () => {
+test('stores that only check out signed in (Amazon): started all the same while the browser says you are signed out there (its own sign-in page stops it if you are)', async () => {
   const amazon = (await ash.post('/api/items', { url: 'https://www.amazon.com.au/dp/B0ABCDEF12', name: 'Amazon ETB', maxPrice: 120, aco: true, price: 90 })).body;
   assert.equal(amazon.aco, true, amazon.error);
   const deviceId = (await ash.get('/api/devices')).body.devices[0].id;
   env.app.repo.setDeviceLogins(ash.user.id, deviceId, { amazon: { status: 'out', at: Date.now(), how: 'check' } });
   await drop(amazon.id, 90);
-  assert.equal(lastRun(amazon.id).reason, 'signed_out');
-  assert.match(lastRun(amazon.id).message, /Amazon AU only checks out signed in/);
-  env.app.repo.setDeviceLogins(ash.user.id, deviceId, { amazon: { status: 'in', at: Date.now(), how: 'check' } });
-  await drop(amazon.id, 90);
-  assert.equal(lastRun(amazon.id).status, 'queued');
+  assert.equal(lastRun(amazon.id).status, 'queued', 'started, seen signed out');
 });
 
 test('several at once: drops at the same moment each get a run, all handed to the browser together; one next in line at its store says so (no DM), goes when its turn comes, and gives up after 20 minutes', async () => {

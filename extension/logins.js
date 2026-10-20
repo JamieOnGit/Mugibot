@@ -12,6 +12,9 @@
      the page you have open.
    - Any other store: the page you have open. Its header shows a "Sign in"
      link while you're signed out, and "Hi, <name>" or "Sign out" once you're in.
+   - Shop (account.check.onScreen): what's on the screen on Shop's checkout — your
+     email, "Check out as guest" — never a page's source, and never fetched: Shop's
+     pages are an app whose code carries "Sign in to your account" signed in or not.
 
    Used by the background worker (imported) and the store-page script. */
 
@@ -30,7 +33,7 @@
    * shop.app/account asks you to sign in there while you're signed out).
    */
   function fromHtml(html, url, check) {
-    if (!check) return null;
+    if (!check || check.onScreen) return null;
     var outUrl = rx(check.signedOutUrl);
     var signedIn = rx(check.signedIn);
     var signedOut = rx(check.signedOut);
@@ -59,8 +62,39 @@
     return s.visibility !== 'hidden' && s.display !== 'none';
   }
 
+  var EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i;
+
+  /**
+   * What's on the screen, for a store whose pages' source can't be read for it (check.onScreen, Shop's):
+   * on its page where (Shop's checkout), signed in when you can see both a short piece of text that's one
+   * of in ("Check out as guest", offered beside your saved details) and, with email, an email address
+   * (yours, by Shop's logo) — as a member's signed-in checkout showed them. 'in' or null — never 'out'
+   * from a page.
+   */
+  function onScreen(doc, s) {
+    var where = rx(s.where);
+    if (where && !where.test(String(doc.location.pathname || ''))) return null;
+    var ins = [].concat(s['in'] || []).map(rx).filter(Boolean);
+    var sawIn = !ins.length;
+    var sawEmail = !s.email;
+    var els = doc.querySelectorAll('a, button, [role="button"], [role="link"], span, p, div, h1, h2, h3, h4, h5, h6');
+    for (var i = 0; i < els.length && i < 5000 && !(sawIn && sawEmail); i++) {
+      var el = els[i];
+      if (el.children.length > 3 || el.closest('#mugibot-qc')) continue;
+      var t = textOf(el);
+      if (!t || t.length > 80) continue;
+      var isIn = !sawIn && ins.some(function (re) { return re.test(t); });
+      var isEmail = !sawEmail && EMAIL.test(t);
+      if (!(isIn || isEmail) || !visible(el)) continue;
+      if (isIn) sawIn = true;
+      if (isEmail) sawEmail = true;
+    }
+    return sawIn && sawEmail ? 'in' : null;
+  }
+
   /** From the page you have open: 'in', 'out' or null (can't tell). */
   function fromPage(doc, check) {
+    if (check && check.onScreen) return onScreen(doc, check.onScreen);
     var known = fromHtml(doc.documentElement.outerHTML, doc.location.href, check);
     if (known) return known;
     var els = doc.querySelectorAll('header a, header button, [role="banner"] a, [role="banner"] button, nav a, nav button, '

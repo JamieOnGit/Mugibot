@@ -93,8 +93,25 @@ function demoCopy(def, demoUrl) {
     demo: true,
     realId: def.id,
     // (A store whose items are checked more often — Shop checkout links — is in the dummy store too.)
-    monitor: { server: true, browser: true, ...(def.monitor && def.monitor.intervalSeconds ? { intervalSeconds: def.monitor.intervalSeconds } : {}) },
+    monitor: { server: true, browser: true, ...(def.monitor && def.monitor.intervalSeconds ? { intervalSeconds: def.monitor.intervalSeconds, floorSeconds: def.monitor.floorSeconds, hostGapSeconds: def.monitor.hostGapSeconds } : {}) },
   };
+}
+
+/**
+ * The latest sign-in reading at a store across a member's browsers (each one's logins[store]), with the
+ * browser's name — at a store read off the screen (check.onScreen, Shop's), only readings made that way
+ * or by a run: an older extension read Shop's pages' source, which says "Sign in to your account"
+ * either way, and took members signed in for signed out.
+ */
+export function latestLogin(r, devices, id = r && r.id) {
+  const screenOnly = !!(r && r.account && r.account.check && r.account.check.onScreen);
+  let best = null;
+  for (const d of devices || []) {
+    const l = d.logins && d.logins[id];
+    if (!l || (screenOnly && !['screen', 'run'].includes(l.how))) continue;
+    if (!best || l.at > best.at) best = { ...l, device: d.name };
+  }
+  return best;
 }
 
 /** RegExps → { re, f } so flows can travel as JSON (the extension turns them back). */

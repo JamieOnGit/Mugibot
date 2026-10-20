@@ -1192,7 +1192,7 @@ async function notReachedShop(run) {
     message: "Shop's checkout didn't open in this browser: the link went on to the store's own checkout, as a guest — sign in to Shop (shop.app) here, and finish this one in its tab yourself.",
   });
   // (Your account only takes it while the run hadn't got going: then it's said, and this browser's signed out of Shop.)
-  if (res.status === 200 && res.body && res.body.run && res.body.run.reason === 'no_shop') await noteLogin(run.store, 'out', 'page');
+  if (res.status === 200 && res.body && res.body.run && res.body.run.reason === 'no_shop') await noteLogin(run.store, 'out', 'run');
 }
 
 async function isSweepWindow(windowId) {
@@ -1549,7 +1549,8 @@ async function checkLogins({ force = false } = {}) {
   let n = 0;
   for (const r of st.flows || []) {
     const check = r.account && r.account.check;
-    if (!check || !r.base || held.has(r.id)) continue;
+    // (Not a store whose pages can only be read on the screen: Shop's.)
+    if (!check || check.fetch === false || check.onScreen || !r.base || held.has(r.id)) continue;
     try {
       const res = await fetch(`${r.base}${check.path || ''}`, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
       const status = globalThis.MGBLogins.fromHtml((await res.text()).slice(0, 3000000), res.url, check);
@@ -1648,7 +1649,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // The store page you have open: signed in there or not (logins.js).
         if (!sender.tab || sender.frameId !== 0 || !['in', 'out'].includes(msg.status) || typeof msg.store !== 'string') return null;
         if (await isSweepTab(sender.tab.id)) return null;
-        await noteLogin(msg.store.slice(0, 40), msg.status, 'page');
+        await noteLogin(msg.store.slice(0, 40), msg.status, msg.how === 'screen' ? 'screen' : 'page');
         return { ok: true };
       }
       case 'checkLogins': {
@@ -1731,6 +1732,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!pass || !pass.aco || !pass.aco.runId) return null;
         const status = String(msg.status || '');
         const run = { ...pass.aco };
+        if (status === 'not_live') {
+          // The store said it isn't on sale to the final button (or still says so): nothing was bought, so
+          // the run may press it again once it is — waiting on the checkout meanwhile (its pass kept good).
+          // Your account hears so the first time, then every half a minute or so.
+          const live = run.notLive || { since: Date.now(), saidAt: 0 };
+          const say = Date.now() - live.saidAt > 30 * 1000;
+          const next = { ...run, placing: false, notLive: { since: live.since, saidAt: say ? Date.now() : live.saidAt } };
+          await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: next, expires: Date.now() + PASS_TTL } });
+          if (!say) return { ok: true, since: live.since };
+          const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { status: 'waiting', reason: 'not_live', message: String(msg.message || '').slice(0, 300), total: typeof msg.total === 'number' ? msg.total : null });
+          // (Stopped meanwhile — from the dashboard, or over on your account's side: this tab's run ends here.)
+          const over = res.status === 200 && !!(res.body && res.body.run && res.body.run.active === false);
+          if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...next, done: true } } });
+          return { ok: res.status === 200, since: live.since, over, text: over ? String(res.body.run.message || '') : '' };
+        }
         if (status === 'checkout') {
           if (run.atCheckout) return { ok: true }; // (said once, however many pages the checkout has)
           run.atCheckout = true;

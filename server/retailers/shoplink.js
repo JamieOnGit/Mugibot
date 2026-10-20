@@ -14,9 +14,12 @@
 // out as guest" is never pressed.
 //
 // Signed in to Shop only: signed out, Shop sends the link on to the store's own guest checkout, where
-// Mugibot doesn't run. The extension checks shop.app/account every 10 minutes (the store login monitor),
-// Auto-checkout doesn't start while you're seen signed out, and a run that never reaches Shop's
-// checkout says so (the tab is left on the store's checkout for you).
+// Mugibot doesn't run — a run that never reaches Shop's checkout says so (the tab is left on the store's
+// checkout for you). Whether you're signed in is read on Shop's checkout itself, from what's on the
+// screen (your email, "Check out as guest"): Shop Pay can know you on a checkout while shop.app's own
+// pages show you signed out, and Shop's pages carry words like "Sign in to your account" in their code
+// either way — so neither its account page nor any page's source is read for it (until Oct 2026 they
+// were, and a member signed in at checkout was taken for signed out).
 
 /** A cart link's path: /cart/<variant>:<qty>, up to 10 of them (after a dummy store's folder, in tests). */
 export const CART_LINK = /^(.*?)\/cart\/(\d{1,20}:\d{1,3}(?:,\d{1,20}:\d{1,3}){0,9})\/?$/;
@@ -37,8 +40,9 @@ export default {
   devPath: '/shopapp',
   // Any store's cart link is one of these (retailers/index.js forUrl), unless the store is one Mugibot knows.
   cartLinks: true,
-  // ⚡ Buy and Auto-checkout need the extension that runs on Shop's checkout (it says so before starting).
-  acoVersion: '1.22.0',
+  // ⚡ Buy and Auto-checkout need the extension that runs on Shop's checkout (it says so before starting):
+  // 1.24.0 reads your Shop sign-in off the checkout's screen and waits there while it isn't on sale yet.
+  acoVersion: '1.24.0',
   flowStatus: 'beta',
   flowNote: "A store's Shop checkout link: Shop's checkout with your Shop details and card, the store's required boxes ticked, \"Pay now\". Signed in to Shop only. Tested on a Shop-style dummy checkout.",
   skuLabel: 'Checkout link',
@@ -47,11 +51,19 @@ export default {
     // No guest checkout here: signed out, the link goes to the store's own checkout instead.
     required: true,
     signIn: '/account',
-    // Shop's account page: "Sign in to your account" signed out (seen Oct 2026); the page itself, signed in.
-    check: { path: '/account', signedOut: /Sign in to your account/i, signedInPage: /<title>[^<]*Manage account[^<]*<\/title>/i },
+    check: {
+      // (Never fetched by the extension's 10-minute check.)
+      fetch: false,
+      // On Shop's checkout: signed in when it shows your email by its logo and offers "Check out as guest"
+      // beside your saved details (both, as a member's signed-in checkout did). Never "signed out" from a
+      // page: only a link that went on to the store's guest checkout says that.
+      onScreen: { where: /\/checkout\//i, in: [/^check ?out as (a )?guest$/i], email: true },
+    },
   },
-  // (The server asks the store about each option; it's not a page a browser needs to read.)
-  monitor: { server: true, browser: false, intervalSeconds: 20 },
+  // (The server asks the store about each option every 5 seconds — quick and small, the store's own
+  // pages ask the same; it's not a page a browser needs to read.)
+  // (Below the usual 20 s floor, and a second apart at a store rather than five: each option's JSON is tiny.)
+  monitor: { server: true, browser: false, intervalSeconds: 5, floorSeconds: 5, hostGapSeconds: 1 },
   flow: {
     checkout: {
       path: /\/checkout\//i,
@@ -65,8 +77,15 @@ export default {
       // Shop has your address, delivery and card: nothing of yours is typed in, and its choices are left as they are.
       ownDetails: true,
       payment: 'account',
-      // What the store says when it won't sell it to you now: nothing's bought.
-      unavailable: [/not available for purchase/i, /\b(is|are) (sold out|out of stock|no longer available|unavailable)\b/i],
+      // What the store says when it's sold out: nothing's bought, and it stops there.
+      unavailable: [/\b(is|are) (sold out|out of stock|no longer available|unavailable)\b/i],
+      // "This Product is not available for purchase": which it may say until the drop's live (a member's
+      // Mattel checkout, Oct 2026: shown with the membership notice before anything was pressed, while the
+      // store's own data already said in stock). So it isn't a reason not to press "Pay now" once; the store
+      // saying it anew to the press (a fresh notice, the page still here), nothing's bought and the run waits
+      // on the checkout: looked at again every 5 seconds, "Pay now" pressed again only once the notice has
+      // gone — for 30 minutes at most.
+      waitLive: { notices: [/not available for purchase/i], everyMs: 5000, forMs: 30 * 60 * 1000 },
       // Said by the store until its box is ticked (Mugibot ticks it): not a reason to stop.
       ignoreErrors: [/must accept (the )?membership agreement/i],
       // After "Pay now", Shop goes on to the store's own order page (another address): that's the order placed.

@@ -210,7 +210,8 @@ test('only the member who pressed it: someone else\'s DM button, an unconnected 
   const deskId = (await gary.get('/api/aco')).body.browsers.find((b) => b.checkout).id;
   env.app.repo.setDeviceLogins(gary.user.id, deskId, { amazon: { status: 'out', at: Date.now(), how: 'check' } });
   r = await press('d-gary', `buy:i:${amazon.id}`);
-  assert.match(r.content, /Amazon AU only sells to signed-in customers — sign in there in Gary desktop first\./);
+  assert.doesNotMatch(r.content, /only sells to signed-in customers/, 'started all the same: a reading of signed out may be wrong');
+  env.app.db.run("UPDATE aco_runs SET status = 'failed' WHERE item_id = :i", { i: amazon.id });
   // An alert that's gone, and a button Mugibot didn't make.
   r = await press('d-gary', 'buy:a:999999');
   assert.match(r.content, /That alert is too old to buy from/);

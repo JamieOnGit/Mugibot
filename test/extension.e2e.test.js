@@ -1137,14 +1137,14 @@ test('Premium Bandai (as its real checkout goes): "PLACE PRE-ORDER" once its Vue
   await dash.close();
 });
 
-test('Amazon signed out: ⚡ Buy says to sign in first (Amazon has no guest checkout) and presses nothing', async () => {
+test('Amazon signed out: ⚡ Buy goes on all the same (a reading of signed out may be wrong) — Amazon\'s own sign-in page stops it, nothing bought', async () => {
   await useItems([{ url: store.productUrl('amazon', 'B0MGBTEST1'), name: 'AMZ Bundle' }]);
   const dash = await ctx.newPage();
   const shop = await buyFromDashboard(dash, 'AMZ Bundle');
-  await shop.waitForFunction(() => /only sells to signed-in customers — sign in to Amazon AU \(dummy store\) in this browser first/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 20000 });
+  await shop.waitForURL(/\/amazon\/ap\/signin/, { timeout: 30000 });
   await shop.waitForTimeout(1500);
-  assert.deepEqual(store.shop('amazon').steps, [], '"Buy Now" was not pressed');
-  assert.match(shop.url(), /\/amazon\/dp\//, 'still on the product page');
+  assert.match(shop.url(), /\/amazon\/ap\/signin/, "stopped at Amazon's sign-in page");
+  assert.equal(store.shop('amazon').orders.length, 0, 'nothing ordered');
   await shop.close();
   await dash.close();
 });
@@ -2039,13 +2039,10 @@ async function dropLink(link) {
   await env.app.monitor.checkPage(link);
 }
 const closeShopPages = async () => { for (const pg of ctx.pages()) if (/\/(shopapp|creations)\//.test(pg.url())) await pg.close(); };
-/** Signed in to the dummy Shop (or not), as the extension's own check of Shop's account page sees it. */
-async function shopSignedIn(on) {
-  store.state.shopapp.signedIn = on;
-  await sw.evaluate(() => globalThis.mugibotCheckLogins({ force: true }));
-  const want = on ? 'in' : 'out';
-  await waitFor(async () => (await browserApi('GET', '/api/logins')).body.stores.find((x) => x.id === 'demo-shoplink').status === want, { message: `Shop seen signed ${want}` });
-}
+/** Signed in to the dummy Shop in this browser (or not): its checkout knows you, or sends a link on to the store's guest checkout. */
+const shopSignedIn = (on) => { store.state.shopapp.signedIn = on; };
+const shopLogin = async () => (await browserApi('GET', '/api/logins')).body.stores.find((x) => x.id === 'demo-shoplink');
+const shopSeen = async (name) => (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === name).shopSeen;
 /** Room in the day's limits for a link's order (Shop's delivery on top): the limit as it was, to put back. */
 async function roomForALink() {
   env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
@@ -2054,10 +2051,11 @@ async function roomForALink() {
   return () => browserApi('PUT', '/api/aco', { maxOrder: before });
 }
 
-test("🛍️ Auto-checkout of a Shop checkout link (Mattel Creations-style, two options): it drops → the link opens Shop's checkout with your Shop address, delivery and card → the membership agreement ticked (never the newsletter box), \"Check out as guest\" never pressed → the total checked → \"Pay now\" — placed, seen as Shop goes on to the store's order page", async () => {
+test("🛍️ Auto-checkout of a Shop checkout link (Mattel Creations-style, two options), as a member's real checkout looked: signed in (the page's code says \"Sign in to your account\" all the same), the membership notice and \"not available for purchase\" up before anything's pressed → the agreement ticked (never the newsletter box), \"Check out as guest\" never pressed → the total checked → \"Pay now\" — placed, seen as Shop goes on to the store's order page; signed in, as its screen showed", async () => {
   const putBack = await roomForALink();
   try {
-    await shopSignedIn(true);
+    shopSignedIn(true);
+    store.state.shopapp.notice = true;
     const link = store.cartLink([[PORSCHE, 2], [RLC, 1]]);
     await useItems([{ url: link, name: 'ACO RLC link', maxPrice: 90, aco: true }]);
     await acoListen();
@@ -2077,40 +2075,55 @@ test("🛍️ Auto-checkout of a Shop checkout link (Mattel Creations-style, two
     const item = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO RLC link');
     assert.equal(item.aco, false, 'one purchase per arming');
     assert.ok(env.app.repo.listEvents(env.app.repo.userByUsername('ash').id).some((e) => /Auto-checkout pressed "Pay now" \(total \$117\.99\)/.test(e.message)));
+    // Signed in to Shop, as Shop's checkout showed it (your email, "Check out as guest") — for the link too.
+    await waitFor(async () => (await shopLogin()).status === 'in', { message: "Shop seen signed in on its checkout" });
+    assert.deepEqual([(await shopSeen('ACO RLC link')).status, (await shopSeen('ACO RLC link')).how], ['in', 'run']);
+    assert.equal(store.state.shopapp.accountViews, 0, "Shop's account page never read");
   } finally {
+    store.state.shopapp.notice = false;
     await putBack();
     await closeShopPages();
   }
 });
 
-test("🛍️ a Shop checkout link where the store won't sell it (\"This Product is not available for purchase\"): Auto-checkout stops at Shop's checkout and says so — \"Pay now\" never pressed", async () => {
+test("🛍️ a Shop checkout link not on sale yet (\"This Product is not available for purchase\" when \"Pay now\" is pressed): Auto-checkout waits on the checkout, everything in, looking again every 5 s without pressing — and the moment it's on sale, \"Pay now\": placed", async () => {
   const putBack = await roomForALink();
   try {
-    await shopSignedIn(true);
+    shopSignedIn(true);
     store.state.shopapp.unavailable = true;
     const link = store.cartLink([[PORSCHE, 1]]);
-    await useItems([{ url: link, name: 'ACO RLC members only', maxPrice: 60, aco: true }]);
+    await useItems([{ url: link, name: 'ACO RLC not live', maxPrice: 60, aco: true }]);
     await acoListen();
     await dropLink(link);
-    await waitFor(async () => { const r = await lastRun(); return r && r.name === 'ACO RLC members only' && !r.active; }, { timeout: 45000, message: 'the run over' });
-    const run = await lastRun();
-    assert.equal(run.status, 'failed', JSON.stringify(run));
-    assert.equal(run.reason, 'sold_out');
-    assert.match(run.message, /says "This Product is not available for purchase" — nothing was bought/);
+    await waitFor(async () => { const r = await lastRun(); return r && r.name === 'ACO RLC not live' && r.status === 'waiting' && r.reason === 'not_live'; }, { timeout: 45000, message: 'waiting: not on sale yet' })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify(await lastRun())}`); });
+    assert.equal(store.state.shopapp.refused.length, 1, '"Pay now" pressed once, and refused');
     assert.equal(store.state.shopapp.orders.length, 0);
-    assert.equal(store.state.shopapp.refused.length, 0, '"Pay now" never pressed');
+    assert.match((await lastRun()).message, /not available for purchase.*not on sale yet/);
+    // Looked at again (the checkout reloaded), never pressed while it still says so.
+    const shown = store.state.shopapp.shown;
+    await waitFor(() => store.state.shopapp.shown >= shown + 2, { timeout: 20000, message: 'the checkout looked at again' });
+    assert.equal(store.state.shopapp.refused.length, 1, 'not pressed again while it says it');
+    // On sale: pressed at the next look.
+    const liveAt = Date.now();
+    store.state.shopapp.unavailable = false;
+    await waitFor(() => store.state.shopapp.orders.length === 1, { timeout: 20000, message: 'placed once it was on sale' });
+    assert.ok(Date.now() - liveAt < 12000, `within moments (${Date.now() - liveAt} ms)`);
+    await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 20000, message: 'the run says placed' });
+    assert.equal(store.state.shopapp.refused.length, 1);
+    assert.equal(store.state.shopapp.orders[0].agreed, true);
   } finally {
+    store.state.shopapp.unavailable = false;
     await putBack();
     await closeShopPages();
   }
 });
 
-test("🛍️ signed out of Shop: the link goes on to the store's own guest checkout (no Mugibot there) — the run says so within half a minute, left in its tab for you, and Shop shows as signed out; signed in again, the extension's check sees it", async () => {
+test("🛍️ signed out of Shop: the link goes on to the store's own guest checkout (no Mugibot there) — the run says so within half a minute, left in its tab for you, and Shop and the link show as signed out; signed in again, the next drop starts all the same and is placed, seen signed in on Shop's checkout (its account page never read)", async () => {
   const putBack = await roomForALink();
   try {
     // Seen signed in to Shop at the last check — then its session lapsed: the link goes to the store's guest checkout.
-    await shopSignedIn(true);
-    store.state.shopapp.signedIn = false;
+    shopSignedIn(false);
     const link = store.cartLink([[RLC, 1]]);
     await useItems([{ url: link, name: 'ACO RLC signed out', maxPrice: 20, aco: true }]);
     await acoListen();
@@ -2123,16 +2136,19 @@ test("🛍️ signed out of Shop: the link goes on to the store's own guest chec
     assert.equal(store.state.shopapp.guestViews, 1, 'opened once, on the store\'s guest checkout — not again');
     assert.ok(ctx.pages().some((pg) => /\/creations\/checkouts\/cn\//.test(pg.url())), 'its tab left there for you');
     assert.equal(store.state.shopapp.orders.length, 0);
-    await waitFor(async () => (await browserApi('GET', '/api/logins')).body.stores.find((x) => x.id === 'demo-shoplink').status === 'out', { message: 'Shop: signed out' });
-    // Signed in at Shop again: the store login monitor's check (shop.app/account, with your cookies) sees it.
-    await shopSignedIn(true);
-    assert.ok(store.state.shopapp.accountViews > 0, "Shop's account page read");
-    // …and seen signed out, Auto-checkout doesn't start at all (it says why).
-    await shopSignedIn(false);
+    await waitFor(async () => (await shopLogin()).status === 'out', { message: 'Shop: signed out' });
+    assert.equal((await shopSeen('ACO RLC signed out')).status, 'out', 'the link says so');
+    // Signed in to Shop again (nothing has seen it yet): the next drop starts all the same — reaches Shop's
+    // checkout, and is placed; Shop and the link are seen signed in, from its screen.
+    shopSignedIn(true);
     await browserApi('PUT', `/api/items/${(await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO RLC signed out').id}`, { aco: true });
     await dropLink(link);
-    await waitFor(async () => { const r = await lastRun(); return r && r.reason === 'signed_out'; }, { message: 'skipped: signed out of Shop' });
-    assert.equal(store.state.shopapp.guestViews, 1, 'nothing opened');
+    await waitFor(() => store.state.shopapp.orders.length === 1, { timeout: 45000, message: 'placed, signed in again' })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify(await lastRun())}`); });
+    await waitFor(async () => (await shopLogin()).status === 'in', { message: 'Shop: signed in' });
+    await waitFor(async () => (await shopSeen('ACO RLC signed out')).status === 'in', { message: 'the link: signed in' });
+    assert.equal(store.state.shopapp.guestViews, 1, 'the guest checkout only the once');
+    assert.equal(store.state.shopapp.accountViews, 0, "Shop's account page never read");
   } finally {
     await putBack();
     await closeShopPages();

@@ -189,8 +189,10 @@ export function defaultShopApp() {
     // Its "By selecting, you indicate your acceptance of the Membership Agreement" box (required), and
     // the notice about it at the top (shown from the start, as in a member's screenshot, and staying up).
     agreement: true, agreeNotice: true,
-    // "This Product is not available for purchase" (the store won't sell it now).
-    unavailable: false,
+    // "This Product is not available for purchase": the store won't sell it now (unavailable: "Pay now"
+    // refused, as before a drop's live) — or only the notice, shown before anything's pressed while
+    // "Pay now" goes through (notice: as a member's real checkout showed it, with the membership one).
+    unavailable: false, notice: false,
     shipping: 32,
     checkouts: {}, orders: [], refused: [], shown: 0, guestViews: 0, accountViews: 0,
   };
@@ -2018,9 +2020,12 @@ ${body}
 
   function shopApp(sub, u, req, res, { html, json, redirect }) {
     const A = state.shopapp;
+    // (Like the real Shop's pages, an app's: its code carries the words it might show — "Sign in to your
+    //  account" among them — whether you're signed in or not.)
+    const strings = '<script type="application/json" id="shop-i18n">{"signIn":"Sign in to your account","continue":"Continue with email"}</script>';
     if (sub === '/account') {
       A.accountViews += 1;
-      return html(200, `<!doctype html><html><head><meta charset="utf-8"><title>Manage account - Shop</title></head><body><div class="dummy">⚠ Dummy Shop — nothing here is real.</div>
+      return html(200, `<!doctype html><html><head><meta charset="utf-8"><title>Manage account - Shop</title>${strings}</head><body><div class="dummy">⚠ Dummy Shop — nothing here is real.</div>
         ${A.signedIn ? '<h1>Manage account</h1><p>ash.shop@example.com</p><button type="button">Sign out</button>' : '<h2>Sign in to your account</h2><button type="button">Continue with email</button>'}</body></html>`);
     }
     const m = sub.match(/^\/checkout\/(\d+)\/cn\/(\w+)\/en-us\/(shoppay|pay)$/);
@@ -2042,12 +2047,12 @@ ${body}
     if (!A.signedIn) return redirect(back.startsWith('/creations/') ? back : `/creations/checkouts/cn/${m[2]}/en-us`);
     A.shown += 1;
     const banner = (t, id = '', hidden = false) => `<div class="banner"${id ? ` id="${id}"` : ''} role="alert"${hidden ? ' hidden' : ''}>${t}</div>`;
-    return html(200, `<!doctype html><html><head><meta charset="utf-8"><title>Checkout - Creations (dummy) - Shop</title>
+    return html(200, `<!doctype html><html><head><meta charset="utf-8"><title>Checkout - Creations (dummy) - Shop</title>${strings}
 <style>body{font:15px system-ui;margin:0;background:#f5f3ff;color:#111}header{background:#5a31f4;color:#fff;padding:10px 20px;display:flex;justify-content:space-between}main{max-width:560px;margin:20px auto;padding:0 20px}
 section{background:#fff;border-radius:10px;padding:10px 14px;margin:10px 0}.banner{background:#fde8e8;color:#9b1c1c;border-radius:8px;padding:10px;margin:8px 0}#pay{background:#5a31f4;color:#fff;border:0;border-radius:8px;padding:14px;width:100%;font-size:16px}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style></head>
 <body><div class="dummy">⚠ Dummy Shop checkout for testing Mugibot — nothing here is real.</div>
 <header><b>shop</b><span class="acct">ash.shop@example.com</span></header><main>
-${A.unavailable ? banner('This Product is not available for purchase') : ''}
+${A.unavailable || A.notice ? banner('This Product is not available for purchase') : ''}
 ${A.agreement ? banner('You must accept membership agreement before checking out', 'agree-err', !A.agreeNotice) : ''}
 <section><h3>Ship to</h3><p>Ash Ketchum, 1 Pallet Town Rd, Sydney NSW 2000, AU</p></section>
 <section><h3>Shipping method</h3><p>Standard Courier · ${shopMoney(A.shipping)}</p></section>

@@ -108,14 +108,17 @@
   // A store that only sells to signed-in customers (Amazon: no guest checkout) says so in the panel.
   const signedOutHere = () => !!(retailer.account && retailer.account.required && globalThis.MGBLogins && MGBLogins.fromPage(document, retailer.account.check) === 'out');
   const SIGN_IN_FIRST = `${retailer.name} only sells to signed-in customers — sign in to ${retailer.name} in this browser first, then ⚡ Buy again.`;
+  let lookLogin = () => {};
   if (retailer.account && globalThis.MGBLogins) {
     let said = null;
-    const look = () => {
+    lookLogin = () => {
       const status = MGBLogins.fromPage(document, retailer.account.check);
-      if (status && status !== said) { said = status; ask({ type: 'login', store: retailer.id, status }); }
+      // (how: read off the screen, for a store whose pages' source can't be read for it — Shop's.)
+      if (status && status !== said) { said = status; ask({ type: 'login', store: retailer.id, status, how: retailer.account.check && retailer.account.check.onScreen ? 'screen' : 'page' }); }
       if (status === 'out' && retailer.account.required && !busy) { try { panel.setNote(SIGN_IN_FIRST); } catch { /* (the panel isn't up yet) */ } }
     };
-    for (const ms of [1200, 4000, 9000]) setTimeout(look, ms);
+    // (And just before a checkout's final button: a quick one may leave the page before these.)
+    for (const ms of [300, 1200, 4000, 9000]) setTimeout(lookLogin, ms);
   }
 
   const store = MGBQuick.sessionStore('mgbFlow');
@@ -154,7 +157,20 @@
 
   // (The checks themselves: checks.js, shared with checkouts that run in a frame.)
   const orderTotal = () => MGBChecks.orderTotal(document);
-  const pageError = () => MGBChecks.pageError(document, checkoutFlow && checkoutFlow.ignoreErrors);
+  // A checkout that says it isn't on sale until the drop's live (checkout.waitLive: Shop checkout links'
+  // "This Product is not available for purchase"): that notice isn't a reason not to press its final
+  // button — the store says again when it's pressed (notLiveYet).
+  const waitLive = !!(checkoutFlow && checkoutFlow.waitLive);
+  const liveNotices = waitLive ? (checkoutFlow.waitLive.notices || []).filter((re) => re && re.test) : [];
+  const pageError = () => MGBChecks.pageError(document, [].concat((checkoutFlow && checkoutFlow.ignoreErrors) || [], liveNotices));
+  /** The checkout's "not on sale" notices on the screen (checkout.waitLive.notices). */
+  const noticeEls = () => (liveNotices.length ? [...document.querySelectorAll('[role="alert"], [aria-live], p, div, span, li')]
+    .filter((el) => el.children.length <= 2 && MGBFill.isVisible(el) && !el.closest('#mugibot-qc'))
+    .filter((el) => { const t = (el.innerText || '').replace(/\s+/g, ' ').trim(); return t.length < 200 && liveNotices.some((re) => re.test(t)); }) : []);
+  const noticeText = (els) => (els[0] ? (els[0].innerText || '').replace(/\s+/g, ' ').trim().slice(0, 160) : '');
+  // (Those up before the final button is pressed are marked: only one the store shows anew is its answer to the press.)
+  const markNotices = () => { for (const el of noticeEls()) el.setAttribute('data-mgb-seen', '1'); };
+  const freshNotice = () => noticeText(noticeEls().filter((el) => !el.closest('[data-mgb-seen]')));
   const outcome = () => MGBChecks.outcome(document, checkoutFlow && checkoutFlow.done, retailer.name);
   const cardBoxesOnPage = () => [...document.querySelectorAll('input, select')]
     .filter((el) => /^card(Number|Expiry|ExpMonth|Cvc)$/.test(MGBFill.classifyField(el, checkoutFlow) || '') && MGBFill.isVisible(el));
@@ -198,19 +214,26 @@
     const text = (btn.innerText || btn.value || '').trim();
     report('step', `Auto-checkout pressed "${text}" on the last step (place order)`, null);
     panel.setStatus('🤖 Placing your order…');
+    markNotices();
     btn.click();
     return true;
   }
 
   /** After the final button: what happened (up to 45 s here; a new page carries on by itself). */
   async function watchOutcome(run, total) {
-    const until = Date.now() + 45000;
+    const started = Date.now();
+    const until = started + 45000;
     let said = null;
     let errSince = 0;
     while (Date.now() < until) {
       await MGBFlows.wait(400);
       let o = outcome();
       if (!o && await pressReview(run)) continue;
+      // The store said no to the final button (a Shop link's "not available for purchase"): a notice shown
+      // anew since the press, the page still here 8 seconds on and its button free again — so nothing was
+      // bought. It waits here for the sale. (The same notice merely still up is no answer: left as it is.)
+      const notLive = !o && waitLive && Date.now() - started > 8000 && !finalBusy() ? freshNotice() : '';
+      if (notLive) return notLiveYet(run, notLive, total);
       // The store refused the press (a box it says is wrong), and it's still saying so a few seconds on: for you.
       const err = o ? '' : pageError();
       errSince = err ? errSince || Date.now() : 0;
@@ -228,6 +251,39 @@
       await acoReport(o.status, o.reason, o.message, total);
       if (o.status === 'failed') return;
     }
+  }
+
+  /** The final button, still working on the press (disabled, or busy): not yet the store's answer. */
+  function finalBusy() {
+    const finals = (checkoutFlow && checkoutFlow.final) || [];
+    const btn = [...document.querySelectorAll('button, input[type="submit"], [role="button"]')]
+      .find((el) => MGBFill.isVisible(el) && finals.some((re) => re.test((el.innerText || el.value || '').trim())));
+    return !btn || btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.getAttribute('aria-busy') === 'true';
+  }
+
+  /**
+   * Not on sale yet (checkout.waitLive): the store said "not available for purchase" to the final button,
+   * or still says it now. Nothing was bought. The run waits on this checkout, everything in, and looks
+   * again every few seconds (the page reloaded, like a person refreshing it): the final button is pressed
+   * again only once the notice has gone. At most checkout.waitLive.forMs, then it stops and says so.
+   */
+  async function notLiveYet(run, words, total) {
+    const W = checkoutFlow.waitLive;
+    const every = Math.max(2, Math.round((W.everyMs || 5000) / 1000));
+    const res = await ask({ type: 'acoReport', status: 'not_live', reason: 'not_live', message: `${retailer.name} says "${words}" — not on sale yet. Waiting on the checkout with everything in, looking again every ${every} s, to press "Pay now" the moment it is.`, total: typeof total === 'number' ? total : undefined });
+    if (!res || !res.ok || res.over) {
+      panel.setStatus(res && res.over ? `🤖 ${res.text || 'This run is over.'}` : `🤖 ${retailer.name} says "${words}" — nothing was bought.`);
+      return;
+    }
+    if (Date.now() - res.since > (W.forMs || 30 * 60 * 1000)) {
+      return acoStop('failed', 'not_live', `${retailer.name} still says "${words}" after ${Math.round((Date.now() - res.since) / 60000)} minutes — nothing was bought, and it's armed again for when it's on sale.`, null, total);
+    }
+    panel.setNote('🤖 Auto-checkout — waiting for it to go on sale');
+    panel.setStatus(`⏳ ${retailer.name} says "${words}" — not on sale yet. Waiting here with everything filled in: looking again every ${every} s, and "Pay now" is pressed the moment it is.`);
+    // (This tab stays in the run while it waits: its checkout flag kept, like its pass.)
+    const flag = assistFlag.read();
+    assistFlag.on(flag && flag.profileId);
+    setTimeout(() => location.reload(), every * 1000);
   }
 
   /** Stop short of the final button, say why, and leave the rest to you. */
@@ -273,9 +329,18 @@
 
   /** At the final button of an Auto-checkout run: check the order, then press it — once. */
   async function acoFinish(run, fin, data) {
+    lookLogin();
     // The store says it won't sell it now (Shop checkout links: "This Product is not available for purchase"): nothing's bought.
     const refused = MGBChecks.unavailable(document, checkoutFlow);
     if (refused) return acoStop('failed', 'sold_out', `${retailer.name} says "${refused}" — nothing was bought.`, fin);
+    // (Not on sale yet, a checkout that says so until the drop's live: the first time, "Pay now" is pressed
+    //  anyway — the notice may only be about a box it's just ticked, and the store says again if not.
+    //  Already told no by the store (run.notLive): only once the notice has gone, a moment after the boxes.)
+    if (run.notLive && run.mode === 'place' && noticeEls().length) {
+      await MGBFlows.wait(1500);
+      const still = noticeText(noticeEls());
+      if (still) return notLiveYet(run, still, orderTotal());
+    }
     // A store that only takes PayPal at checkout (The Games Cube): Auto-checkout can't pay there.
     if (checkoutFlow && checkoutFlow.payment === 'paypal') {
       return acoStop('needs_you', 'paypal_only', `${retailer.name} only takes PayPal at checkout — your details are in; press "${fin.text}" and pay with PayPal yourself.`, fin);
@@ -316,6 +381,7 @@
     panel.setStatus(`🤖 Placing your order ($${total.toFixed(2)})…`);
     report('step', `Auto-checkout pressed "${fin.text}" (total $${total.toFixed(2)})`, null);
     if (checkoutFlow.leaves) watchLeaving(fin.text, total);
+    markNotices();
     btn.click();
     watchOutcome(run, total);
   }
@@ -534,14 +600,9 @@
       acoReport('needs_you', 'wrong_item', `Your ${retailer.name} bag already had ${inBag} item${inBag === 1 ? '' : 's'} in it`);
       return;
     }
-    // Signed out at a store that only sells signed in: say so, rather than run into its sign-in page.
-    if (signedOutHere()) {
-      panel.setNote(SIGN_IN_FIRST);
-      panel.setStatus('Sign in first — nothing was added.');
-      report('error', `Signed out at ${retailer.name}: sign in there first (it doesn't sell to guests)`, product);
-      if (aco) acoReport('needs_you', 'signed_out', `You're signed out at ${retailer.name}, and it only sells to signed-in customers — sign in there, then try again.`);
-      return;
-    }
+    // (Seen signed out at a store that only sells signed in: said, but it goes on all the same — the
+    //  reading may be wrong, and the store's own sign-in page stops it, buying nothing, if it isn't.)
+    if (signedOutHere()) panel.setNote(SIGN_IN_FIRST);
     assistFlag.on(claim.profileId);
     panel.setNote(aco ? `🤖 Auto-checkout${aco.mode === 'place' ? ' — places the order within your limits' : ' — stops at the final button for you'}` : 'Started from ⚡ Buy');
     // Kept for this tab until the ⚡ Buy gets going (go() clears it): a store's queue page drawn by its own

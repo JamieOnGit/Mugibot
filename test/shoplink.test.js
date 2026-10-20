@@ -27,7 +27,7 @@ before(async () => {
   makeMember(env, ash);
   for (const it of (await ash.get('/api/items')).body.items) await ash.del(`/api/items/${it.id}`);
   desk = await Device.pair(env.url, ash, 'Ash desktop');
-  await desk.call('GET', '/api/ext/me?v=1.22.0');
+  await desk.call('GET', '/api/ext/me?v=1.24.0');
   const r = await ash.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
   assert.equal(r.status, 200, r.text);
 });
@@ -73,7 +73,7 @@ test('🛍️ a store\'s checkout link is a Shop checkout link — its options a
   assert.equal(r.body.shopLink, true);
   assert.equal(r.body.acoCan, true);
   assert.equal(r.body.acoPlaces, true, "Auto-checkout presses Shop's \"Pay now\"");
-  assert.equal(r.body.acoVersion, '1.22.0');
+  assert.equal(r.body.acoVersion, '1.24.0');
   await ash.del(`/api/items/${r.body.id}`);
 
   // The extension runs on Shop's checkout, and knows each link is its own order.
@@ -99,7 +99,7 @@ test("🛍️ watched option by option (the store's /variants/<id>.js, asked hon
   const item = add.body;
   assert.equal(item.store, 'demo-shoplink');
   // Checked more often than the default minute: what these links are for goes in moments.
-  assert.ok(env.app.monitor.pageInterval(link) <= 20000, `every 20 seconds at most (${env.app.monitor.pageInterval(link)} ms)`);
+  assert.ok(env.app.monitor.pageInterval(link) <= 5000, `every 5 seconds at most (${env.app.monitor.pageInterval(link)} ms)`);
 
   store.state.requests.length = 0;
   store.setVariant(RLC, { available: false });
@@ -136,59 +136,119 @@ test("🛍️ watched option by option (the store's /variants/<id>.js, asked hon
   await ash.del(`/api/items/${item.id}`);
 });
 
-test("🛍️ signed out of Shop (the link goes to the store's guest checkout): Auto-checkout doesn't start, and says why; a run whose tab never reached Shop's checkout says so — but not once it's got going there", async () => {
+test("🛍️ Shop sign-in: an older extension's reading of Shop's account page (its source says \"Sign in to your account\" either way) is left out; a run starts whatever was seen last — signed out, it finds out in seconds, buying nothing; each link says how its checkout last opened", async () => {
   const link = store.cartLink([[PORSCHE, 1]]);
   const item = (await ash.post('/api/items', { url: link, name: 'RLC Porsche', maxPrice: 60, aco: true })).body;
-  // The browser saw it signed out of Shop.
+  const shopLogin = async () => (await ash.get('/api/logins')).body.stores.find((x) => x.id === 'demo-shoplink');
+  const seen = async () => (await ash.get('/api/items')).body.items.find((x) => x.id === item.id).shopSeen;
+  assert.equal(await seen(), null, 'not opened yet');
+  // An extension before 1.24.0 read Shop's account page and took it for signed out: not believed.
   let r = await desk.call('POST', '/api/ext/logins', { logins: { 'demo-shoplink': { status: 'out', at: Date.now(), how: 'check' } } });
   assert.equal(r.status, 200);
+  assert.equal((await shopLogin()).status, null, "a fetched page's reading isn't Shop's");
   await drop(link);
   let [run] = runsOf(item.id);
-  assert.equal(run.status, 'skipped');
-  assert.equal(run.reason, 'signed_out');
-  assert.match(run.message, /Shop( \(dummy store\))? only checks out signed in/);
-
-  // Signed in again: it starts. Its tab never reaches Shop's checkout (the browser says so, 25 s on).
-  await desk.call('POST', '/api/ext/logins', { logins: { 'demo-shoplink': { status: 'in', at: Date.now(), how: 'check' } } });
-  await ash.put(`/api/items/${item.id}`, { aco: true });
-  await drop(link);
-  [run] = runsOf(item.id);
-  assert.equal(run.status, 'queued', `${run.reason}: ${run.message}`);
+  assert.equal(run.status, 'queued', `started: ${run.reason} ${run.message}`);
+  // Its tab never reaches Shop's checkout (the browser says so, 25 s on): the link says signed out.
   await desk.call('GET', '/api/ext/aco/next');
   r = await desk.call('POST', `/api/ext/aco/${run.id}`, { status: 'needs_you', reason: 'no_shop', message: "Shop's checkout didn't open in this browser" });
   assert.equal(r.status, 200);
   assert.equal(r.body.run.status, 'needs_you');
   assert.equal(r.body.run.reason, 'no_shop');
   assert.equal(r.body.run.reasonText, "Shop's checkout didn't open — this browser isn't signed in to Shop");
+  assert.deepEqual([(await seen()).status, (await seen()).how], ['out', 'run']);
 
-  // One that did reach it (claimed: its page reports for itself): the late "never reached" changes nothing.
+  // Seen signed out on a page (that run's browser says so): the next drop still starts — signed in since,
+  // unseen, it would otherwise cost the drop.
+  await desk.call('POST', '/api/ext/logins', { logins: { 'demo-shoplink': { status: 'out', at: Date.now(), how: 'run' } } });
+  assert.equal((await shopLogin()).status, 'out');
   await ash.put(`/api/items/${item.id}`, { aco: true });
   await drop(link);
   [run] = runsOf(item.id);
+  assert.equal(run.status, 'queued', `${run.reason}: ${run.message}`);
+  // This one reached Shop's checkout (its code taken up there: only signed in does it get that far) — the link
+  // says signed in, and a late "never reached" changes nothing.
   const next = (await desk.call('GET', '/api/ext/aco/next')).body;
   const code = new URL(next.runs[0].url).hash.replace('#mgb-go=', '');
   assert.equal((await desk.call('POST', '/api/ext/claim', { code })).status, 200);
+  assert.deepEqual([(await seen()).status, (await seen()).how], ['in', 'run']);
   r = await desk.call('POST', `/api/ext/aco/${run.id}`, { status: 'needs_you', reason: 'no_shop', message: 'late' });
   assert.equal(r.body.run.status, 'started', 'left as it is');
+  assert.equal((await seen()).status, 'in');
   finishRuns();
   await ash.del(`/api/items/${item.id}`);
 });
 
-test('🛍️ a checkout browser with an extension older than 1.22.0 (no Shop checkout in it): not started — it says to update; Discord\'s ⚡ Buy says so too', async () => {
+test("🛍️ not on sale yet at the checkout (\"not available for purchase\" to \"Pay now\"): the run waits there — said once, after the press too — and pressing again when it's live places it; still not on sale at the end, nothing's bought and it's armed again", async () => {
+  const link = store.cartLink([[PORSCHE, 1]]);
+  const item = (await ash.post('/api/items', { url: link, name: 'RLC Porsche (not live)', maxPrice: 60, aco: true })).body;
+  const ashId = env.app.repo.userByUsername('ash').id;
+  await drop(link);
+  let [run] = runsOf(item.id);
+  await desk.call('GET', '/api/ext/aco/next');
+  const say = (body) => desk.call('POST', `/api/ext/aco/${run.id}`, body);
+  await say({ status: 'checkout', message: "At Shop's checkout" });
+  await say({ status: 'placing', message: 'Pressing "Pay now"', total: 70 });
+  let r = await say({ status: 'waiting', reason: 'not_live', message: 'Shop says "This Product is not available for purchase" — not on sale yet' });
+  assert.equal(r.body.run.status, 'waiting', 'from "placing": the store said no');
+  assert.equal(r.body.run.reason, 'not_live');
+  assert.equal(r.body.run.active, true);
+  const dms = () => env.app.repo.listEvents(ashId, { limit: 500 }).filter((e) => /Not on sale yet at checkout/.test(JSON.stringify(e)));
+  await new Promise((res) => setTimeout(res, 50));
+  assert.equal(dms().length, 1, 'told once');
+  // Pressed again once the notice went — refused again (it came back): not told again. Then it's live: placed.
+  await say({ status: 'placing', message: 'Pressing "Pay now"', total: 70 });
+  await say({ status: 'waiting', reason: 'not_live', message: 'Shop says "This Product is not available for purchase" — not on sale yet' });
+  await new Promise((res) => setTimeout(res, 50));
+  assert.equal(dms().length, 1, 'still once');
+  await say({ status: 'placing', message: 'Pressing "Pay now"', total: 70 });
+  r = await say({ status: 'placed', message: 'Order placed', total: 70 });
+  assert.equal(r.body.run.status, 'placed');
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).aco, false, 'one purchase per arming');
+
+  // Another: still not on sale when the browser gives up — nothing bought, armed again.
+  await ash.put(`/api/items/${item.id}`, { aco: true });
+  await drop(link);
+  [run] = runsOf(item.id);
+  await desk.call('GET', '/api/ext/aco/next');
+  await say({ status: 'placing', message: 'Pressing "Pay now"', total: 70 });
+  await say({ status: 'waiting', reason: 'not_live', message: 'not on sale yet' });
+  r = await say({ status: 'failed', reason: 'not_live', message: 'Shop still says "This Product is not available for purchase" after 30 minutes — nothing was bought' });
+  assert.equal(r.body.run.status, 'failed');
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).aco, true, 'armed again');
+  // …and one still waiting long after (its browser lost): the server ends it the same way.
+  await drop(link);
+  [run] = runsOf(item.id);
+  await desk.call('GET', '/api/ext/aco/next');
+  await say({ status: 'placing', message: 'Pressing "Pay now"', total: 70 });
+  await say({ status: 'waiting', reason: 'not_live', message: 'not on sale yet' });
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 91 * 60 * 1000 WHERE id = :id', { id: run.id });
+  env.app.aco.expire();
+  await new Promise((res) => setTimeout(res, 50));
+  run = env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: run.id });
+  assert.equal(run.status, 'failed');
+  assert.equal(run.reason, 'not_live');
+  assert.match(run.message, /still said it isn't on sale — nothing was bought, and it's armed again/);
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).aco, true);
+  finishRuns();
+  await ash.del(`/api/items/${item.id}`);
+});
+
+test('🛍️ a checkout browser with an extension older than 1.24.0 (one that reads Shop\'s sign-in off its pages, and stops at "not available"): not started — it says to update; Discord\'s ⚡ Buy says so too', async () => {
   const link = store.cartLink([[RLC, 1]]);
   const item = (await ash.post('/api/items', { url: link, name: 'RLC membership', maxPrice: 20, aco: true })).body;
-  await desk.call('GET', '/api/ext/me?v=1.21.0');
+  await desk.call('GET', '/api/ext/me?v=1.23.0');
   try {
     await drop(link);
     const [run] = runsOf(item.id);
     assert.equal(run.status, 'skipped');
     assert.equal(run.reason, 'old_extension');
-    assert.match(run.message, /Ash desktop has 1\.21\.0 — update it to 1\.22\.0/);
+    assert.match(run.message, /Ash desktop has 1\.23\.0 — update it to 1\.24\.0/);
     await ash.put('/api/aco', { remoteBuy: true });
     const out = await env.app.aco.remote(env.app.repo.userByUsername('ash').id, item.id);
-    assert.match(out.error, /update it to 1\.22\.0 to buy from Shop/);
+    assert.match(out.error, /update it to 1\.24\.0 to buy from Shop/);
   } finally {
-    await desk.call('GET', '/api/ext/me?v=1.22.0');
+    await desk.call('GET', '/api/ext/me?v=1.24.0');
     finishRuns();
     await ash.del(`/api/items/${item.id}`);
   }
