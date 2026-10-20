@@ -162,7 +162,7 @@
   // button — the store says again when it's pressed (notLiveYet).
   const waitLive = !!(checkoutFlow && checkoutFlow.waitLive);
   const liveNotices = waitLive ? (checkoutFlow.waitLive.notices || []).filter((re) => re && re.test) : [];
-  const pageError = () => MGBChecks.pageError(document, [].concat((checkoutFlow && checkoutFlow.ignoreErrors) || [], liveNotices));
+  const pageError = (anew) => MGBChecks.pageError(document, [].concat((checkoutFlow && checkoutFlow.ignoreErrors) || [], liveNotices), anew);
   /** The checkout's "not on sale" notices on the screen (checkout.waitLive.notices). */
   const noticeEls = () => (liveNotices.length ? [...document.querySelectorAll('[role="alert"], [aria-live], p, div, span, li')]
     .filter((el) => el.children.length <= 2 && MGBFill.isVisible(el) && !el.closest('#mugibot-qc'))
@@ -328,7 +328,38 @@
     });
   }
 
-  /** At the final button of an Auto-checkout run: check the order, then press it — once. */
+  /** The final button of this checkout as it is now (the page may have drawn it again): fin's, by its words. */
+  function finalNow(fin) {
+    if (fin.el && fin.el.isConnected && MGBFill.isVisible(fin.el)) return fin.el;
+    const finals = ((checkoutFlow && checkoutFlow.final) || []).filter((re) => re && re.test);
+    return [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')].find((el) => {
+      if (!MGBFill.isVisible(el) || el.closest('#mugibot-qc')) return false;
+      const t = (el.innerText || el.value || '').replace(/\s+/g, ' ').trim();
+      return t === fin.text || finals.some((re) => re.test(t));
+    }) || null;
+  }
+  const isOff = (btn) => !btn || !btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true' || !MGBFill.isVisible(btn);
+
+  /** What the order may cost in this run: the item's max plus delivery — or, things already in the bag going too, the order limit. */
+  const limitOf = (run) => (run.others && typeof run.orderLimit === 'number' ? Math.max(run.maxTotal, run.orderLimit) : run.maxTotal);
+
+  /**
+   * The total, read just before pressing: within the run's limit (said and stopped if not). Over the item's
+   * max plus delivery but within your order limit, with other things in your bag: said, and it goes on.
+   */
+  function totalOk(run, fin, total) {
+    if (total === null) { acoStop('needs_you', 'no_total', "Couldn't read the order total to check it against your limit — check it and press the button yourself.", fin); return false; }
+    const limit = limitOf(run);
+    if (total > limit) { acoStop('needs_you', 'over_limit', `The total, $${total.toFixed(2)}, is over your limit of $${limit.toFixed(2)} — check it and press the button yourself if it's right.`, fin, total); return false; }
+    return true;
+  }
+
+  /**
+   * At the final button of an Auto-checkout run: the order checked (instant reads only — nothing waited for
+   * before pressing), then pressed. And while the store's struggling (a hot drop: it's busy, something went
+   * wrong, try again, or no answer at all) pressed again, a little later each time, for up to half an hour —
+   * never while it's still working on a press, and never past a decline, your bank's check or a human check.
+   */
   async function acoFinish(run, fin, data) {
     lookLogin();
     // The store says it won't sell it now (Shop checkout links: "This Product is not available for purchase"): nothing's bought.
@@ -353,52 +384,149 @@
       await acoReport('ready', '', `Filled in at ${retailer.name} — waiting for you to press "${fin.text}"`);
       return;
     }
-    if (run.placing) return; // pressed already in this run (the page came back): never twice
+    // Pressed already in this run (the page came back): only to press it again while the store's struggling.
+    if (run.placing && !retrying(run)) return;
     // (Stores that pay with the card saved in your account there — Amazon's — need none from the extension;
-    // nor does a card the store or Shop Pay shows it already has for you.)
+    // nor does a card the store or Shop Pay shows it already has for you: EB Games' "...2387".)
     const ownCard = !checkoutFlow || checkoutFlow.payment !== 'account';
     const frames = (await ask({ type: 'cardFrames' })) || [];
-    const saved = ownCard && !cardBoxesOnPage().length && !frames.some((f) => f.seen > 0)
-      && (MGBChecks.savedCardShown(document, checkoutFlow, false) || frames.some((f) => f.saved));
+    const boxes = cardBoxesOnPage().length > 0 || frames.some((f) => f.seen > 0);
+    const saved = ownCard && !boxes && (MGBChecks.savedCardShown(document, checkoutFlow, false) || frames.some((f) => f.saved));
     if (ownCard && !saved && !data.card) return acoStop('needs_you', 'card_missing', 'No card is saved in the extension — add it (icon → Card settings) and finish this yourself.', fin);
-    if (ownCard && checkoutFlow && checkoutFlow.payment === 'card' && !(await cardIn())) return acoStop('needs_you', 'card_not_filled', "Your card didn't go into the store's card boxes — type it in and press the button yourself.", fin);
-    await MGBFlows.wait(400); // the page's own checks on the last boxes
+    if (ownCard && !saved && checkoutFlow && checkoutFlow.payment === 'card' && !(await cardIn())) return acoStop('needs_you', 'card_not_filled', "Your card didn't go into the store's card boxes — type it in and press the button yourself.", fin);
+    // The page's own say on the boxes: filled in once more if it says one's wrong or empty, then checked.
+    const values = MGBFill.fieldValues(data.profile, data.card);
+    if (pageError() || MGBChecks.missingRequired(document)) MGBFill.fillFields(document, values, { flow: checkoutFlow });
     const err = pageError();
-    if (err) return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);
+    if (err && MGBChecks.errorKind(err) !== 'busy') return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);
     const missing = MGBChecks.missingRequired(document);
     if (missing) return acoStop('needs_you', 'needs_details', `"${missing}" still needs filling in — fill it and press the button yourself.`, fin);
-    let total = orderTotal();
-    if (total === null) return acoStop('needs_you', 'no_total', "Couldn't read the order total to check it against your limit — check it and press the button yourself.", fin);
-    if (total > run.maxTotal) return acoStop('needs_you', 'over_limit', `The total, $${total.toFixed(2)}, is over your limit of $${run.maxTotal.toFixed(2)} — check it and press the button yourself if it's right.`, fin, total);
-    // The button, ready to press (some turn on a moment after the last box is filled).
-    let btn = fin.el;
-    // (5 s — or, a checkout still coming in, up to 45 s.)
-    const finStarted = Date.now();
-    for (; (Date.now() - finStarted < 5000 || (Date.now() - finStarted < 45000 && MGBQuick.pageBusy())) && (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true' || !MGBFill.isVisible(btn));) {
-      await MGBFlows.wait(200);
-      if (!btn.isConnected) btn = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')].find((el) => MGBFill.isVisible(el) && (el.innerText || el.value || '').trim() === fin.text) || btn;
+    const total = orderTotal();
+    if (!totalOk(run, fin, total)) return;
+    if (total > run.maxTotal) report('step', `The total, $${total.toFixed(2)}, is more than this item's max and delivery — the other things in your ${retailer.name} bag are being bought too`, null);
+    return pressLoop(run, fin, values, total);
+  }
+
+  /** May this run press its final button again? (Pressed already, the store hasn't taken the order, and it's not 30 minutes yet.) */
+  const retrying = (run) => !!(run && run.placing && !run.stopped && run.placingAt && Date.now() - run.placingAt < MGBChecks.RETRY_MS);
+
+  /**
+   * The final button, ready to press (it turns on once the store's done with the last boxes — under load,
+   * that can take minutes: up to 30, said to your account meanwhile), then pressed — again and again while
+   * the store's struggling. Each press is asked of the extension first (it keeps count, and the 30 minutes).
+   */
+  async function pressLoop(run, fin, values, total) {
+    let leaving = false;
+    addEventListener('beforeunload', () => { leaving = true; }, { once: true });
+    let fieldTries = 0;
+    let watching = false;
+    for (let n = 0; ; n++) {
+      // The button: free to press (the page may draw it again meanwhile).
+      let btn = finalNow(fin);
+      for (const since = Date.now(); isOff(btn);) {
+        if (leaving) return;
+        if (Date.now() - since > MGBChecks.RETRY_MS) return acoStop('needs_you', 'needs_details', `"${fin.text}" didn't become available in 30 minutes — check the page and press it yourself.`, fin, total);
+        const o = outcome();
+        if (o) return said(o, total);
+        panel.setStatus(`⏳ Waiting for ${retailer.name}'s "${fin.text}" to turn on (the store's slow)…`);
+        beat(`Waiting for "${fin.text}" to turn on — ${retailer.name}'s checkout is slow (up to 30 minutes)`);
+        await MGBFlows.wait(250);
+        btn = finalNow(fin);
+      }
+      if (n > 0) {
+        // Before pressing again: its boxes ticked and filled in still, and the total still within the limit.
+        MGBFill.fillFields(document, values, { flow: checkoutFlow });
+        const now = orderTotal();
+        if (now !== null) total = now;
+        if (!totalOk(run, fin, total)) return;
+      }
+      const go = await ask({ type: 'acoRetry' });
+      if (!go || !go.ok) {
+        if (go && go.over) return acoStop('failed', 'not_placed', `Pressed "${fin.text}" for ${Math.round((Date.now() - go.since) / 60000)} minutes and ${retailer.name} never took the order — nothing more pressed.`, fin, total);
+        return; // (the run ended meanwhile: stopped, or finished on your phone)
+      }
+      await acoReport('placing', '', go.n === 1 ? `Pressing "${fin.text}" — total $${total.toFixed(2)}` : `Pressing "${fin.text}" again (${go.n}) — ${retailer.name} hasn't taken the order yet`, total);
+      panel.setStatus(go.n === 1 ? `🤖 Placing your order ($${total.toFixed(2)})…` : `🤖 Pressing "${fin.text}" again (${go.n}) — ${retailer.name}'s struggling…`);
+      report('step', `Auto-checkout pressed "${fin.text}"${go.n > 1 ? ` again (${go.n})` : ''} (total $${total.toFixed(2)})`, null);
+      if (checkoutFlow.leaves && !watching) { watching = true; watchLeaving(fin.text, total); }
+      markNotices();
+      // (What the page said before this press isn't its answer to it: only something it says anew.)
+      MGBChecks.markErrors(document);
+      btn.click();
+      const ans = await answer(run, total, () => leaving);
+      if (ans.kind === 'done' || ans.kind === 'left') return;
+      if (ans.kind === 'field' && ++fieldTries > 2) return acoStop('needs_you', 'needs_details', `${retailer.name} said: "${ans.text}" — finish it yourself in this tab.`, fin, total);
+      const w = MGBChecks.retryWait(n);
+      panel.setStatus(`⏳ ${retailer.name} ${ans.text ? `said "${ans.text.slice(0, 80)}"` : "hasn't taken the order yet"} — pressing "${fin.text}" again in ${Math.round(w / 1000)} s…`);
+      for (const until = Date.now() + w; Date.now() < until;) {
+        await MGBFlows.wait(250);
+        if (leaving) return;
+        const o = outcome();
+        if (o) return said(o, total);
+      }
     }
-    if (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true') return acoStop('needs_you', 'needs_details', `"${fin.text}" didn't become available — check the page and press it yourself.`, fin, total);
-    // (Read again just before pressing: a checkout still coming in can add its delivery or fees, or a
-    //  message, while its button turns on.)
-    if (Date.now() - finStarted > 300) {
-      const err2 = pageError();
-      if (err2) return acoStop('needs_you', 'needs_details', `The page says: "${err2}" — fix it and press the button yourself.`, fin);
-      const missing2 = MGBChecks.missingRequired(document);
-      if (missing2) return acoStop('needs_you', 'needs_details', `"${missing2}" still needs filling in — fill it and press the button yourself.`, fin);
-      const total2 = orderTotal();
-      if (total2 === null) return acoStop('needs_you', 'no_total', "Couldn't read the order total to check it against your limit — check it and press the button yourself.", fin);
-      if (total2 > run.maxTotal) return acoStop('needs_you', 'over_limit', `The total, $${total2.toFixed(2)}, is over your limit of $${run.maxTotal.toFixed(2)} — check it and press the button yourself if it's right.`, fin, total2);
-      total = total2;
+  }
+
+  /** How it went, said to your account (placed: the run's done here). */
+  async function said(o, total) {
+    if (o.status === 'placed') {
+      panel.setStatus('🤖 Order placed.');
+      await acoReport('placed', '', `Order confirmed at ${retailer.name}`, total);
+      assistFlag.off();
+      ask({ type: 'endFill' });
+      return;
     }
-    // Said first (the page may leave the moment it's pressed): this run's final button, pressed once.
-    await acoReport('placing', '', `Pressing "${fin.text}" — total $${total.toFixed(2)}`, total);
-    panel.setStatus(`🤖 Placing your order ($${total.toFixed(2)})…`);
-    report('step', `Auto-checkout pressed "${fin.text}" (total $${total.toFixed(2)})`, null);
-    if (checkoutFlow.leaves) watchLeaving(fin.text, total);
-    markNotices();
-    btn.click();
-    watchOutcome(run, total);
+    panel.setStatus(o.message);
+    await acoReport(o.status, o.reason, o.message, total);
+  }
+
+  // Your account told how a slow checkout's going, every half a minute or so (it keeps the run going).
+  let beatAt = 0;
+  function beat(text) {
+    if (!aco || Date.now() - beatAt < 30000) return;
+    beatAt = Date.now();
+    ask({ type: 'acoReport', status: 'beat', message: text });
+  }
+
+  /**
+   * After a press: the store's answer. 'done' (placed, or stopped and said: a decline, your bank's or a human
+   * check, not on sale yet), 'left' (on to another page: it carries on there), 'field' (it says a box is
+   * wrong: filled in again, then pressed again) or 'again' (it's struggling: it's busy, something went wrong —
+   * or no answer at all, its button free again 20 seconds on). While its button is busy, it's waited for.
+   * (What the page said before the press, still up word for word, isn't its answer: markErrors.)
+   */
+  async function answer(run, total, left) {
+    const started = Date.now();
+    let errSince = 0;
+    for (;;) {
+      await MGBFlows.wait(400);
+      if (left()) return { kind: 'left' };
+      const o = outcome();
+      if (o) { await said(o, total); return { kind: 'done' }; }
+      if (await pressReview(run)) continue;
+      // The store said no to the final button (a Shop link's "not available for purchase"): a notice shown
+      // anew since the press, the page still here 8 seconds on and its button free again — so nothing was
+      // bought. It waits here for the sale. (The same notice merely still up is no answer: left as it is.)
+      const notLive = waitLive && Date.now() - started > 8000 && !finalBusy() ? freshNotice() : '';
+      if (notLive) { await notLiveYet(run, notLive, total); return { kind: 'done' }; }
+      const err = pageError(true);
+      errSince = err ? errSince || Date.now() : 0;
+      if (err && Date.now() - errSince > 2500 && !finalBusy()) {
+        const k = MGBChecks.errorKind(err);
+        if (k === 'declined') { await said({ status: 'failed', reason: 'card_declined', message: `${retailer.name} said: ${err}` }, total); return { kind: 'done' }; }
+        return { kind: k === 'field' ? 'field' : 'again', text: err };
+      }
+      // (Still working on it — its button busy, the page loading: waited for, up to the half hour.)
+      if (finalBusy() || MGBQuick.pageBusy()) {
+        if (Date.now() - started > MGBChecks.RETRY_MS) {
+          await said({ status: 'needs_you', reason: 'unconfirmed', message: `"Pay" was pressed and ${retailer.name} still hasn't answered after 30 minutes — check your email for the order confirmation before buying it again.` }, total);
+          return { kind: 'done' };
+        }
+        beat(`Pressed — waiting for ${retailer.name} to answer (it's slow)`);
+        continue;
+      }
+      if (Date.now() - started > MGBChecks.NO_ANSWER_MS) return { kind: 'again', text: '' };
+    }
   }
 
   async function fillCheckout() {
@@ -414,14 +542,15 @@
         return;
       }
       if (data.aco && data.aco.placing) {
-        // Back after the final button was pressed (here, or in the store's checkout frame): what happened,
-        // without pressing it again.
+        // Back after the final button was pressed (here, or in the store's checkout frame): what happened —
+        // and, the store back at its checkout without having taken the order (it's struggling), within the
+        // half hour: filled in again and pressed again (below). (A checkout in a frame presses its own.)
         aco = data.aco;
         const o = outcome();
         if (o) await acoReport(o.status, o.reason, o.message);
         if (o && o.status === 'placed') { assistFlag.off(); ask({ type: 'endFill' }); }
-        else if (!o) watchOutcome(data.aco, null);
-        return;
+        if (o) return;
+        if (!retrying(data.aco) || (checkoutFlow && checkoutFlow.inFrame)) { watchOutcome(data.aco, null); return; }
       }
       if (checkoutFlow && checkoutFlow.inFrame) {
         // The whole checkout is in a frame (Global-e's, for Premium Bandai): frame.js runs it in there —
@@ -442,15 +571,8 @@
       }
       const run = data.aco || null;
       if (run) aco = run;
-      if (run && run.placing) {
-        // Back at checkout after the final button was pressed: what happened, without pressing it again.
-        const o = outcome();
-        if (o) await acoReport(o.status, o.reason, o.message);
-        if (o && o.status === 'placed') { assistFlag.off(); ask({ type: 'endFill' }); }
-        else if (!o) watchOutcome(run, null);
-        return;
-      }
-      if (run) await acoReport('checkout', '', `At ${retailer.name}'s checkout — filling it in`);
+      if (run && !run.placing) await acoReport('checkout', '', `At ${retailer.name}'s checkout — filling it in`);
+      if (run && run.placing) panel.setStatus(`🤖 ${retailer.name} came back to its checkout without taking the order — filling it in again to press "Pay" again…`);
       let fin = null;
       const result = await MGBFill.assist({
         values: MGBFill.fieldValues(data.profile, data.card),
@@ -464,6 +586,9 @@
         auto: !!run,
         onFinal: (f) => { fin = f; },
         cardReady: data.card ? cardReady : null,
+        // (An Auto-checkout run: a store slowed right down gets up to 30 minutes, your account told how it's going.)
+        patientMs: run ? MGBChecks.RETRY_MS : 0,
+        onBeat: run ? beat : null,
       });
       if (result === 'final' && run && fin) {
         await acoFinish(run, fin, data);
@@ -582,8 +707,20 @@
           : `Your checkout of ${turn.name || 'another item'} at ${retailer.name} is going — ${retailer.name} keeps one bag for this browser. Press this again once it's done.`);
         return;
       }
-      const ok = await ask({ type: 'startFill' });
+      const ok = await ask({ type: 'startFill', product: item ? { id: item.fromPage ? null : item.id || null, store: retailer.id, sku: item.sku, name: item.name, url: item.url || location.href.split('#')[0] } : null });
       if (ok) assistFlag.on(item && item.profileId);
+      if (ok && ok.aco) {
+        // (Auto-checkout set to "Place the order for me": this checkout places the order, within your limits.)
+        aco = ok.aco;
+        panel.setNote('🤖 Auto-checkout — places the order within your limits');
+        const inBag = !retailer.cartLinks ? MGBQuick.bagCount() : null;
+        if (inBag) {
+          const text = `Your ${retailer.name} bag already had ${inBag} item${inBag === 1 ? '' : 's'} in it — Auto-checkout carries on, and ${inBag === 1 ? 'it' : 'they'}'ll be bought too (Clear cart before a drop to buy only this)`;
+          aco = { ...aco, others: inBag };
+          ask({ type: 'acoOthers', n: inBag, message: text });
+          report('error', text, item);
+        }
+      }
       go(true);
     },
     onStop: async () => {
@@ -607,14 +744,15 @@
     // Another checkout of yours at this store goes first (its one bag): next in line, here.
     const turn = await ask({ type: 'turn', name: product && product.name });
     if (turn && turn.go === false) { waitTurn(claim, product, turn); return; }
-    // Auto-checkout only ever buys the one item: a bag with other things in it is left for you.
-    // (A Shop checkout link is its own order: no bag of yours behind it.)
+    // Other things in your bag already: Auto-checkout goes on all the same — they're bought with it — and
+    // says so (your activity, the run's history), its total checked against your order limit instead of this
+    // item's max. (Clear cart before a drop to buy only the one thing. A Shop checkout link is its own order.)
     const inBag = aco && !retailer.cartLinks ? MGBQuick.bagCount() : null;
     if (aco && inBag) {
-      panel.setNote('🤖 Auto-checkout');
-      panel.setStatus(`Your ${retailer.name} bag already has ${inBag} item${inBag === 1 ? '' : 's'} in it — Auto-checkout only buys the one item. Empty it, or buy this yourself.`);
-      acoReport('needs_you', 'wrong_item', `Your ${retailer.name} bag already had ${inBag} item${inBag === 1 ? '' : 's'} in it`);
-      return;
+      const text = `Your ${retailer.name} bag already had ${inBag} item${inBag === 1 ? '' : 's'} in it — Auto-checkout carries on, and ${inBag === 1 ? 'it' : 'they'}'ll be bought too (Clear cart before a drop to buy only this)`;
+      aco = { ...aco, others: inBag };
+      ask({ type: 'acoOthers', n: inBag, message: text });
+      report('error', text, product);
     }
     // (Seen signed out at a store that only sells signed in: said, but it goes on all the same — the
     //  reading may be wrong, and the store's own sign-in page stops it, buying nothing, if it isn't.)
@@ -690,6 +828,12 @@
     return g;
   }
   const gate = seenGate();
+  // The store's bot protection turning this browser away instead of its page (BIG W's "Access Denied"): said
+  // here, and Mugibot asks that store for nothing more from this browser for half an hour, so it can lift —
+  // asking more only makes it last. (A run that lands here says so, and stops: nothing to buy on this page.)
+  const denied = !gate && MGBQuick.deniedPage();
+  const DENIED_TEXT = `${retailer.name}'s bot protection is turning this browser away ("Access Denied"). Mugibot leaves ${retailer.name} alone from this browser for 30 minutes so it can lift. To get back in sooner: clear ${retailer.name}'s cookies (the icon left of the address → Cookies and site data → delete ${retailer.name}'s), or try another network, then open the link again.`;
+  if (denied) { ask({ type: 'denied', store: retailer.id }); panel.setStatus(DENIED_TEXT); }
   // (The extension keeps track of which tabs are in a queue: it never refreshes them, and nothing
   // else of yours asks that store for anything until you're through.)
   if (retailer.gate) ask({ type: 'gate', store: retailer.id, on: !!gate, kind: retailer.gate.kind, wait: gate ? gate.wait : null });
@@ -766,6 +910,11 @@
       const listed = items.find((p) => p.id === claim.itemId) || items.find((p) => p.sku === claim.sku);
       const product = { ...(listed || {}), sku: claim.sku, name: claim.name || (listed && listed.name) || claim.sku, url: claim.url || (listed && listed.url) || null, store: retailer.id };
       aco = claim.aco || null;
+      if (denied) {
+        panel.setStatus(DENIED_TEXT);
+        if (aco) acoReport('needs_you', 'store_denied', `${retailer.name} said "Access Denied" to this browser (its bot protection) — nothing was bought. Mugibot leaves ${retailer.name} alone from it for 30 minutes so it can lift.`);
+        return;
+      }
       if (gate) {
         // The store opened in its queue (or at its checkpoint): this ⚡ Buy waits here, claimed.
         holdStore.save({ code: goCode, claim, product, kind: gate.kind, at: Date.now() });

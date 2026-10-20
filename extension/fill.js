@@ -446,6 +446,11 @@ var MGBFill = (function () {
 
   // Boxes never ticked for you, whatever the flow says: newsletters, offers, marketing texts.
   var MARKETING_RE = /newsletter|marketing|subscribe|offers|promotion|news\b|sms|text me|email me|updates|kmail/i;
+  // At every store: a box saying you accept its terms or agreement ("By selecting, you indicate your
+  // acceptance of the Membership Agreement", "I have read and agree to the terms and conditions") — the
+  // checkout won't go without it. (Never one to save your details, or a marketing one.)
+  var CONSENT_RE = /\b(accept(ance)?|agree(ment)?|i have read|acknowledge|consent)\b[\s\S]{0,80}\b(terms|conditions|agreement|policy|policies|rules)\b|\bmembership agreement\b|\b(terms|conditions)\b[\s\S]{0,40}\b(accept|agree)/i;
+  var NOT_CONSENT_RE = /save (my|this|your)|remember me|keep me signed|create an account|use (this|my) (address|card) for/i;
 
   /**
    * The flow's boxes to have ticked (C.tick: Shopify's "Use shipping address as billing address", Shop
@@ -455,8 +460,7 @@ var MGBFill = (function () {
    * (a store that ticks it back: left as it says).
    */
   function setTicks(root, C, out) {
-    if (!(C.tick && C.tick.length) && !(C.untick && C.untick.length) && !C.tickRequired) return;
-    toArray(root.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).forEach(function (el) {
+    toArray(root.querySelectorAll('input[type="checkbox"], [role="checkbox"], [role="switch"]')).forEach(function (el) {
       var real = el.matches('input');
       if (el.disabled || el.getAttribute('aria-disabled') === 'true' || inPanel(el)) return;
       // (A real box inside a drawn one is that box: the real one's ticked.)
@@ -465,14 +469,21 @@ var MGBFill = (function () {
       if (!isVisible(el) && !(l && isVisible(l))) return;
       var words = (labelText(el) + ' ' + describe(el) + (real ? '' : ' ' + textOf(el))).replace(/\s+/g, ' ');
       var required = real ? el.required || el.getAttribute('aria-required') === 'true' : el.getAttribute('aria-required') === 'true';
-      var want = any(C.tick, words) ? true : any(C.untick, words) ? false : C.tickRequired && required ? true : null;
+      var want = any(C.tick, words) ? true : any(C.untick, words) ? false : C.tickRequired && required ? true
+        : CONSENT_RE.test(words) && !NOT_CONSENT_RE.test(words) ? true : null;
       if (want && MARKETING_RE.test(words)) want = null;
       var checked = real ? el.checked : el.getAttribute('aria-checked') === 'true';
       if (want === null || checked === want) return;
       var key = 'tick|' + (el.name || el.id || words.slice(0, 40));
-      if ((SWITCHED[key] || 0) >= 2) return;
+      if ((SWITCHED[key] || 0) >= 3) return;
       SWITCHED[key] = (SWITCHED[key] || 0) + 1;
       el.click();
+      // (A box the page draws over a hidden one, and only answers clicks on its label: the label.)
+      var now = real ? el.checked : el.getAttribute('aria-checked') === 'true';
+      if (now !== want) {
+        var lab = (real && el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]')) || el.closest('label');
+        if (lab) lab.click();
+      }
       out.filled.push((want ? 'ticked "' : 'unticked "') + (labelText(el) || (real ? '' : textOf(el)) || el.name || 'box').replace(/\s+/g, ' ').trim().slice(0, 50) + '"');
     });
   }
@@ -732,7 +743,16 @@ var MGBFill = (function () {
     var manualTried = false;
     var finalAt = 0;
     var idle = 0;
-    var deadline = Date.now() + 4 * 60 * 1000;
+    // (An Auto-checkout run, opts.patientMs: a store slowed right down in a hot drop gets this long —
+    //  30 minutes — its steps pressed again while they don't take, and your account told how it's going.)
+    var startedAt = Date.now();
+    var deadline = startedAt + (opts.patientMs || 4 * 60 * 1000);
+    var beatAt = 0;
+    var beat = function (text) {
+      if (!opts.onBeat || Date.now() - beatAt < 20000) return;
+      beatAt = Date.now();
+      opts.onBeat(text);
+    };
     setStatus('Filling in checkout…');
     while (Date.now() < deadline) {
       if (opts.isActive && !opts.isActive()) { setStatus('Stopped.'); return 'stopped'; }
@@ -823,7 +843,7 @@ var MGBFill = (function () {
         fillFields(document, opts.values, { flow: C });
         var fin = finals.find(function (b) { return !b.disabled; }) || finals[0];
         if (opts.auto) {
-          setStatus('Filled in — checking the order before placing it…');
+          setStatus('Filled in — placing your order…');
           if (opts.onFinal) opts.onFinal({ el: fin.el, text: fin.text });
           return 'final';
         }
@@ -835,21 +855,36 @@ var MGBFill = (function () {
         return 'ready';
       }
 
-      // A step button we already pressed is still there: maybe a field needs attention.
-      var again = steps.find(function (b) { return clicked[norm(b.text)] && clicked[norm(b.text)] < 3; });
-      if (again && idle > 6) {
+      // A step button we already pressed is still there: maybe a field needs attention. (A patient run: the
+      // store may just be slow to answer it — pressed again every few seconds, as long as it's patient.)
+      var patient = !!opts.patientMs;
+      var again = steps.find(function (b) { return clicked[norm(b.text)] && (patient || clicked[norm(b.text)] < 3); });
+      if (again && idle > (patient ? 16 : 6)) {
         clicked[norm(again.text)] += 1;
+        if (patient) {
+          setStatus('The store\'s slow to answer "' + again.text + '" — pressing it again…');
+          beat('Still at "' + again.text + '" — the store\'s slow to answer; pressing it again (for up to ' + Math.round(opts.patientMs / 60000) + ' minutes)');
+        }
         again.el.click();
         await wait(1500);
         idle = 0;
         continue;
       }
-      idle += 1;
-      if (idle > 64) {
+      // (Still loading, or its button busy: the store's working on it — not stuck.)
+      var working = patient && typeof MGBQuick !== 'undefined' && MGBQuick.pageBusy && MGBQuick.pageBusy();
+      if (!working) idle += 1;
+      if (idle > 64 && !(patient && Date.now() < deadline)) {
         var stuck = steps[0] ? 'Stuck at "' + steps[0].text + '" — something on the page needs your input.' : "Couldn't find the next step — please continue yourself.";
         setStatus(stuck);
         report('error', stuck);
         return 'needs_you';
+      }
+      if (idle > 64) {
+        // (Patient: said, and on it goes — the page may come right; a box only you can fill, you fill in.)
+        var slow = steps[0] ? 'Waiting at "' + steps[0].text + '" — the store hasn\'t moved on yet (if a box needs you, fill it in)' : 'Waiting for the store\'s checkout to move on';
+        setStatus(slow + '…');
+        beat(slow);
+        idle = 32;
       }
       await wait(250);
     }

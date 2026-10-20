@@ -93,7 +93,12 @@ function demoCopy(def, demoUrl) {
     demo: true,
     realId: def.id,
     // (A store whose items are checked more often — Shop checkout links — is in the dummy store too.)
-    monitor: { server: true, browser: true, ...(def.monitor && def.monitor.intervalSeconds ? { intervalSeconds: def.monitor.intervalSeconds, floorSeconds: def.monitor.floorSeconds, hostGapSeconds: def.monitor.hostGapSeconds } : {}) },
+    monitor: {
+      server: true, browser: true,
+      ...(def.monitor && def.monitor.intervalSeconds ? { intervalSeconds: def.monitor.intervalSeconds, floorSeconds: def.monitor.floorSeconds, hostGapSeconds: def.monitor.hostGapSeconds } : {}),
+      // (Its pages opened in the extension's window for in-browser checks, at its pace: the dummy store's copy too.)
+      ...(def.monitor && def.monitor.render ? { render: true, browserSeconds: def.monitor.browserSeconds } : {}),
+    },
   };
 }
 
@@ -149,7 +154,8 @@ export class Retailers {
     const saved = this.getSetting(`retailer:${r.id}`) || {};
     return {
       enabled: saved.enabled !== false,
-      serverChecks: saved.serverChecks ?? r.monitor.server !== false,
+      // (server 'never': a store that refuses every server — BIG W — whatever an admin saved before.)
+      serverChecks: r.monitor.server === 'never' ? false : saved.serverChecks ?? r.monitor.server !== false,
       browserChecks: saved.browserChecks ?? r.monitor.browser !== false,
     };
   }

@@ -161,7 +161,10 @@ export function register(router, ctx) {
     // An Auto-checkout run's code: what this checkout may do by itself (null: an ordinary ⚡ Buy).
     // (Finished on the phone instead: the computer opens nothing.)
     if (row.run_id && ctx.aco.handedOff(req.user.id, row.run_id)) throw new HttpError(409, 'You finished this one on your phone — nothing to do here');
-    const aco = row.run_id ? ctx.aco.claimed(req.user.id, row.run_id, req.device) : null;
+    // (Your own ⚡ Buy — the dashboard's, a channel's link — with Auto-checkout set to "Place the order for me":
+    //  a run for it, placing the order within your limits. Otherwise it stops at the final button for you.)
+    const aco = row.run_id ? ctx.aco.claimed(req.user.id, row.run_id, req.device)
+      : row.item_id ? ctx.aco.own(req.user, req.device, { id: row.item_id }, { qty: row.quantity }) : null;
     // (The product's page: where to go once through a store's queue, which may let you in at its front page.)
     const item = row.item_id ? repo.getItem(req.user.id, row.item_id) : null;
     // (A Shop checkout link's code is only taken up on Shop's checkout: it opened signed in for that link.)
@@ -204,7 +207,7 @@ export function register(router, ctx) {
     const want = new Set();
     // (Only an extension that can be allowed other websites says which it may read: 1.26.0 or later.)
     if (req.query.has('sites')) ctx.monitor.noteSites(req.user.id, req.device.id, sites);
-    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want });
+    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want, version: req.device.version });
     if (ctx.drops && ctx.monitor.browserChecksOn(req.user)) checks.push(...ctx.drops.browserDue(req.user, { sites, want }));
     return { checks, intervalSeconds: cfg.monitor.browserIntervalSeconds, sites: [...want].slice(0, 20) };
   }, { auth: 'device', entitled: true });
@@ -261,6 +264,16 @@ export function register(router, ctx) {
       lobbies: ctx.aco.lobbiesFor(req.user, req.device), gates: gatesUp(),
       clears, clearing: ctx.bags.activeFor(req.user, req.device),
     };
+  }, { auth: 'device', entitled: true });
+
+  // The store panel's "Add to bag → Checkout" pressed on a product's page (yours on your watchlist, or the page's
+  // own): with Auto-checkout set to "Place the order for me", a run for it (what its checkout may do) — or none.
+  router.post('/api/ext/aco/own', async (req) => {
+    if (!limiter.hit(`aco-own:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const p = req.body.product && typeof req.body.product === 'object' ? req.body.product : {};
+    const product = { id: str(p.id, 40) || null, store: str(p.store, 40), sku: str(p.sku, 80), name: str(p.name, 200), url: str(p.url, 2000) };
+    if (product.url && !/^https?:\/\//i.test(product.url)) product.url = '';
+    return { aco: ctx.aco.own(req.user, req.device, product, { price: num(p.price, { min: 0, max: 100000, def: null }) }) };
   }, { auth: 'device', entitled: true });
 
   // A run this browser held while it waited in a store's queue, through now: a fresh link to open the store with.

@@ -1328,6 +1328,66 @@ test('in-browser checks: a store that refuses the server is checked by your brow
   assert.match(discord.dmsTo('d-ash').at(-1).body.embeds[0].description, /Seen by your browser/);
 });
 
+test("🧭 BIG W, whose bot protection resets every server's connection: your watchlist's BIG W items are read by your browser opening each one's page in the extension's window — one at a time, never asked for in the background — and, told \"Access Denied\", BIG W is left alone from this browser for 30 minutes (no checks, no searches), the item and the store's panel saying why", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const prev = env.app.repo.getSetting('retailer:demo-bigw');
+  // (The dummy BIG W as the real one is: never asked by the server — retailers/bigw.js, monitor.server 'never'.)
+  env.app.repo.setSetting('retailer:demo-bigw', { ...(prev || {}), serverChecks: false });
+  const S = store.shop('bigw');
+  const bigwPages = () => store.state.requests.filter((x) => x.path.startsWith('/bigw/product/'));
+  const due = () => env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
+  try {
+    await useItems([{ url: store.productUrl('bigw', '6012345'), name: 'BIG W UPC' }, { url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle' }]);
+    store.set('bigw', '6012345', { status: 'out_of_stock' });
+    store.set('bigw', '6012346', { status: 'in_stock' });
+    const before = bigwPages().length;
+    let r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.equal(r.checked, 1, 'one BIG W page at a time');
+    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.equal(r.checked, 1, 'the next one in the next round');
+    const items = env.app.repo.listItems(userId);
+    assert.deepEqual(items.map((i) => [i.name, i.status, i.statusSource]).sort(), [['BIG W Bundle', 'in_stock', 'browser'], ['BIG W UPC', 'out_of_stock', 'browser']]);
+    const asked = bigwPages().slice(before);
+    assert.equal(asked.length, 2);
+    assert.ok(asked.every((x) => x.mode === 'navigate' && /Chrome|Mozilla/.test(x.ua)), `each page opened, as you'd open it: ${JSON.stringify(asked)}`);
+    // Each at most every 15 minutes (the live searches see drops sooner): nothing due straight after.
+    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.equal(r.checked, 0);
+
+    // "Access Denied" (its Akamai, turning this browser away): said on the item, and BIG W left alone from here.
+    S.denied = true;
+    due();
+    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.equal(r.checked, 1);
+    assert.equal(S.deniedServed, 1);
+    const denied = env.app.repo.listItems(userId).find((i) => i.status === 'blocked');
+    assert.ok(denied, JSON.stringify(env.app.repo.listItems(userId)));
+    assert.match(denied.error, /Access Denied/);
+    due();
+    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.equal(r.checked, 0, 'nothing more asked of BIG W from this browser');
+    assert.equal(S.deniedServed, 1);
+    // Its page opened by you meanwhile: the panel says what's happening and what to do.
+    const page = await ctx.newPage();
+    await page.goto(store.productUrl('bigw', '6012346'));
+    await page.waitForFunction(() => /bot protection is turning this browser away \("Access Denied"\)/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 15000 });
+    assert.match(await panel(page).textContent(), /30 minutes/);
+    await page.close();
+    // Let in again (and the half hour over): checked as before.
+    S.denied = false;
+    await sw.evaluate(() => chrome.storage.session.remove('deniedStores'));
+    due();
+    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.equal(r.checked, 1);
+    assert.ok(env.app.repo.listItems(userId).some((i) => i.status === 'in_stock' || i.status === 'out_of_stock'));
+  } finally {
+    S.denied = false;
+    await sw.evaluate(() => chrome.storage.session.remove('deniedStores')).catch(() => null);
+    env.app.repo.setSetting('retailer:demo-bigw', prev || {});
+    await useItems([]);
+  }
+});
+
 test('🧭 a drop watch at another website that refuses the server: your browser reads its search and its find\'s page instead (as a visitor), and what it finds counts', async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const ash = env.app.repo.userById(userId);
@@ -1494,7 +1554,7 @@ test("BIG W's search page builds its products once it's open: an admin's browser
     const tabs = ctx.pages().filter((pg) => pg.url().includes('/bigw/search'));
     assert.equal(tabs.length, 1);
     await tabs[0].waitForTimeout(1500);
-    // (Its next search may be opening in that tab by now — BIG W's every 10 s: the page it's on is asked.)
+    // (Its next search may be opening in that tab by now — BIG W's every 20 s: the page it's on is asked.)
     const panel = async () => {
       for (let i = 0; ; i++) {
         try { return await tabs[0].evaluate((id) => !!document.getElementById(id), 'mugibot-qc'); } catch (e) {
@@ -1906,7 +1966,7 @@ test('🤖 Auto-checkout at Kmart: it drops → your browser opens the store by 
   await closeStorePages('kmart');
 });
 
-test('🤖 Auto-checkout stops short — and buys nothing — when the total is over your limit, or the bag already has other things in it', async () => {
+test('🤖 Auto-checkout stops short — and buys nothing — when the total is over your limit; other things already in the bag: it carries on (they\'re bought too) and says so', async () => {
   // Over the limit: the store wants more than you allowed (the server saw $100; checkout says $110).
   await browserApi('PUT', '/api/aco', { maxOrder: 105 });
   const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB');
@@ -1922,14 +1982,19 @@ test('🤖 Auto-checkout stops short — and buys nothing — when the total is 
   await closeStorePages('kmart');
   await browserApi('PUT', '/api/aco', { maxOrder: 200 });
 
-  // Something else already in the bag: Auto-checkout only ever buys the one item.
+  // Something else already in the bag: Auto-checkout goes on all the same — it's bought too — and says so
+  // (the run's history, your activity), the total checked against your limit an order.
   store.shop('kmart').cart.push({ sku: '43818556', qty: 1, price: 20, name: 'Knock Out Collection' });
   await acoListen();
   await drop('kmart', '43818587');
-  await waitFor(async () => (await lastRun()).reason === 'wrong_item', { timeout: 45000, message: 'stopped: the bag had other things' });
-  assert.equal(store.shop('kmart').orders.length, 0);
+  await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 45000, message: 'placed, the other thing in the bag too' });
+  assert.equal(store.shop('kmart').orders.length, 1);
+  assert.deepEqual(store.shop('kmart').orders[0].cart.map((c) => c.sku).sort(), ['43818556', '43818587']);
   run = await lastRun();
-  assert.equal(run.status, 'needs_you');
+  assert.equal(run.total, 130, '$100 + $20 + $10 delivery');
+  assert.ok(run.steps.some((x) => /bag already had 1 item in it — Auto-checkout carries on, and it'll be bought too/.test(x.message)), JSON.stringify(run.steps));
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => e.level === 'warn' && /ACO ETB: Your Kmart \(dummy store\) bag already had 1 item/.test(e.message)), 'flagged in your activity');
   await closeStorePages('kmart');
 });
 
@@ -1978,6 +2043,54 @@ test("🤖 Auto-checkout at a Kmart that won't add it: no blind trip to checkout
   assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB').aco, true, 'never got to the final button: still armed');
   await closeStorePages('kmart');
   await browserApi('PUT', `/api/items/${it.id}`, { aco: false });
+});
+
+test('🔥 Auto-checkout at a store struggling under a hot drop (Kmart): "high demand — please try again" to its final button twice — pressed again a few seconds later each time (it says so), and the third press is taken: placed, once', async () => {
+  freshDay();
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO retry', aco: true, maxPrice: 120 }]);
+  const S = store.shop('kmart');
+  S.placeBusy = 2;
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await runFor('ACO retry') || {}).status === 'placed', { timeout: 60000, message: 'placed on the third press' });
+  assert.equal(S.placeTries, 3, 'three presses: turned away twice, then taken');
+  assert.equal(S.orders.length, 1, 'one order');
+  const run = await runFor('ACO retry');
+  assert.equal(run.total, 110);
+  assert.ok(run.steps.some((x) => x.status === 'placing' && /Pressing "Checkout securely" again \(2\) — Kmart \(dummy store\) hasn't taken the order yet/.test(x.message)), JSON.stringify(run.steps));
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /Auto-checkout pressed "Checkout securely" again \(3\)/.test(e.message)), 'each press in your activity');
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(S.placeTries, 3, 'never pressed again once placed');
+  await closeStorePages('kmart');
+});
+
+test("🔥 a slow store at the final button: its last \"please try again\" still up, word for word, while it works on the next press (6 s each) — not taken for its answer: never pressed again meanwhile — two presses, one order", async () => {
+  freshDay();
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO slow answer', aco: true, maxPrice: 120 }]);
+  const S = store.shop('kmart');
+  Object.assign(S, { placeBusy: 1, placeSlowMs: 6000, placeKeepsError: true });
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await runFor('ACO slow answer') || {}).status === 'placed', { timeout: 60000, message: 'placed on the second press' });
+  assert.equal(S.placeTries, 2, 'pressed twice: once turned away, then taken — never while it was still working on one');
+  assert.equal(S.orders.length, 1);
+  await closeStorePages('kmart');
+});
+
+test('🔥 the final button drawn greyed out (the store still working on the last boxes), turned on 8 s later: waited for (your account told), then pressed the moment it is — once', async () => {
+  freshDay();
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO greyed', aco: true, maxPrice: 120 }]);
+  const S = store.shop('kmart');
+  S.finalGreyedMs = 8000;
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await runFor('ACO greyed') || {}).status === 'placed', { timeout: 60000, message: 'placed once the button came on' });
+  assert.equal(S.placeTries, 1);
+  assert.equal(S.orders.length, 1);
+  const run = await runFor('ACO greyed');
+  assert.ok(run.steps.some((x) => /Waiting for "Checkout securely" to turn on/.test(x.message)), JSON.stringify(run.steps));
+  await closeStorePages('kmart');
 });
 
 test('🤖 Auto-checkout at Target: the "Often Bought Together" pop-up is closed with its ✕ (nothing else added), then the order is placed', async () => {
@@ -2086,8 +2199,9 @@ test('🤖 Auto-checkout at EB Games: Home Delivery (not the Click & Collect EB 
   await closeStorePages('ebgames');
 });
 
-test('🤖 Auto-checkout at EB Games signed in: it\'s all in already (your saved card included) — straight to "CONFIRM & PAY", placed', async () => {
+test('🤖 Auto-checkout at EB Games signed in: it\'s all in already (your saved card included, shown as EB shows it: "...2387 08/27") — straight to "CONFIRM & PAY", placed', async () => {
   store.state.signedIn.ebgames = true;
+  store.shop('ebgames').savedCard = '...2387 08/27';
   await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'ACO EB ETB', maxPrice: 120 }]);
   await testRun('ACO EB ETB');
   const run = await runOver('the EB Games run over');
@@ -2195,6 +2309,31 @@ test("🛍️ Auto-checkout of a Shop checkout link (Mattel Creations-style, two
     assert.equal(store.state.shopapp.accountViews, 0, "Shop's account page never read");
   } finally {
     store.state.shopapp.notice = false;
+    await putBack();
+    await closeShopPages();
+  }
+});
+
+test("🛍️ Shop under a hot drop's load: its Membership Agreement box drawn by the page over a hidden one (only its label answers) — ticked; \"Something went wrong — please try again\" to \"Pay now\" twice — pressed again each time: placed on the third", async () => {
+  const putBack = await roomForALink();
+  try {
+    shopSignedIn(true);
+    Object.assign(store.state.shopapp, { hiddenBox: true, busy: 2 });
+    const link = store.cartLink([[PORSCHE, 1]]);
+    await useItems([{ url: link, name: 'ACO busy Shop', maxPrice: 90, aco: true }]);
+    await acoListen();
+    await dropLink(link);
+    await waitFor(() => store.state.shopapp.orders.length === 1, { timeout: 60000, message: 'the order placed at the dummy Shop' });
+    const A = store.state.shopapp;
+    assert.equal(A.orders[0].agreed, true, 'the membership agreement ticked (its hidden box, through its label)');
+    assert.equal(A.orders[0].marketing, false, 'the newsletter box left alone');
+    assert.equal(A.payTries, 3, 'pressed three times: twice "try again", then taken');
+    assert.deepEqual(A.refused, ['busy', 'busy']);
+    await waitFor(async () => (await runFor('ACO busy Shop') || {}).status === 'placed', { timeout: 20000, message: 'the run says placed' });
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal(A.orders.length, 1, 'one order');
+  } finally {
+    Object.assign(store.state.shopapp, { hiddenBox: false, busy: 0 });
     await putBack();
     await closeShopPages();
   }
@@ -2548,7 +2687,7 @@ test('🤖 ⚡ Buy pressed in Discord while an Auto-checkout run is going: anoth
   await closeStorePages('target');
 });
 
-test('🤖 ⚡ Buy pressed on the dashboard while Auto-checkout is checking out at the same store: the ⚡ Buy waits on its page (it says so) — nothing of it in the order being placed — then reloads and goes to checkout, its own item alone in the bag', async () => {
+test('🤖 ⚡ Buy pressed on the dashboard while Auto-checkout is checking out at the same store: the ⚡ Buy waits on its page (it says so) — nothing of it in the order being placed — then reloads and goes to checkout, its own item alone in the bag, and (Auto-checkout set to place) places its own order', async () => {
   freshDay();
   await useItems([
     { url: store.productUrl('kmart', '43818587'), name: 'ACO ETB', aco: true, maxPrice: 120 },
@@ -2564,14 +2703,50 @@ test('🤖 ⚡ Buy pressed on the dashboard while Auto-checkout is checking out 
   assert.match(await panel(shop).textContent(), /Your checkout of ACO ETB at Kmart \(dummy store\) goes first — Kmart \(dummy store\) keeps one bag for this browser/);
   await waitFor(() => store.shop('kmart').orders.length === 1, { timeout: 45000, message: "the Auto-checkout run's order" });
   assert.deepEqual(store.shop('kmart').orders[0].cart.map((c) => [c.sku, c.qty]), [['43818587', 1]], "the ⚡ Buy's item isn't in it");
-  // Its turn: the page afresh, then on to checkout — stopping at the final button for you, its item alone in the bag.
+  // Its turn: the page afresh, then on to checkout — and, Auto-checkout set to "Place the order for me", the
+  // order placed by itself (within your limits), its item alone in it.
   await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 30000 });
-  await waitReady(shop, 'Checkout securely');
-  assert.deepEqual(store.shop('kmart').cart.map((c) => [c.sku, c.qty]), [['43818556', 1]]);
+  await waitFor(() => store.shop('kmart').orders.length === 2, { timeout: 45000, message: "the ⚡ Buy's own order" });
+  assert.deepEqual(store.shop('kmart').orders[1].cart.map((c) => [c.sku, c.qty]), [['43818556', 1]], 'its own item alone');
   await waitFor(async () => (await runFor('ACO ETB')).status === 'placed', { message: 'the Auto-checkout run placed' });
+  await waitFor(async () => (await runFor('Knock Out by hand') || {}).status === 'placed', { message: "the ⚡ Buy's run placed" });
+  assert.equal((await runFor('Knock Out by hand')).trigger, 'buy');
   store.shop('kmart').addDelayMs = 0;
   await shop.close();
   await dash.close();
+  await closeStorePages('kmart');
+});
+
+test('🤖 the store panel\'s "Add to bag → Checkout" with Auto-checkout set to "Place the order for me" — a product not on your watchlist: placed by itself within your limit an order; over that limit, left at the final button for you', async () => {
+  freshDay();
+  await useItems([]);
+  await sw.evaluate(async () => { const all = await chrome.storage.local.get(null); await chrome.storage.local.remove(Object.keys(all).filter((k) => k.startsWith('state:'))); });
+  const kmart = await ctx.newPage();
+  await kmart.goto(store.productUrl('kmart', '43818587'));
+  await panel(kmart).waitFor();
+  await kmart.waitForFunction(() => /\(not on your watchlist\)/.test(document.querySelector('#mugibot-qc').textContent));
+  await panel(kmart).getByRole('button', { name: 'Add to bag → Checkout' }).click();
+  await waitFor(() => store.shop('kmart').orders.length === 1, { timeout: 45000, message: 'placed by itself' });
+  assert.deepEqual(store.shop('kmart').orders[0].cart.map((c) => [c.sku, c.qty]), [['43818587', 1]]);
+  await waitFor(async () => (await lastRun()).status === 'placed', { message: 'its run placed' });
+  const run = await lastRun();
+  assert.equal(run.trigger, 'buy');
+  assert.equal(run.total, 110);
+  await kmart.close();
+  // Over your limit an order: nothing placed — filled in, the final button left to you.
+  await browserApi('PUT', '/api/aco', { maxOrder: 100 });
+  try {
+    const again = await ctx.newPage();
+    await again.goto(store.productUrl('kmart', '43818587'));
+    await panel(again).waitFor();
+    await panel(again).getByRole('button', { name: 'Add to bag → Checkout' }).click();
+    await again.waitForURL(/\/kmart\/checkout$/, { timeout: 20000 });
+    await again.waitForFunction(() => /over your limit of \$100\.00/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 40000 });
+    assert.equal(store.shop('kmart').orders.length, 1, 'not placed');
+    await again.close();
+  } finally {
+    await browserApi('PUT', '/api/aco', { maxOrder: 200 });
+  }
   await closeStorePages('kmart');
 });
 
@@ -2771,7 +2946,7 @@ test("🧹 a store where a checkout of yours is going: its bag is left alone (it
   await useItems([]);
 });
 
-test('🧹 → 🤖 what it\'s for: Auto-checkout stops at a bag with something else in it ("only buys the one item"); Clear cart empties it from the dashboard, and the next drop is bought — its own item alone in the order', async (t) => {
+test('🧹 → 🤖 what it\'s for: a drop with something else in the bag is bought all the same, that thing too (it says so); Clear cart empties the bag from the dashboard first, and the next drop is bought — its own item alone in the order', async (t) => {
   t.after(closeDashboards);
   freshDay();
   await browserApi('PUT', '/api/aco', { enabled: true, mode: 'place' });
@@ -2779,9 +2954,14 @@ test('🧹 → 🤖 what it\'s for: Auto-checkout stops at a bag with something 
   fillBag('kmart', [['43818556', 1]]);
   await acoListen();
   await drop('kmart', '43818587');
-  await waitFor(async () => (await runFor('ACO after Clear cart') || {}).reason === 'wrong_item', { timeout: 45000, message: 'stopped: the bag had something else in it' });
-  assert.equal(store.shop('kmart').orders.length, 0);
+  await waitFor(async () => (await runFor('ACO after Clear cart') || {}).status === 'placed', { timeout: 45000, message: 'bought, with the other thing in the bag' });
+  assert.deepEqual(store.shop('kmart').orders[0].cart.map((c) => c.sku).sort(), ['43818556', '43818587']);
+  assert.ok((await runFor('ACO after Clear cart')).steps.some((x) => /already had 1 item in it/.test(x.message)), 'said on the run');
   await closeStorePages('kmart');
+  // Next time: the bag emptied first (Clear cart), and armed again.
+  fillBag('kmart', [['43818556', 1]]);
+  const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO after Clear cart');
+  await browserApi('PUT', `/api/items/${it.id}`, { aco: true });
   const dash = await openBags();
   const since = await pressClear(dash, 'kmart');
   const s = await bagDone('kmart', since);
@@ -2789,13 +2969,13 @@ test('🧹 → 🤖 what it\'s for: Auto-checkout stops at a bag with something 
   assert.equal(s.removed, 1);
   assert.deepEqual(store.shop('kmart').cart, []);
   await dash.close();
-  // It drops again (still armed: nothing was bought): bought, its own item alone.
+  // It drops again: bought, its own item alone.
   assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO after Clear cart').aco, true);
   await acoListen();
   await drop('kmart', '43818587');
-  await waitFor(() => store.shop('kmart').orders.length === 1, { timeout: 45000, message: 'the order placed' });
-  assert.deepEqual(store.shop('kmart').orders[0].cart.map((c) => [c.sku, c.qty]), [['43818587', 1]]);
-  await waitFor(async () => (await runFor('ACO after Clear cart')).status === 'placed', { message: 'the run placed' });
+  await waitFor(() => store.shop('kmart').orders.length === 2, { timeout: 45000, message: 'the order placed' });
+  assert.deepEqual(store.shop('kmart').orders[1].cart.map((c) => [c.sku, c.qty]), [['43818587', 1]]);
+  await waitFor(async () => (await runFor('ACO after Clear cart')).status === 'placed' && (await acoRuns()).filter((r) => r.name === 'ACO after Clear cart').length === 2, { message: 'the run placed' });
   await closeStorePages('kmart');
   await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
   await useItems([]);
@@ -2873,13 +3053,26 @@ test('🧹 an EB Games bag already empty, its cart a pop-up over its home page (
   t.after(closeDashboards);
   await closeStorePages('ebgames');
   const S = store.shop('ebgames');
-  S.cart = [];
-  S.cartPopup = true;
+  // (As a pop-up — and drawn by the page's code 1.5 s after it loads, in plain boxes with no pop-up markup.)
+  for (const popup of [true, 'late']) {
+    S.cart = [];
+    S.cartPopup = popup;
+    const dash = await openBags();
+    const since = await pressClear(dash, 'ebgames');
+    const s = await bagDone('ebgames', since);
+    assert.equal(s.status, 'empty', `${popup}: ${JSON.stringify(s)}`);
+    await dash.waitForFunction(() => /already empty/i.test(document.querySelector('#bags li[data-store="demo-ebgames"]')?.textContent || ''), null, { timeout: 10000 });
+    await dash.close();
+    await waitFor(() => !bagTabs('ebgames').length, { message: 'its tab closed' });
+  }
+  // With things in it: emptied ("cleared"), its empty pop-up afterwards read as done.
+  S.cartPopup = 'late';
+  fillBag('ebgames', [['312345', 1]]);
   const dash = await openBags();
   const since = await pressClear(dash, 'ebgames');
   const s = await bagDone('ebgames', since);
-  assert.equal(s.status, 'empty', JSON.stringify(s));
-  await dash.waitForFunction(() => /already empty/i.test(document.querySelector('#bags li[data-store="demo-ebgames"]')?.textContent || ''), null, { timeout: 10000 });
+  assert.equal(s.status, 'cleared', JSON.stringify(s));
+  assert.deepEqual(S.cart, []);
   await dash.close();
 });
 

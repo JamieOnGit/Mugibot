@@ -230,6 +230,58 @@ test('an admin switches a store\'s server checks off: no server requests, browse
   assert.ok(env.app.repo.listAudit().some((a) => a.action === 'retailer'));
 });
 
+test("BIG W (its bot protection resets every server's connection): the server never asks it, whatever an admin saved; the \"Error\" its old tries left is forgotten; members' browsers read each product by opening its page — one BIG W page a round, each at most every 15 minutes — and only an extension that does (1.27.0) is asked", async () => {
+  const real = env.app.retailers.get('bigw');
+  assert.equal(real.monitor.server, 'never');
+  assert.equal(real.monitor.render, true);
+  env.app.repo.setSetting('retailer:bigw', { serverChecks: true });
+  assert.equal(env.app.retailers.settings(real).serverChecks, false, "an admin's old switch doesn't put the server back on it");
+  env.app.repo.setSetting('retailer:bigw', {});
+
+  // What the server's tries said before ("Error" on every BIG W item): forgotten when the monitor starts.
+  const c = await member('bigwfan');
+  const real1 = (await c.post('/api/items', { url: 'https://www.bigw.com.au/product/pokemon-tcg-test/p/6099001', name: 'Real BIG W' })).body;
+  env.app.db.run("UPDATE items SET status = 'error', error = 'HTTP/2 stream error', status_source = 'server' WHERE id = :id", { id: real1.id });
+  const kept = (await c.post('/api/items', { url: 'https://www.bigw.com.au/product/pokemon-tcg-kept/p/6099002', name: 'Seen by a browser' })).body;
+  env.app.db.run("UPDATE items SET status = 'blocked', error = 'refused your browser', status_source = 'browser' WHERE id = :id", { id: kept.id });
+  env.app.monitor.forgetServerFailures();
+  const row = (id) => env.app.db.get('SELECT status, error FROM items WHERE id = :id', { id });
+  assert.deepEqual(row(real1.id), { status: 'pending', error: '' });
+  assert.equal(row(kept.id).status, 'blocked', "a browser's own reading stays");
+  for (const it of [real1, kept]) await c.del(`/api/items/${it.id}`);
+
+  // The dummy BIG W, as the real one: its pages opened by members' browsers.
+  env.app.repo.setSetting('retailer:demo-bigw', { serverChecks: false });
+  try {
+    const a = (await c.post('/api/items', { url: store.productUrl('bigw', '6012345'), name: 'BIG W UPC' })).body;
+    const b = (await c.post('/api/items', { url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle' })).body;
+    const before = hits('/bigw/product/');
+    await advance();
+    assert.equal(hits('/bigw/product/'), before, 'the server left it alone');
+    const old = await Device.pair(env.url, c, 'Old copy');
+    await old.call('GET', '/api/ext/me?v=1.26.0');
+    assert.ok(!(await old.call('GET', '/api/ext/checks')).body.checks.some((x) => x.store === 'demo-bigw'), 'an older extension would ask for the page in the background: not asked');
+    const device = await Device.pair(env.url, c, 'New copy');
+    await device.call('GET', '/api/ext/me?v=1.27.0');
+    const round = async () => (await device.call('GET', '/api/ext/checks')).body.checks.filter((x) => x.store === 'demo-bigw');
+    const first = await round();
+    assert.equal(first.length, 1, 'one BIG W page a round');
+    assert.equal(first[0].render, true, 'opened in the extension\'s window, as you would');
+    const second = await round();
+    assert.equal(second.length, 1);
+    assert.deepEqual([first[0].id, second[0].id].sort(), [a.id, b.id].sort());
+    assert.equal((await round()).length, 0, 'each at most every 15 minutes');
+    clock.offset += 901 * 1000;
+    assert.equal((await round()).length, 1, 'due again after 15 minutes');
+    // Seen by a live search just now: nothing more to open — its turn pushed back.
+    env.app.db.run("UPDATE items SET status_source = 'sweep', checked_at = :t, browser_next_at = 0 WHERE user_id = :u", { t: env.app.repo.now(), u: c.user.id });
+    assert.equal((await round()).length, 0, 'a fresh live-search reading: no page opened');
+  } finally {
+    env.app.repo.setSetting('retailer:demo-bigw', {});
+    for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  }
+});
+
 test('announced SKUs (an admin\'s): restocks are posted in the Discord channel once', async () => {
   const boss = new Client(env.url);
   await boss.post('/api/auth/login', { username: 'boss', password: 'correct horse battery staple' });

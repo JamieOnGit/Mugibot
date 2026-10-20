@@ -452,3 +452,31 @@ test("another website's answer for a drop watch is read the same from the server
   const bot = siteAnswer({ way: 'page', status: 200, type: 'text/html', text: '<html><head><title>Just a moment...</title></head><body>Checking your browser before accessing. Verify you are human.</body></html>' });
   assert.equal(bot.refused, true, 'a bot check instead of the page');
 });
+
+test("Auto-checkout's read of a store's answer to its final button (extension/checks.js): a decline is never pressed through, a box it says is wrong is filled in again, anything else is the store struggling — pressed again, a little later each time, for up to 30 minutes; a card the store has for you, as EB Games shows it", () => {
+  const ctx = {};
+  vm.runInNewContext(`${fs.readFileSync(new URL('../extension/checks.js', import.meta.url), 'utf8')}\nthis.MGBChecks = MGBChecks;`, ctx);
+  const C = ctx.MGBChecks;
+  const kinds = {
+    'Your card was declined. Please try another card.': 'declined',
+    'Payment failed. Please use a different payment method.': 'declined',
+    'Insufficient funds': 'declined',
+    'Please enter a valid postcode': 'field',
+    'Phone number is invalid': 'field',
+    'You must accept membership agreement before checking out': 'field',
+    '"Card number" needs attention': 'field',
+    "We're experiencing high demand right now. Something went wrong — please try again.": 'busy',
+    'Something went wrong on our end. Please try again.': 'busy',
+    'Too many requests': 'busy',
+    'Service unavailable': 'busy',
+    '': '',
+  };
+  for (const [text, kind] of Object.entries(kinds)) assert.equal(C.errorKind(text), kind, text);
+  assert.deepEqual([0, 1, 2, 3, 6, 50].map(C.retryWait), [3000, 5000, 8000, 10000, 20000, 20000], '3 s, 5 s, 8 s… then every 20 s');
+  assert.equal(C.RETRY_MS, 30 * 60 * 1000);
+  assert.equal(C.NO_ANSWER_MS, 20000);
+  const doc = (text) => ({ querySelector: () => ({ innerText: text }), body: { innerText: text } });
+  for (const shown of ['...2387 08/27', 'Visa ending in 4242', '•••• 4242', '**** 4242', 'Mastercard …2387']) assert.equal(C.savedCardShown(doc(`Payment ${shown}`), null, false), true, shown);
+  assert.equal(C.savedCardShown(doc('Order total $109.95 · 2 items · Pickup 2387 Main Rd'), null, false), false, 'no card shown');
+  assert.equal(C.savedCardShown(doc('...2387 08/27'), null, true), false, 'card boxes on the page: they need filling, whatever else shows');
+});

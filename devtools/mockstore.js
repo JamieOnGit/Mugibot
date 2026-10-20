@@ -135,7 +135,8 @@ export function defaultShops() {
       // hidden widget left aria-busy, "Due to high demand" and a price like $502.99 (nothing to wait for).
       decoys: false,
       // cartPopup: its cart, empty, is a pop-up over its home page (/cart goes there), as EB Games' is:
-      // "Oh no! currently your cart is empty."
+      // "Oh no! currently your cart is empty." ('late': drawn by the page's code 1.5 s after it loads, in
+      // plain boxes — no dialog or modal markup — small, under the header.)
       cartPopup: false,
       // Search pages that only fill in their products once open (like Pokémon Center's and Premium Bandai's).
       clientSearch: id === 'pokemoncenter' || id === 'pbandai',
@@ -145,6 +146,16 @@ export function defaultShops() {
       servedAt: 0, addedAt: 0,
       // Placing an order: the card is declined; or the bank's "verify it's you" check comes up first.
       decline: false, threeDS: false,
+      // A hot drop at the final button: the store answers "high demand — please try again" this many times
+      // (placeBusy; placeTries counts every press that reached it), each answer placeSlowMs late (its
+      // button left as it is meanwhile, like a store that shows nothing while it works). Kmart's final
+      // button drawn greyed out, turned on finalGreyedMs after the payment step opens.
+      // (placeKeepsError: its last error left up while it works on the next press, word for word.)
+      placeBusy: 0, placeTries: 0, placeSlowMs: 0, finalGreyedMs: 0, placeKeepsError: false,
+      // denied: its bot protection (BIG W's Akamai) answers every page "Access Denied" (deniedServed counts them).
+      denied: false, deniedServed: 0,
+      // savedCard (EB Games signed in): how it shows the card it has for you — a member's showed "...2387 08/27".
+      savedCard: '',
       // addNeedsLoad: the cart turns an add away (HTTP 403) until the product page has finished
       // loading and its own start-up is done, this many ms after (like Kmart for a signed-out visitor).
       addNeedsLoad: 0,
@@ -199,6 +210,9 @@ export function defaultShopApp() {
     // Its "By selecting, you indicate your acceptance of the Membership Agreement" box (required), and
     // the notice about it at the top (shown from the start, as in a member's screenshot, and staying up).
     agreement: true, agreeNotice: true,
+    // hiddenBox: that box drawn by the page over a hidden one (the real box display:none, its label beside it);
+    // busy: "Pay now" answered "Something went wrong — please try again" this many times first (payTries counts).
+    hiddenBox: false, busy: 0, payTries: 0,
     // "This Product is not available for purchase": the store won't sell it now (unavailable: "Pay now"
     // refused, as before a drop's live) — or only the notice, shown before anything's pressed while
     // "Pay now" goes through (notice: as a member's real checkout showed it, with the membership one).
@@ -843,6 +857,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
 
   // After the final button: the order confirmed — or the card declined, or the bank's "verify it's you" check (in a frame).
   const placeJs = (shop, errId) => `async (body) => {
+    ${state.shops[shop] && state.shops[shop].placeKeepsError ? '' : `document.getElementById('${errId}').textContent = '';`}
     const r = await fetch('/${shop}/checkout/place', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json().catch(() => ({}));
     if (d.error) { const e = document.getElementById('${errId}'); e.textContent = d.error; e.setAttribute('role', 'alert'); return; }
@@ -887,7 +902,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <label><input type="radio" name="pay" value="afterpay"> afterpay</label>
         <label><input type="radio" name="pay" value="zip"> zip</label>
         ${cardFields}
-        <p><button type="button" id="k-place">Checkout securely</button></p></section>
+        <p><button type="button" id="k-place"${state.shops.kmart.finalGreyedMs ? ' disabled' : ''}>Checkout securely</button></p></section>
       <p id="k-error" class="err"></p>
       <script>
         const data = (sec) => Object.fromEntries([...sec.querySelectorAll('input,select')].map((i) => [i.name, i.type === 'checkbox' || i.type === 'radio' ? (i.checked ? (i.value || true) : undefined) : i.value]).filter(([, x]) => x !== undefined));
@@ -903,7 +918,10 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         const $ = (id) => document.getElementById(id);
         $('k-to-details').addEventListener('click', () => step('summary', $('k-summary'), $('k-details')));
         $('k-to-delivery').addEventListener('click', () => step('details', $('k-details'), $('k-delivery')));
-        $('k-to-payment').addEventListener('click', () => step('delivery', $('k-delivery'), $('k-payment')));
+        $('k-to-payment').addEventListener('click', () => {
+          step('delivery', $('k-delivery'), $('k-payment'));
+          ${state.shops.kmart.finalGreyedMs ? `setTimeout(() => { $('k-place').disabled = false; }, ${Number(state.shops.kmart.finalGreyedMs)});` : ''}
+        });
         const place = ${placeJs('kmart', 'k-error')};
         $('k-place').addEventListener('click', () => place(data($('k-payment'))));
         for (const el of document.querySelectorAll('input[name=cardNumber]')) el.addEventListener('input', () => { el.value = el.value.replace(/\\D/g, '').slice(0, 16).replace(/(\\d{4})(?=\\d)/g, '$1 '); });
@@ -1018,7 +1036,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         </div></section>
       <section id="eb-pay" ${signed ? '' : 'hidden'}><h2>How would you like to pay?</h2>
         <div role="tablist"><button type="button" role="tab" aria-selected="true" class="pay-tab is-active">Pay Now</button> <button type="button" role="tab" aria-selected="false" class="pay-tab">Pay Later</button></div>
-        ${signed ? '<p class="saved-card">Visa ending in 4242 <small>Expires 07/29</small></p>' : `<div class="pay-options">
+        ${signed ? (state.shops.ebgames.savedCard ? `<div class="saved-card"><span class="brand" aria-hidden="true">💳</span> <span>${esc(state.shops.ebgames.savedCard)}</span></div>` : '<p class="saved-card">Visa ending in 4242 <small>Expires 07/29</small></p>') : `<div class="pay-options">
           <button type="button" class="pay-option" data-m="card">Credit / Debit card</button>
           <button type="button" class="pay-option" data-m="paypal">PayPal</button>
           <button type="button" class="pay-option" data-m="applepay">Apple Pay</button></div>
@@ -2050,6 +2068,8 @@ ${body}
     const total = Math.round((subtotal + A.shipping) * 100) / 100;
     if (m[3] === 'pay' && req.method === 'POST') {
       return parseBody(req).then((b) => {
+        A.payTries += 1;
+        if (A.agreement && b.agreed && A.payTries <= A.busy) { A.refused.push('busy'); return json(503, { error: 'Something went wrong on our end. Please try again.' }); }
         const why = A.unavailable ? 'This Product is not available for purchase' : A.agreement && !b.agreed ? 'You must accept membership agreement before checking out' : '';
         if (why) { A.refused.push(why); return json(422, { error: why }); }
         A.orders.push({ token: m[2], lines: lines.map((l) => [l.id, l.qty]), total, agreed: !!b.agreed, marketing: !!b.marketing, at: Date.now() });
@@ -2073,7 +2093,8 @@ ${A.agreement ? banner('You must accept membership agreement before checking out
 <section><h3>Payment</h3><p>Commonwealth Bank •••• 2387</p></section>
 <section class="lines">${priced.map((l) => `<p class="line">${esc(l.v.name)}${l.qty > 1 ? ` × ${l.qty}` : ''} <span>${shopMoney(l.v.price * l.qty)}</span></p>`).join('')}
   <p>Subtotal <span>${shopMoney(subtotal)}</span></p><p>Shipping <span>${shopMoney(A.shipping)}</span></p><p class="total"><b>Total</b> AUD <b>${shopMoney(total)}</b></p></section>
-${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" name="membership" required> By selecting, you indicate your acceptance of the <a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></label>' : ''}
+${A.agreement && A.hiddenBox ? '<div class="agree"><input type="checkbox" id="membership" name="membership" required style="display:none"><label for="membership"><span class="tick" aria-hidden="true">☐</span> By selecting, you indicate your acceptance of the <a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></label></div>'
+    : A.agreement ? '<label class="agree"><input type="checkbox" id="membership" name="membership" required> By selecting, you indicate your acceptance of the <a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></label>' : ''}
 <label><input type="checkbox" id="marketing" name="marketing"> Email me with news and offers</label>
 <p><button type="button" id="pay">Pay now</button></p>
 <p><a href="${esc(back)}" id="guest">Check out as guest</a></p>
@@ -2094,7 +2115,8 @@ ${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" nam
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const p = u.pathname;
-    state.requests.push({ method: req.method, path: p, ua: req.headers['user-agent'] || '' });
+    // (mode: how the browser asked — 'navigate' for a page opened, 'cors' / 'no-cors' / 'same-origin' for a request from code.)
+    state.requests.push({ method: req.method, path: p, ua: req.headers['user-agent'] || '', mode: req.headers['sec-fetch-mode'] || '' });
     if (state.requests.length > 4000) state.requests.splice(0, 2000);
     const html = (status, body) => {
       const sm = p.match(SHOP_RE);
@@ -2173,6 +2195,11 @@ ${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" nam
     if (state.tooMany && state.tooMany[shop] && !sub.startsWith('/img/')) {
       res.writeHead(429, { 'content-type': 'text/plain', 'retry-after': String(state.tooMany[shop]) });
       return res.end('Too many requests');
+    }
+    // Its bot protection turning this browser away (denied — BIG W's Akamai): "Access Denied" for every page.
+    if (S.denied && !sub.startsWith('/img/')) {
+      S.deniedServed += 1;
+      return html(403, `<!DOCTYPE html><html><head><title>Access Denied</title></head><body><h1>Access Denied</h1>You don't have permission to access "http&#58;&#47;&#47;www&#46;${shop}&#46;com&#46;au&#47;" on this server.<p>Reference&#32;&#35;18&#46;5e0d0217&#46;1760943212&#46;3c1f9a2</p><p>https&#58;&#47;&#47;errors&#46;edgesuite&#46;net&#47;18&#46;5e0d0217&#46;1760943212&#46;3c1f9a2</p></body></html>`);
     }
     // Its virtual queue, when it's on: every page (its search JSON too) for a visitor not let in yet.
     if (S.queue.on && !sub.startsWith('/img/') && inQueue(shop, S, req, res, u, html, redirect)) return undefined;
@@ -2295,7 +2322,9 @@ ${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" nam
     }
 
     if (sub === '/' || sub === '') {
-      const popup = S.cartPopup && u.searchParams.get('cart') === 'open' && !S.cart.length
+      const popup = S.cartPopup === 'late' && u.searchParams.get('cart') === 'open' && !S.cart.length
+        ? `<div id="mini-holder"></div><script>setTimeout(() => { document.getElementById('mini-holder').innerHTML = '<div class="mini"><div class="msg"><span>Oh no!</span> currently your cart is empty.</div><a href="/${shop}/">Continue shopping</a></div>'; }, 1500);</script>`
+        : S.cartPopup && u.searchParams.get('cart') === 'open' && !S.cart.length
         ? '<div class="modal cart-popup" role="dialog" aria-modal="true" style="position:fixed;top:60px;right:40px;width:380px;min-height:220px;background:#fff;border:1px solid #ccc;padding:30px;z-index:5"><button type="button" aria-label="Close" onclick="this.parentNode.remove()">×</button><div><b>Oh no!</b> currently your cart is empty.</div></div>' : '';
       return html(200, page(shop, SHOPS[shop].name, `<h1>${esc(SHOPS[shop].name)}</h1>${S.products.filter((x) => x.listed).map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}">${esc(x.name)}</a><div>$${x.price.toFixed(2)} · ${x.status.replace(/_/g, ' ')}</div></div>`).join('')}${popup}`));
     }
@@ -2615,6 +2644,9 @@ ${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" nam
     }
     if (sub === '/checkout/place' && req.method === 'POST') {
       const b = await parseBody(req);
+      S.placeTries += 1;
+      if (S.placeSlowMs) await new Promise((r) => setTimeout(r, S.placeSlowMs));
+      if (S.placeTries <= S.placeBusy) return json(503, { ok: false, error: "We're experiencing high demand right now. Something went wrong — please try again." });
       if (S.decline) { S.declined = (S.declined || 0) + 1; return json(402, { ok: false, error: 'Your card was declined. Please try another card.' }); }
       if (S.threeDS) { S.challenged = (S.challenged || 0) + 1; return json(200, { ok: false, challenge: `${cardOrigin}/acs/challenge` }); }
       S.orders.push({ cart: S.cart.slice(), data: { ...S.data }, form: b, ts: Date.now() });

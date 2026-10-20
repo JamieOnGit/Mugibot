@@ -39,6 +39,11 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // twice nor left for the bag early, and no second tab for a run; a cart in a pop-up (EB Games') read as the bag.
 // 1.26.0: drop watches at websites refusing the server — read from your browser (an admin's for one for
 // everyone) once you've allowed the extension on that website (its menu: Allow); it says which (sites=…).
+// 1.27.0: "Place the order for me" for checkouts you start (⚡ Buy, the panel's) as for armed drops; the final
+// button pressed the moment it's filled in, and again while a struggling store doesn't answer (up to 30 minutes,
+// never past a decline or a check); agreement boxes ticked (Shop's Membership Agreement); other things in the
+// bag flagged, not stopped for; EB Games' empty-cart pop-up; BIG W read by opening its page, left alone for
+// 30 minutes when it says "Access Denied" (monitor RENDER_EXTENSION_VERSION).
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.

@@ -27,12 +27,18 @@ export default {
   // Live sweeps: BIG W refuses servers (its search API too), so an admin's browser (the
   // extension) reads its search page. The page builds its product list once it's open, so the
   // extension opens it (in a minimised window of its own), waits for the products, then reads them.
-  // At most one search every 10 s: about what a person refreshing it does (its page takes ~5 s to build).
-  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 10 },
+  // At most one search every 20 s (Oct 2026: every 10 s — and with watchlist checks fetched in the background
+  // besides, BIG W's bot protection took a member's browser for a bot and turned it away, "Access Denied", on
+  // their own visits too). The page takes ~5 s to build.
+  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20 },
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
   account: { signIn: '' },
-  monitor: { server: true, browser: true },
+  // Its product pages: BIG W's bot protection (Akamai) resets every server's connection, so the server never
+  // asks (server: 'never'). Members' browsers do, each product every 15 minutes at most (browserSeconds) — the
+  // live searches see drops sooner — by opening its page in the extension's window the way you'd open it
+  // (render): background requests are what got a member's browser turned away.
+  monitor: { server: 'never', browser: true, render: true, browserSeconds: 900 },
   flow: {
     product: {
       add: ADD_WORDS,

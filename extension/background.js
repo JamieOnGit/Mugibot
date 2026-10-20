@@ -51,6 +51,8 @@ const VERSION = chrome.runtime.getManifest().version;
 const FROM_STORE = !!chrome.runtime.getManifest().update_url;
 const SOURCE = FROM_STORE ? 'store' : 'download';
 const PASS_TTL = 15 * 60 * 1000;
+// The longest an Auto-checkout run presses its final button again while the store's struggling (checks.js RETRY_MS).
+const RETRY_MS = 30 * 60 * 1000;
 const CHECK_ALARM = 'mgb-checks';
 
 async function getAuth() {
@@ -610,7 +612,52 @@ function hasSku(url, sku) {
   return false;
 }
 
+/**
+ * A store whose bot protection takes background requests for a bot (BIG W's Akamai: it then turns the whole
+ * browser away — "Access Denied" on your own visits too): its product page opened in the extension's window
+ * instead, the way you'd open it, and read once it's drawn. One at a time, gently (the server paces them).
+ */
+async function renderCheck(c, gate) {
+  let tab;
+  try {
+    tab = await sweepTab(`check:${c.store}`);
+    await openIn(tab.id, c.url, gate || null);
+  } catch (e) {
+    if (e instanceof GateHeld) return { id: c.id, gate: e.gate };
+    return { id: c.id, status: 'error', error: "Your browser couldn't open the store's page" };
+  }
+  let page = null;
+  // (The buy box is drawn by the page's own code: a few seconds for it.)
+  for (const until = Date.now() + 10000; Date.now() < until;) {
+    page = (await inPage(tab.id, readSweepPage, [c.productPath ? [c.productPath.re, c.productPath.f || ''] : null]).catch(() => null)) || page;
+    if (page && (page.denied || page.challenge)) break;
+    if (page && /add to (cart|bag|basket|trolley)|pre-?order|sold out|out of stock|unavailable|notify me/i.test(page.html.slice(0, 2000000))) break;
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  // (Done with it: the tab's left on a blank page, so the store's page isn't kept running.)
+  chrome.tabs.update(tab.id, { url: 'about:blank' }).catch(() => null);
+  if (!page) return { id: c.id, status: 'error', error: "Your browser couldn't read the store's page" };
+  if (page.denied) {
+    await markDenied(c.store);
+    return { id: c.id, status: 'blocked', error: 'The store said "Access Denied" to your browser (its bot protection) — Mugibot asks it for nothing more from here for 30 minutes' };
+  }
+  if (page.challenge) return { id: c.id, status: 'blocked', error: 'The store showed a bot check — backing off' };
+  const html = page.html.slice(0, 3_000_000);
+  const finalUrl = page.url || c.url;
+  if (c.kind === 'search') {
+    // (A SKU whose page isn't known yet: its link, in the search page the store drew.)
+    const productPath = revive(c.productPath);
+    if (productPath && productPath.test(new URL(finalUrl).pathname) && hasSku(finalUrl, c.sku)) return { id: c.id, status: 'not_listed', foundUrl: finalUrl };
+    const hit = extractProductLinks(html, finalUrl, productPath || /\/(product|products|p)\//i).find((l) => hasSku(l.url, c.sku));
+    return hit ? { id: c.id, status: 'not_listed', foundUrl: hit.url } : { id: c.id, status: 'not_listed' };
+  }
+  const ex = extractProduct(html, { url: finalUrl, sku: c.sku });
+  if (ex.blocked) return { id: c.id, status: 'blocked', error: 'The store showed a bot check — backing off' };
+  return { id: c.id, status: ex.status, price: ex.price, title: ex.title, image: ex.image && /^https:\/\//.test(ex.image) ? ex.image : null };
+}
+
 async function checkOne(c, gate) {
+  if (c.render) return renderCheck(c, gate);
   let res;
   try {
     res = await fetch(c.url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
@@ -625,7 +672,12 @@ async function checkOne(c, gate) {
     if (seen && seen.kind === 'queue') return { id: c.id, gate: seen };
   }
   if (res.status === 404 || res.status === 410) return { id: c.id, status: c.kind === 'search' ? 'not_listed' : 'not_found' };
-  if (res.status === 403 || res.status === 429 || res.status === 503) return { id: c.id, status: 'blocked', error: `The store refused your browser's check (HTTP ${res.status}) — backing off` };
+  if (res.status === 403 || res.status === 429 || res.status === 503) {
+    // (Its bot protection's "Access Denied": nothing more asked of that store from here for half an hour.)
+    const page = await res.clone().text().catch(() => '');
+    if (/errors\.edgesuite\.net|you don.?t have permission to access|sorry, you have been blocked/i.test(page.slice(0, 5000))) await markDenied(c.store);
+    return { id: c.id, status: 'blocked', error: `The store refused your browser's check (HTTP ${res.status}) — backing off` };
+  }
   if (!res.ok) return { id: c.id, status: 'error', error: `HTTP ${res.status}` };
   const html = (await res.text()).slice(0, 3_000_000);
   const finalUrl = res.url || c.url;
@@ -701,8 +753,10 @@ async function runChecks() {
     const lastByHost = new Map();
     const flows = (await getState()).flows || [];
     const held = await heldStores();
+    const denied = await deniedStores();
     for (const c of due.body.checks || []) {
       if (held.has(c.store)) continue; // its queue is up here (the server may not know yet)
+      if (denied.has(c.store)) continue; // it's turning this browser away just now: left alone
       const host = new URL(c.url).host;
       const gap = Date.now() - (lastByHost.get(host) || 0);
       if (gap < 4000) await new Promise((r) => setTimeout(r, 4000 - gap)); // gentle on each store
@@ -740,6 +794,23 @@ async function runChecks() {
 //   inPage (EB Games, Zing): the store's own search JSON is asked for from inside a page of the
 //     store, the way that page does, so it passes the store's bot check like any visitor.
 const SWEEP_WINDOW = 'sweepWindow';
+
+// --- a store turning this browser away (Akamai's "Access Denied" at BIG W) ------------------------------
+// Its bot protection has taken this browser for a bot. Asking it for more only makes that last: so this
+// browser asks that store for nothing more — no searches, no checks — for half an hour. (Your own visits,
+// and a checkout you start, still go: only Mugibot's own asking stops.)
+const DENIED = 'deniedStores';
+const DENIED_MS = 30 * 60 * 1000;
+async function deniedStores() {
+  const all = (await chrome.storage.session.get(DENIED))[DENIED] || {};
+  return new Set(Object.keys(all).filter((k) => all[k] > Date.now()));
+}
+async function markDenied(store) {
+  if (!store) return;
+  const all = (await chrome.storage.session.get(DENIED))[DENIED] || {};
+  all[store] = Date.now() + DENIED_MS;
+  await chrome.storage.session.set({ [DENIED]: all });
+}
 
 async function sweepWindow() {
   const { [SWEEP_WINDOW]: saved } = await chrome.storage.session.get(SWEEP_WINDOW);
@@ -834,7 +905,10 @@ function readSweepPage(path) {
   // A bot check's page instead of the store's (Cloudflare's, or Imperva's at Pokémon Center: a frame and no title).
   const challenge = /just a moment|attention required|access denied|verify you are human|pardon our interruption/i.test(document.title)
     || !!document.querySelector('iframe[src*="_Incapsula_Resource"]');
-  return { products, data, challenge, url: location.href, title: document.title, html: document.documentElement.outerHTML };
+  // (Its "Access Denied": the store's bot protection turning this browser away — not a page to wait on.)
+  const text = String((document.body && document.body.innerText) || '').slice(0, 4000);
+  const denied = (/^\s*access denied\s*$/i.test(document.title) || /you don.?t have permission to access|errors\.edgesuite\.net|sorry, you have been blocked/i.test(text)) && text.length < 3000;
+  return { products, data, challenge, denied, url: location.href, title: document.title, html: document.documentElement.outerHTML };
 }
 
 /** Runs in the store's page: asks the store for something, the way the page itself does (with the headers its own code adds). */
@@ -868,6 +942,7 @@ async function renderedPage(t) {
     // satisfied. Reading it at that moment fails: look again a moment later.
     const now = await inPage(tabId, readSweepPage, [path]).then((x) => { failed = null; return x; }, (e) => { failed = e; return null; });
     if (now) page = now;
+    if (now && now.denied) break;
     // Products on the page: one more look a moment later, so their prices have filled in too.
     // A bot check's page: wait (it may let the page through), and say so if it never does.
     if (now && now.products) { if (seen++) break; } else if (Date.now() > until) break;
@@ -969,6 +1044,10 @@ async function sweepOne(t) {
       return { ...base, ok: false, error: `This browser couldn't open the store's page${why(e)}`, ms: Date.now() - started };
     }
     if (!page) return { ...base, ok: false, error: "This browser couldn't read the store's page", ms: Date.now() - started };
+    if (page.denied) {
+      await markDenied(t.store);
+      return { ...base, ok: false, blocked: true, status: 403, error: `${t.storeName || 'The store'} said "Access Denied" to this browser (its bot protection) — Mugibot asks it for nothing from here for 30 minutes, so it can lift`, ms: Date.now() - started };
+    }
     const parsed = parseListing(t.parser, page.html.slice(0, 8_000_000), opts(page.url));
     const problem = page.challenge ? 'blocked' : parsed.problem;
     // (A page it couldn't read: what it was, for the live monitor — its title, size and product links.)
@@ -1065,7 +1144,9 @@ async function sweepLoop() {
       // (With this copy's version: stores added since an older one are kept for browsers that can open them.
       //  And the stores whose queue it's through: the others' are left alone while they're up.)
       // (And the stores it's still searching: none of theirs handed out again until that search is in.)
-      const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}&through=${encodeURIComponent((await throughStores()).join(','))}&busy=${encodeURIComponent([...sweepsGoing.keys()].join(','))}`);
+      // (And the stores turning this browser away just now — "Access Denied": left alone for half an hour.)
+      const denied = await deniedStores();
+      const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}&through=${encodeURIComponent((await throughStores()).join(','))}&busy=${encodeURIComponent([...sweepsGoing.keys(), ...denied].join(','))}`);
       if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) {
         if (sweepAgain) continue;
         // (Searches still going: asked again once they're in — they may be the last of a store swept from here.)
@@ -1080,7 +1161,7 @@ async function sweepLoop() {
       await watchSweepTabsInLine().catch(() => null);
       const held = await heldStores();
       for (const t of due.body.terms || []) {
-        if (held.has(t.store) || sweepsGoing.has(t.store)) continue; // its queue is up in this browser (nothing asked there), or it's still searching
+        if (held.has(t.store) || sweepsGoing.has(t.store) || denied.has(t.store)) continue; // its queue is up in this browser (nothing asked there), it's still searching, or it's turning this browser away
         // Each store's search on its own, side by side: what it found goes in the moment it's read — never
         // after the slowest store's (BIG W's page, drawn once it's open). One at a time at each store.
         const job = (async () => {
@@ -1763,11 +1844,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
       }
       case 'startFill': {
-        // You pressed the panel's button (a real click): allow autofill for this tab's store.
+        // You pressed the panel's button (a real click): allow autofill for this tab's store — and, with
+        // Auto-checkout set to "Place the order for me", a run for the product, placing the order within
+        // your limits (your account says; otherwise it stops at the final button for you).
         const auth = await getAuth();
         if (!auth || !sender.tab) return null;
-        await savePass(sender.tab.id, tabHost(sender), auth.user.id);
-        return { ok: true };
+        let aco = null;
+        if (msg.product && typeof msg.product === 'object') {
+          const res = await api('POST', '/api/ext/aco/own', { product: msg.product }).catch(() => null);
+          if (res && res.status === 200 && res.body && res.body.aco) aco = res.body.aco;
+        }
+        await savePass(sender.tab.id, tabHost(sender), auth.user.id, null, aco);
+        return { ok: true, aco };
       }
       case 'fillData': return fillData(sender, msg.part, typeof msg.profileId === 'string' ? msg.profileId : null);
       case 'gate': {
@@ -1810,14 +1898,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...next, done: true } } });
           return { ok: res.status === 200, since: live.since, over, text: over ? String(res.body.run.message || '') : '' };
         }
+        if (status === 'beat') {
+          // A slow checkout (a hot drop) saying how it's going: your account hears it — that keeps the run going
+          // there — and this tab's pass is kept good while it's at it.
+          await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, expires: Date.now() + PASS_TTL } });
+          api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { status: run.placing ? 'placing' : 'checkout', message: String(msg.message || '').slice(0, 300) }).catch(() => null);
+          return { ok: true };
+        }
         if (status === 'checkout') {
           if (run.atCheckout) return { ok: true }; // (said once, however many pages the checkout has)
           run.atCheckout = true;
         }
-        // Kept on the tab's pass: the final button is pressed at most once, and a run that's over
-        // (stopped short, for you to finish) never presses anything again.
-        if (status === 'placing') run.placing = true;
+        // Kept on the tab's pass: when the final button was first pressed (it's pressed again only while the
+        // store's struggling, for 30 minutes: acoRetry), and a run that's over (stopped short, for you to
+        // finish) never presses anything again.
+        if (status === 'placing') { run.placing = true; run.placingAt = run.placingAt || Date.now(); }
         if (['ready', 'needs_you', 'failed'].includes(status) && !run.placing) run.done = true;
+        if (['needs_you', 'failed'].includes(status) && run.placing) run.stopped = true;
         await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: run } });
         // The store's next checkout: on its way once this one's order is placed or it's stopped, or (waiting
         // for you) in a few minutes. (Stopped before anything went into the bag: straight away.)
@@ -1841,6 +1938,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const over = res.status === 200 && !!(res.body && res.body.run && res.body.run.active === false) && (status === 'waiting' || status === 'started');
         if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...run, done: true } } });
         return res.status === 200 ? { ok: true, over, text: over ? String(res.body.run.message || '') : '' } : { ok: false, status: res.status };
+      }
+      case 'acoRetry': {
+        // The final button, about to be pressed (again): may it be? Only in a run that's placing the order,
+        // hasn't been stopped or ended, and is within the 30 minutes since it was first pressed. Counted.
+        if (!sender.tab) return null;
+        const pass = sender.frameId === 0 ? await passFor(sender) : ((await checkoutFrame(sender)) || {}).pass;
+        if (!pass || !pass.aco || !pass.aco.runId || pass.aco.done || pass.aco.stopped || pass.aco.mode !== 'place') return { ok: false };
+        const run = { ...pass.aco };
+        const now = Date.now();
+        if (run.placingAt && now - run.placingAt > RETRY_MS) return { ok: false, over: true, since: run.placingAt };
+        run.presses = (run.presses || 0) + 1;
+        await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: run, expires: now + PASS_TTL } });
+        return { ok: true, n: run.presses, since: run.placingAt || now };
+      }
+      case 'acoOthers': {
+        // Other things in the store's bag already: the run goes on (they're bought too), and says so.
+        if (!sender.tab) return null;
+        const pass = await passFor(sender);
+        if (!pass || !pass.aco || !pass.aco.runId) return null;
+        const n = Math.max(1, Math.min(99, Number(msg.n) || 1));
+        await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...pass.aco, others: n } } });
+        api('POST', `/api/ext/aco/${encodeURIComponent(pass.aco.runId)}`, { status: 'note', reason: 'others', message: String(msg.message || '').slice(0, 300) }).catch(() => null);
+        return { ok: true };
+      }
+      case 'denied': {
+        // A store page in this browser was its bot protection's "Access Denied": nothing more asked of that store from here for a while.
+        if (!sender.tab || typeof msg.store !== 'string') return null;
+        const r = await storeForTab(sender);
+        if (!r || r.id !== msg.store) return null;
+        await markDenied(r.id);
+        return { ok: true };
       }
       case 'acoInfo': {
         // The store page: is this tab running an Auto-checkout run (and how far has it got)?
