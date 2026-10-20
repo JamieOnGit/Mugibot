@@ -127,6 +127,13 @@ export function defaultShops() {
       reactMs: 0, slowLoadMs: 0, vueMs: id === 'pbandai' ? 600 : 0,
       // searchDelayMs: its search pages and search API answer this much later (a slow store).
       searchDelayMs: 0,
+      // A store under a hot drop's load: its product page answers with a short error page this many times
+      // first (busyPages: HTTP 503 "Too many requests"), and its Add button is drawn greyed out, turned on
+      // greyedMs after the page loads. (busyServed: how many error pages it sent.)
+      busyPages: 0, busyServed: 0, greyedMs: 0,
+      // cartPopup: its cart, empty, is a pop-up over its home page (/cart goes there), as EB Games' is:
+      // "Oh no! currently your cart is empty."
+      cartPopup: false,
       // Search pages that only fill in their products once open (like Pokémon Center's and Premium Bandai's).
       clientSearch: id === 'pokemoncenter' || id === 'pbandai',
       // A bot check's page first, which reloads the page after a moment (Pokémon Center's search; the delay in ms).
@@ -356,7 +363,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     if (shop === 'gamesworld') return wooProductPage(p);
     // (addLabel: its buy button in other words — "Buy Now", "Add to Basket"…; buyNowToo: a "Buy Now" beside it, counted when pressed.)
     const words = (orderable && shopOf(shop).addLabel) || labels[p.status];
-    const button = orderable ? `<button type="button" id="atc" class="add-to-cart">${esc(words)}</button>${shopOf(shop).buyNowToo ? ' <button type="button" id="buy-now" class="buy-now" onclick="fetch(\'/__admin/buynow?shop=' + shop + '\', { method: \'POST\' })">Buy Now</button>' : ''}` : `<button type="button" class="add-to-cart" disabled>${labels[p.status]}</button>`;
+    const button = orderable ? `<button type="button" id="atc" class="add-to-cart"${shopOf(shop).greyedMs ? ' disabled' : ''}>${esc(words)}</button>${shopOf(shop).buyNowToo ? ' <button type="button" id="buy-now" class="buy-now" onclick="fetch(\'/__admin/buynow?shop=' + shop + '\', { method: \'POST\' })">Buy Now</button>' : ''}` : `<button type="button" class="add-to-cart" disabled>${labels[p.status]}</button>`;
     const drawer = {
       kmart: '<div class="drawer" id="drawer" role="dialog" aria-label="Added to bag"><h3>Added to bag</h3><p id="drawer-msg"></p><a class="btn" href="/kmart/checkout">Checkout</a> <a href="/kmart/cart">View bag</a></div>',
       bigw: '<div class="drawer added-to-cart-drawer" id="drawer" role="dialog" aria-label="Added to cart"><h3>Added to your cart</h3><p id="drawer-msg"></p><a class="btn" href="/bigw/cart">View cart</a> <a href="/bigw/">Continue shopping</a></div>',
@@ -401,6 +408,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       ${shop === 'citybeach' && !shopOf(shop).noPopup ? CITYBEACH_POPUP : ''}
       <script>
         ${p.lateMs ? `setTimeout(() => { document.getElementById('buybox').innerHTML = ${JSON.stringify(button)}; }, ${Number(p.lateMs)});` : ''}
+        ${shopOf(shop).greyedMs ? `addEventListener('load', () => setTimeout(() => { const b = document.getElementById('atc'); if (b) b.disabled = false; }, ${Number(shopOf(shop).greyedMs)}));` : ''}
         ${shopOf(shop).addNeedsLoad ? `addEventListener('load', () => setTimeout(() => { document.cookie = 'mgb_started=${S_TOKEN(shop)}; path=/'; }, ${Number(shopOf(shop).addNeedsLoad)}));` : ''}
         ${stepperJs(p)}
         // Until the page's code has started, pressing Add does nothing (like a store that's still loading).
@@ -2281,7 +2289,9 @@ ${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" nam
     }
 
     if (sub === '/' || sub === '') {
-      return html(200, page(shop, SHOPS[shop].name, `<h1>${esc(SHOPS[shop].name)}</h1>${S.products.filter((x) => x.listed).map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}">${esc(x.name)}</a><div>$${x.price.toFixed(2)} · ${x.status.replace(/_/g, ' ')}</div></div>`).join('')}`));
+      const popup = S.cartPopup && u.searchParams.get('cart') === 'open' && !S.cart.length
+        ? '<div class="modal cart-popup" role="dialog" aria-modal="true" style="position:fixed;top:60px;right:40px;background:#fff;border:1px solid #ccc;padding:30px;z-index:5"><button type="button" aria-label="Close" onclick="this.parentNode.remove()">×</button><div><b>Oh no!</b> currently your cart is empty.</div></div>' : '';
+      return html(200, page(shop, SHOPS[shop].name, `<h1>${esc(SHOPS[shop].name)}</h1>${S.products.filter((x) => x.listed).map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}">${esc(x.name)}</a><div>$${x.price.toFixed(2)} · ${x.status.replace(/_/g, ' ')}</div></div>`).join('')}${popup}`));
     }
 
     // Product pages, each in its retailer's link shape.
@@ -2315,6 +2325,11 @@ ${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" nam
     if (sku) {
       const prod = find(shop, sku);
       if (!prod || !prod.listed) return html(404, page(shop, 'Page not found', '<h1>Sorry, we can\'t find that page</h1>'));
+      if (S.busyPages > 0) {
+        S.busyPages -= 1;
+        S.busyServed += 1;
+        return html(503, '<!doctype html><html><head><meta charset="utf-8"><title>Too many requests</title></head><body><h1>Too many requests</h1><p>We\'re experiencing high traffic right now. Please try again shortly.</p></body></html>');
+      }
       S.servedAt = Date.now();
       S.startToken = Math.random().toString(36).slice(2);
       return html(200, productPage(shop, prod));
@@ -2583,6 +2598,7 @@ ${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" nam
     }
     if (sub === '/cart' || sub === '/cart/') {
       S.bagViews.push(bagCount(shop));
+      if (S.cartPopup && !S.cart.length) return redirect(`/${shop}/?cart=open`);
       return html(200, cartPage(shop));
     }
     if (sub === '/api/checkout/step' && req.method === 'POST') {

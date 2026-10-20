@@ -169,7 +169,8 @@ var MGBBag = (function () {
 
   /** The store's bag page (not a page not found, nor somewhere it sent the tab instead). */
   function onBag(R) {
-    return !notFound() && (MGBQuick.onBagPage(R) || removes(R).length > 0);
+    // (Or its cart open in a pop-up over another page: EB Games' cart opens over its home page.)
+    return !notFound() && (MGBQuick.onBagPage(R) || removes(R).length > 0 || !!MGBQuick.bagDrawer());
   }
 
   /** The store's own link to its bag (in its header), when the address Mugibot knows isn't it. */

@@ -474,6 +474,69 @@ test('Kmart with a slow "Add to bag" (4 s): waits for it, adds once, never opens
   await dash.close();
 });
 
+test('🔥 a hot drop at Kmart: the buy box takes 18 s to come in ("Loading…") and the cart 20 s to answer — ⚡ Buy waits through both (it says so), adds once, and reaches checkout', async (t) => {
+  t.after(async () => { await closeStorePages('kmart'); await closeDashboards(); });
+  const S = store.shop('kmart');
+  const prod = S.products.find((x) => x.sku === '43818587');
+  prod.lateMs = 18000;
+  S.addDelayMs = 20000;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
+  await shop.waitForFunction(() => /The store's page is slow \(a busy drop\) — still waiting for its Add button/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 20000 });
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 90000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.ok(S.addedAt - S.servedAt >= 18000, 'pressed once the buy box was there');
+  assert.deepEqual(S.cart.map((c) => c.qty), [1], 'added once — never pressed again while the cart was working on it');
+  assert.deepEqual(S.bagViews.filter((n) => n === 0), [], 'the bag never opened while empty');
+  assert.equal(ordersPlaced(), 0);
+  await shop.close();
+  await dash.close();
+});
+
+test('🔥 a hot drop: the Add button drawn greyed out, turned on 20 s later — waited for (it says so), then pressed', async (t) => {
+  t.after(async () => { await closeStorePages('kmart'); await closeDashboards(); });
+  const S = store.shop('kmart');
+  S.greyedMs = 20000;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
+  await shop.waitForFunction(() => /Add button is still greyed out — waiting for it to turn on/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 20000 });
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 60000 });
+  assert.ok(S.addedAt - S.servedAt >= 20000, 'pressed once it turned on');
+  assert.deepEqual(S.cart.map((c) => c.qty), [1]);
+  await shop.close();
+  await dash.close();
+});
+
+test("🔥 a hot drop: the store's product page answers \"Too many requests\" (HTTP 503) twice — looked at again after a wait each time, as a person refreshing would, then added and on to checkout", async (t) => {
+  t.after(async () => { await closeStorePages('kmart'); await closeDashboards(); });
+  const S = store.shop('kmart');
+  S.busyPages = 2;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 60000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.equal(S.busyServed, 2, 'both error pages seen, and looked at again');
+  assert.deepEqual(S.cart.map((c) => c.qty), [1], 'added once');
+  await shop.close();
+  await dash.close();
+});
+
+test('not a hot drop: a sold-out product still says so in seconds (nothing waited for)', async (t) => {
+  t.after(async () => { await closeStorePages('kmart'); await closeDashboards(); });
+  await useItems([{ url: store.productUrl('kmart', '43818648'), name: 'Kmart UPC (sold out)', price: 360 }]);
+  const dash = await ctx.newPage();
+  const started = Date.now();
+  const shop = await buyFromDashboard(dash, 'Kmart UPC (sold out)');
+  await shop.waitForFunction(() => /Add to bag isn't available — sold out/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 30000 });
+  assert.ok(Date.now() - started < 20000, `said in ${Date.now() - started} ms`);
+  assert.equal(store.shop('kmart').cart.length, 0);
+  await shop.close();
+  await dash.close();
+});
+
 test("Kmart's React page, slow to finish loading: Add is pressed the moment Kmart's code is ready, not when the page has loaded", async () => {
   // Like kmart.com.au: its code wires up "Add to bag" well before the page has finished
   // loading (pictures, adverts), and a press before that does nothing.
@@ -2752,6 +2815,20 @@ test("🧹 when it can't: a Remove that does nothing — it says so, and leaves 
   } finally {
     env.app.bags.bagUrl = realUrl;
   }
+  await dash.close();
+});
+
+test('🧹 an EB Games bag already empty, its cart a pop-up over its home page ("Oh no! currently your cart is empty."): already empty — not "couldn\'t find your bag"', async (t) => {
+  t.after(closeDashboards);
+  await closeStorePages('ebgames');
+  const S = store.shop('ebgames');
+  S.cart = [];
+  S.cartPopup = true;
+  const dash = await openBags();
+  const since = await pressClear(dash, 'ebgames');
+  const s = await bagDone('ebgames', since);
+  assert.equal(s.status, 'empty', JSON.stringify(s));
+  await dash.waitForFunction(() => /already empty/i.test(document.querySelector('#bags li[data-store="demo-ebgames"]')?.textContent || ''), null, { timeout: 10000 });
   await dash.close();
 });
 

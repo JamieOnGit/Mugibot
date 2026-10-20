@@ -42,6 +42,9 @@ const ACTIVE = ['queued', 'sent', 'started', 'waiting', 'checkout', 'placing'];
 const DONE = new Set(['placed', 'ready', 'needs_you', 'failed', 'skipped', 'expired']);
 // A browser has this long to pick a run up, and a run this long to finish.
 const PICKUP_MS = 2 * 60 * 1000;
+// …and once its browser has opened the store (sent), this long for the store's page to come in and take
+// it up: a hot drop can slow a big store's page to minutes.
+const SENT_MS = 6 * 60 * 1000;
 const RESEND_MS = 45 * 1000;
 const RUN_MS = 10 * 60 * 1000;
 const PLACING_MS = 5 * 60 * 1000;
@@ -929,10 +932,10 @@ export class Aco {
   /** Runs nobody picked up, or that never finished. */
   expire() {
     const now = this.now();
-    const stale = this.db.all(`SELECT * FROM aco_runs WHERE (status IN ('queued', 'sent') AND created_at < :pick)
+    const stale = this.db.all(`SELECT * FROM aco_runs WHERE (status = 'queued' AND created_at < :pick) OR (status = 'sent' AND created_at < :sent)
       OR (status IN ('started', 'checkout') AND updated_at < :run) OR (status = 'placing' AND updated_at < :placing)
       OR (status = 'waiting' AND (updated_at < :beat OR (reason = 'checkpoint' AND created_at < :cp) OR (reason = 'turn' AND created_at < :turn) OR (reason = 'not_live' AND created_at < :live) OR created_at < :queue))`,
-    { pick: now - PICKUP_MS, run: now - RUN_MS, placing: now - PLACING_MS, beat: now - WAIT_BEAT_MS, cp: now - CHECKPOINT_MS, turn: now - TURN_MS, live: now - NOT_LIVE_MS, queue: now - QUEUE_MS });
+    { pick: now - PICKUP_MS, sent: now - SENT_MS, run: now - RUN_MS, placing: now - PLACING_MS, beat: now - WAIT_BEAT_MS, cp: now - CHECKPOINT_MS, turn: now - TURN_MS, live: now - NOT_LIVE_MS, queue: now - QUEUE_MS });
     for (const row of stale) {
       if (row.status === 'queued' || row.status === 'sent') this.finish(row.user_id, row, 'expired', 'no_browser', '').catch(() => null);
       else if (row.status === 'placing') this.finish(row.user_id, row, 'needs_you', 'unconfirmed', 'The final button was pressed, but no order confirmation showed. Check your email from the store before buying again.').catch(() => null);

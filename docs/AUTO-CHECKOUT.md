@@ -161,6 +161,36 @@ Trigger ACO and ⚡ Buy from your phone.
 - Your other browsers still do everything else: ⚡ Buy pressed in them,
   in-browser checks, the store login monitor.
 
+### Hot drops: a store slowed right down
+
+In a hot drop a big store's site can slow to a crawl: its product page takes a
+minute to draw its Add button, its cart minutes to answer. Before, the run gave
+up after a fixed few seconds ("Add to bag isn't available", "Timed out"). Now
+(extension 1.25.0) it waits as long as the store plainly needs — and **only**
+then, so a drop that isn't busy goes exactly as fast as before:
+
+- **The Add button** — the usual wait, then on (up to 2 minutes) while the page is
+  still coming in: still loading, a spinner or "Loading…" where the buy box goes,
+  hardly anything drawn yet; or (up to 45 seconds) while its Add button is there
+  but still greyed out. A page that's loaded with no Add button, or that says
+  "Sold out" / "Out of stock", ends at once, as ever. The panel says which it's
+  waiting for.
+- **An error page** ("503", "Too many requests", "Something went wrong", "high
+  traffic"): looked at again after a wait — 3, 5, 8, 10, 15… seconds — as a person
+  refreshing would, and the run picks up on the new page. Never a virtual queue's
+  page (that would cost the place in line): that's left alone, as ever.
+- **The add itself** — while the store's still working on it (its button busy or
+  greyed out, its page still loading) it's never pressed again (that could put a
+  second one in) and the run doesn't move on to the bag: it waits for the store's
+  answer, up to 2 minutes, then on to checkout.
+- **At checkout** — the final button and the card boxes get up to 45 seconds / a
+  minute while the page is still loading (5 / 15 seconds otherwise). A Shop
+  checkout link's "Shop's checkout didn't open" waits while its tab is still
+  loading (up to 3 minutes) rather than 25 seconds.
+- **Your account** waits up to 6 minutes (was 2) for a store's slow page to take a
+  run up once your browser's opened it — and your browser never opens a second
+  tab for a run whose first one is still coming in.
+
 ### Several at once
 
 Several drops at once — armed items, Trigger ACO, ⚡ Buy pressed in Discord
@@ -196,6 +226,11 @@ browser:
   short frees its place again.
 
 ### Clear cart: your bags, emptied before a drop
+
+(EB Games' cart opens as a pop-up over its home page — "Oh no! currently your cart
+is empty." — rather than a page of its own: that pop-up counts as its bag, and its
+"empty" as empty. Until extension 1.25.0 an EB Games bag already empty was said as
+"couldn't find your bag".)
 
 Auto-checkout only ever buys the one item, so a bag with something else in it
 stops it there ("your bag already had 1 item in it"). The Checkout page's
