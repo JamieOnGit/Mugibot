@@ -67,9 +67,10 @@ test('connection codes are easy to type', () => {
 
 test('retailers: each store has its own flow; product codes from links; demo copies on the dummy store', () => {
   assert.deepEqual(RETAILER_DEFS.map((r) => r.id), ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown', 'amazon', 'thegamescube', 'gamerholic', 'pokemoncenter', 'pbandai', 'citybeach',
-    'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gamesmen', 'gamesworld']);
+    'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gamesmen', 'gamesworld', 'shoplink']);
   for (const r of RETAILER_DEFS) {
-    assert.ok(r.flow && r.flow.product && r.flow.checkout, `${r.id} has a flow`);
+    // (A Shop checkout link has no product page to add from: the link is the order, straight to Shop's checkout.)
+    assert.ok(r.flow && (r.flow.product || r.cartLinks) && r.flow.checkout, `${r.id} has a flow`);
     assert.ok(r.flow.checkout.final.length, `${r.id} names its final button`);
     assert.ok(['verified', 'beta', 'draft'].includes(r.flowStatus), r.id);
   }
@@ -403,7 +404,7 @@ test('the buy button by its words, the same at every store: "Add to cart", "Add 
   assert.equal(classifyActionText('Buy'), 'in_stock');
   assert.equal(classifyActionText('Pre Order'), 'preorder');
   // Every store's flow: the same words, in the same order (Amazon's "Buy Now" is its own straight-to-checkout button too).
-  for (const r of RETAILER_DEFS) assert.equal(r.flow.product.addSelector || r.flow.product.add === ADD_WORDS ? true : r.flow.product.add, true, `${r.id}: the shared add words`);
+  for (const r of RETAILER_DEFS.filter((x) => !x.cartLinks)) assert.equal(r.flow.product.addSelector || r.flow.product.add === ADD_WORDS ? true : r.flow.product.add, true, `${r.id}: the shared add words`);
   // extension/core.js has its own copy (a classic script): the same words, in the same order.
   const core = fs.readFileSync(new URL('../extension/core.js', import.meta.url), 'utf8');
   const list = core.match(/var ADD_WORDS = \[([\s\S]*?)\];/)[1].trim().split(/,\s*\n\s*/).map((x) => x.replace(/,$/, '').trim());
