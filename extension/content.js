@@ -367,7 +367,7 @@
     if (err) return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);
     const missing = MGBChecks.missingRequired(document);
     if (missing) return acoStop('needs_you', 'needs_details', `"${missing}" still needs filling in — fill it and press the button yourself.`, fin);
-    const total = orderTotal();
+    let total = orderTotal();
     if (total === null) return acoStop('needs_you', 'no_total', "Couldn't read the order total to check it against your limit — check it and press the button yourself.", fin);
     if (total > run.maxTotal) return acoStop('needs_you', 'over_limit', `The total, $${total.toFixed(2)}, is over your limit of $${run.maxTotal.toFixed(2)} — check it and press the button yourself if it's right.`, fin, total);
     // The button, ready to press (some turn on a moment after the last box is filled).
@@ -379,6 +379,18 @@
       if (!btn.isConnected) btn = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')].find((el) => MGBFill.isVisible(el) && (el.innerText || el.value || '').trim() === fin.text) || btn;
     }
     if (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true') return acoStop('needs_you', 'needs_details', `"${fin.text}" didn't become available — check the page and press it yourself.`, fin, total);
+    // (Read again just before pressing: a checkout still coming in can add its delivery or fees, or a
+    //  message, while its button turns on.)
+    if (Date.now() - finStarted > 300) {
+      const err2 = pageError();
+      if (err2) return acoStop('needs_you', 'needs_details', `The page says: "${err2}" — fix it and press the button yourself.`, fin);
+      const missing2 = MGBChecks.missingRequired(document);
+      if (missing2) return acoStop('needs_you', 'needs_details', `"${missing2}" still needs filling in — fill it and press the button yourself.`, fin);
+      const total2 = orderTotal();
+      if (total2 === null) return acoStop('needs_you', 'no_total', "Couldn't read the order total to check it against your limit — check it and press the button yourself.", fin);
+      if (total2 > run.maxTotal) return acoStop('needs_you', 'over_limit', `The total, $${total2.toFixed(2)}, is over your limit of $${run.maxTotal.toFixed(2)} — check it and press the button yourself if it's right.`, fin, total2);
+      total = total2;
+    }
     // Said first (the page may leave the moment it's pressed): this run's final button, pressed once.
     await acoReport('placing', '', `Pressing "${fin.text}" — total $${total.toFixed(2)}`, total);
     panel.setStatus(`🤖 Placing your order ($${total.toFixed(2)})…`);
@@ -616,7 +628,7 @@
     const waitMs = (MGBFlows.part(retailer, 'product').waitMs) || 12000;
     // (canReload: a store's error page under load is looked at again — this run picks up on the new page,
     //  kept by the hold above; isGate: never a queue's page.)
-    go(true, { product, waitForButtonMs: waitMs, canReload: true, isGate: () => !!seenGate() });
+    go(true, { product, waitForButtonMs: waitMs, canReload: true, isGate: () => !!seenGate(), onReload: () => reloadFor(product) });
   }
 
   /**
@@ -651,6 +663,21 @@
     }
     panel.setStatus(`Its turn — opening ${retailer.name} afresh…`);
     location.reload();
+  }
+
+  /**
+   * The store's error page under load, looked at again: the product's own page (the store may have sent
+   * this tab to an error page of its own, "/sorry") — this run's hold kept for either address, for the
+   * run to pick up on whichever comes in.
+   */
+  function reloadFor(product) {
+    let to = null;
+    try { to = product && product.url ? new URL(product.url, location.href) : null; } catch { to = null; }
+    const here = location.pathname + location.search;
+    if (!to || to.origin !== location.origin || to.pathname + to.search === here) { location.reload(); return; }
+    const h = holdStore.read();
+    if (h) holdStore.save({ ...h, page: to.pathname + to.search, also: here });
+    location.replace(to.href);
   }
 
   // ---------------------------------------------------------------------------
@@ -767,7 +794,7 @@
   // its progress kept by the flow — carries on as that, below.)
   if (!goCode && held && store.read()) { holdStore.clear(); held = null; }
   // (Kept only in case its page reloaded: anywhere else, it's not carried on — you went somewhere else.)
-  if (!goCode && held && held.provisional && !gate && held.page !== location.pathname + location.search) { holdStore.clear(); held = null; }
+  if (!goCode && held && held.provisional && !gate && held.page !== location.pathname + location.search && held.also !== location.pathname + location.search) { holdStore.clear(); held = null; }
   if (!goCode && held) {
     aco = (await ask({ type: 'acoInfo' })) || held.claim.aco || null;
     if (gate) {

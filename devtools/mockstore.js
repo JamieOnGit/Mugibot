@@ -131,6 +131,9 @@ export function defaultShops() {
       // first (busyPages: HTTP 503 "Too many requests"), and its Add button is drawn greyed out, turned on
       // greyedMs after the page loads. (busyServed: how many error pages it sent.)
       busyPages: 0, busyServed: 0, greyedMs: 0,
+      // decoys: an ordinary page that only looks busy — a picture's lazy-loader, a quantity "spinner", a
+      // hidden widget left aria-busy, "Due to high demand" and a price like $502.99 (nothing to wait for).
+      decoys: false,
       // cartPopup: its cart, empty, is a pop-up over its home page (/cart goes there), as EB Games' is:
       // "Oh no! currently your cart is empty."
       cartPopup: false,
@@ -389,6 +392,9 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <div class="price">$${p.price.toFixed(2)}</div>
         <p>${shop === 'kmart' ? 'Keycode' : 'Product code'} ${p.sku}</p>
         ${qtyControl(p)}
+        ${shopOf(shop).decoys ? `<div class="image-loader" style="width:80px;height:80px"><img src="/slow.gif?ms=1" alt="" width="80" height="80"></div>
+        <div class="qty-spinner" style="width:60px;height:20px">−1+</div><div aria-busy="true" hidden>reviews</div>
+        <p class="note">Due to high demand, limit 1 per customer. Was $502.99 — 500 sold this week.</p>` : ''}
         <div id="buybox">${p.lateMs ? '<p>Loading…</p>' : button}</div>
         ${shop === 'amazon' && orderable ? `<form id="buy-now-form" method="post" action="/amazon/checkout/entry/buynow"><input type="hidden" name="asin" value="${esc(p.sku)}">
           <span class="a-button a-button-oneclick"><input id="buy-now-button" name="submit.buy-now" type="submit" class="a-button-input" aria-labelledby="submit.buy-now-announce" style="width:120px;height:30px"><span id="submit.buy-now-announce" class="a-button-text" aria-hidden="true">Buy Now</span></span></form>
@@ -2290,7 +2296,7 @@ ${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" nam
 
     if (sub === '/' || sub === '') {
       const popup = S.cartPopup && u.searchParams.get('cart') === 'open' && !S.cart.length
-        ? '<div class="modal cart-popup" role="dialog" aria-modal="true" style="position:fixed;top:60px;right:40px;background:#fff;border:1px solid #ccc;padding:30px;z-index:5"><button type="button" aria-label="Close" onclick="this.parentNode.remove()">×</button><div><b>Oh no!</b> currently your cart is empty.</div></div>' : '';
+        ? '<div class="modal cart-popup" role="dialog" aria-modal="true" style="position:fixed;top:60px;right:40px;width:380px;min-height:220px;background:#fff;border:1px solid #ccc;padding:30px;z-index:5"><button type="button" aria-label="Close" onclick="this.parentNode.remove()">×</button><div><b>Oh no!</b> currently your cart is empty.</div></div>' : '';
       return html(200, page(shop, SHOPS[shop].name, `<h1>${esc(SHOPS[shop].name)}</h1>${S.products.filter((x) => x.listed).map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}">${esc(x.name)}</a><div>$${x.price.toFixed(2)} · ${x.status.replace(/_/g, ' ')}</div></div>`).join('')}${popup}`));
     }
 

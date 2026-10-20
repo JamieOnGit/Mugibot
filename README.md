@@ -258,7 +258,7 @@ the passphrase backup.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 393 tests in about seventeen minutes:
+the 394 tests in about seventeen minutes:
 
 ```bash
 npm install

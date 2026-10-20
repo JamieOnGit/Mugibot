@@ -363,19 +363,27 @@ var MGBQuick = (function () {
    * bag icon: that can show 0 for a moment while a slow bag page loads (and pressing Add again
    * then would add a second one).
    */
-  function bagLooksEmpty() {
+  function bagLooksEmpty(opts) {
     var main = document.querySelector('main') || document.body;
     if (bagCount() > 0) return false;
     if (EMPTY_RE.test((main.innerText || '').slice(0, 5000))) return true;
-    // (Or the store's cart in a pop-up over the page — EB Games': "Oh no! currently your cart is empty.")
-    var d = bagDrawer();
+    // (Clear cart: or the store's cart in a pop-up over the page — EB Games': "Oh no! currently your cart
+    //  is empty." Not for ⚡ Buy: a bag drawer can say empty a moment while the bag page fills in.)
+    var d = opts && opts.drawer ? bagDrawer() : null;
     return !!d && EMPTY_RE.test((d.innerText || '').slice(0, 3000));
   }
 
-  /** The store's cart open in a pop-up or drawer over the page (EB Games' opens over its home page), or null. */
+  /**
+   * The store's cart open in a pop-up or drawer over the page (EB Games' opens over its home page), or
+   * null: a panel laid over the page (fixed or absolute, a good size) — not the cart icon in its header.
+   */
   function bagDrawer() {
     return toArray(document.querySelectorAll(DRAWER)).find(function (el) {
-      return !inAnyPanel(el) && isVisible(el) && /\b(cart|bag|basket|trolley)\b/i.test(String(el.innerText || '').slice(0, 3000));
+      if (inAnyPanel(el) || el.closest('header, nav') || !isVisible(el)) return false;
+      var r = el.getBoundingClientRect();
+      var pos = getComputedStyle(el).position;
+      var over = pos === 'fixed' || pos === 'absolute' || el.getAttribute('aria-modal') === 'true' || el.getAttribute('role') === 'dialog';
+      return over && r.width >= 200 && r.height >= 60 && /\b(cart|bag|basket|trolley)\b/i.test(String(el.innerText || '').slice(0, 3000));
     }) || null;
   }
 
@@ -553,9 +561,37 @@ var MGBQuick = (function () {
     if (text.length < 300) return true;
     // ("Loading…" where the buy box will be: a line of its own.)
     if (/(^|\n)\s*(loading|please wait|just a moment)\s*(\.\.\.|…)?\s*(\n|$)/i.test(raw)) return true;
-    var els = document.querySelectorAll('[aria-busy="true"], [class*="skeleton" i], [class*="spinner" i], [class*="shimmer" i], [class*="loader" i], [class*="is-loading" i], [class*="loading-" i]');
-    for (var i = 0; i < els.length && i < 300; i++) if (!inAnyPanel(els[i]) && isVisible(els[i])) return true;
-    return false;
+    return busyEls().length > 0;
+  }
+
+  // A spinner or skeleton by its class: the word whole ("btn--loading", "skeleton-card") — not an
+  // image's lazy-loader, a quantity stepper's "spinner" or a picture wrapper, which stay on a loaded page.
+  var BUSY_CLASS = /(^|[\s_-])(spinner|loader|loading|is-loading|skeleton|shimmer)($|[\s_-])/i;
+  var NOT_BUSY_CLASS = /image|img|lazy|picture|thumb|gallery|video|qty|quantity|stepper|number|counter/i;
+  /** What on the page shows it still working: a visible spinner or skeleton (in the page, not its header or footer), or a part marked busy. */
+  function busyEls() {
+    var out = [];
+    var els = document.querySelectorAll('[aria-busy="true"], [class*="skeleton" i], [class*="spinner" i], [class*="shimmer" i], [class*="loader" i], [class*="loading" i]');
+    for (var i = 0; i < els.length && i < 300; i++) {
+      var el = els[i];
+      var marked = el.getAttribute('aria-busy') === 'true';
+      var cls = String(el.getAttribute('class') || '');
+      if (!marked && (!BUSY_CLASS.test(cls) || NOT_BUSY_CLASS.test(cls) || el.querySelector('input, select, img, picture, video') || String(el.textContent || '').trim().length > 40)) continue;
+      if (inAnyPanel(el) || el.closest('header, nav, footer') || !isVisible(el)) continue;
+      var r = el.getBoundingClientRect();
+      if (r.width >= 12 && r.height >= 12) out.push(el);
+    }
+    return out;
+  }
+
+  /**
+   * After the Add press: the page still working on it — still loading, or a spinner or skeleton that
+   * wasn't there before the press (page.busyBefore: one that was there all along isn't about it).
+   */
+  function pressBusy(page) {
+    if (document.readyState !== 'complete') return true;
+    var before = (page && page.busyBefore) || [];
+    return busyEls().some(function (el) { return before.indexOf(el) < 0; });
   }
 
   /** The product's own Add button, there but greyed out (still turning on — or sold out). */
@@ -572,20 +608,45 @@ var MGBQuick = (function () {
   // What a page says when the product can't be bought now: no point waiting for its Add button.
   var SOLD_OUT_RE = /\b(sold out|out of stock|currently unavailable|no longer available|notify me( when (it'?s )?(back|available))?|coming soon|unavailable online)\b/i;
   function soldOutShown() {
-    // (Its buttons greyed out or not — a "Sold out" button usually is — and its stock message.)
-    return toArray(document.querySelectorAll('button, a, [role="button"], input[type="submit"], [class*="stock" i], [class*="availability" i], [data-testid*="stock" i]')).some(function (el) {
-      var t = textOf(el);
-      return t.length < 120 && SOLD_OUT_RE.test(t) && !inAnyPanel(el) && !el.closest('header, nav, footer') && isVisible(el) && !inOtherProductTile(el) && !el.closest(RECOMMENDATIONS);
-    });
+    // (Its buttons greyed out or not — a "Sold out" button usually is — its stock message, or a short line saying so.)
+    return pageShows(SOLD_OUT_RE, 'button, a, [role="button"], input[type="submit"], [class*="stock" i], [class*="availability" i], [data-testid*="stock" i]');
+  }
+
+  // The Add button greyed out until an option's chosen: not a store still turning it on.
+  var CHOOSE_RE = /\b(select|choose|pick) (a |an |your )?(size|colou?r|option|variant|style|model|edition)\b/i;
+
+  /**
+   * A short message about this product on the page (not its header, footer or other products'):
+   * in these elements, or in a line of text of its own (a leaf: <p>, <span>, <div>…).
+   */
+  function pageShows(re, sel) {
+    var els = toArray(document.querySelectorAll((sel ? sel + ', ' : '') + 'p, span, div, strong, b, em, li, label, h2, h3, h4, h5'));
+    for (var i = 0; i < els.length && i < 4000; i++) {
+      var el = els[i];
+      var leaf = !(sel && el.matches(sel));
+      if (leaf && el.childElementCount > 0) continue;
+      var raw = leaf ? String(el.textContent || '') : textOf(el);
+      if (raw.length > 160 || !re.test(raw)) continue;
+      if (!inAnyPanel(el) && !el.closest('header, nav, footer') && isVisible(el) && !inOtherProductTile(el) && !el.closest(RECOMMENDATIONS)) return true;
+    }
+    return false;
   }
 
   // A store's error page under load — short, saying so. (A queue's page — "in line", "waiting room" — never.)
-  var BUSY_ERROR_RE = /\b(50[234])\b|service unavailable|bad gateway|gateway time-?out|too many requests|something went wrong|(please )?try again (later|shortly|in a (few|moment))|temporarily unavailable|(high|heavy|unusually high) (traffic|demand|volume)|server error|an error (has )?occurred/i;
+  // (An error code said as one — "Error 503", "503 Service Unavailable" — never a price like "$502.99".)
+  var BUSY_ERROR_RE = /\b(error|http)\s*50[234]\b|(^|[^$.,\d])50[234]\s*(error|service|bad gateway|gateway)|service unavailable|bad gateway|gateway time-?out|too many requests|something went wrong|temporarily unavailable|(high|heavy|unusually high) traffic|internal server error|an error (has )?occurred/i;
   var QUEUE_WORDS_RE = /\bqueue\b|in line\b|waiting room|your (place|turn|number)|estimated wait/i;
   function errorPage() {
     var text = String((document.body && document.body.innerText) || '').replace(/\s+/g, ' ').trim();
     var said = (document.title || '') + ' ' + text.slice(0, 3000);
-    return text.length < 3000 && BUSY_ERROR_RE.test(said) && !QUEUE_WORDS_RE.test(said);
+    return text.length < 3000 && BUSY_ERROR_RE.test(said) && !QUEUE_WORDS_RE.test(said) && !productMarked();
+  }
+
+  /** The page says it's a product's (og:type product, or a Product in its JSON-LD): not an error page. */
+  function productMarked() {
+    var og = document.querySelector('meta[property="og:type"]');
+    if (/^(og:)?product\b/i.test(String((og && og.content) || '').trim())) return true;
+    return toArray(document.querySelectorAll('script[type="application/ld+json"]')).some(function (x) { return /"@type"\s*:\s*"Product"/.test(x.textContent || ''); });
   }
 
   /**
@@ -598,7 +659,10 @@ var MGBQuick = (function () {
   async function waitForAdd(R, find, ms, opts, setStatus) {
     // (An error page is seen at once — no need to wait for an Add button on it.)
     var ERR = {};
-    var el = await waitForEl(function () { return find() || (opts.canReload && errorPage() ? ERR : null); }, ms);
+    var errSince = 0;
+    // (Seen for a moment and a half: not a page whose product is still drawing.)
+    var errored = function () { if (!errorPage()) { errSince = 0; return false; } errSince = errSince || Date.now(); return Date.now() - errSince >= 1500; };
+    var el = await waitForEl(function () { return find() || (opts.canReload && errored() ? ERR : null); }, ms);
     if (el && el !== ERR) return el;
     var started = Date.now();
     var said = '';
@@ -613,13 +677,18 @@ var MGBQuick = (function () {
         if (n < RELOAD_WAITS.length && waited + RELOAD_WAITS[n] < HOT_WAIT_MS * 2) {
           say('The store\'s overloaded (its error page) — looking again in ' + Math.round(RELOAD_WAITS[n] / 1000) + ' s…');
           await wait(RELOAD_WAITS[n]);
+          // (Looked at once more first: the page may have come right meanwhile — or turned into a queue's,
+          //  which is never refreshed.)
+          el = find();
+          if (el) return el;
+          if ((opts.isGate && opts.isGate()) || !errorPage()) { await wait(250); continue; }
           slowReloads(n + 1);
-          location.reload();
+          if (opts.onReload) opts.onReload(); else location.reload();
           return 'reload';
         }
         return null;
       }
-      var greyed = greyedAdd(R);
+      var greyed = greyedAdd(R) && !pageShows(CHOOSE_RE);
       var busy = pageBusy();
       if (!(busy && waited < HOT_WAIT_MS) && !(greyed && waited < GREYED_WAIT_MS)) return null;
       say(greyed ? 'The store\'s Add button is still greyed out — waiting for it to turn on (a busy drop)…' : 'The store\'s page is slow (a busy drop) — still waiting for its Add button…');
@@ -636,15 +705,23 @@ var MGBQuick = (function () {
     return n || 0;
   }
 
-  /** The Add button's still working on the press (a slow cart): disabled, busy, or saying so. */
-  function addBusy(R) {
-    if (document.querySelector('[aria-busy="true"]')) return true;
+  /**
+   * The Add button's still working on the press (a slow cart): saying so ("Adding…"), or busy — marked
+   * busy, a busy class, a spinner in it. (Greyed out alone isn't: a store can grey it out once it's
+   * added, one per customer.) pressed: the button pressed (it may have lost its label to a spinner).
+   */
+  var BUSY_BTN_CLASS = /(^|[\s_-])(busy|is-busy|loading|is-loading|adding|is-adding|spinner|loader)($|[\s_-])/i;
+  function addBusy(R, pressed) {
+    var spins = function (el) {
+      return el.getAttribute('aria-busy') === 'true' || BUSY_BTN_CLASS.test(String(el.getAttribute('class') || '')) || !!el.querySelector('[class*="spinner" i], [class*="loader" i], [aria-busy="true"]');
+    };
+    var saying = function (t) { return /^(adding|loading|please wait|processing)\b/i.test(t); };
+    if (pressed && pressed.isConnected && isVisible(pressed) && (spins(pressed) || saying(textOf(pressed)))) return true;
     var labels = part(R, 'product').add && part(R, 'product').add.length ? part(R, 'product').add : ADD_WORDS;
     return toArray(document.querySelectorAll('button, [role="button"], input[type="submit"]')).some(function (el) {
-      if (inAnyPanel(el) || !isVisible(el) || el.closest(RECOMMENDATIONS)) return false;
+      if (inAnyPanel(el) || !isVisible(el) || el.closest(RECOMMENDATIONS) || el.closest('header, nav, footer')) return false;
       var t = textOf(el);
-      var cls = String(el.getAttribute('class') || '');
-      return ((/^(adding|loading|please wait|processing)\b/i.test(t) || ((isDisabled(el) || /(^|\s)(busy|is-busy|loading|is-loading|adding)(\s|$)/i.test(cls)) && addRank(labels, el) !== -1)) && t.length < 60);
+      return t.length < 60 && (saying(t) || (spins(el) && addRank(labels, el) !== -1));
     });
   }
 
@@ -732,6 +809,8 @@ var MGBQuick = (function () {
 
   function pressAdd(page, add) {
     page.before = new Set(controls());
+    page.busyBefore = busyEls(); // (a spinner already there isn't the store working on this press)
+    page.pressed = add;
     page.saidBefore = pageSays(); // (a message already showing isn't about this press)
     if (page.watch) page.watch.stop();
     page.watch = watchPage();
@@ -881,13 +960,14 @@ var MGBQuick = (function () {
     var arrived = Date.now(); // when this page started looking (a bag page takes a moment to show what's in it)
     var deadline = Date.now() + 30000;
     // (A busy drop: on past the usual 30 s while the store's page is plainly still working, HOT_WAIT_MS at most.)
-    while (Date.now() < deadline || (Date.now() < arrived + HOT_WAIT_MS && (pageBusy() || addBusy(R)))) {
+    // (And a little past HOT_WAIT_MS: the store still working then, the run goes on to checkout — not Add again.)
+    while (Date.now() < deadline || (Date.now() < arrived + HOT_WAIT_MS + 15000 && (pageBusy() || addBusy(R, page.pressed)))) {
       var flow = store.read();
       if (!flow) { setStatus('Stopped.'); return 'stopped'; }
       // "Often bought together" and the like: closed, then carry on.
       if (skipUpsell()) { await wait(250); continue; }
       if (!product) product = (opts.products || []).find(function (p) { return p.sku === flow.sku; }) || { sku: flow.sku, name: flow.name };
-      if (Date.now() - flow.startedAt > FLOW_MAX_AGE && !(Date.now() - flow.startedAt < HOT_FLOW_MAX_AGE && (pageBusy() || addBusy(R)))) {
+      if (Date.now() - flow.startedAt > FLOW_MAX_AGE && !(Date.now() - flow.startedAt < HOT_FLOW_MAX_AGE && (pageBusy() || addBusy(R, page.pressed)))) {
         store.clear();
         setStatus('Timed out. Check your bag and continue yourself.');
         report('error', 'Timed out before reaching checkout', product);
@@ -986,7 +1066,10 @@ var MGBQuick = (function () {
         // The store turned the add away (its cart answered with an error — Kmart's can, for a visitor
         // whose page is still starting up): once the page has finished loading, press Add once more.
         // Turned away again: say so, with what the store answered.
-        var refused = flow.added ? 0 : cartRequestFailed(flow.clickedAt);
+        // (Never while the store's still working on the press — its button busy, a new spinner, its page still
+        //  loading: it may be retrying itself, and pressing again then could put a second one in.)
+        var busyNow = !flow.added && (addBusy(R, page.pressed) || pressBusy(page));
+        var refused = flow.added || (busyNow && since < HOT_WAIT_MS) ? 0 : cartRequestFailed(flow.clickedAt);
         if (refused) {
           var again3 = flow.retried ? null : findAddToBag(R);
           if (!again3) return notAdded(flow.said || '', refused);
@@ -1013,9 +1096,11 @@ var MGBQuick = (function () {
         // Nothing on the page reacted to the press (we watched it), or the count didn't move.
         // (Never while the store's still working on the press — its button busy, its page still loading: a
         //  slow cart in a busy drop. Pressing again then could put a second one in.)
-        var working = since > QUIET_MS && since < HOT_WAIT_MS && (addBusy(R) || pageBusy());
-        var ignored = !working && !!page.watch && page.watch.changes() === 0 && since > QUIET_MS;
-        var unmoved = !working && count != null && flow.countBefore != null && count === flow.countBefore && since > CONFIRM_MS;
+        // Still working past HOT_WAIT_MS: on to checkout (its bag says whether it went in) — never Add again.
+        var stillBusy = since > QUIET_MS && busyNow;
+        var working = stillBusy && since < HOT_WAIT_MS;
+        var ignored = !stillBusy && !!page.watch && page.watch.changes() === 0 && since > QUIET_MS;
+        var unmoved = !stillBusy && count != null && flow.countBefore != null && count === flow.countBefore && since > CONFIRM_MS;
         // The bag link's number didn't move, but the store's cart answered the add (some stores only update
         // it on the next page): on to checkout — not Add again, which would put a second one in. (Its bag
         // turning out empty there: back for Add once more, as ever.)

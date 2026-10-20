@@ -1140,9 +1140,12 @@ async function openStoreTab(url, { active = true } = {}) {
  */
 async function startRun(run, { turn = true } = {}) {
   // Sent again while its tab is still coming in (a store slowed right down by a busy drop takes longer
-  // than the server waits to hear back): that tab carries on — never a second one, which could add it twice.
+  // than the server waits to hear back): that tab carries on — never a second one, which could add it
+  // twice. (A tab that has come in and still not taken the run up couldn't — its claim failed: a new
+  // tab, as ever. So does one that's been loading longer than the run's code lasts.)
   const going = Object.entries((await chrome.storage.session.get(TURNS))[TURNS] || {}).find(([k, e]) => k.startsWith('t:') && e.runId === run.id);
-  if (going && (await chrome.tabs.get(Number(going[0].slice(2))).catch(() => null))) return null;
+  const goingTab = going && (await chrome.tabs.get(Number(going[0].slice(2))).catch(() => null));
+  if (goingTab && goingTab.status === 'loading' && Date.now() - (going[1].since || 0) < 5 * 60 * 1000) return null;
   // This browser is in that store's queue (a tab of yours waiting its turn): the run waits for it to
   // get through, rather than ask the store again (which could cost the place in line).
   const g = await gatesNow();

@@ -172,24 +172,36 @@ then, so a drop that isn't busy goes exactly as fast as before:
 - **The Add button** — the usual wait, then on (up to 2 minutes) while the page is
   still coming in: still loading, a spinner or "Loading…" where the buy box goes,
   hardly anything drawn yet; or (up to 45 seconds) while its Add button is there
-  but still greyed out. A page that's loaded with no Add button, or that says
-  "Sold out" / "Out of stock", ends at once, as ever. The panel says which it's
-  waiting for.
-- **An error page** ("503", "Too many requests", "Something went wrong", "high
-  traffic"): looked at again after a wait — 3, 5, 8, 10, 15… seconds — as a person
-  refreshing would, and the run picks up on the new page. Never a virtual queue's
-  page (that would cost the place in line): that's left alone, as ever.
+  but still greyed out (not one greyed out until you choose a size or colour). A
+  page that's loaded with no Add button, or that says "Sold out" / "Out of stock"
+  anywhere on the product, ends at once, as ever. The panel says which it's
+  waiting for. "Still coming in" is the page saying so — a spinner or skeleton in
+  the page itself (not a picture's loader, a quantity stepper, the header or
+  footer) — so an ordinary page never waits longer.
+- **An error page** ("Error 503", "Too many requests", "Something went wrong",
+  "high traffic"), up for a moment and a half and not a product's page (a price of
+  $502.99 or "Due to high demand" isn't one): looked at again after a wait — 3, 5,
+  8, 10, 15… seconds — as a person refreshing would, and the run picks up on the
+  new page. A store that sent the tab to an error page of its own ("/sorry") goes
+  back to the product's. Never a virtual queue's page (that would cost the place
+  in line): it's looked at once more right before, and a queue's left alone.
 - **The add itself** — while the store's still working on it (its button busy or
-  greyed out, its page still loading) it's never pressed again (that could put a
-  second one in) and the run doesn't move on to the bag: it waits for the store's
-  answer, up to 2 minutes, then on to checkout.
+  saying "Adding…", a new spinner, its page still loading) it's never pressed
+  again (that could put a second one in — nor after the store's cart turned it
+  away, as it may be trying again itself) and the run doesn't move on to the bag:
+  it waits for the store's answer, up to 2 minutes, then on to checkout, where the
+  bag says whether it went in.
 - **At checkout** — the final button and the card boxes get up to 45 seconds / a
   minute while the page is still loading (5 / 15 seconds otherwise). A Shop
   checkout link's "Shop's checkout didn't open" waits while its tab is still
-  loading (up to 3 minutes) rather than 25 seconds.
-- **Your account** waits up to 6 minutes (was 2) for a store's slow page to take a
-  run up once your browser's opened it — and your browser never opens a second
-  tab for a run whose first one is still coming in.
+  loading (up to 3 minutes) rather than 25 seconds. Auto-checkout reads the
+  total, the page's errors and its required boxes again just before pressing the
+  final button, so a total that grew while the page came in is still checked
+  against your limit.
+- **Your account** waits up to 5 minutes (was 2: as long as the run's code lasts)
+  for a store's slow page to take a run up once your browser's opened it — and
+  your browser never opens a second tab for a run whose first one is still
+  loading. (One that loaded and couldn't take it up gets a new tab, as before.)
 
 ### Several at once
 
@@ -228,8 +240,10 @@ browser:
 ### Clear cart: your bags, emptied before a drop
 
 (EB Games' cart opens as a pop-up over its home page — "Oh no! currently your cart
-is empty." — rather than a page of its own: that pop-up counts as its bag, and its
-"empty" as empty. Until extension 1.25.0 an EB Games bag already empty was said as
+is empty." — rather than a page of its own: that pop-up, a panel over the page
+(not the cart icon in its header), counts as its bag, and its "empty" as empty.
+That's for Clear cart only: ⚡ Buy never takes a pop-up's "empty" as a reason to
+add again. Until extension 1.25.0 an EB Games bag already empty was said as
 "couldn't find your bag".)
 
 Auto-checkout only ever buys the one item, so a bag with something else in it

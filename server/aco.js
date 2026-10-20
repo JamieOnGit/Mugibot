@@ -43,8 +43,8 @@ const DONE = new Set(['placed', 'ready', 'needs_you', 'failed', 'skipped', 'expi
 // A browser has this long to pick a run up, and a run this long to finish.
 const PICKUP_MS = 2 * 60 * 1000;
 // …and once its browser has opened the store (sent), this long for the store's page to come in and take
-// it up: a hot drop can slow a big store's page to minutes.
-const SENT_MS = 6 * 60 * 1000;
+// it up: a hot drop can slow a big store's page to minutes. (As long as the run's code lasts: repo.js.)
+const SENT_MS = 5 * 60 * 1000;
 const RESEND_MS = 45 * 1000;
 const RUN_MS = 10 * 60 * 1000;
 const PLACING_MS = 5 * 60 * 1000;

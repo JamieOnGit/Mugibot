@@ -537,6 +537,26 @@ test('not a hot drop: a sold-out product still says so in seconds (nothing waite
   await dash.close();
 });
 
+test('not a hot drop: a loaded page that only looks busy (a lazy picture loader, a quantity "spinner", "Due to high demand", $502.99) — straight through, nothing waited for or reloaded', async (t) => {
+  t.after(async () => { await closeStorePages('kmart'); await closeDashboards(); });
+  const S = store.shop('kmart');
+  S.decoys = true;
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  const started = Date.now();
+  const shop = await buyFromDashboard(dash, 'Kmart ETB');
+  const said = [];
+  const watch = setInterval(() => { shop.evaluate(() => document.querySelector('#mugibot-qc')?.textContent || '').then((x) => said.push(x)).catch(() => null); }, 250);
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 30000 });
+  clearInterval(watch);
+  assert.ok(Date.now() - started < 15000, `at checkout in ${Date.now() - started} ms`);
+  assert.equal(said.some((x) => /busy drop|overloaded|greyed out/.test(x)), false, 'never took it for a busy drop');
+  assert.equal(S.busyServed, 0);
+  assert.deepEqual(S.cart.map((c) => c.qty), [1], 'added once');
+  await shop.close();
+  await dash.close();
+});
+
 test("Kmart's React page, slow to finish loading: Add is pressed the moment Kmart's code is ready, not when the page has loaded", async () => {
   // Like kmart.com.au: its code wires up "Add to bag" well before the page has finished
   // loading (pictures, adverts), and a press before that does nothing.
