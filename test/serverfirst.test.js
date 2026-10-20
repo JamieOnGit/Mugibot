@@ -353,7 +353,7 @@ test("⚡ an admin's browser, searching each store on its own: a store it's stil
   const held = sw.browserDue(admin, { version: '99.0.0', busy: new Set(['demo-bigw']) });
   assert.ok(!held.terms.some((t) => t.store === 'demo-bigw'), 'not given while its search is going');
   assert.equal(sw.stat('demo-bigw').turn, turn, "its keyword's turn kept for the next one");
-  assert.ok(held.waitMs !== null && held.waitMs <= 2000, 'asked about again shortly');
+  assert.equal(held.waitMs, null, 'nothing else due: the browser asks again the moment its search is in');
   assert.ok(due('demo-bigw'), 'given again once its search is in');
   await boss.put('/api/monitor/sweep', { browserEverySeconds: 15 });
   sw.save({ stores: { ...sw.settings.stores, 'demo-bigw': mode } }, null);

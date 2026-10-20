@@ -1135,8 +1135,6 @@ export class Sweeper {
     for (const { retailer: r, mode } of this.stores()) {
       if (!this.fromBrowser(r, mode)) continue;
       const st = this.stat(r.id);
-      // (Its search still going in that browser: its next one once that's in — the browser asks again then.)
-      if (busy.has(r.id)) { next = Math.min(next ?? Infinity, Math.max(st.browserNext || 0, now + 1000)); continue; }
       // Its virtual queue is up (monitor/gates.js): no searches from a browser that isn't through it —
       // a request there could cost the admin their place in line. Its tab is left exactly as it is.
       if (this.gates && this.gates.queueUp(r.id) && !through.has(r.id)) {
@@ -1150,6 +1148,8 @@ export class Sweeper {
         st.heldAt = 0;
         this.sys(`${r.name}: searching it again (${this.gates && this.gates.queueUp(r.id) ? 'through its virtual queue' : 'its virtual queue is down'})`, { store: r.id });
       }
+      // (Its search still going in that browser: nothing yet — the browser asks again the moment that's in.)
+      if (busy.has(r.id)) continue;
       const needs = r.sweep.extension;
       if (needs && olderVersion(browser.version, needs)) {
         // (Unless another admin's browser, an up-to-date one, is searching it.)

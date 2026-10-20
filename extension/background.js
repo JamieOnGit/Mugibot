@@ -1036,7 +1036,8 @@ async function sweepLoop() {
         // Each store's search on its own, side by side: what it found goes in the moment it's read — never
         // after the slowest store's (BIG W's page, drawn once it's open). One at a time at each store.
         const job = (async () => {
-          const result = await sweepOne(t);
+          // (A search that went wrong in here is said as a failed one: the store's backed off as for any.)
+          const result = await sweepOne(t).catch((e) => ({ store: t.store, keyword: t.keyword, page: t.page, ok: false, error: `This browser's search went wrong: ${String((e && e.message) || e).slice(0, 120)}`, ms: 0 }));
           if (result.gate) await sweepTabInLine(t).catch(() => null);
           await api('POST', '/api/ext/sweeps', { results: [result] });
           await noteLastSweep(t, result);

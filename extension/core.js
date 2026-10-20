@@ -502,9 +502,16 @@ var MGBQuick = (function () {
     var path = MGBFlows.decodedPath(location);
     var m = R.skuFromPath ? path.match(R.skuFromPath) : null;
     var og = document.querySelector('meta[property="og:type"]');
-    var ld = toArray(document.querySelectorAll('script[type="application/ld+json"]')).some(function (x) { return /"@type"\s*:\s*"Product"/.test(x.textContent || ''); });
-    var looks = !!m || !!(R.productPath && R.productPath.test && R.productPath.test(path)) || /product/i.test((og && og.content) || '') || ld
-      || !!findAddToBag(R) || !!findBuyNow(R);
+    // (The page's data saying it's one product — its top level, not a list of them on a search page.)
+    var ld = toArray(document.querySelectorAll('script[type="application/ld+json"]')).some(function (x) {
+      try {
+        var d = JSON.parse(x.textContent || 'null');
+        return [].concat((d && d['@graph']) || d || []).some(function (o) { return o && [].concat(o['@type'] || []).indexOf('Product') >= 0; });
+      } catch (e) { return false; }
+    });
+    // A product's own address, or the page saying it's one product (og:type "product", not "product.group") —
+    // never just an Add button: a search or category page has one on every tile.
+    var looks = !!m || !!(R.productPath && R.productPath.test && R.productPath.test(path)) || /^(og:)?product$/i.test(String((og && og.content) || '').trim()) || ld;
     if (!looks) return null;
     var sku = m ? m[1] : (path.split('/').filter(Boolean).pop() || '');
     var h1 = toArray(document.querySelectorAll('h1')).find(function (el) { return isVisible(el) && !inAnyPanel(el); });
@@ -1130,6 +1137,7 @@ var MGBQuick = (function () {
     renderProducts();
     // (A page that draws its product a moment later: its name, once it's there.)
     setTimeout(renderProducts, 1500);
+    setTimeout(renderProducts, 4000);
     applyCollapsed();
     document.body.appendChild(panel);
     return {
