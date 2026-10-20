@@ -15,6 +15,8 @@ import { DEFAULT_ALERTS, HttpError, MAX_RESTORE_COPIES, RESTORE_KEY_ID, bad, car
 const EVENT_TYPES = { add: 'info', basket: 'info', step: 'info', checkout: 'success', ready: 'success', error: 'warn' };
 
 /** "ebgames,pokemoncenter" → the stores this browser has got through the queue of (it says, since 1.16.0). */
+// Other websites this browser may read (its extension allowed there: their addresses, '*' for any).
+const sitesFrom = (v) => new Set(String(v || '').split(',').map((x) => x.trim().toLowerCase()).filter((x) => x === '*' || /^[a-z0-9.-]{1,253}(:(\d{1,5}|\*))?$/.test(x)).slice(0, 200));
 const throughFrom = (v) => new Set(String(v || '').split(',').map((x) => x.trim()).filter((x) => /^[a-z0-9-]{1,40}$/.test(x)).slice(0, 20));
 
 export function register(router, ctx) {
@@ -193,19 +195,30 @@ export function register(router, ctx) {
     return { ok: true };
   }, { auth: 'device' });
 
-  // In-browser checks: which of your SKUs your browser should look at now…
+  // In-browser checks: which of your SKUs your browser should look at now — and, a website refusing the
+  // server, its pages (an admin's browser: the shared monitors and drop watches; yours: your own)…
+  // sites: the other websites this browser may read; it's told the ones it could (to offer allowing them).
   router.get('/api/ext/checks', async (req) => {
     if (!limiter.hit(`checks:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
-    return { checks: ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')) }), intervalSeconds: cfg.monitor.browserIntervalSeconds };
+    const sites = sitesFrom(req.query.get('sites'));
+    const want = new Set();
+    // (Only an extension that can be allowed other websites says which it may read: 1.26.0 or later.)
+    if (req.query.has('sites')) ctx.monitor.noteSites(req.user.id, req.device.id, sites);
+    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want });
+    if (ctx.drops && ctx.monitor.browserChecksOn(req.user)) checks.push(...ctx.drops.browserDue(req.user, { sites, want }));
+    return { checks, intervalSeconds: cfg.monitor.browserIntervalSeconds, sites: [...want].slice(0, 20) };
   }, { auth: 'device', entitled: true });
 
   // …and what it saw. Results only ever update this account's own items.
   router.post('/api/ext/checks', async (req) => {
     if (!limiter.hit(`checks-post:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     if (!Array.isArray(req.body.results)) throw bad('results must be a list');
-    const applied = await ctx.monitor.browserResults(req.user, req.body.results.slice(0, 20));
+    const results = req.body.results.slice(0, 20);
+    let applied = await ctx.monitor.browserResults(req.user, results.filter((r) => !(r && typeof r.id === 'string' && r.id.startsWith('d:'))));
+    // (Another website's search read for a drop watch.)
+    for (const r of results) if (r && typeof r.id === 'string' && r.id.startsWith('d:') && ctx.drops && (await ctx.drops.browserResult(req.user, r))) applied += 1;
     return { ok: true, applied };
-  }, { auth: 'device', entitled: true });
+  }, { auth: 'device', entitled: true, maxBody: 512 * 1024 });
 
   // The store login monitor: which stores this browser is signed in to (it looks when you open a
   // store, and checks the stores that say so in their pages every 10 minutes). Signed in, ⚡ Buy is

@@ -806,3 +806,38 @@ export function termsRegex(terms) {
   const list = (terms || []).map((t) => norm(t).trim()).filter(Boolean);
   return list.length ? new RegExp(`\\b(${list.map(esc).join('|')})\\b`, 'i') : null;
 }
+
+// ---------------------------------------------------------------------------
+// Another website read for a drop watch's words (monitor/drops.js): the server's read, or an admin's browser's
+// ---------------------------------------------------------------------------
+/** Where to read another website for words, one way: its search suggestions, its search page, or the page given. */
+export function siteUrl(site, words, way) {
+  const base = String(site).replace(/[?#].*$/, '').replace(/\/+$/, '');
+  const q = encodeURIComponent(words);
+  if (way === 'suggest') return `${base}/search/suggest.json?q=${q}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last`;
+  return way === 'search' ? `${base}/search?q=${q}` : site;
+}
+
+/**
+ * What another website answered, read the same wherever it was read: { ok, products, refused, error }.
+ * refused: it turned the reader away (try again later, no other way now). (A search page with
+ * nothing on it is fine: nothing with those words yet.) by: who it refused ('Mugibot', 'your browser').
+ */
+export function siteAnswer({ way, status, type = '', text = '', url = '', by = 'Mugibot' }) {
+  if ([401, 403, 429, 503].includes(status)) return { ok: false, refused: true, error: `The website refused ${by} (HTTP ${status}) — it's asked again later` };
+  if (!(status >= 200 && status < 300)) return { ok: false, error: `The website answered HTTP ${status}` };
+  if (way === 'suggest') {
+    if (!/json/.test(type)) return { ok: false, error: 'Not a Shopify shop' };
+    const parsed = parseShopifySuggest(text, { base: url });
+    return parsed.problem ? { ok: false, error: 'Not a Shopify shop' } : { ok: true, products: parsed.products };
+  }
+  if (/json/.test(type)) {
+    const parsed = parseShopifyProducts(text, { base: url });
+    return parsed.problem ? { ok: false, error: "That page's data isn't a product list Mugibot can read" } : { ok: true, products: parsed.products };
+  }
+  let host = '';
+  try { host = new URL(url).hostname; } catch { /* no address */ }
+  const parsed = parseGeneric(text, { base: url, storeName: host });
+  if (parsed.problem === 'blocked') return { ok: false, refused: true, error: 'The website showed a bot check instead of the page — it\'s asked again later' };
+  return { ok: true, products: parsed.products };
+}

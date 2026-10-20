@@ -472,7 +472,7 @@ export class Monitor {
    * through: stores whose virtual queue this browser has got through. A store whose queue is up is left alone
    * otherwise: a request there could cost the member their place in line (monitor/gates.js).
    */
-  browserDue(user, { through = new Set() } = {}) {
+  browserDue(user, { through = new Set(), sites = new Set(), want = new Set() } = {}) {
     const held = (store) => !!this.gates && this.gates.queueUp(store) && !through.has(store);
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(user.id, 'alerts', {}) || {}) };
     if (!settings.browserChecks) return [];
@@ -483,25 +483,36 @@ export class Monitor {
     const out = [];
     for (const it of rows) {
       const r = this.retailers.get(it.store);
+      const other = it.store === 'other';
       // (Not a Shop checkout link: opening it starts a checkout — the server asks the store about its options instead.)
-      if (!r || it.store === 'other' || r.cartLinks || !this.retailers.enabled(r) || !this.retailers.settings(r).browserChecks || held(it.store)) continue;
+      if (!r || r.cartLinks || !this.retailers.enabled(r) || held(it.store)) continue;
+      // (Another website's page: only once it refuses the server, and where you've let the extension read that website.)
+      if (other ? !it.url : !this.retailers.settings(r).browserChecks) continue;
       const serverOff = !this.retailers.settings(r).serverChecks;
       const serverStruggling = FAILED.has(it.page_status) || it.page_fails > 0 || /Server checks are off/.test(it.page_error || '');
       const serverSilent = !it.page_checked && now - it.created_at > 90 * 1000;
       const searchBlocked = !it.url && this.searchStruggling(it);
       if (!(serverOff || serverStruggling || serverSilent || searchBlocked || it.status_source === 'browser')) continue;
+      if (other && !this.siteAllowed(it.url, sites, want)) continue;
       const url = it.url || this.retailers.searchUrl(r, it.sku);
       if (!url) continue;
       out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null }));
       this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + this.browserInterval, id: it.id });
       if (out.length >= 5) break;
     }
-    // Admins' browsers also check the shared monitors at stores that refuse the server (Kmart).
-    // Members' browsers never do: only the server and admins can change what everyone sees.
+    // Admins' browsers also check the shared monitors the server can't: every one at a store that
+    // refuses the server (Kmart), and any one whose own page refuses it (a drop watch's find at BIG W,
+    // or at another website the admin has let the extension read). Members' browsers never do: only
+    // the server and admins can change what everyone sees.
     if (user.role === 'admin' && out.length < 5) {
       const stores = this.retailers.list.filter((r) => r.id !== 'other' && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
         && (!this.retailers.settings(r).serverChecks || this.serverStruggles(r.id)) && !held(r.id)).map((r) => r.id);
-      for (const p of this.catalog.browserTargets(stores, now, 5 - out.length)) {
+      const whole = this.catalog.browserTargets(stores, now, 5 - out.length);
+      // (Picked in the database by where this browser may check — so ones it may not never crowd out the rest.)
+      const checks = this.retailers.list.filter((r) => r.id !== 'other' && !r.cartLinks && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks && !held(r.id)).map((r) => r.id);
+      const failing = this.catalog.browserFailing({ stores: checks, sites: this.sitePatterns(sites) }, now, 5).filter((p) => !whole.some((x) => x.id === p.id));
+      for (const url of this.catalog.failingSitePages()) this.siteAllowed(url, sites, want);
+      for (const p of [...whole, ...failing].slice(0, 5 - out.length)) {
         const r = this.retailers.get(p.store);
         const url = p.url || this.retailers.searchUrl(r, p.sku);
         this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.browserInterval, id: p.id });
@@ -509,6 +520,63 @@ export class Monitor {
       }
     }
     return out;
+  }
+
+  /** The pages of the other websites a browser may read, as LIKE patterns ('*': any https page). */
+  sitePatterns(sites) {
+    if (sites.has('*')) return ['https://%'];
+    // (http too where private addresses are allowed: the dummy store, on your own computer.)
+    const dev = this.cfg.monitor.allowPrivateHosts;
+    return [...sites].flatMap((s) => (/:\*$/.test(s) ? (dev ? [`http://${s.slice(0, -1)}%`] : []) : [`https://${s}/%`, ...(dev ? [`http://${s}/%`] : [])]));
+  }
+
+  /**
+   * The other websites each of a member's browsers may read (each says at every check, extension 1.26.0
+   * or later), for the dashboard to say whether to allow one. device: the browser's id.
+   */
+  noteSites(userId, device, sites) {
+    this.siteGrants ||= new Map();
+    const mine = this.siteGrants.get(userId) || new Map();
+    mine.set(device, { sites, at: this.now() });
+    for (const [d, g] of mine) if (this.now() - g.at > 10 * 60 * 1000) mine.delete(d);
+    this.siteGrants.set(userId, mine);
+  }
+
+  /**
+   * Has a browser of this member's said lately (10 minutes) whether it may read this page's website?
+   * true: one may; false: a browser that could be allowed it hasn't been; null: none of theirs has said
+   * (no extension open, or one too old to ask).
+   */
+  siteGranted(userId, url) {
+    const mine = this.siteGrants && this.siteGrants.get(userId);
+    const live = mine ? [...mine.values()].filter((g) => this.now() - g.at <= 10 * 60 * 1000) : [];
+    if (!live.length) return null;
+    return live.some((g) => this.siteAllowed(url, g.sites, null));
+  }
+
+  /** Are in-browser checks on for this member (their alerts settings)? */
+  browserChecksOn(user) {
+    return !!{ ...DEFAULT_ALERTS, ...(this.repo.getData(user.id, 'alerts', {}) || {}) }.browserChecks;
+  }
+
+  /**
+   * May this browser read a page at another website? Only where its owner has let the extension read
+   * that website (sites: its addresses, '*' for any) — else the address goes in want (the extension
+   * offers to allow it). https only (bar the dummy store).
+   */
+  siteAllowed(url, sites, want) {
+    let host;
+    try {
+      const u = new URL(url);
+      // (http too where private addresses are allowed: the dummy store, on your own computer.)
+      if (u.protocol !== 'https:' && !(u.protocol === 'http:' && this.cfg.monitor.allowPrivateHosts)) return false;
+      host = u.host.toLowerCase();
+    } catch { return false; }
+    if (sites.has('*') || sites.has(host)) return true;
+    // (Any port: the dummy store, on your own computer.)
+    if (this.cfg.monitor.allowPrivateHosts && sites.has(`${host.replace(/:\d+$/, '')}:*`)) return true;
+    if (want) want.add(host);
+    return false;
   }
 
   /** Is the server being refused by this store lately? (Then admins' browsers check its monitors.) */
@@ -526,8 +594,12 @@ export class Monitor {
     const now = this.now();
     const status = KNOWN.has(res.status) ? res.status : STATUS.ERROR;
     const failed = FAILED.has(status);
+    // (Refused in the admin's browser too: asked again later each time, as members' own are.)
+    this.browserFails ||= new Map();
+    const fails = failed ? (this.browserFails.get(product.id) || 0) + 1 : 0;
+    if (fails) this.browserFails.set(product.id, fails); else this.browserFails.delete(product.id);
     this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id',
-      { n: now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 4) : this.browserInterval), id: product.id });
+      { n: now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails + 1, 5)) : this.browserInterval), id: product.id });
     const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';
     if (!product.url && found) {
       let ok = false;

@@ -198,9 +198,16 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
   /** How its looking is going, in a few words. */
   function stateText(w) {
     if (w.kind === 'link') return '';
-    if (w.error) return h('span', { class: 'warn-text' }, w.error);
+    if (w.error) return h('span', { class: 'warn-text' }, w.error, w.allow ? ` — ${allowText(w.allow)}` : '');
     if (!w.looked) return w.store === OTHER ? 'Looking in a few seconds…' : `Looking at ${w.storeName}'s next search…`;
+    // (The website refusing the server: read from a browser instead.)
+    if (w.via === 'browser') return `read from ${w.shared ? 'an admin\'s browser' : 'your browser'} ${ago(w.lastOkAt || w.lastAt)} (the website refuses the server)`;
     return `looked ${ago(w.lastOkAt || w.lastAt)}`;
+  }
+
+  /** Another website refusing the server: how to have your browser check it instead. */
+  function allowText(host) {
+    return `allow ${host} in the Mugibot extension (its toolbar menu → Allow checks from this browser) and your browser checks it instead`;
   }
 
   function row(w) {
@@ -282,10 +289,13 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
         acts.push(b);
       }
     }
-    const bits = [p.storeName, money(p.price), p.aco ? '🤖 armed' : ARM[p.arm] || ''].filter(Boolean).join(' · ');
+    // (Its store refusing the server: checked from a browser — or, at another website, once you allow it there.)
+    const via = p.via === 'browser' ? (p.itemId ? '🧭 checked from your browser' : '🧭 checked from an admin\'s browser') : '';
+    const bits = [p.storeName, money(p.price), p.aco ? '🤖 armed' : ARM[p.arm] || '', via].filter(Boolean).join(' · ');
     return h('li', {},
       p.image ? h('img', { class: 'thumb', src: p.image, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('div', { class: 'thumb ph', 'aria-hidden': 'true' }, String(p.name || '?').slice(0, 1).toUpperCase()),
-      h('div', { class: 'info' }, h('div', { class: 'name' }, p.name), h('div', { class: 'meta' }, bits)),
+      h('div', { class: 'info' }, h('div', { class: 'name' }, p.name), h('div', { class: 'meta' }, bits),
+        p.allow ? h('div', { class: 'meta warn-text' }, `The website refuses Mugibot's server — ${allowText(p.allow)}.`) : null),
       h('span', { class: `pill ${p.status}` }, STATUS[p.status] || p.status),
       h('div', { class: 'acts' }, ...acts));
   }

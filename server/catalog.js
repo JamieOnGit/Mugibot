@@ -312,6 +312,30 @@ export class Catalog {
       ORDER BY p.browser_next_at LIMIT :limit`, { now, limit, ...Object.fromEntries(stores.map((s, i) => [`s${i}`, s])) });
   }
 
+  /**
+   * Active monitors whose own page refuses the server or fails there (or that an admin's browser
+   * checks already, the server being refused): for admins' browsers to check, at any store.
+   */
+  browserFailing({ stores = [], sites = [] }, now, limit = 5) {
+    // stores: the stores this browser checks at; sites: the other websites it may read (LIKE patterns of their pages).
+    const where = [];
+    const params = { now, limit };
+    if (stores.length) where.push(`p.store IN (${stores.map((s, i) => { params[`s${i}`] = s; return `:s${i}`; }).join(', ')})`);
+    if (sites.length) where.push(`(p.store = 'other' AND (${sites.map((s, i) => { params[`o${i}`] = s; return `p.url LIKE :o${i}`; }).join(' OR ')}))`);
+    if (!where.length) return [];
+    return this.db.all(`SELECT p.* FROM products p JOIN monitors m ON m.product_id = p.id
+      WHERE m.paused = 0 AND p.browser_next_at <= :now AND p.url != '' AND (${where.join(' OR ')})
+        AND (p.status IN ('blocked', 'error') OR p.fail_count > 0 OR p.status_source = 'browser')
+      ORDER BY p.browser_next_at LIMIT :limit`, params);
+  }
+
+  /** The pages of active monitors at other websites refusing the server (for the extension to offer allowing those websites). */
+  failingSitePages(limit = 50) {
+    return this.db.all(`SELECT DISTINCT p.url FROM products p JOIN monitors m ON m.product_id = p.id
+      WHERE m.paused = 0 AND p.store = 'other' AND p.url != '' AND (p.status IN ('blocked', 'error') OR p.fail_count > 0)
+      LIMIT :limit`, { limit }).map((r) => r.url);
+  }
+
   // ---------------------------------------------------------------------------
   // Check log
   // ---------------------------------------------------------------------------

@@ -37,7 +37,7 @@ import './vault.js';
 import './logins.js';
 import { extractProduct, extractProductLinks } from './lib/extract.js';
 import { classify, gateOnPage } from './lib/gate.js';
-import { parseListing } from './lib/listing.js';
+import { parseListing, siteAnswer } from './lib/listing.js';
 
 const CONFIG = globalThis.MGB_CONFIG;
 const Vault = globalThis.MGBVault;
@@ -587,10 +587,10 @@ async function status() {
   const me = await api('GET', `/api/ext/me?v=${encodeURIComponent(VERSION)}&src=${SOURCE}`);
   const still = await getAuth();
   if (!still) return { paired: false, server: SERVER, appName: CONFIG.appName, version: VERSION, disconnected: true, update };
-  const { lastChecks, lastSweeps } = await chrome.storage.local.get(['lastChecks', 'lastSweeps']);
+  const { lastChecks, lastSweeps, needSites } = await chrome.storage.local.get(['lastChecks', 'lastSweeps', 'needSites']);
   return {
     paired: true, server: SERVER, appName: CONFIG.appName, version: VERSION, user: still.user, update,
-    online: me.status === 200, entitlement: me.body && me.body.entitlement, card: await Vault.status(still.user.id), cardBackup: me.status === 200 ? await cardBackupInfo() : undefined, lastChecks: lastChecks || null,
+    online: me.status === 200, entitlement: me.body && me.body.entitlement, card: await Vault.status(still.user.id), cardBackup: me.status === 200 ? await cardBackupInfo() : undefined, lastChecks: lastChecks || null, needSites: needSites || [],
     lastSweeps: lastSweeps || null, sweeping,
   };
 }
@@ -642,6 +642,47 @@ async function checkOne(c, gate) {
   return { id: c.id, status: ex.status, price: ex.price, title: ex.title, image: ex.image && /^https:\/\//.test(ex.image) ? ex.image : null };
 }
 
+// --- other websites (drop watches) -------------------------------------------------
+// A website that refuses Mugibot's server is read from here instead — only once you've allowed the
+// extension to read it (its menu: Allow), never otherwise. The server says which it would.
+/** The other websites this browser may read: those allowed beyond the stores ('*': any). */
+async function otherSites() {
+  try {
+    const { origins = [] } = await chrome.permissions.getAll();
+    const fixed = new Set(chrome.runtime.getManifest().host_permissions || []);
+    if (origins.some((o) => o === '<all_urls>' || o === 'https://*/*')) return ['*'];
+    // (A server on your own computer: the extension reads it, and the dummy store there, on any port.)
+    const dev = ['127.0.0.1', 'localhost'].filter((h) => fixed.has(`http://${h}/*`)).map((h) => `${h}:*`);
+    return [...new Set([...dev, ...origins.filter((o) => !fixed.has(o)).map((o) => (o.match(/^https:\/\/([^/*]+)\/\*$/) || [])[1]).filter(Boolean)])];
+  } catch {
+    return [];
+  }
+}
+
+/** A drop watch's search at another website: its ways in turn, as the server reads them, till one answers. */
+async function readSite(c) {
+  let last = { ok: false, error: "Your browser couldn't read the website" };
+  for (const r of (c.reads || []).slice(0, 3)) {
+    let res;
+    try {
+      res = await fetch(r.url, { credentials: 'include', cache: 'no-store', redirect: 'follow', signal: AbortSignal.timeout(20000) });
+    } catch {
+      last = { ok: false, error: "Your browser couldn't reach the website" };
+      continue;
+    }
+    const type = res.headers.get('content-type') || '';
+    const text = res.ok ? (await res.text()).slice(0, 3_000_000) : '';
+    const got = siteAnswer({ way: r.way, status: res.status, type, text, url: res.url || r.url, by: 'your browser' });
+    if (got.ok) {
+      const products = got.products.slice(0, 150).map((p) => ({ title: p.title, url: p.url, image: p.image || '', price: typeof p.price === 'number' ? p.price : null }));
+      return { id: c.id, ok: true, how: r.way, products };
+    }
+    last = got;
+    if (got.refused) break;
+  }
+  return { id: c.id, ok: false, refused: !!last.refused, error: last.error };
+}
+
 let checking = false;
 async function runChecks() {
   if (checking) return { busy: true };
@@ -651,8 +692,11 @@ async function runChecks() {
   checking = true;
   try {
     // (Stores whose queue this browser got through: it may check them; the others' queues are left alone.)
-    const due = await api('GET', `/api/ext/checks?through=${encodeURIComponent((await throughStores()).join(','))}`);
+    const sites = await otherSites();
+    const due = await api('GET', `/api/ext/checks?through=${encodeURIComponent((await throughStores()).join(','))}&sites=${encodeURIComponent(sites.join(','))}`);
     if (due.status !== 200 || !due.body) return { status: due.status };
+    // (Websites refusing the server that this browser could read, once allowed: offered in the menu.)
+    await chrome.storage.local.set({ needSites: Array.isArray(due.body.sites) ? due.body.sites.slice(0, 20) : [] });
     const results = [];
     const lastByHost = new Map();
     const flows = (await getState()).flows || [];
@@ -663,6 +707,10 @@ async function runChecks() {
       const gap = Date.now() - (lastByHost.get(host) || 0);
       if (gap < 4000) await new Promise((r) => setTimeout(r, 4000 - gap)); // gentle on each store
       lastByHost.set(host, Date.now());
+      if (c.kind === 'site') {
+        results.push(await readSite(c));
+        continue;
+      }
       const r = flows.find((x) => x.id === c.store);
       const out = await checkOne(c, r && r.gate);
       if (out.gate) {

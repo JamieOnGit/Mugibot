@@ -17,6 +17,7 @@ import { chromium } from 'playwright';
 import { EXTENSION_VERSION, writeExtension } from '../server/extension.js';
 import { RETAILER_DEFS } from '../server/retailers/index.js';
 import { startMockStore } from '../devtools/mockstore.js';
+import { otherSku } from '../server/monitor/drops.js';
 import { Client, PASSWORD, discordOpts, interactionKeys, startApp, startFakeDiscord, waitFor } from './helpers.js';
 
 const PROFILE_A = { label: 'Home', firstName: 'Ash', lastName: 'Ketchum', email: 'ash.orders@example.com', phone: '0412345678', address1: '1 Pallet Town Rd', address2: 'Unit 2', suburb: 'Sydney', state: 'NSW', postcode: '2000' };
@@ -1325,6 +1326,36 @@ test('in-browser checks: a store that refuses the server is checked by your brow
   assert.equal(item.status, 'in_stock');
   await waitFor(() => discord.dmsTo('d-ash').length > dmsBefore, { message: 'restock DM' });
   assert.match(discord.dmsTo('d-ash').at(-1).body.embeds[0].description, /Seen by your browser/);
+});
+
+test('🧭 a drop watch at another website that refuses the server: your browser reads its search and its find\'s page instead (as a visitor), and what it finds counts', async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const ash = env.app.repo.userById(userId);
+  const site = store.acmeUrl();
+  const w = await env.app.drops.add({ store: 'other', site, words: 'series x console' }, ash);
+  store.state.blockNonBrowsers = true; // the website turns servers away
+  try {
+    await env.app.drops.look(env.app.drops.get(w.id));
+    assert.match(env.app.drops.get(w.id).error, /refused Mugibot/);
+    const r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.ok(r.checked >= 1, JSON.stringify(r));
+    const after = env.app.drops.get(w.id);
+    assert.equal(after.error, '', 'read from your browser');
+    assert.ok(after.baselineAt);
+    assert.ok(store.state.requests.some((x) => x.path.startsWith('/acme/search') && /Chrome|Mozilla/.test(x.ua)), "your browser's own request, as a visitor");
+    const item = env.app.repo.itemBySku(userId, 'other', otherSku(store.acmeUrl('xbox-series-x-console-1tb')));
+    assert.ok(item, 'its find on your watchlist');
+    // Its page refuses the server too: your browser checks it.
+    await env.app.monitor.checkPage(item.url);
+    env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE id = :id', { id: item.id });
+    await sw.evaluate(() => globalThis.mugibotRunChecks());
+    const it = env.app.repo.getItem(userId, item.id);
+    assert.equal(it.statusSource, 'browser');
+    assert.ok(['in_stock', 'out_of_stock', 'preorder'].includes(it.status), it.status);
+  } finally {
+    store.state.blockNonBrowsers = false;
+    env.app.drops.remove(w.id, ash);
+  }
 });
 
 test("live sweeps from an admin's browser: a store that refuses the server is searched from here, and a new drop alerts", async () => {

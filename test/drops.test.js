@@ -6,7 +6,7 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { Client, discordOpts, makeMember, startApp, startFakeDiscord } from './helpers.js';
+import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
 import { hasWords, otherSku } from '../server/monitor/drops.js';
 import { item as checkItem } from '../server/schema.js';
@@ -710,4 +710,154 @@ test('🎯 drop watches: what can be added, how many, who sees and changes what'
   assert.equal((await boss.del(`/api/drops/${link.id}`)).status, 200);
   assert.equal(env.app.catalog.monitorForProduct(pid), null);
   assert.ok(env.app.catalog.productById(pid));
+});
+
+test("🧭 a drop watch's page the server is refused on (BIG W's, say — the rest of the store answers): an admin's browser checks it instead; members' browsers never do", async () => {
+  const url = store.addProduct('jbhifi', { sku: 'ps5-pro-console-2tb', name: 'PlayStation 5 Pro Console 2TB', price: 1199, status: 'out_of_stock' });
+  const w = (await boss.post('/api/drops', { url, label: 'Series X at JB' })).body.watch;
+  assert.ok(w, 'watch added');
+  const p = env.app.catalog.productById(drops().get(w.id).found[0].productId);
+  const bossDevice = await Device.pair(env.url, boss, 'Boss Chrome');
+  const ashDevice = await Device.pair(env.url, ash, 'Ash Chrome');
+  const due = async (d) => (await d.call('GET', '/api/ext/checks')).body.checks.filter((c) => c.id === `p:${p.id}`);
+  env.app.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: p.id });
+  assert.deepEqual(await due(bossDevice), [], 'the server reads it fine: no browser asked');
+  // Its page turns the server away (the store's other pages still answer: not the whole store struggling).
+  env.app.catalog.updateProduct(p.id, { status: 'blocked', fail_count: 3, error: 'The store refused the server check (HTTP 403)', browser_next_at: 0 });
+  assert.equal(env.app.monitor.serverStruggles('demo-jbhifi'), false);
+  assert.deepEqual(await due(ashDevice), [], "a member's browser never checks what everyone sees");
+  const mine = await due(bossDevice);
+  assert.equal(mine.length, 1, "the admin's browser is asked to check it");
+  assert.equal(mine[0].url, url);
+  assert.deepEqual(await due(bossDevice), [], 'leased: not handed out twice at once');
+  await bossDevice.call('POST', '/api/ext/checks', { results: [{ id: `p:${p.id}`, status: 'out_of_stock', price: 799 }] });
+  let fresh = env.app.catalog.productById(p.id);
+  assert.equal(fresh.status, 'out_of_stock');
+  assert.equal(fresh.status_source, 'browser');
+  const view = () => (boss.get('/api/drops')).then((r) => r.body.watches.find((x) => x.id === w.id).found[0]);
+  assert.equal((await view()).via, 'browser', "said on the watch (admins): checked from an admin's browser");
+  assert.equal((await ash.get('/api/drops')).body.watches.find((x) => x.id === w.id).found[0].via, undefined, 'not to members');
+  // The server refused again meanwhile: what the admin's browser read stands.
+  await env.app.feed.applyCheck(fresh, { status: 'blocked', error: 'HTTP 403' }, { source: 'server', url });
+  assert.equal(env.app.catalog.productById(p.id).status, 'out_of_stock');
+  // It's the admin's browser's to check while it does: asked again at its next turn.
+  env.app.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: p.id });
+  assert.equal((await due(bossDevice)).length, 1);
+  // The server reads it again: back to the server.
+  fresh = env.app.catalog.productById(p.id);
+  await env.app.feed.applyCheck(fresh, { status: 'in_stock', price: 799 }, { source: 'server', url });
+  env.app.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: p.id });
+  assert.deepEqual(await due(bossDevice), [], 'the server reads it again: no browser asked');
+  assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
+});
+
+test("🧭 another website refusing the server (David Jones', say): an admin's browser checks the drop watch's page — once the extension may read that website; till then the dashboard and the extension say to allow it", async () => {
+  const url = store.acmeUrl('xbox-series-x-console-1tb');
+  const host = new URL(url).host;
+  store.state.acme.refuse = true;
+  const w = (await boss.post('/api/drops', { url, label: 'Xbox at Acme' })).body.watch;
+  const p = env.app.catalog.productById(drops().get(w.id).found[0].productId);
+  for (let i = 0; i < 3; i++) await env.app.monitor.checkPage(url);
+  assert.equal(env.app.catalog.productById(p.id).status, 'blocked', 'refused: blocked by site');
+  const bossDevice = await Device.pair(env.url, boss, 'Boss Chrome 2');
+  env.app.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: p.id });
+  // No browser of the admin's has said what it may read (an older extension, or none open): nothing to allow on the dashboard.
+  assert.equal((await boss.get('/api/drops')).body.watches.find((x) => x.id === w.id).found[0].allow, undefined);
+  // Not allowed there yet: not handed out, and the extension's told which website to offer.
+  let r = (await bossDevice.call('GET', '/api/ext/checks?sites=')).body;
+  assert.ok(!r.checks.some((c) => c.id === `p:${p.id}`));
+  assert.ok(r.sites.includes(host), 'the website to allow');
+  let found = (await boss.get('/api/drops')).body.watches.find((x) => x.id === w.id).found[0];
+  assert.equal(found.allow, host, 'the dashboard says to allow it in the extension');
+  // (Refused in the browser too: asked again later each time.)
+  r = (await bossDevice.call('GET', `/api/ext/checks?sites=${encodeURIComponent(host)}`)).body;
+  assert.ok(r.checks.some((c) => c.id === `p:${p.id}`));
+  await bossDevice.call('POST', '/api/ext/checks', { results: [{ id: `p:${p.id}`, status: 'blocked', error: 'HTTP 403' }] });
+  const gap1 = env.app.catalog.productById(p.id).browser_next_at - env.app.repo.now();
+  env.app.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: p.id });
+  await bossDevice.call('GET', `/api/ext/checks?sites=${encodeURIComponent(host)}`);
+  await bossDevice.call('POST', '/api/ext/checks', { results: [{ id: `p:${p.id}`, status: 'blocked', error: 'HTTP 403' }] });
+  assert.ok(env.app.catalog.productById(p.id).browser_next_at - env.app.repo.now() > gap1 * 1.5, 'backing off');
+  env.app.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: p.id });
+  // Allowed: checked from the admin's browser.
+  r = (await bossDevice.call('GET', `/api/ext/checks?sites=${encodeURIComponent(host)}`)).body;
+  assert.ok(r.checks.some((c) => c.id === `p:${p.id}` && c.url === url && c.kind === 'product'));
+  assert.ok(!r.sites.includes(host));
+  await bossDevice.call('POST', '/api/ext/checks', { results: [{ id: `p:${p.id}`, status: 'in_stock', price: 749, title: 'Xbox Series X Console 1TB' }] });
+  assert.equal(env.app.catalog.productById(p.id).status, 'in_stock');
+  found = (await boss.get('/api/drops')).body.watches.find((x) => x.id === w.id).found[0];
+  assert.equal(found.via, 'browser');
+  assert.equal(found.allow, undefined);
+  // A member's browser, allowed everywhere, still never checks it.
+  const mistyDevice = await Device.pair(env.url, misty, 'Misty Chrome');
+  env.app.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: p.id });
+  assert.ok(!(await mistyDevice.call('GET', '/api/ext/checks?sites=*')).body.checks.some((c) => c.id === `p:${p.id}`));
+  store.state.acme.refuse = false;
+  assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
+});
+
+test("🧭 words at another website that refuses the server: read from an admin's browser instead (your own watch: your browser) — only for the watches that browser reads for", async () => {
+  const site = store.acmeUrl();
+  const host = new URL(site).host;
+  store.state.acme.refuse = true;
+  const a = (await boss.post('/api/drops', { store: 'other', site, words: 'series x console' })).body.watch;
+  const m = (await misty.post('/api/drops', { store: 'other', site, words: 'series x console' })).body.watch;
+  await drops().look(drops().get(a.id));
+  assert.equal(drops().get(a.id).fails, 1);
+  assert.match(drops().get(m.id).error, /refused Mugibot/);
+  const bossDevice = await Device.pair(env.url, boss, 'Boss Chrome 3');
+  // (This test's two watches: other tests' watches at the same website may be due too.)
+  const ours = (r) => r.body.checks.filter((c) => c.kind === 'site' && [`d:${a.id}`, `d:${m.id}`].includes(c.id));
+  const mistyDevice = await Device.pair(env.url, misty, 'Misty Chrome 2');
+  // Not allowed there (the admin's browser says what it may read at each check): the dashboard says so on the watch.
+  // (The admin's browsers from the tests before, allowed there, put away first.)
+  env.app.monitor.siteGrants.delete(boss.user.id);
+  await bossDevice.call('GET', '/api/ext/checks?sites=');
+  assert.match((await boss.get('/api/drops')).body.watches.find((x) => x.id === a.id).allow, new RegExp(host.replace(/[.:]/g, '\\$&')));
+  const reads = ours(await bossDevice.call('GET', `/api/ext/checks?sites=${encodeURIComponent(host)}`));
+  assert.deepEqual(reads.map((c) => c.id), [`d:${a.id}`], "the admin's browser: the admin's watch, never the member's own");
+  assert.deepEqual(reads[0].reads.map((x) => x.way), ['suggest', 'search', 'page'], 'the ways the server reads it');
+  assert.match(reads[0].reads[1].url, /\/search\?q=series%20x%20console$/);
+  assert.deepEqual(ours(await bossDevice.call('GET', `/api/ext/checks?sites=${encodeURIComponent(host)}`)), [], 'not again till its turn');
+  // A member's browser can't answer for the admin's watch.
+  assert.equal((await mistyDevice.call('POST', '/api/ext/checks', { results: [{ id: `d:${a.id}`, ok: true, how: 'search', products: [] }] })).body.applied, 0);
+  // The admin's browser read it: its finds, as the server's read would have.
+  const item = { title: 'Xbox Series X Console 1TB', url: store.acmeUrl('xbox-series-x-console-1tb'), price: 749 };
+  const res = await bossDevice.call('POST', '/api/ext/checks', { results: [{ id: `d:${a.id}`, ok: true, how: 'search', products: [item, { title: 'Bad', url: 'javascript:alert(1)' }] }] });
+  assert.equal(res.body.applied, 1);
+  const aw = drops().get(a.id);
+  assert.equal(aw.fails, 0);
+  assert.equal(aw.error, '');
+  assert.ok(aw.baselineAt, 'its first look done');
+  assert.equal(aw.found.length, 1);
+  const av = (await boss.get('/api/drops')).body.watches.find((x) => x.id === a.id);
+  assert.equal(av.via, 'browser');
+  assert.equal(av.allow, '');
+  assert.equal(drops().get(m.id).fails, 1, "the member's own watch isn't the admin's browser's to read");
+  // The server's next look is refused again: the watch says nothing (an admin's browser reads it), and the server asks less often.
+  assert.ok(drops().get(a.id).nextAt - env.app.repo.now() >= 7 * 60 * 1000, "a browser's read keeps the server asking less often");
+  await drops().look(drops().get(a.id));
+  assert.equal(drops().get(a.id).error, '');
+  assert.ok(drops().get(a.id).nextAt - env.app.repo.now() >= 7 * 60 * 1000);
+  // Its next read from the browser: still not the server's every couple of minutes.
+  drops().browserNext.delete(a.id);
+  const again = ours(await bossDevice.call('GET', `/api/ext/checks?sites=${encodeURIComponent(host)}`));
+  assert.deepEqual(again.map((c) => c.id), [`d:${a.id}`], 'read from the browser again at its turn');
+  await bossDevice.call('POST', '/api/ext/checks', { results: [{ id: `d:${a.id}`, ok: true, how: 'search', products: [item] }] });
+  assert.ok(drops().get(a.id).nextAt - env.app.repo.now() >= 7 * 60 * 1000, 'the server still asks less often');
+  assert.ok(drops().get(m.id).fails >= 2, "the member's own still says the website refused it");
+  // The member's own browser reads their own watch — unless they've turned in-browser checks off.
+  const own = ours(await mistyDevice.call('GET', '/api/ext/checks?sites=*'));
+  assert.deepEqual(own.map((c) => c.id), [`d:${m.id}`]);
+  drops().browserNext.delete(m.id);
+  assert.equal((await misty.put('/api/alerts', { browserChecks: false })).status, 200);
+  assert.deepEqual(ours(await mistyDevice.call('GET', '/api/ext/checks?sites=*')), []);
+  assert.equal((await misty.put('/api/alerts', { browserChecks: true })).status, 200);
+  // The website answers the server again: the server's to read once more — no browser asked, and the watch says so.
+  store.state.acme.refuse = false;
+  await drops().look(drops().get(a.id));
+  assert.equal(drops().viaBrowser(drops().get(a.id)), false);
+  assert.equal((await boss.get('/api/drops')).body.watches.find((x) => x.id === a.id).via, '');
+  assert.deepEqual(ours(await bossDevice.call('GET', `/api/ext/checks?sites=${encodeURIComponent(host)}`)), []);
+  for (const [c, id] of [[boss, a.id], [misty, m.id]]) assert.equal((await c.del(`/api/drops/${id}`)).status, 200);
 });

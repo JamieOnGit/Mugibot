@@ -78,6 +78,7 @@ async function render() {
   $('card-status').textContent = cardText(s.card, s.cardBackup);
   $('card-settings').textContent = s.card && s.card.ready ? 'Card settings' : s.cardBackup ? 'Restore your card' : s.card && s.card.saved ? 'Card settings' : 'Add your card';
   $('checks-status').textContent = checksText(s.lastChecks);
+  renderSites(s.needSites || []);
   const sweeps = Object.values(s.lastSweeps || {}).filter((x) => Date.now() - x.at < 30 * 60 * 1000);
   $('sweeps').hidden = !sweeps.length;
   $('sweeps-list').textContent = '';
@@ -114,6 +115,34 @@ async function render() {
     list.appendChild(li);
   }
 }
+
+// Websites refusing Mugibot's server, that this browser could check once allowed (drop watches there).
+let needSites = [];
+function renderSites(list) {
+  needSites = list;
+  $('sites').hidden = !list.length;
+  const ul = $('sites-list');
+  ul.textContent = '';
+  for (const host of list) {
+    const li = document.createElement('li');
+    li.textContent = host;
+    ul.appendChild(li);
+  }
+}
+
+$('sites-allow').addEventListener('click', async () => {
+  // (Asked of you here, by Chrome: only these websites, and you can take it back in the extension's details.)
+  let ok = false;
+  // (With and without www: a website often sends one to the other.)
+  const hosts = needSites.flatMap((h) => (/:\d+$/.test(h) ? [h] : h.startsWith('www.') ? [h, h.slice(4)] : [h, `www.${h}`]));
+  try { ok = await chrome.permissions.request({ origins: [...new Set(hosts)].map((h) => `https://${h}/*`) }); } catch { ok = false; }
+  $('sites-msg').textContent = ok ? 'Allowed — checking them now…' : 'Not allowed: drop watches there are left to the server.';
+  $('sites-msg').className = `msg ${ok ? 'ok' : 'err'}`;
+  if (!ok) return;
+  await chrome.storage.local.set({ needSites: [] });
+  await ask({ type: 'checkNow' });
+  render();
+});
 
 // The store login monitor: signed in, not signed in, or not seen yet — with a link to sign in.
 function renderLogins(d) {
