@@ -150,16 +150,16 @@ test("🛍️ Shop checkout links: a section of their own under My watchlist —
   const owner = env.app.repo.userByUsername('owner');
   const { device } = env.app.repo.addDevice(owner.id, 'Chrome on the desk', '1.24.0');
   try {
-    // (An older extension's reading of Shop's account page: not believed.)
+    // (An older extension's reading of Shop's pages: not believed — only the checkout's screen, or a run.)
     env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'out', at: Date.now(), how: 'check' } });
     await page.reload();
     await page.click('#pt-watch');
     await page.waitForFunction(() => /Not seen on Shop's checkout yet/.test(document.querySelector('#sl-signin').textContent));
-    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'in', at: Date.now(), how: 'page' } });
+    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'in', at: Date.now(), how: 'screen' } });
     await page.reload();
     await page.click('#pt-watch');
     await page.waitForFunction(() => /Signed in to Shop in Chrome on the desk \(seen on Shop's checkout/.test(document.querySelector('#sl-signin').textContent));
-    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'out', at: Date.now() + 1000, how: 'page' } });
+    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'out', at: Date.now() + 1000, how: 'run' } });
     await page.reload();
     await page.click('#pt-watch');
     await page.waitForFunction(() => /Signed out of Shop in Chrome on the desk/.test(document.querySelector('#sl-signin').textContent));
