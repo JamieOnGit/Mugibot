@@ -373,6 +373,17 @@ before the drop, add that as well: its page is read directly.
 Settings (environment variables): `VIP_FAST_SECONDS` (5), `VIP_SLOW_SECONDS`
 (15), `VIP_SWEEP_SECONDS` (4).
 
+### 🛍️ Shop checkout links
+
+A member's **checkout link** at a store that checks out with Shop
+(`…/cart/<variant>:<qty>,…`, on **My watchlist → 🛍️ Shop checkout links**) is watched
+by the server every 20 seconds, option by option: the store's own
+`/variants/<id>.js` for each, read honestly as Mugibot, in stock once every one is,
+its price the link's (each option's price times its quantity). The link itself is
+never opened by the server, and never by members' browsers' checks (it would start
+a checkout). The alert is the member's own DM with ⚡ Buy; armed, Auto-checkout buys
+it on Shop's checkout ([AUTO-CHECKOUT.md](AUTO-CHECKOUT.md#️-shop-checkout-links)).
+
 ### 🎯 Drop watches: anything that isn't the card keywords
 
 **Drops → 🎯 Drop watches** (a tab of the lists, for everyone with a

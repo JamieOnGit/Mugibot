@@ -1395,8 +1395,7 @@ async function renderAcoChecks() {
   const ext = await detectExtension();
   state.ext = ext;
   const mine = ext.installed && ext.paired && ext.userId === state.me.user.id;
-  // (A store the extension checks out at from a later version: Shop checkout links, on Shop's checkout.)
-  const minV = it.acoVersion && versionBelow(state.aco.extensionVersion || '1.10.0', it.acoVersion) ? it.acoVersion : state.aco.extensionVersion || '1.10.0';
+  const minV = state.aco.extensionVersion || '1.10.0';
   const extOk = mine && !versionBelow(ext.version, minV);
   const card = mine ? ((await askExtension('cardStatus')) || {}).card : null;
   const backup = card && card.ready ? null : (await api('GET', '/api/card-backup').catch(() => ({}))).backup;

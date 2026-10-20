@@ -49,6 +49,14 @@ community. Built on TCGCopBot's working Kmart flow.
   gets their checkout browser in line by itself, and anyone can from Discord
   (📥 Join the queue on my computer). See
   [docs/MONITORING.md](docs/MONITORING.md#-checkpoints-and-virtual-queues).
+- **🛍️ Shop checkout links.** At stores that check out with Shop (Mattel
+  Creations, say), watch and arm the store's checkout link itself
+  (`…/cart/48835830579405:2,40653613531341:1`): every option checked every 20
+  seconds, ⚡ Buy and Auto-checkout open Shop's checkout with your Shop details
+  and card, tick the store's required boxes (its membership agreement — never
+  newsletters) and press **Pay now**. The extension checks you're signed in to
+  Shop, which it needs. See
+  [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md#️-shop-checkout-links).
 - **🎯 Drop watches: anything that isn't the card keywords.** A console at
   JB Hi-Fi, a figure at any shop: paste its link, or type the words in its name
   and where to look (a store Mugibot searches, or any other website). An admin's
@@ -247,7 +255,7 @@ the passphrase backup.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 374 tests in about sixteen minutes:
+the 383 tests in about sixteen minutes:
 
 ```bash
 npm install
@@ -285,6 +293,17 @@ npm test
 - **Kmart's "In store only"**: its own status — the alert says it can't be
   ordered online, with no ⚡ Buy, and nobody's Auto-checkout starts; online
   later that day, it alerts as a restock all the same.
+- **Shop checkout links** (`test/shoplink.test.js`, and the 🛍️ end-to-end tests on
+  a Shop-style dummy checkout): any store's cart link is one, a known store's stays
+  its own, a Shop page isn't one; watched option by option (honestly as Mugibot,
+  the link never opened by the server), in stock once every one is, its price the
+  link's; armed, the browser opens the link itself; signed out of Shop or with an
+  extension before 1.22.0 it doesn't start; a tab that never reaches Shop says so,
+  but not once it got going. In Chromium: the agreement ticked, the newsletter box
+  and "Check out as guest" left alone, the total checked, "Pay now" — placed as
+  Shop goes on to the store's order page; "not available for purchase" stops it
+  with nothing pressed; signed out, the run says so in seconds and Shop shows
+  signed out until the extension's check sees it signed in.
 - **A checkpoint from the phone** (`test/phone.test.js`, and the 📱 end-to-end
   test): ⚡ Buy while JB Hi-Fi's checkpoint is up says so, with 🖥️ Solve it on
   my computer and 📱 Finish on this phone; the reply and DM at the checkpoint

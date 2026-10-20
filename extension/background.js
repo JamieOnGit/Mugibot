@@ -1637,6 +1637,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // A ⚡ Buy code: confirm it once, then allow checkout autofill in this tab.
         const auth = await getAuth();
         if (!auth || !sender.tab) return null;
+        // Only on a store's page (one with a flow): a link that went somewhere else — a Shop checkout link
+        // sent on to the store's own guest checkout — leaves its code unused. (The flows this browser has,
+        // read here, never fetched: nothing waits on them.)
+        const { [`state:${auth.user.id}`]: known } = await chrome.storage.local.get(`state:${auth.user.id}`);
+        if (known && Array.isArray(known.flows) && known.flows.length && !storeOfUrl(known.flows, sender.url || sender.tab.url)) return { ok: false, status: 0, elsewhere: true };
         const res = await api('POST', '/api/ext/claim', { code: msg.code });
         if (res.status === 200 && res.body && res.body.ok) {
           // (An Auto-checkout run's code: the run's limits ride on this tab's pass, never on the page.)

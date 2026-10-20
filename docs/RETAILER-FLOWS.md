@@ -53,6 +53,7 @@ checkout as fast as the store allows:
 | Collectible Madness | `collectiblemadness.js` | 🟦 beta | The same as Pokébox (Shopify), at **collectiblemadness.com.au** (www. sends you there). |
 | Cherry Collectables | `cherrycollectables.js` | 🟦 beta | The same as Pokébox (Shopify). |
 | The Gamesmen | `gamesmen.js` | 🟦 beta | Magento (its Hyvä theme: its search tiles are `div[data-ga-type="product-list-item"]`, read by `gamesmenTiles` in `listing.js` from a copy of its real page; searched newest first). From a member's walk-through (Oct 2026): "Add to Cart" / "Pre-order" → "You added … to your shopping cart" → straight to checkout → Shipping Address (email, first and last name, street address, suburb, state/territory, postcode, country Australia, mobile / phone) → "I have a different billing address" left unticked (`untick`) → Shipping Methods: "Standard", else the first one offered (`shippingFallback: 'first'`) → "Credit card" → card number, expiry, security code → the terms box ticked → "CONFIRM AND PAY". Signed in with your address saved: the same without the address. Its card form's provider wasn't visible from outside: the general card rules cover the usual ones. |
+| Shop checkout links | `shoplink.js` | 🟦 beta | Not one store: **any store's own cart link** (`…/cart/<variant>:<qty>,<variant>:<qty>`, e.g. Mattel Creations') at a store that checks out with Shop. A cart link at a store Mugibot doesn't know is one of these (`cartLinks`); the link opens Shop's checkout (`shop.app/checkout/…/shoppay`, where the extension runs) with your Shop address, delivery and card in. Nothing of yours is typed (`ownDetails`); the store's boxes are ticked — its membership agreement (`tick`) and any box marked required (`tickRequired`), never newsletters — "Check out as guest" is never pressed (`notFinal`), the store saying "not available for purchase" stops it (`unavailable`), and its "You must accept membership agreement" notice isn't a reason to stop (`ignoreErrors`). → "Pay now". Shop then goes on to the store's own order page, another address (`leaves`): that's the order placed. **Signed in to Shop only**: signed out, the link goes to the store's guest checkout, where Mugibot doesn't run. Extension 1.22.0 (`acoVersion`). Tested on a Shop-style dummy checkout (`/creations` + `/shopapp`). |
 | Games World | `gamesworld.js` | 🟦 beta | WooCommerce. Its add-to-cart link (`/checkout/?add-to-cart=<id>&quantity=1`, a simple product's id) → checkout: email, first and last name, Country/Region, street address, suburb, state (selectWoo's drop-down over the real one), postcode, phone → "Deliver to a different address?" unticked (it can come ticked) → Standard Shipping → Stripe's card form (card number, MM/YY, security code), or with Stripe's Link connected its card and "Confirm" (`frameConfirm`) → "Place order". Signed in, your saved details are left as they are. |
 
 - **verified**: tested on the real store.
@@ -188,6 +189,12 @@ export default {
       // untick: [/deliver to a different address/i],         // boxes to have unticked (unticked if they come ticked)
       // frameConfirm: [/^confirm$/i], // a payment frame showing a card it already has (Stripe's Link): its button,
       //                               //   pressed once instead of typing a card
+      // tickRequired: true,           // also tick any box the checkout marks as required (never a newsletter's)
+      // ownDetails: true,             // the checkout has your details and card already (Shop's): nothing typed, its choices left alone
+      // unavailable: [/not available for purchase/i],  // the store won't sell it now: stop, nothing bought
+      // ignoreErrors: [/must accept (the )?membership agreement/i],  // a notice that isn't a reason to stop (about a box Mugibot ticks)
+      // leaves: true,                 // after the final button the checkout goes on to another address (Shop's, to the store's
+      //                               //   order page): the order's seen placed when that address is `done`
     },
   },
 };

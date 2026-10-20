@@ -1958,6 +1958,13 @@ async function dropLink(link) {
   await env.app.monitor.checkPage(link);
 }
 const closeShopPages = async () => { for (const pg of ctx.pages()) if (/\/(shopapp|creations)\//.test(pg.url())) await pg.close(); };
+/** Signed in to the dummy Shop (or not), as the extension's own check of Shop's account page sees it. */
+async function shopSignedIn(on) {
+  store.state.shopapp.signedIn = on;
+  await sw.evaluate(() => globalThis.mugibotCheckLogins({ force: true }));
+  const want = on ? 'in' : 'out';
+  await waitFor(async () => (await browserApi('GET', '/api/logins')).body.stores.find((x) => x.id === 'demo-shoplink').status === want, { message: `Shop seen signed ${want}` });
+}
 /** Room in the day's limits for a link's order (Shop's delivery on top): the limit as it was, to put back. */
 async function roomForALink() {
   env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
@@ -1969,7 +1976,7 @@ async function roomForALink() {
 test("🛍️ Auto-checkout of a Shop checkout link (Mattel Creations-style, two options): it drops → the link opens Shop's checkout with your Shop address, delivery and card → the membership agreement ticked (never the newsletter box), \"Check out as guest\" never pressed → the total checked → \"Pay now\" — placed, seen as Shop goes on to the store's order page", async () => {
   const putBack = await roomForALink();
   try {
-    store.state.shopapp.signedIn = true;
+    await shopSignedIn(true);
     const link = store.cartLink([[PORSCHE, 2], [RLC, 1]]);
     await useItems([{ url: link, name: 'ACO RLC link', maxPrice: 90, aco: true }]);
     await acoListen();
@@ -1998,7 +2005,7 @@ test("🛍️ Auto-checkout of a Shop checkout link (Mattel Creations-style, two
 test("🛍️ a Shop checkout link where the store won't sell it (\"This Product is not available for purchase\"): Auto-checkout stops at Shop's checkout and says so — \"Pay now\" never pressed", async () => {
   const putBack = await roomForALink();
   try {
-    store.state.shopapp.signedIn = true;
+    await shopSignedIn(true);
     store.state.shopapp.unavailable = true;
     const link = store.cartLink([[PORSCHE, 1]]);
     await useItems([{ url: link, name: 'ACO RLC members only', maxPrice: 60, aco: true }]);
@@ -2020,12 +2027,15 @@ test("🛍️ a Shop checkout link where the store won't sell it (\"This Product
 test("🛍️ signed out of Shop: the link goes on to the store's own guest checkout (no Mugibot there) — the run says so within half a minute, left in its tab for you, and Shop shows as signed out; signed in again, the extension's check sees it", async () => {
   const putBack = await roomForALink();
   try {
+    // Seen signed in to Shop at the last check — then its session lapsed: the link goes to the store's guest checkout.
+    await shopSignedIn(true);
     store.state.shopapp.signedIn = false;
     const link = store.cartLink([[RLC, 1]]);
     await useItems([{ url: link, name: 'ACO RLC signed out', maxPrice: 20, aco: true }]);
     await acoListen();
     await dropLink(link);
-    await waitFor(async () => { const r = await lastRun(); return r && r.name === 'ACO RLC signed out' && r.reason === 'no_shop'; }, { timeout: 45000, message: 'the run says Shop\'s checkout didn\'t open' });
+    await waitFor(async () => { const r = await lastRun(); return r && r.name === 'ACO RLC signed out' && r.reason === 'no_shop'; }, { timeout: 45000, message: 'the run says Shop\'s checkout didn\'t open' })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify(await lastRun())}`); });
     const run = await lastRun();
     assert.equal(run.status, 'needs_you');
     assert.match(run.message, /sign in to Shop/);
@@ -2034,10 +2044,14 @@ test("🛍️ signed out of Shop: the link goes on to the store's own guest chec
     assert.equal(store.state.shopapp.orders.length, 0);
     await waitFor(async () => (await browserApi('GET', '/api/logins')).body.stores.find((x) => x.id === 'demo-shoplink').status === 'out', { message: 'Shop: signed out' });
     // Signed in at Shop again: the store login monitor's check (shop.app/account, with your cookies) sees it.
-    store.state.shopapp.signedIn = true;
-    await sw.evaluate(() => globalThis.mugibotCheckLogins({ force: true }));
-    await waitFor(async () => (await browserApi('GET', '/api/logins')).body.stores.find((x) => x.id === 'demo-shoplink').status === 'in', { message: 'Shop: signed in again' });
+    await shopSignedIn(true);
     assert.ok(store.state.shopapp.accountViews > 0, "Shop's account page read");
+    // …and seen signed out, Auto-checkout doesn't start at all (it says why).
+    await shopSignedIn(false);
+    await browserApi('PUT', `/api/items/${(await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO RLC signed out').id}`, { aco: true });
+    await dropLink(link);
+    await waitFor(async () => { const r = await lastRun(); return r && r.reason === 'signed_out'; }, { message: 'skipped: signed out of Shop' });
+    assert.equal(store.state.shopapp.guestViews, 1, 'nothing opened');
   } finally {
     await putBack();
     await closeShopPages();
