@@ -125,6 +125,8 @@ export function defaultShops() {
       // opens, long before a slow picture lets the page finish loading (slowLoadMs).
       // vueMs: the same for a Vue page (Premium Bandai's).
       reactMs: 0, slowLoadMs: 0, vueMs: id === 'pbandai' ? 600 : 0,
+      // searchDelayMs: its search pages and search API answer this much later (a slow store).
+      searchDelayMs: 0,
       // Search pages that only fill in their products once open (like Pokémon Center's and Premium Bandai's).
       clientSearch: id === 'pokemoncenter' || id === 'pbandai',
       // A bot check's page first, which reloads the page after a moment (Pokémon Center's search; the delay in ms).
@@ -2146,6 +2148,8 @@ ${A.agreement ? '<label class="agree"><input type="checkbox" id="membership" nam
     const shop = m[1];
     const sub = m[2] || '/';
     const S = shopOf(shop);
+    // A shop whose search is slow to answer (searchDelayMs): its search pages and search APIs.
+    if (S.searchDelayMs && /search|cnstrc/i.test(sub)) await new Promise((r) => setTimeout(r, Math.min(30000, Number(S.searchDelayMs))));
     // A shop answering "too many requests, wait N seconds" (state.tooMany[shop] = N), like Shopify's 429.
     if (state.tooMany && state.tooMany[shop] && !sub.startsWith('/img/')) {
       res.writeHead(429, { 'content-type': 'text/plain', 'retry-after': String(state.tooMany[shop]) });

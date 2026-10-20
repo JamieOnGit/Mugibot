@@ -27,7 +27,8 @@ export default {
   // Live sweeps: BIG W refuses servers (its search API too), so an admin's browser (the
   // extension) reads its search page. The page builds its product list once it's open, so the
   // extension opens it (in a minimised window of its own), waits for the products, then reads them.
-  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20 },
+  // At most one search every 10 s: about what a person refreshing it does (its page takes ~5 s to build).
+  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 10 },
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
   account: { signIn: '' },

@@ -491,6 +491,35 @@ var MGBQuick = (function () {
     return shown.find(function (p) { return (!R || p.store === R.id) && path.indexOf(String(p.sku).toLowerCase()) !== -1; }) || null;
   }
 
+  /**
+   * A product page at this store that isn't on your watchlist (a link from another Discord, say): the
+   * product as the page shows it — its code from the address (the store's own pattern, else the last
+   * part of it), its name from the page. null where this isn't a product page: the bag, checkout, or a
+   * page that neither has the store's product address, says it's a product, nor shows a buy button.
+   */
+  function pageProduct(R) {
+    if (!R || onBagPage(R) || onCheckoutPage(R)) return null;
+    var path = MGBFlows.decodedPath(location);
+    var m = R.skuFromPath ? path.match(R.skuFromPath) : null;
+    var og = document.querySelector('meta[property="og:type"]');
+    // (The page's data saying it's one product — its top level, not a list of them on a search page.)
+    var ld = toArray(document.querySelectorAll('script[type="application/ld+json"]')).some(function (x) {
+      try {
+        var d = JSON.parse(x.textContent || 'null');
+        return [].concat((d && d['@graph']) || d || []).some(function (o) { return o && [].concat(o['@type'] || []).indexOf('Product') >= 0; });
+      } catch (e) { return false; }
+    });
+    // A product's own address, or the page saying it's one product (og:type "product", not "product.group") —
+    // never just an Add button: a search or category page has one on every tile.
+    var looks = !!m || !!(R.productPath && R.productPath.test && R.productPath.test(path)) || /^(og:)?product$/i.test(String((og && og.content) || '').trim()) || ld;
+    if (!looks) return null;
+    var sku = m ? m[1] : (path.split('/').filter(Boolean).pop() || '');
+    var h1 = toArray(document.querySelectorAll('h1')).find(function (el) { return isVisible(el) && !inAnyPanel(el); });
+    var title = document.querySelector('meta[property="og:title"]');
+    var name = ((h1 && h1.innerText) || (title && title.content) || document.title || sku).replace(/\s+/g, ' ').trim().slice(0, 120);
+    return { sku: String(sku || name).slice(0, 80), name: name || sku, url: location.href.split('#')[0], store: R.id, fromPage: true };
+  }
+
   async function waitForEl(find, ms) {
     var end = Date.now() + (ms || 0);
     for (;;) {
@@ -672,7 +701,9 @@ var MGBQuick = (function () {
       store.clear();
       if (onCheckoutPage(R)) { setStatus('At checkout — filling it in…'); return 'checkout'; }
       if (onBagPage(R)) return checkoutFromBag();
-      if (!product) { setStatus('Open one of your SKUs first (list below).'); return 'error'; }
+      // Not on your watchlist (a link from somewhere else): the product this page shows, all the same.
+      if (!product) product = pageProduct(R);
+      if (!product) { setStatus('This isn\'t a product page — open the product, then press this again.'); return 'error'; }
       // Shopify and WooCommerce: the store's own cart link puts it in the cart and opens checkout — no clicks.
       if (R && R.cartPath && R.cartPath.indexOf('{variant}') !== -1) {
         setStatus('Opening checkout with it in your cart…');
@@ -1023,8 +1054,10 @@ var MGBQuick = (function () {
     var products = opts.products || [];
     function renderProducts() {
       var cur = productForPage(products, R);
+      // (A product that isn't on your watchlist: the page's own — the button works for it too.)
+      var here = cur ? null : pageProduct(R);
       info.textContent = cur ? cur.name + ' · SKU ' + cur.sku
-        : onBagPage(R) ? 'Your bag' : onCheckoutPage(R) ? 'Checkout' : 'Open one of your SKUs';
+        : onBagPage(R) ? 'Your bag' : onCheckoutPage(R) ? 'Checkout' : here ? here.name + ' (not on your watchlist)' : 'Open a product';
       info.title = info.textContent;
       // This store's SKUs first.
       var shown = products.filter(function (p) { return p.url; }).sort(function (a, b) { return (b.store === (R && R.id)) - (a.store === (R && R.id)); });
@@ -1102,6 +1135,9 @@ var MGBQuick = (function () {
     stop.addEventListener('click', function (e) { if (e.isTrusted && opts.onStop) opts.onStop(); });
 
     renderProducts();
+    // (A page that draws its product a moment later: its name, once it's there.)
+    setTimeout(renderProducts, 1500);
+    setTimeout(renderProducts, 4000);
     applyCollapsed();
     document.body.appendChild(panel);
     return {
@@ -1136,6 +1172,7 @@ var MGBQuick = (function () {
     onCheckoutPage: onCheckoutPage,
     onBagPage: onBagPage,
     productForPage: productForPage,
+    pageProduct: pageProduct,
     dropCartParams: dropCartParams,
     run: run,
     makePanel: makePanel,

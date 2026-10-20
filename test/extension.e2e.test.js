@@ -405,6 +405,42 @@ test('Kmart flow (verified): ⚡ Buy → added → straight to checkout → deta
   await dash.close();
 });
 
+test("a product that isn't on your watchlist (a link from another Discord): the panel's \"Add to bag → Checkout\" checks it out the same way — Kmart's add and checkout, and JB Hi-Fi's Shopify cart link — to the final button", async () => {
+  await useItems([]);
+  // (What the extension has of your watchlist, fetched afresh: nothing on it.)
+  await sw.evaluate(async () => { const all = await chrome.storage.local.get(null); await chrome.storage.local.remove(Object.keys(all).filter((k) => k.startsWith('state:'))); });
+  // Kmart: its own product page, opened straight from a link.
+  const kmart = await ctx.newPage();
+  await kmart.goto(store.productUrl('kmart', '43818587'));
+  await panel(kmart).waitFor();
+  await kmart.waitForFunction(() => /\(not on your watchlist\)/.test(document.querySelector('#mugibot-qc').textContent));
+  assert.doesNotMatch(await panel(kmart).textContent(), /Open one of your SKUs/);
+  await panel(kmart).getByRole('button', { name: 'Add to bag → Checkout' }).click();
+  await kmart.waitForURL(/\/kmart\/checkout$/, { timeout: 20000 });
+  await waitReady(kmart, 'Checkout securely');
+  assert.deepEqual(store.shop('kmart').cart.map((c) => [c.sku, c.qty]), [['43818587', 1]], 'one of it, in the bag');
+  assert.equal(await kmart.inputValue('input[name=cardNumber]'), '4242 4242 4242 4242', "card from this browser's vault");
+  assert.equal(ordersPlaced(), 0, 'the final button is yours, as ever');
+  await kmart.close();
+  // JB Hi-Fi (Shopify): straight to checkout with its cart link, the product's option read off the page.
+  const handle = 'pokemon-tcg-30th-celebration-etb';
+  const jb = await ctx.newPage();
+  await jb.goto(store.productUrl('jbhifi', handle));
+  await panel(jb).waitFor();
+  await panel(jb).getByRole('button', { name: 'Add to bag → Checkout' }).click();
+  await reach(jb, /\/jbhifi\/checkouts\/c\/abc123/);
+  await waitReady(jb, 'Pay now');
+  assert.deepEqual(store.shop('jbhifi').cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+  await jb.close();
+  // A page that isn't a product (the store's front page): says so, adds nothing.
+  const home = await ctx.newPage();
+  await home.goto(`${store.url}/kmart/`);
+  await panel(home).waitFor();
+  await panel(home).getByRole('button', { name: 'Add to bag → Checkout' }).click();
+  await home.waitForFunction(() => /isn't a product page/.test(document.querySelector('#mugibot-qc').textContent));
+  await home.close();
+});
+
 test('Kmart on a fresh, slow page: never opens the bag before the item is in it', async () => {
   // Like kmart.com.au straight after ⚡ Buy opens it: "Add to bag" shows before the
   // page's code has started (pressing it does nothing yet), and adding takes a while.
@@ -1284,6 +1320,41 @@ test("server first: Mugibot's server searches the store; refused 3 times, this a
   }
 });
 
+test("⚡ an admin's browser searches each store on its own, side by side: a slow store (BIG W's page taking 6 s to answer) never holds up the others — Kmart searched every 2 s meanwhile, its finds in at once — and a store is never searched twice at once", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 2, stores: { ...off, 'demo-kmart': 'browser', 'demo-bigw': 'browser' } }, null);
+  for (const id of ['demo-kmart', 'demo-bigw']) Object.assign(sweeper.stat(id), { browserNext: 0, fails: 0, slowUntil: 0 });
+  assert.equal(sweeper.settings.browserEverySeconds, 2, 'down to 2 s between searches from an admin\'s browser');
+  store.shop('bigw').clientSearch = true;
+  store.shop('bigw').searchDelayMs = 6000;
+  const kmart = () => store.state.requests.filter((x) => x.path.startsWith('/kmart/cnstrc/search') && /Chrome|Mozilla/.test(x.ua)).length;
+  const bigw = () => store.state.requests.filter((x) => x.path.startsWith('/bigw/search')).length;
+  const since = Date.now();
+  const tookIn = (id) => (sweeper.health().find((x) => x.store === id) || { terms: [] }).terms.some((t) => t.source === 'browser' && t.lastOkAt > since);
+  const bigwIn = () => tookIn('demo-bigw');
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => bigw() > 0, { timeout: 20000, message: "BIG W's search asked for" });
+    const k0 = kmart();
+    const b0 = bigw();
+    // While BIG W's page is still on its way: Kmart searched again and again, and its results taken.
+    await waitFor(() => kmart() >= k0 + 2, { timeout: 5500, message: 'Kmart searched twice more while BIG W was still answering' });
+    assert.equal(bigwIn(), false, "(BIG W's search hadn't come back yet)");
+    assert.equal(bigw(), b0, 'BIG W not asked again while its search is going (one at a time at a store)');
+    await waitFor(() => tookIn('demo-kmart'), { timeout: 3000, message: "Kmart's finds taken meanwhile" });
+    assert.equal(bigwIn(), false, "(still before BIG W's answer)");
+    // …and BIG W's, once its page is in.
+    await waitFor(bigwIn, { timeout: 20000, message: "BIG W's results taken once its page answered" });
+  } finally {
+    store.shop('bigw').searchDelayMs = 0;
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ browserEverySeconds: 5, stores: off }, null);
+  }
+});
+
 test("BIG W's search page builds its products once it's open: an admin's browser opens it in a window of its own, waits, and reads them; ↻ Reset opens it afresh", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;
@@ -1309,7 +1380,17 @@ test("BIG W's search page builds its products once it's open: an admin's browser
     const tabs = ctx.pages().filter((pg) => pg.url().includes('/bigw/search'));
     assert.equal(tabs.length, 1);
     await tabs[0].waitForTimeout(1500);
-    assert.equal(await tabs[0].evaluate((id) => !!document.getElementById(id), 'mugibot-qc'), false);
+    // (Its next search may be opening in that tab by now — BIG W's every 10 s: the page it's on is asked.)
+    const panel = async () => {
+      for (let i = 0; ; i++) {
+        try { return await tabs[0].evaluate((id) => !!document.getElementById(id), 'mugibot-qc'); } catch (e) {
+          if (i >= 5 || !/context was destroyed|navigat/i.test(e.message)) throw e;
+          await tabs[0].waitForLoadState('domcontentloaded').catch(() => null);
+          await tabs[0].waitForTimeout(1500);
+        }
+      }
+    };
+    assert.equal(await panel(), false);
 
     // ↻ Reset: the store's tab is closed and opened again at its front page, then searched as before.
     const fronts = () => store.state.requests.filter((x) => x.path === '/bigw' || x.path === '/bigw/').length;
