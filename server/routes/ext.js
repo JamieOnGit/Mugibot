@@ -293,7 +293,8 @@ export function register(router, ctx) {
     if (!limiter.hit(`sweeps:${req.device.id}`, 120, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     // Which version this copy of the extension is (it says, since 1.8.1; before that, the one it connected with).
     const version = str(req.query.get('v'), 20) || req.device.version || '';
-    return ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through: throughFrom(req.query.get('through')) });
+    // (busy: the stores this browser is still searching — the same list as `through`.)
+    return ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through: throughFrom(req.query.get('through')), busy: throughFrom(req.query.get('busy')) });
   }, { auth: 'device' });
 
   // …and what they found.

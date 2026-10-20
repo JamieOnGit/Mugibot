@@ -489,8 +489,9 @@
     products: items,
     note,
     onStart: async () => {
-      // Your click on the panel: fill in checkout afterwards too.
-      const item = MGBQuick.productForPage(items, retailer);
+      // Your click on the panel: fill in checkout afterwards too. (A product not on your watchlist — a link
+      // from another Discord — is checked out the same way: the page's own product.)
+      const item = MGBQuick.productForPage(items, retailer) || MGBQuick.pageProduct(retailer);
       // (Another checkout of yours going at this store — its one bag: this one once that's done.)
       const turn = await ask({ type: 'turn', name: item && item.name });
       if (turn && turn.go === false) {

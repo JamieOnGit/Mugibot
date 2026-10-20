@@ -337,3 +337,25 @@ test("The Gamesmen (its Cloudflare turns servers away): refused once, an admin's
   }
   sw.save({ stores: { ...sw.settings.stores, [id]: 'off', 'demo-pokebox': 'off', 'demo-gamesworld': 'off' } }, null);
 });
+
+test("⚡ an admin's browser, searching each store on its own: a store it's still searching (busy) isn't handed out again until that search is in — no two at once there, no keyword's turn lost — and its pace can be as quick as 2 s", async () => {
+  fresh('demo-bigw');
+  const mode = sw.settings.stores['demo-bigw'] || 'auto';
+  sw.save({ stores: { ...sw.settings.stores, 'demo-bigw': 'browser' } }, null);
+  let r = await boss.put('/api/monitor/sweep', { browserEverySeconds: 2 });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(sw.settings.browserEverySeconds, 2);
+  assert.equal(sw.paceFor(R('demo-gamesmen'), true), 2000, 'a store with no floor of its own: the set pace');
+  assert.equal(sw.paceFor(R('demo-bigw'), true), 10000, "BIG W's own floor: one search every 10 s");
+  r = await boss.put('/api/monitor/sweep', { browserEverySeconds: 1 });
+  assert.equal(sw.settings.browserEverySeconds, 2, '2 s at the quickest');
+  const turn = sw.stat('demo-bigw').turn;
+  const held = sw.browserDue(admin, { version: '99.0.0', busy: new Set(['demo-bigw']) });
+  assert.ok(!held.terms.some((t) => t.store === 'demo-bigw'), 'not given while its search is going');
+  assert.equal(sw.stat('demo-bigw').turn, turn, "its keyword's turn kept for the next one");
+  assert.ok(held.waitMs !== null && held.waitMs <= 2000, 'asked about again shortly');
+  assert.ok(due('demo-bigw'), 'given again once its search is in');
+  await boss.put('/api/monitor/sweep', { browserEverySeconds: 15 });
+  sw.save({ stores: { ...sw.settings.stores, 'demo-bigw': mode } }, null);
+  fresh('demo-bigw');
+});

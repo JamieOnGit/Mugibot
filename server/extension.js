@@ -30,6 +30,8 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // 1.22.0: Shop checkout links (retailers/shoplink.js) — runs on Shop's checkout (shop.app): the store's
 // required boxes ticked, "Pay now", the order seen placed as Shop goes on to the store's order page; and
 // a link that never reaches Shop (signed out of it) said in seconds. The store's acoVersion says so.
+// 1.23.0: the panel's "Add to bag → Checkout" checks out a product that isn't on your watchlist (read off
+// its page); an admin's browser searches each store on its own, side by side (busy=…), not one after another.
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.

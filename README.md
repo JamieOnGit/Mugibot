@@ -17,7 +17,9 @@ community. Built on TCGCopBot's working Kmart flow.
   to checkout once it's in. The browser extension then fills in delivery details
   and card, following **that store's own checkout flow**, and **stops at the
   store's final button** ("Checkout securely", "Place order") for the member to
-  press.
+  press. The panel on the store's page does the same for a product that isn't
+  on the watchlist (a link from another Discord): open it, press **Add to bag →
+  Checkout**.
 - **Auto-checkout (optional, per member).** A member who switches it on and
   agrees can **arm** items (each with a max price). When one drops, their own
   browser checks out by itself: adds it, closes "add more" pop-ups (Target's
@@ -255,7 +257,7 @@ the passphrase backup.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 383 tests in about sixteen minutes:
+the 386 tests in about sixteen minutes:
 
 ```bash
 npm install
@@ -293,6 +295,16 @@ npm test
 - **Kmart's "In store only"**: its own status — the alert says it can't be
   ordered online, with no ⚡ Buy, and nobody's Auto-checkout starts; online
   later that day, it alerts as a restock all the same.
+- **A product that isn't on your watchlist** (end to end, a real Chrome with the
+  extension): the panel reads it off the page and checks it out — Kmart's
+  checkout with one in the cart and the card in, JB Hi-Fi's Shopify checkout —
+  nothing placed; a page that isn't a product says so.
+- **An admin's browser, each store on its own** (`test/serverfirst.test.js`, and
+  end to end): a store whose search is slow (BIG W's, held 6 s) doesn't hold up
+  the others — Kmart is searched again and again meanwhile — and isn't searched
+  twice at once; the server hands out no store that browser's still searching
+  and keeps its keyword's turn; the admin's-browser seconds from 2, BIG W at most every
+  10 s.
 - **Shop checkout links** (`test/shoplink.test.js`, and the 🛍️ end-to-end tests on
   a Shop-style dummy checkout): any store's cart link is one, a known store's stays
   its own, a Shop page isn't one; watched option by option (honestly as Mugibot,

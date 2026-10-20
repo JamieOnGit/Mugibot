@@ -84,7 +84,20 @@ stick.
 BIG W, EB Games, Pokémon Center, Premium Bandai and The Gamesmen have refused
 requests from servers (403 / Cloudflare's, Imperva's or their own bot checks), so
 while they do, the extension in an **admin's** browser searches them instead, every 15
-seconds per store (BIG W every 20, Pokémon Center and Premium Bandai every 30).
+seconds per store by default (the sweep settings' **…from an admin's browser**, from 2 seconds), each store at its
+own pace — at most BIG W every 10, Amazon every 20, Pokémon Center and Premium
+Bandai every 30: those stores turn away pages asked for faster (Amazon's 503,
+Pokémon Center's Imperva), and a browser that's turned away finds nothing at all.
+
+**Each store on its own, side by side** (extension 1.23.0): the admin's browser
+searches every store it's given at once, each in its own tab, and asks for that
+store's next search the moment its last one is in. Before 1.23.0 it searched them
+one after another and waited for the whole round, so a slow page (BIG W's, which
+takes a few seconds to build) held up every other store: each store's real pace was
+the round's, often 20–40 seconds whatever the setting said. Now a store's pace
+is what's set. The browser tells the server which stores it's still searching, so
+a store is never searched twice at once and no keyword loses its turn; its tabs
+are opened one at a time, so the window never gets two tabs for one store.
 Members' browsers never do this: only Mugibot's server and admins can change
 what everyone sees.
 
@@ -235,12 +248,14 @@ isn't searched any less often (at least half a second between two searches):
 - Amazon AU: each keyword every ~60 s (page 1), page 2 now and then.
 - The Games Cube: each keyword every ~10 s (page 1), the later pages now and then.
 - Gamerholic: its newest products every ~15 s.
-- BIG W (admin's browser): each keyword every ~40 s; EB Games: every ~30 s;
-  Pokémon Center and Premium Bandai: every ~60 s.
+- BIG W (admin's browser): one search every 10 s at the quickest, so each
+  keyword every ~20 s with two keywords; EB Games and The Gamesmen: one search
+  as often as the admin's-browser seconds set (from 2 s); Pokémon Center and
+  Premium Bandai: one every 30 s.
 - Pokébox, Good Games, Collectible Madness, Cherry Collectables: each keyword
   every ~20–30 s, and their newest products as often.
 - Games World: each keyword every ~30 s.
-- The Gamesmen (admin's browser): each keyword every ~40 s.
+- The Gamesmen (admin's browser): as often as the admin's-browser seconds set.
 
 More keywords means each one comes round a little less often. Each store has
 its own loop, so a slow store never holds up the others.

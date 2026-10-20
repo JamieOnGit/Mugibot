@@ -702,8 +702,15 @@ async function isSweepTab(tabId) {
   return Object.values((await sweepWindow()).tabs).includes(tabId);
 }
 
-/** The store's tab in the sweep window (opened if needed). */
-async function sweepTab(store) {
+let sweepTabLock = Promise.resolve();
+/** The store's tab in the sweep window (opened if needed) — one at a time: searches at several stores start side by side. */
+function sweepTab(store) {
+  const next = sweepTabLock.then(() => openSweepTab(store));
+  sweepTabLock = next.catch(() => null);
+  return next;
+}
+
+async function openSweepTab(store) {
   const saved = await sweepWindow();
   if (saved.tabs[store] !== undefined) {
     try { return await chrome.tabs.get(saved.tabs[store]); } catch { /* closed */ }
@@ -866,13 +873,17 @@ async function askFromStorePage(t) {
  * cookies stay as they are.
  */
 async function freshStart(t) {
-  const saved = await sweepWindow();
-  const old = saved.tabs[t.store];
-  if (old !== undefined) {
+  // (In turn with the other stores' tabs being opened: the list of them is changed one at a time.)
+  const forget = sweepTabLock.then(async () => {
+    const saved = await sweepWindow();
+    const old = saved.tabs[t.store];
+    if (old === undefined) return;
     delete saved.tabs[t.store];
     await chrome.storage.session.set({ [SWEEP_WINDOW]: saved });
     await chrome.tabs.remove(old).catch(() => null);
-  }
+  });
+  sweepTabLock = forget.catch(() => null);
+  await forget;
   if (!t.frontUrl) return;
   if (t.render || t.inPage) {
     const tab = await sweepTab(t.store);
@@ -978,6 +989,18 @@ let sweeping = false;
 // rather than after the wait — or, if the loop was just stopping, keep going.
 let sweepAgain = false;
 let wakeSweeps = null;
+// Searches going now in this browser: store → its search (each store's runs on its own).
+const sweepsGoing = new Map();
+let lastSweepLock = Promise.resolve();
+/** The popup's "last search" at each store (one change at a time: searches finish side by side). */
+function noteLastSweep(t, result) {
+  lastSweepLock = lastSweepLock.then(async () => {
+    const { lastSweeps } = await chrome.storage.local.get('lastSweeps');
+    await chrome.storage.local.set({ lastSweeps: { ...(lastSweeps || {}), [t.store]: { at: Date.now(), name: t.storeName, ok: result.ok, found: (result.products || []).length, status: result.status || 0 } } });
+  }).catch(() => null);
+  return lastSweepLock;
+}
+
 /** Runs while the server has searches for this browser (only admins get any); the alarm restarts it. */
 async function sweepLoop() {
   if (sweeping) {
@@ -993,9 +1016,12 @@ async function sweepLoop() {
       sweepAgain = false;
       // (With this copy's version: stores added since an older one are kept for browsers that can open them.
       //  And the stores whose queue it's through: the others' are left alone while they're up.)
-      const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}&through=${encodeURIComponent((await throughStores()).join(','))}`);
+      // (And the stores it's still searching: none of theirs handed out again until that search is in.)
+      const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}&through=${encodeURIComponent((await throughStores()).join(','))}&busy=${encodeURIComponent([...sweepsGoing.keys()].join(','))}`);
       if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) {
         if (sweepAgain) continue;
+        // (Searches still going: asked again once they're in — they may be the last of a store swept from here.)
+        if (sweepsGoing.size) { await Promise.race([...sweepsGoing.values()]); continue; }
         break;
       }
       if (Array.isArray(due.body.gates)) await noteGatesUp(due.body.gates);
@@ -1006,13 +1032,20 @@ async function sweepLoop() {
       await watchSweepTabsInLine().catch(() => null);
       const held = await heldStores();
       for (const t of due.body.terms || []) {
-        if (held.has(t.store)) continue; // its queue is up in this browser: nothing asked there
-        const result = await sweepOne(t);
-        // (Its queue: nothing more asked there — this round's other searches included.)
-        if (result.gate) { held.add(t.store); await sweepTabInLine(t).catch(() => null); }
-        await api('POST', '/api/ext/sweeps', { results: [result] });
-        const { lastSweeps } = await chrome.storage.local.get('lastSweeps');
-        await chrome.storage.local.set({ lastSweeps: { ...(lastSweeps || {}), [t.store]: { at: Date.now(), name: t.storeName, ok: result.ok, found: (result.products || []).length, status: result.status || 0 } } });
+        if (held.has(t.store) || sweepsGoing.has(t.store)) continue; // its queue is up in this browser (nothing asked there), or it's still searching
+        // Each store's search on its own, side by side: what it found goes in the moment it's read — never
+        // after the slowest store's (BIG W's page, drawn once it's open). One at a time at each store.
+        const job = (async () => {
+          const result = await sweepOne(t);
+          if (result.gate) await sweepTabInLine(t).catch(() => null);
+          await api('POST', '/api/ext/sweeps', { results: [result] });
+          await noteLastSweep(t, result);
+        })().catch(() => null).finally(() => {
+          sweepsGoing.delete(t.store);
+          sweepAgain = true; // (its next search, at its pace: asked for now)
+          if (wakeSweeps) wakeSweeps();
+        });
+        sweepsGoing.set(t.store, job);
       }
       // Waiting for the next search. Touching storage keeps this worker running meanwhile.
       await chrome.storage.session.set({ sweepBeat: Date.now() });

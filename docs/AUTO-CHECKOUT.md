@@ -74,6 +74,18 @@ is bought for an item until they **arm** it, and each arming buys **once**.
    - which browser is your **checkout browser** (below), and whether this one is
      listening.
 
+### A link from somewhere else: the panel checks it out too
+
+A product someone else pinged you (another Discord, another bot that was
+quicker), at a store Mugibot checks out at, doesn't have to be on your watchlist
+first. Open its page and press the Mugibot panel's **Add to bag → Checkout**: the
+panel reads the product off the page (its name and code, "not on your watchlist"
+under it) and does exactly what it does for one of yours — adds one, goes
+straight to checkout, fills in your delivery details and card and stops at the
+final button for you. On a page that isn't a product (the store's home page, a
+search) it says so. It never presses the final button for you: that's only for
+armed items.
+
 ### Trigger ACO: try it now
 
 Each row of the Armed list has a **Trigger ACO** button. It runs

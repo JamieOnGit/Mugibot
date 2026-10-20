@@ -200,7 +200,8 @@ export function sweepSettings(input, current, retailers) {
     keywords,
     modesVersion: 3, // stores: only the modes that differ from each store's default (server first, since 3)
     everySeconds: num(src.everySeconds, { min: 3, max: 600, int: true, def: SWEEP_DEFAULTS.everySeconds }),
-    browserEverySeconds: num(src.browserEverySeconds, { min: 5, max: 600, int: true, def: SWEEP_DEFAULTS.browserEverySeconds }),
+    // (From 2 s: an admin's browser searches each store on its own — side by side — so its set pace is what each gets.)
+    browserEverySeconds: num(src.browserEverySeconds, { min: 2, max: 600, int: true, def: SWEEP_DEFAULTS.browserEverySeconds }),
     stores,
     skipMarketplace: bool(src.skipMarketplace, true),
     tcgOnly,
@@ -1120,6 +1121,8 @@ export class Sweeper {
    * The next search at each store swept from browsers, for an admin's browser. Two admins' browsers share them.
    * Server first: only while the browser stands in for the server (refused, or it can't read the store).
    * browser.version: its copy of the extension. A store that needs a newer one is left for another browser.
+   * browser.busy: stores that browser is still searching (each store's search runs on its own, side by
+   * side): none handed out again until it's done — never two at once at a store, no keyword's turn lost.
    */
   browserDue(user, browser = {}) {
     if (!user || user.role !== 'admin') return { terms: [], waitMs: null };
@@ -1128,9 +1131,12 @@ export class Sweeper {
     const held = [];
     let next = null;
     const through = browser.through || new Set();
+    const busy = browser.busy || new Set();
     for (const { retailer: r, mode } of this.stores()) {
       if (!this.fromBrowser(r, mode)) continue;
       const st = this.stat(r.id);
+      // (Its search still going in that browser: its next one once that's in — the browser asks again then.)
+      if (busy.has(r.id)) { next = Math.min(next ?? Infinity, Math.max(st.browserNext || 0, now + 1000)); continue; }
       // Its virtual queue is up (monitor/gates.js): no searches from a browser that isn't through it —
       // a request there could cost the admin their place in line. Its tab is left exactly as it is.
       if (this.gates && this.gates.queueUp(r.id) && !through.has(r.id)) {
