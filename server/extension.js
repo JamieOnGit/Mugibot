@@ -25,6 +25,11 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // Collectables, The Gamesmen, Games World), every store's buy button by the same words (words.js:
 // "Buy now" too), boxes ticked or unticked by the flow, WooCommerce's drop-downs and add-to-cart
 // link, and a card Stripe's Link has for you.
+// 1.21.0: a checkout your account ended while it waited at a checkpoint (finished on your phone
+// instead) stops once through the check, never carrying on to the final button.
+// 1.22.0: Shop checkout links (retailers/shoplink.js) — runs on Shop's checkout (shop.app): the store's
+// required boxes ticked, "Pay now", the order seen placed as Shop goes on to the store's order page; and
+// a link that never reaches Shop (signed out of it) said in seconds. The store's acoVersion says so.
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.
@@ -36,6 +41,10 @@ export const REMOTE_EXTENSION_VERSION = '1.15.0';
 // refreshing, carries on once through, and says when it's through (older ones get no checks or
 // searches at a store while its queue is up).
 export const GATE_EXTENSION_VERSION = '1.16.0';
+// The oldest that stops a checkout your account has ended (finished on your phone instead) when it
+// gets through a checkpoint, rather than carrying on: before it, "📱 Finish on this phone" isn't
+// offered once the checkout browser waits at the checkpoint.
+export const PHONE_EXTENSION_VERSION = '1.21.0';
 // The monitor's page reader, used by the extension's in-browser checks too.
 const SHARED = ['html.js', 'extract.js', 'status.js', 'listing.js', 'gate.js', 'words.js'].map((f) => ({ name: `lib/${f}`, from: path.join(ROOT, 'server', 'monitor', f) }));
 

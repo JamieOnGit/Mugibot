@@ -225,6 +225,30 @@ like you would.
   the way. Once you've solved it, the store sends you on to checkout and the
   run carries on: details, card, the total checked, the final button. It waits
   up to 20 minutes.
+- **A checkpoint while you're on your phone** (Discord's ⚡ Buy, or an armed
+  item's drop): the check is for the browser that's buying, so solving it on
+  your phone can't let your computer through, and Mugibot never moves a pass
+  from one browser to another. Discord's ⚡ Buy reply and your DM give you two
+  buttons instead (from the moment you press ⚡ Buy when the checkpoint is
+  already up):
+  - **🖥️ Solve it on my computer** opens
+    [Chrome Remote Desktop](https://remotedesktop.google.com/access). The
+    checkout's tab is in front, waiting; solve the check there and the run
+    carries on by itself. Set it up once: install it on your computer from that
+    page, then sign in to the Chrome Remote Desktop app on your phone with the
+    same Google account.
+  - **📱 Finish on this phone** opens a page that says what it does. Pressing
+    its button stops your computer's checkout and opens the store on your
+    phone with the product in the cart (JB Hi-Fi's cart link), for you to pass
+    the check and pay there (Shop Pay or your card). The item is disarmed:
+    one purchase per arming. It works before your computer has started, or
+    while it waits at the checkpoint; never once it's past the check and
+    checking out, or has pressed the final button (the page says so, so you
+    don't buy it twice). The link is only in your own reply and DM, and lasts
+    30 minutes.
+  - Your computer's tab stops for good: even if the check is solved there
+    afterwards, it doesn't carry on (extension **1.21.0** or later; with an
+    older one, only 🖥️ is offered once it's waiting at the check).
 - **In a virtual queue** the run waits its turn. The queue page refreshes
   itself; Mugibot **never refreshes it**, because refreshing it yourself can
   lose your place. Your ⚡ Buy, checkout pass and Auto-checkout limits are kept
@@ -436,6 +460,44 @@ Conditions…", leaves "I have a different billing address" unticked, then "CONF
 AND PAY". At **Games World** it leaves "Deliver to a different address?" unticked
 and types the card into Stripe's form — or, with Stripe's **Link** connected,
 presses Link's "Confirm" — then "Place order".
+
+### 🛍️ Shop checkout links
+
+At a store that checks out with **Shop** (Shop Pay), you can watch and arm the
+store's **checkout link** itself — Monitor → **My watchlist** → **🛍️ Shop checkout
+links** → **+ Add checkout link**, e.g.
+`https://creations.mattel.com/cart/48835830579405:2,40653613531341:1` (each option,
+and how many). The link is the order, its quantities included, so its **max price
+is for the whole link** (delivery on top, up to $40 more, within your limit an
+order).
+
+- **Watching.** Mugibot's server asks the store about each option in the link
+  every 20 seconds, the way its own pages do (`/variants/<id>.js`), honestly as
+  Mugibot. It's in stock once **every** option is; its price is the link's. The
+  link itself is never opened by the server (it would start a checkout).
+- **⚡ Buy and Auto-checkout** open the link as it is, which goes straight to
+  Shop's checkout with your Shop address, delivery and card already in — nothing
+  of yours is typed there, and Shop's choices are left as they are. Any box the
+  store needs ticked to check out is ticked: Mattel Creations' **"By selecting,
+  you indicate your acceptance of the Membership Agreement"**, and any box the
+  checkout marks as required — never a newsletter or marketing box. **"Check
+  out as guest"** is never pressed. ⚡ Buy stops at **Pay now** for you;
+  Auto-checkout checks the total against your limits and presses it once. Shop
+  then goes on to the store's own order page, and that's the order seen placed.
+- **The store won't sell it** ("This Product is not available for purchase", as
+  Mattel says when you're not a member): it stops there, nothing pressed, and
+  says so.
+- **Signed in to Shop only.** Signed out, Shop sends the link on to the store's
+  own checkout as a guest, where Mugibot doesn't run. So the extension checks
+  `shop.app/account` every 10 minutes with your cookies (the store login monitor,
+  read-only), the section shows whether you're signed in, and Auto-checkout
+  doesn't start while you're seen signed out (Discord's ⚡ Buy says so). A run
+  whose tab doesn't reach Shop's checkout within 25 seconds says so — "Shop's
+  checkout didn't open" — and is left in its tab for you.
+- **No bag**: each link is its own order, so Shop links never wait for each other
+  or for another checkout, and Clear cart has nothing to empty for them.
+- Needs the extension **1.22.0** (it runs on `shop.app`): with an older one in
+  your checkout browser, Auto-checkout doesn't start and says to update.
 
 At **Premium Bandai** the whole checkout is in Global-e's frame. Mugibot runs it
 in there: your details, the card, the purchase agreement box, and — after the same

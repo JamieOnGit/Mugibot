@@ -1425,6 +1425,62 @@ test("⚡ Kmart's whole range in one list: every trading card it sells read in o
   }
 });
 
+test("🏬 Kmart's \"In store only\" (FulfilmentChannel 2): its own status — the alert says it can't be ordered online, with no ⚡ Buy, and nobody's Auto-checkout starts; online later that day, it alerts as a restock all the same", async () => {
+  const r = R('demo-kmart');
+  store.shop('kmart').products.push({ sku: '43877005', name: 'Pokémon TCG: In Store Test Tin', price: 30, status: 'out_of_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477005 });
+  // A member watching it, armed for Auto-checkout with a browser connected.
+  const c = await Client.signup(env.url, 'instore');
+  makeMember(env, c);
+  for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  env.app.repo.updateUser(c.user.id, { discord_id: 'd-instore' });
+  const add = await c.post('/api/items', { url: store.productUrl('kmart', '43877005'), name: 'In Store Tin' });
+  assert.equal(add.status, 200, add.text);
+  assert.equal((await c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 400, perDay: 5, spendPerDay: 2000 })).status, 200);
+  env.app.repo.addDevice(c.user.id, 'Chrome on PC', '1.21.0');
+  assert.equal((await c.put(`/api/items/${add.body.id}`, { aco: true, maxPrice: 50 })).status, 200);
+  const runs = () => env.app.db.all('SELECT * FROM aco_runs WHERE item_id = :i', { i: add.body.id });
+  const restocks = () => alerts('restock').filter((x) => x.sku === '43877005');
+  await sw.sweepTerm(r, { keyword: 'pokemon', page: 1 });
+  await sw.sweepTerm(r, { keyword: 'pokemon', page: 1 }); // (sold out, twice: confirmed)
+  // In stock in NSW and VIC — in Kmart's shops only.
+  store.set('kmart', '43877005', { status: 'in_stock', inStoreOnly: true, oosStates: ['QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'] });
+  const posts = channel().length;
+  let out = await sw.sweepTerm(r, { keyword: 'pokemon', page: 1 });
+  assert.equal(out.restock, 1);
+  assert.equal(product('demo-kmart', '43877005').status, 'in_store');
+  const [a] = restocks();
+  assert.equal(a.status, 'in_store');
+  assert.equal(a.note, "In Kmart (dummy store)'s stores only — it can't be ordered online. In stock in NSW, VIC only.");
+  const post = channel().slice(posts).find((m) => /In Store Test Tin/.test(m.body.embeds[0].title));
+  assert.match(post.body.embeds[0].title, /^🏬 In store only: /);
+  assert.equal(post.body.embeds[0].fields.find((f) => f.name === 'Stock').value, 'In store only');
+  const labels = (post.body.components || []).flatMap((row) => row.components.map((b) => b.label));
+  assert.ok(!labels.some((l) => /Buy|Add to cart/.test(l)), `nothing to buy online: ${labels.join(', ')}`);
+  assert.equal(runs().length, 0, 'no Auto-checkout run');
+  assert.equal((await c.get('/api/items')).body.items.find((x) => x.id === add.body.id).status, 'in_store');
+  assert.ok(!discord.dmsTo('d-instore').some((m) => /In Store Tin/.test(m.body.embeds[0].title)), 'no "in stock" DM');
+  // Still in the shops only: nothing more.
+  out = await sw.sweepTerm(r, { keyword: 'pokemon', page: 1 });
+  assert.equal(out.restock, 0);
+  // Online the same day (delivery offered): that's the restock that counts — it alerts, with ⚡ Buy, and the armed member's run starts.
+  store.set('kmart', '43877005', { inStoreOnly: false, oosStates: [] });
+  out = await sw.sweepTerm(r, { keyword: 'pokemon', page: 1 });
+  assert.equal(out.restock, 1);
+  assert.equal(product('demo-kmart', '43877005').status, 'in_stock');
+  const online = channel().slice(posts).filter((m) => /In Store Test Tin/.test(m.body.embeds[0].title)).at(-1);
+  assert.match(online.body.embeds[0].title, /^🟢 In stock: /);
+  assert.ok(online.body.components.flatMap((row) => row.components.map((b) => b.label)).includes('⚡ Buy with Mugibot'));
+  assert.equal(runs().length, 1, 'the armed member\'s Auto-checkout run');
+  // The reader: FulfilmentChannel 2 is in store only, 3 isn't.
+  const read = parseConstructor(JSON.stringify({ response: { results: [
+    { value: 'Deck A', data: { id: 'P_1', FulfilmentChannel: 2, stateOOS: { QLD: '6' } } },
+    { value: 'Deck B', data: { id: 'P_2', FulfilmentChannel: 3 } },
+  ] } }), { base: 'https://ac.cnstrc.com/x', storeBase: 'https://www.kmart.com.au' });
+  assert.deepEqual(read.products.map((p) => [p.sku, p.inStock, !!p.inStoreOnly]), [['1', true, true], ['2', true, false]]);
+  env.app.db.run("UPDATE aco_runs SET status = 'failed' WHERE item_id = :i", { i: add.body.id });
+  await c.del(`/api/items/${add.body.id}`);
+});
+
 test('⚡ searches come on the set pace from the start of the last one: a store slow to answer isn\'t searched less often (at least half a second apart, never before Retry-After)', () => {
   const st = { fails: 0, slowUntil: 0, retryAt: 0 };
   assert.equal(sw.waitFor(st, 5000, { spent: 1200 }), 3800);

@@ -444,25 +444,36 @@ var MGBFill = (function () {
     return !!((next && /select2|ts-wrapper/.test(String(next.className || '')) && isVisible(next)) || (wrap && isVisible(wrap)));
   }
 
+  // Boxes never ticked for you, whatever the flow says: newsletters, offers, marketing texts.
+  var MARKETING_RE = /newsletter|marketing|subscribe|offers|promotion|news\b|sms|text me|email me|updates|kmail/i;
+
   /**
-   * The flow's boxes to have ticked (C.tick: Shopify's "Use shipping address as billing address") or
-   * not (C.untick: WooCommerce's "Deliver to a different address?", which can come ticked). Each at
-   * most twice per page (a store that ticks it back: left as it says).
+   * The flow's boxes to have ticked (C.tick: Shopify's "Use shipping address as billing address", Shop
+   * checkout links' membership agreement) or not (C.untick: WooCommerce's "Deliver to a different
+   * address?", which can come ticked) — and, with C.tickRequired, any box the checkout marks as required
+   * (never marketing). Real tick boxes, and ones drawn as role="checkbox". Each at most twice per page
+   * (a store that ticks it back: left as it says).
    */
   function setTicks(root, C, out) {
-    if (!(C.tick && C.tick.length) && !(C.untick && C.untick.length)) return;
-    toArray(root.querySelectorAll('input[type="checkbox"]')).forEach(function (el) {
-      if (el.disabled || inPanel(el)) return;
+    if (!(C.tick && C.tick.length) && !(C.untick && C.untick.length) && !C.tickRequired) return;
+    toArray(root.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).forEach(function (el) {
+      var real = el.matches('input');
+      if (el.disabled || el.getAttribute('aria-disabled') === 'true' || inPanel(el)) return;
+      // (A real box inside a drawn one is that box: the real one's ticked.)
+      if (!real && el.querySelector('input[type="checkbox"]')) return;
       var l = el.closest('label') || el.parentElement;
       if (!isVisible(el) && !(l && isVisible(l))) return;
-      var words = (labelText(el) + ' ' + describe(el)).replace(/\s+/g, ' ');
-      var want = any(C.tick, words) ? true : any(C.untick, words) ? false : null;
-      if (want === null || el.checked === want) return;
+      var words = (labelText(el) + ' ' + describe(el) + (real ? '' : ' ' + textOf(el))).replace(/\s+/g, ' ');
+      var required = real ? el.required || el.getAttribute('aria-required') === 'true' : el.getAttribute('aria-required') === 'true';
+      var want = any(C.tick, words) ? true : any(C.untick, words) ? false : C.tickRequired && required ? true : null;
+      if (want && MARKETING_RE.test(words)) want = null;
+      var checked = real ? el.checked : el.getAttribute('aria-checked') === 'true';
+      if (want === null || checked === want) return;
       var key = 'tick|' + (el.name || el.id || words.slice(0, 40));
       if ((SWITCHED[key] || 0) >= 2) return;
       SWITCHED[key] = (SWITCHED[key] || 0) + 1;
       el.click();
-      out.filled.push((want ? 'ticked "' : 'unticked "') + (labelText(el) || el.name || 'box').replace(/\s+/g, ' ').trim().slice(0, 50) + '"');
+      out.filled.push((want ? 'ticked "' : 'unticked "') + (labelText(el) || (real ? '' : textOf(el)) || el.name || 'box').replace(/\s+/g, ' ').trim().slice(0, 50) + '"');
     });
   }
 
@@ -494,6 +505,8 @@ var MGBFill = (function () {
       out.kinds[kind] = true;
       var isCard = CARD_KINDS.indexOf(kind) !== -1;
       if (isCard) out.cardFieldsSeen += 1;
+      // (A checkout with your details and card in already — Shop's: nothing of yours is typed in.)
+      if (C.ownDetails) return;
       if (opts.onlyCard && !isCard) return;
       if (kind === 'addressLookup') return;
       if (opts.selectsOnly && el.tagName !== 'SELECT') return;
@@ -513,7 +526,7 @@ var MGBFill = (function () {
       out.filled.push(kind);
     });
 
-    if (!opts.onlyCard) {
+    if (!opts.onlyCard && !C.ownDetails) {
       // Radio groups: home delivery (or what the flow says) and the flow's shipping choice; card payment.
       // A group nobody has chosen in yet gets one; a store's own default is changed only when it's
       // click & collect (for home delivery), a payment that isn't the card, or not the flow's shipping.
@@ -554,11 +567,13 @@ var MGBFill = (function () {
         pick.click();
         out.filled.push(isPayment ? 'payment method' : 'delivery method');
       });
+    }
+    if (!opts.onlyCard) {
       // "I agree to the terms" only — never marketing.
       fields.forEach(function (el) {
         if ((el.getAttribute('type') || '').toLowerCase() !== 'checkbox' || el.checked) return;
         var l = (labelText(el) + ' ' + describe(el)).toLowerCase();
-        if (/agree|terms|conditions|t\s?&\s?c/.test(l) && !/newsletter|marketing|subscribe|offers|promotion|news\b|sms|email me|updates|kmail/.test(l)) {
+        if (/agree|terms|conditions|t\s?&\s?c/.test(l) && !MARKETING_RE.test(l)) {
           el.click();
           out.filled.push('terms');
         }

@@ -138,10 +138,10 @@
                 <div class="notice" id="ext-status">Checking for the extension…</div>
                 <form class="card w-form" id="w-form" hidden>
                   <h3 id="w-form-title">Add a SKU</h3>
-                  <p class="muted small">Paste the product link — or pick the store and type the SKU (handy before it's listed: Mugibot finds the page when it goes up).</p>
-                  <label for="w-url">Product link <span class="muted">(optional if you enter the SKU)</span></label>
+                  <p class="muted small" id="w-form-help">Paste the product link — or pick the store and type the SKU (handy before it's listed: Mugibot finds the page when it goes up).</p>
+                  <label for="w-url" id="w-url-label">Product link <span class="muted">(optional if you enter the SKU)</span></label>
                   <input id="w-url" name="url" type="url" placeholder="https://www.kmart.com.au/product/…-43818648/">
-                  <div class="grid2">
+                  <div class="grid2" id="w-store-row">
                     <div><label for="w-store">Store</label><select id="w-store" name="store"></select></div>
                     <div><label for="w-sku">SKU / keycode</label><input id="w-sku" name="sku" placeholder="e.g. 43818648" autocomplete="off"></div>
                   </div>
@@ -169,6 +169,13 @@
                   <button class="btn small" type="button" id="w-starter">Add the Kmart starter list</button>
                   <button class="btn small" type="button" id="w-demo" hidden>Add dummy-store test items</button>
                 </div>
+                <!-- 🛍️ Shop checkout links: a store's own checkout link (…/cart/<variant>:<qty>) at stores that check out with Shop -->
+                <section class="card sl-box" id="sl-box" aria-labelledby="sl-title">
+                  <div class="sl-head"><h3 id="sl-title">🛍️ Shop checkout links <span class="mon-meta" id="sl-count"></span></h3><button class="btn small primary" id="sl-add" type="button">+ Add checkout link</button></div>
+                  <p class="muted small">For stores that check out with <b>Shop</b> (Shop Pay), when you have the store's checkout link itself — like <code>https://creations.mattel.com/cart/48835830579405:2,40653613531341:1</code> (each option, and how many). Mugibot checks every option in the link about every 20 seconds, and once they're all in stock you get a DM with <b>⚡ Buy</b>. Armed for 🤖 Auto-checkout, it's bought by itself: the link opens Shop's checkout with your Shop address, delivery and card, any box the store needs ticked to check out is ticked (a membership agreement — never newsletters), and <b>Pay now</b> is pressed, within your limits. The max price is for the whole link, quantities included (delivery's on top: up to $40 more).</p>
+                  <div class="notice" id="sl-signin" role="status"></div>
+                  <ul class="items" id="sl-list"></ul>
+                </section>
               </div>
               <!-- 🤖 Armed: your watchlist's items for Auto-checkout — each one's switch, max price, whether
                    everything it needs is ready (bag, sign-in, card, address, checkout browser), and its buttons -->
@@ -449,6 +456,7 @@
             <div class="aco-device-pick"><select id="aco-device"></select><button class="btn small" type="button" id="aco-device-here" hidden>Use this browser</button></div>
             <p class="muted small" id="aco-device-note"></p>
           </div>
+          <p class="muted small" id="aco-checkpoint-help">🛡️ <b>A store's checkpoint</b> (JB Hi-Fi's hCaptcha) is a check for the browser that's buying, so solving it on your phone can't let your computer through — and Mugibot never solves it. When your computer stops at one, Discord's reply and your DM give you two buttons: <b>🖥️ Solve it on my computer</b> opens <a href="https://remotedesktop.google.com/access" rel="noopener">Chrome Remote Desktop</a>, where the checkout's tab is in front, waiting (set it up once: install it on your computer from that page and sign in to the app on your phone with the same Google account); <b>📱 Finish on this phone</b> stops your computer's checkout and opens the store on your phone, with the product, for you to pass the check and pay there.</p>
         </div>
 
         <div class="card" id="bags-card">

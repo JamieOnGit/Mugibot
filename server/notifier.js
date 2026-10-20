@@ -156,7 +156,10 @@ export class Notifier {
     const price = info.price ?? item.last_price ?? item.price;
     // (Another website's product: its address is the "store", and its code isn't a SKU anyone uses.)
     const buyable = this.retailers.canBuy(item.store);
-    const meta = [storeName, buyable ? `SKU ${item.sku}` : '', money(price)].filter(Boolean).join(' · ');
+    // (A Shop checkout link: what's in it, by the store's own names — its code is the link.)
+    const r = this.retailers.get(item.store);
+    const what = r && r.cartLinks ? item.title || '' : buyable ? `SKU ${item.sku}` : '';
+    const meta = [storeName, what, money(price)].filter(Boolean).join(' · ');
     const buttons = [];
     // ⚡ Buy where Mugibot checks out; at another website, the product page is the way in.
     if (item.url && buyable) buttons.push({ label: '⚡ Buy', url: this.buyLink(userId, item), action: buyAction('i', item.id) });

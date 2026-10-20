@@ -157,6 +157,8 @@ export function register(router, ctx) {
     const row = repo.claimGoCode(req.user.id, str(req.body.code, 100));
     if (!row) throw new HttpError(404, 'That ⚡ Buy link has expired — press ⚡ Buy again');
     // An Auto-checkout run's code: what this checkout may do by itself (null: an ordinary ⚡ Buy).
+    // (Finished on the phone instead: the computer opens nothing.)
+    if (row.run_id && ctx.aco.handedOff(req.user.id, row.run_id)) throw new HttpError(409, 'You finished this one on your phone — nothing to do here');
     const aco = row.run_id ? ctx.aco.claimed(req.user.id, row.run_id, req.device) : null;
     // (The product's page: where to go once through a store's queue, which may let you in at its front page.)
     const item = row.item_id ? repo.getItem(req.user.id, row.item_id) : null;

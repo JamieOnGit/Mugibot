@@ -1,6 +1,7 @@
 // Input checks. Everything a user sends goes through one of these first.
 
 import crypto from 'node:crypto';
+import { cartLines } from './retailers/shoplink.js';
 
 export class HttpError extends Error {
   constructor(status, message, extra = {}) {
@@ -92,13 +93,19 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
   }
   if (!sku) throw bad("Couldn't find the product code in that link — enter the SKU / keycode");
   const r = retailers.get(store);
+  // A Shop checkout link (retailers/shoplink.js): the store's whole cart link is the item — nothing else to go by.
+  if (r && r.cartLinks) {
+    if (!url) throw bad("Paste the store's checkout link (…/cart/<number>:<quantity>) — it's the order itself");
+    if (!cartLines(new URL(url).pathname)) throw bad("That's a Shop page, not a store's checkout link: paste the store's own link (…/cart/<number>:<quantity>)");
+    sku = retailers.skuFromUrl(url);
+  }
   const changingStore = !existing || existing.store !== store;
   if (changingStore && store !== 'other' && !retailers.enabled(r)) throw bad(`${r ? r.name : store} is switched off at the moment`);
   const out = {
     store,
     sku,
     url,
-    name: str(src.name, 120) || sku,
+    name: str(src.name, 120) || (r && r.cartLinks ? `Checkout link at ${new URL(url).host.replace(/^www\./, '')}` : sku),
     price: num(src.price, { min: 0, max: 100000, def: null }),
     maxPrice: num(src.maxPrice ?? src.max_price, { min: 0, max: 100000, def: null }),
     quantity: num(src.quantity, { min: 1, max: 10, def: 1, int: true }),

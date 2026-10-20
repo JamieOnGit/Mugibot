@@ -608,7 +608,8 @@ export class Sweeper {
     const posting = [];
     try {
       for (const p of parsed.products) {
-        const status = p.inStock === true ? (p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
+        // (In stock in the store's shops only — Kmart's "In store only": a status of its own, never ordered online.)
+        const status = p.inStock === true ? (p.inStoreOnly ? STATUS.IN_STORE : p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
         // Members' own SKUs, whatever they are.
         await this.members(r, p, status, later);
         // A store whose search doesn't say who sells what (JB Hi-Fi): what Mugibot found out before.
@@ -742,25 +743,33 @@ export class Sweeper {
       if (a && a.posting && posting) posting.push(a.posting);
       return a;
     };
-    // (Kmart says which states it has stock in: when it isn't all of them, its alerts say so.)
-    const where = statesNote(p.states);
+    // (Kmart says which states it has stock in: when it isn't all of them, its alerts say so — and when
+    // it's in its shops only, that it can't be ordered online.)
+    const inStore = fresh.status === STATUS.IN_STORE;
+    const where = [inStore ? `In ${r.name}'s stores only — it can't be ordered online.` : '', statesNote(p.states)].filter(Boolean).join(' ');
+    // Back in stock: online (after selling out, coming soon, or being in stores only), or in stores only
+    // (after selling out) — the online one is the one that counts, so a day's in-store alert never holds
+    // it back (its day is marked apart).
+    const restocked = (isOrderable(fresh.status) && (ORDERABLE_FROM.has(before && before.status) || (before && before.status === STATUS.IN_STORE)))
+      || (inStore && ORDERABLE_FROM.has(before && before.status));
     // New: never seen before, or a SKU confirmed as not listed yet (a monitor added before it's checked isn't new).
     const isNew = !before || (before.status === STATUS.NOT_LISTED && !!before.last_ok_at);
     // About to alert a product whose seller isn't known yet (JB Hi-Fi): ask first. A marketplace
     // seller's product leaves the list without an alert. (If the store doesn't answer, it alerts.)
     const mayAlert = isNew ? !baseline && s.newAlerts
-      : (s.restockAlerts && isOrderable(fresh.status) && ORDERABLE_FROM.has(before.status)) || (s.priceAlerts && priceMoved && price < prevPrice);
+      : (s.restockAlerts && restocked) || (s.priceAlerts && priceMoved && price < prevPrice);
     if (mayAlert && s.skipMarketplace && r.sweep.sellers && (fresh.seller === null || fresh.seller === undefined) && !monitor) {
       if (await this.sellerOf(r, fresh)) return sent;
     }
     if (isNew) {
       if (!baseline && (s.newAlerts || vip || drop) && await alert(fresh, 'listed', { note: [`New in "${keyword}" at ${r.name}.`, where].filter(Boolean).join(' ') })) sent.push('new');
     } else {
-      if (s.restockAlerts && isOrderable(fresh.status) && ORDERABLE_FROM.has(before.status) && before.confirmed) {
+      if (s.restockAlerts && restocked && before.confirmed) {
         const today = sydneyDay.format(now);
-        if (!s.restockOncePerDay || fresh.restock_day !== today) {
+        const day = inStore ? `${today} in store` : today;
+        if (!s.restockOncePerDay || (fresh.restock_day !== today && fresh.restock_day !== day)) {
           if (await alert(fresh, 'restock', { note: where })) {
-            this.catalog.updateProduct(product.id, { restock_day: today });
+            this.catalog.updateProduct(product.id, { restock_day: day });
             sent.push('restock');
           }
         }
@@ -1268,7 +1277,7 @@ export class Sweeper {
     const image = str(p.image, 1000);
     return {
       sku, title, aliases: (Array.isArray(p.aliases) ? p.aliases : []).slice(0, 3).map((a) => str(a, 80)).filter(Boolean),
-      price: price(p.price), wasPrice: price(p.wasPrice), inStock: typeof p.inStock === 'boolean' ? p.inStock : null, preorder: p.preorder === true,
+      price: price(p.price), wasPrice: price(p.wasPrice), inStock: typeof p.inStock === 'boolean' ? p.inStock : null, preorder: p.preorder === true, inStoreOnly: p.inStoreOnly === true,
       url: onStore(p.url), image: /^https:\/\//.test(image) ? image : '', marketplace: p.marketplace === true,
       variantId: /^\d{1,20}$/.test(String(p.variantId ?? '')) ? String(p.variantId) : null,
     };

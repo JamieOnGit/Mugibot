@@ -24,6 +24,7 @@ import { PRODUCTS_FOR_PAGE } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { DEFAULT_ALERTS } from '../schema.js';
 import { serialize } from '../retailers/index.js';
+import { CART_LINK, cartLines } from '../retailers/shoplink.js';
 import { extractProduct, extractProductLinks } from './extract.js';
 import { SWEEP_FRESH_MS } from './feed.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
@@ -97,15 +98,18 @@ export class Monitor {
    * monitor on it asks for (never below MONITOR_MIN_INTERVAL).
    */
   pageInterval(url) {
+    // A store whose items are checked more often (Shop checkout links: what they're for goes in moments).
+    const r = this.retailers.forUrl(url);
+    const own = r && r.monitor && r.monitor.intervalSeconds ? Math.max(this.cfg.monitor.minIntervalSeconds, r.monitor.intervalSeconds) * 1000 : Infinity;
     const m = this.db.get(`SELECT MIN(COALESCE(m.interval_seconds, :def)) AS s, COUNT(*) AS n FROM products p JOIN monitors m ON m.product_id = p.id, page_checks c
       WHERE c.url = :url AND m.paused = 0 AND ${PRODUCTS_FOR_PAGE}`, { url, def: this.cfg.monitor.urlIntervalSeconds });
-    if (!m || !m.n) return this.interval;
+    if (!m || !m.n) return Math.min(own, this.interval);
     // Members watching the same page still get it checked at the default interval.
     const members = this.db.get(`SELECT 1 AS y FROM items i, page_checks c WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 LIMIT 1`, { url });
     const s = members ? Math.min(m.s, this.cfg.monitor.urlIntervalSeconds) : m.s;
     // A VIP drop's page (monitor/vip.js): every few seconds around its drop time.
     const vip = this.vip ? this.vip.pageSeconds(url) : null;
-    return Math.min(vip ? vip * 1000 : Infinity, Math.max(this.cfg.monitor.minIntervalSeconds, s) * 1000);
+    return Math.min(own, vip ? vip * 1000 : Infinity, Math.max(this.cfg.monitor.minIntervalSeconds, s) * 1000);
   }
 
   get browserInterval() {
@@ -178,6 +182,8 @@ export class Monitor {
   /** A product page's stock status (Shopify's product JSON first, for Shopify stores). */
   async read(url, retailer) {
     const u = new URL(url);
+    const lines = retailer && retailer.cartLinks ? cartLines(u.pathname) : null;
+    if (lines) return this.readCartLink(u, lines);
     if (/\/products\/[^/]+\/?$/.test(u.pathname) && (!retailer || retailer.platform === 'shopify' || retailer.id === 'other')) {
       try {
         const res = await this.get(`${u.origin}${u.pathname.replace(/\/$/, '')}.js`);
@@ -213,6 +219,33 @@ export class Monitor {
     let image = r.image || null;
     try { if (image) image = new URL(image, url).href; } catch { image = null; }
     return { status: r.status, title: r.title, price: r.price, image, decidedBy: r.decidedBy, error: r.blocked ? 'The store showed a bot check instead of the page' : '' };
+  }
+
+  /**
+   * A Shop checkout link (retailers/shoplink.js): each option in it, as the store's own pages ask about
+   * it (/variants/<id>.js) — in stock when every one of them can be bought. Its price: the link's
+   * (each option's price times its quantity); its name: the options'.
+   */
+  async readCartLink(u, lines) {
+    const prefix = u.pathname.match(CART_LINK)[1];
+    const names = [];
+    let price = 0;
+    let image = null;
+    let gone = false;
+    for (const line of lines) {
+      const res = await this.get(`${u.origin}${prefix}/variants/${line.id}.js`);
+      if (res.status === 404 || res.status === 410) return { status: STATUS.NOT_FOUND, error: `Option ${line.id} in the link isn't at the store any more` };
+      if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store refused the server check (HTTP ${res.status})` };
+      if (!res.ok) return { status: STATUS.ERROR, error: `HTTP ${res.status}` };
+      const v = await res.json().catch(() => null);
+      if (!v || typeof v.available !== 'boolean') return { status: STATUS.ERROR, error: "The store's answer wasn't about an option it sells" };
+      if (!v.available) gone = true;
+      if (typeof v.price === 'number') price += (v.price / 100) * line.qty;
+      names.push(`${String(v.name || v.title || line.id).slice(0, 80)}${line.qty > 1 ? ` ×${line.qty}` : ''}`);
+      const img = v.featured_image && typeof v.featured_image === 'object' ? v.featured_image.src : v.featured_image;
+      if (!image && typeof img === 'string') image = img.startsWith('//') ? `https:${img}` : img;
+    }
+    return { status: gone ? STATUS.OUT_OF_STOCK : STATUS.IN_STOCK, title: names.join(' + ').slice(0, 200), price: Math.round(price * 100) / 100, image, decidedBy: 'shopify-variant' };
   }
 
   /**
@@ -450,7 +483,8 @@ export class Monitor {
     const out = [];
     for (const it of rows) {
       const r = this.retailers.get(it.store);
-      if (!r || it.store === 'other' || !this.retailers.enabled(r) || !this.retailers.settings(r).browserChecks || held(it.store)) continue;
+      // (Not a Shop checkout link: opening it starts a checkout — the server asks the store about its options instead.)
+      if (!r || it.store === 'other' || r.cartLinks || !this.retailers.enabled(r) || !this.retailers.settings(r).browserChecks || held(it.store)) continue;
       const serverOff = !this.retailers.settings(r).serverChecks;
       const serverStruggling = FAILED.has(it.page_status) || it.page_fails > 0 || /Server checks are off/.test(it.page_error || '');
       const serverSilent = !it.page_checked && now - it.created_at > 90 * 1000;

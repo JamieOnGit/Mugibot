@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>📱 Finish on this phone — {{APP_NAME}}</title>
+  <link rel="icon" href="/img/favicon.png" type="image/png" sizes="64x64">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+  <link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap"><a class="logo" href="/app"><img src="/img/logo.png" alt=""> {{APP_NAME}}</a></div>
+  </header>
+  <main class="wrap">
+    <div class="card buy-card" id="phone">
+      <h1 id="p-title">📱 Finish on this phone</h1>
+      <p class="muted" id="p-meta">Loading…</p>
+      <p id="p-what" hidden></p>
+      <div class="status-row mt" id="p-row" hidden>
+        <button class="btn primary big" id="p-go" type="button">📱 Stop my computer and buy it here</button>
+      </div>
+      <p class="msg" id="p-msg"></p>
+      <p class="muted small" id="p-help">A store's checkpoint is a check for the browser that's buying, so solving it on your phone can't let your computer through — and {{APP_NAME}} never solves it or moves it between browsers. To keep your computer's checkout going instead, solve the check there from your phone with <a href="https://remotedesktop.google.com/access" rel="noopener">Chrome Remote Desktop</a>: the checkout's tab is in front, waiting, and carries on by itself once it's solved.</p>
+    </div>
+  </main>
+  <script type="module" src="/js/phone.js"></script>
+</body>
+</html>

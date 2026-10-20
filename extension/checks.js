@@ -66,8 +66,11 @@ var MGBChecks = (function () {
   var GOOD_NEWS = /(^|[\s_-])(success|woocommerce-message|woocommerce-info|message-success|alert-success|notice-success)([\s_-]|$)/i;
   var ADDED_NEWS = /\b(has been |been )?added to your (shopping )?(cart|bag|basket|trolley)\b|^\W*you added\b/i;
 
-  /** What the page says is wrong (an error message, or a box marked invalid), or ''. */
-  function pageError(doc) {
+  /**
+   * What the page says is wrong (an error message, or a box marked invalid), or ''. ignore: what the
+   * store's flow says isn't a reason to stop (C.ignoreErrors: a notice about a box Mugibot ticks).
+   */
+  function pageError(doc, ignore) {
     doc = doc || document;
     var els = doc.querySelectorAll('[role="alert"], .error, .err, [class*="error" i], [class*="invalid" i]');
     for (var i = 0; i < els.length; i++) {
@@ -75,6 +78,7 @@ var MGBChecks = (function () {
       if (el.matches('input, select, textarea, form, body')) continue;
       var t = visibleText(el);
       if (t && (GOOD_NEWS.test(el.getAttribute('class') || '') || ADDED_NEWS.test(t))) continue;
+      if (t && (ignore || []).some(function (re) { return re && re.test && re.test(t); })) continue;
       if (t && t.length < 300 && /[a-z]/i.test(t)) return t.slice(0, 160);
     }
     var bad = Array.prototype.slice.call(doc.querySelectorAll('[aria-invalid="true"]')).find(visible);
@@ -124,6 +128,22 @@ var MGBChecks = (function () {
   }
 
   /**
+   * The store says it won't sell it to you now (C.unavailable: Shop checkout links' "This Product is not
+   * available for purchase"): its words, or ''.
+   */
+  function unavailable(doc, C) {
+    var list = ((C && C.unavailable) || []).filter(function (re) { return re && re.test; });
+    if (!list.length) return '';
+    var main = (doc || document).querySelector('main') || (doc || document).body;
+    var lines = String(main.innerText || '').slice(0, 20000).split(/\n+/);
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].replace(/\s+/g, ' ').trim();
+      if (t.length < 200 && list.some(function (re) { return re.test(t); })) return t.slice(0, 160);
+    }
+    return '';
+  }
+
+  /**
    * The checkout pays with a card the store (or its wallet: Shop Pay) already has for you, shown as
    * "Visa •••• 4242" with no card boxes to fill. C.savedCard: the store's own wording, if it differs.
    */
@@ -134,5 +154,5 @@ var MGBChecks = (function () {
     return re.test((main.innerText || '').slice(0, 20000));
   }
 
-  return { CONFIRM_RE: CONFIRM_RE, DECLINE_RE: DECLINE_RE, orderTotal: orderTotal, pageError: pageError, missingRequired: missingRequired, outcome: outcome, savedCardShown: savedCardShown, visible: visible };
+  return { CONFIRM_RE: CONFIRM_RE, DECLINE_RE: DECLINE_RE, orderTotal: orderTotal, pageError: pageError, missingRequired: missingRequired, outcome: outcome, savedCardShown: savedCardShown, unavailable: unavailable, visible: visible };
 })();

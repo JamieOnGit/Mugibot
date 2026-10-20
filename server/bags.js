@@ -55,9 +55,12 @@ export class Bags {
     this.timer = null;
   }
 
-  /** The stores whose bag can be emptied: those Mugibot checks out at (the dummy store's copies too, when it's on). */
+  /**
+   * The stores whose bag can be emptied: those Mugibot checks out at (the dummy store's copies too, when it's on).
+   * (Not Shop checkout links: each link is its own order, with no bag of yours behind it.)
+   */
   storeList() {
-    return this.retailers.list.filter((r) => r.flow && this.retailers.enabled(r) && (!r.demo || this.cfg.demoStoreUrl));
+    return this.retailers.list.filter((r) => r.flow && !r.cartLinks && this.retailers.enabled(r) && (!r.demo || this.cfg.demoStoreUrl));
   }
 
   /** The store's bag page: its flow's bag.url, else /cart under the store's own address. */

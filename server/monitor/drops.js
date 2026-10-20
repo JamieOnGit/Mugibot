@@ -37,7 +37,8 @@ const MAX_FOUND_SHARED = 20;
 const MAX_FOUND_OWN = 10;
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 // Statuses that say whether something's on sale (not a failed or empty read).
-const READ = new Set([STATUS.IN_STOCK, STATUS.PREORDER, STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.NOT_LISTED]);
+// (In the store's shops only — Kmart's "In store only" — is a reading too: not on sale online yet.)
+const READ = new Set([STATUS.IN_STOCK, STATUS.PREORDER, STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.NOT_LISTED, STATUS.IN_STORE]);
 const NO_ACO = 'Auto-checkout works at stores Mugibot has a checkout for — at another website you get the alert, and buy it there yourself';
 // What an admin's watch for everyone posts in the channel chosen for it: its drops, restocks (and
 // pre-orders) and price drops.

@@ -265,6 +265,16 @@ Kmart's figures give its stock state by state. When only some states have a
 product, its alert says which: "In stock in NSW, VIC only." When most of them
 have it, it names the ones that don't: "In stock everywhere except NT."
 
+**🏬 In store only.** Kmart sells some products only in its shops: not for
+delivery, not for ordering online, pre-orders included (its search data says
+so: "FulfilmentChannel" 2; 3 is delivery and click & collect). They get a
+status of their own, **In store only**. Back in stock in the shops, the
+channel alert says "🏬 In store only", that it can't be ordered online, and
+which states have it — with no ⚡ Buy or cart link, and nobody's
+Auto-checkout starts. When it can be ordered online again, that's a restock
+like any other (⚡ Buy, Auto-checkout), even on a day it already alerted in
+stores.
+
 ## 3. Setting it up
 
 1. Deploy as usual: merging into `main` deploys it, and the database upgrades
@@ -362,6 +372,17 @@ before the drop, add that as well: its page is read directly.
 
 Settings (environment variables): `VIP_FAST_SECONDS` (5), `VIP_SLOW_SECONDS`
 (15), `VIP_SWEEP_SECONDS` (4).
+
+### 🛍️ Shop checkout links
+
+A member's **checkout link** at a store that checks out with Shop
+(`…/cart/<variant>:<qty>,…`, on **My watchlist → 🛍️ Shop checkout links**) is watched
+by the server every 20 seconds, option by option: the store's own
+`/variants/<id>.js` for each, read honestly as Mugibot, in stock once every one is,
+its price the link's (each option's price times its quantity). The link itself is
+never opened by the server, and never by members' browsers' checks (it would start
+a checkout). The alert is the member's own DM with ⚡ Buy; armed, Auto-checkout buys
+it on Shop's checkout ([AUTO-CHECKOUT.md](AUTO-CHECKOUT.md#️-shop-checkout-links)).
 
 ### 🎯 Drop watches: anything that isn't the card keywords
 

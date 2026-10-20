@@ -6,7 +6,7 @@
 import { $, ago, api, busy, h, money, setMsg, toast } from './common.js';
 
 const STATUS = {
-  in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', not_listed: 'Not listed yet',
+  in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', in_store: 'In store only', not_listed: 'Not listed yet',
   not_found: 'Page gone', blocked: 'Blocked by site', error: 'Check failed', unknown: 'Checking…', pending: 'Checking…', paused: 'Paused',
 };
 const ARM = { armed: '🤖 armed', pending: '🤖 armed if it isn\'t on sale yet', skipped: 'on sale before the watch looked — not armed' };

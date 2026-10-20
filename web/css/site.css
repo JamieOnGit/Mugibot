@@ -71,7 +71,7 @@ input[type="checkbox"], input[type="radio"] { width: auto; margin: 0 6px 0 0; pa
 .card + .card { margin-top: 16px; }
 .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 12px; font-weight: 700; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .pill.ok, .pill.in_stock, .pill.preorder { background: var(--ok-bg); color: var(--ok); }
-.pill.warn, .pill.blocked, .pill.coming_soon { background: var(--warn-bg); color: var(--warn); }
+.pill.warn, .pill.blocked, .pill.coming_soon, .pill.in_store { background: var(--warn-bg); color: var(--warn); }
 .pill.err, .pill.error, .pill.not_found { background: var(--err-bg); color: var(--err); }
 .pill.out_of_stock { background: var(--surface-2); color: var(--muted); }
 .notice { border-radius: 10px; padding: 10px 14px; margin: 0 0 16px; background: var(--info-bg); color: var(--fg); border: 1px solid transparent; }
@@ -937,3 +937,11 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 .hero h1 { font-weight: 900; }
 .feature, .steps .card { transition: transform .15s ease, box-shadow .15s ease; }
 .feature:hover, .steps .card:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(91, 63, 191, .12); }
+
+/* 🛍️ Shop checkout links (My watchlist): their own section, with the Shop sign-in line */
+.sl-box { margin-top: 18px; }
+.sl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.sl-head h3 { margin: 0; }
+.sl-box code { overflow-wrap: anywhere; }
+.sl-box #sl-signin { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; justify-content: space-between; }
+.sl-box #sl-signin:empty { display: none; }

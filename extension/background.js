@@ -1116,8 +1116,9 @@ async function startRun(run, { turn = true } = {}) {
     return null;
   }
   const key = `r:${run.id}`;
+  const shopLink = await isShopLink(run.store);
   const before = await withTurns((t) => {
-    if (!t[key]) t[key] = { store: run.store, since: Date.now(), runId: run.id, name: run.name || '', run: { id: run.id, store: run.store, storeName: run.storeName, name: run.name, sku: run.sku, mode: run.mode } };
+    if (!t[key]) t[key] = { store: run.store, since: Date.now(), runId: run.id, name: run.name || '', own: shopLink, run: { id: run.id, store: run.store, storeName: run.storeName, name: run.name, sku: run.sku, mode: run.mode } };
     const a = turn ? ahead(t, key) : null;
     if (a) t[key].beatAt = Date.now();
     else t[key].opening = true;
@@ -1130,13 +1131,34 @@ async function startRun(run, { turn = true } = {}) {
   // (Not in front of a card being typed in another tab: that tab keeps the front for it.)
   const tab = await openStoreTab(run.url, { active: !typingElsewhere(null) });
   await withTurns((t) => {
-    const e = t[key] || { store: run.store, since: Date.now(), runId: run.id, name: run.name || '' };
+    const e = t[key] || { store: run.store, since: Date.now(), runId: run.id, name: run.name || '', own: shopLink };
     delete t[key];
-    if (tab) t[`t:${tab.id}`] = { store: e.store, since: e.since, runId: e.runId, name: e.name, tabId: tab.id };
+    if (tab) t[`t:${tab.id}`] = { store: e.store, since: e.since, runId: e.runId, name: e.name, tabId: tab.id, own: !!e.own };
   });
+  if (tab && shopLink) setTimeout(() => { notReachedShop(run).catch(() => null); }, SHOP_REACH_MS);
   const { acoRecent = [] } = await chrome.storage.local.get('acoRecent');
   await chrome.storage.local.set({ acoRecent: [{ id: run.id, name: run.name, store: run.storeName, at: Date.now() }, ...acoRecent].slice(0, 10) });
   return tab;
+}
+
+/** Is this store's flow a Shop checkout link's (each link its own order, opened by the link itself)? */
+async function isShopLink(storeId) {
+  const r = ((await getState()).flows || []).find((x) => x.id === storeId);
+  return !!(r && r.cartLinks);
+}
+
+// A Shop checkout link opens Shop's checkout only in a browser signed in to Shop: otherwise Shop sends it
+// on to the store's own checkout as a guest, where Mugibot doesn't run — and the run would wait for
+// nothing. Not on Shop's checkout this long after its tab opened: your account hears so (the tab is left
+// as it is, for you), and this browser counts as signed out of Shop until it's seen signed in again.
+const SHOP_REACH_MS = 25 * 1000;
+async function notReachedShop(run) {
+  const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.id)}`, {
+    status: 'needs_you', reason: 'no_shop',
+    message: "Shop's checkout didn't open in this browser: the link went on to the store's own checkout, as a guest — sign in to Shop (shop.app) here, and finish this one in its tab yourself.",
+  });
+  // (Your account only takes it while the run hadn't got going: then it's said, and this browser's signed out of Shop.)
+  if (res.status === 200 && res.body && res.body.run && res.body.run.reason === 'no_shop') await noteLogin(run.store, 'out', 'page');
 }
 
 async function isSweepWindow(windowId) {
@@ -1180,13 +1202,16 @@ const holds = (e, now = Date.now()) => !!e && !e.over && now - e.since < (e.clea
 // (Emptying a bag — Clear cart, below — holds its store for this long at most.)
 const CLEAR_TURN_MS = 2 * 60 * 1000;
 
-/** The checkout before this one at its store that's still going, or null: it's this one's turn. */
+/**
+ * The checkout before this one at its store that's still going, or null: it's this one's turn. (A Shop
+ * checkout link's — own: each link its own order, with no bag shared — never waits, nor holds anyone up.)
+ */
 function ahead(t, key, now = Date.now()) {
   const me = t[key];
-  if (!me) return null;
+  if (!me || me.own) return null;
   let first = null;
   for (const [k, e] of Object.entries(t)) {
-    if (k === key || e.store !== me.store || !holds(e, now)) continue;
+    if (k === key || e.store !== me.store || e.own || !holds(e, now)) continue;
     if ((e.since < me.since || (e.since === me.since && k < key)) && (!first || e.since < first.since)) first = e;
   }
   return first;
@@ -1196,16 +1221,16 @@ const nextInLine = (storeName, a) => (a && a.clear
   ? `Next in line at ${storeName || 'the store'}: your bag there is being emptied (Clear cart) — this one goes the moment that's done`
   : `Next in line at ${storeName || 'the store'}: your checkout of ${(a && a.name) || 'another item'} there goes first (it keeps one bag for this browser) — this one goes the moment that's done`);
 
-/** This tab's checkout, in the line for its store (from its ⚡ Buy code: an Auto-checkout run's tab already is). */
-async function joinTurn(tabId, store, { runId = null, name = '' } = {}) {
+/** This tab's checkout, in the line for its store (from its ⚡ Buy code: an Auto-checkout run's tab already is). own: a Shop checkout link's. */
+async function joinTurn(tabId, store, { runId = null, name = '', own = false } = {}) {
   if (tabId == null || !store) return;
   await withTurns((t) => {
     const key = `t:${tabId}`;
     const run = runId ? t[`r:${runId}`] : null;
-    if (run) { delete t[`r:${runId}`]; t[key] = { store, since: run.since, runId, name: run.name || name, tabId }; return; }
+    if (run) { delete t[`r:${runId}`]; t[key] = { store, since: run.since, runId, name: run.name || name, tabId, own }; return; }
     // (The same checkout carrying on — or a new one in this tab: it starts again, at the back.)
     if (t[key] && t[key].store === store && holds(t[key]) && (!runId || t[key].runId === runId)) return;
-    t[key] = { store, since: Date.now(), runId, name, tabId };
+    t[key] = { store, since: Date.now(), runId, name, tabId, own };
   });
 }
 
@@ -1612,6 +1637,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // A ⚡ Buy code: confirm it once, then allow checkout autofill in this tab.
         const auth = await getAuth();
         if (!auth || !sender.tab) return null;
+        // Only on a store's page (one with a flow): a link that went somewhere else — a Shop checkout link
+        // sent on to the store's own guest checkout — leaves its code unused. (The flows this browser has,
+        // read here, never fetched: nothing waits on them.)
+        const { [`state:${auth.user.id}`]: known } = await chrome.storage.local.get(`state:${auth.user.id}`);
+        if (known && Array.isArray(known.flows) && known.flows.length && !storeOfUrl(known.flows, sender.url || sender.tab.url)) return { ok: false, status: 0, elsewhere: true };
         const res = await api('POST', '/api/ext/claim', { code: msg.code });
         if (res.status === 200 && res.body && res.body.ok) {
           // (An Auto-checkout run's code: the run's limits ride on this tab's pass, never on the page.)
@@ -1619,7 +1649,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           profileFor(res.body.profileId || '').catch(() => null); // for checkout, in a moment
           // In the line for this store (one checkout at a time there: turns, above).
           const r = await storeForTab(sender);
-          if (r) await joinTurn(sender.tab.id, r.id, { runId: res.body.aco ? res.body.aco.runId : null, name: res.body.name || '' });
+          if (r) await joinTurn(sender.tab.id, r.id, { runId: res.body.aco ? res.body.aco.runId : null, name: res.body.name || '', own: !!r.cartLinks });
           return res.body;
         }
         return { ok: false, status: res.status, error: res.body && res.body.error };
@@ -1693,7 +1723,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return { ok: true };
         }
         const res = await post();
-        return res.status === 200 ? { ok: true } : { ok: false, status: res.status };
+        // Over on your account's side (finished on your phone instead, while this tab waited at the
+        // checkpoint): this tab's run stops here — it never carries on to the final button.
+        const over = res.status === 200 && !!(res.body && res.body.run && res.body.run.active === false) && (status === 'waiting' || status === 'started');
+        if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...run, done: true } } });
+        return res.status === 200 ? { ok: true, over, text: over ? String(res.body.run.message || '') : '' } : { ok: false, status: res.status };
       }
       case 'acoInfo': {
         // The store page: is this tab running an Auto-checkout run (and how far has it got)?
@@ -1786,7 +1820,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!r) return { go: true };
         const key = `t:${sender.tab.id}`;
         const mine = ((await chrome.storage.session.get(TURNS))[TURNS] || {})[key];
-        if (!mine || mine.store !== r.id || !holds(mine)) await joinTurn(sender.tab.id, r.id, { name: typeof msg.name === 'string' ? msg.name.slice(0, 120) : '' });
+        if (!mine || mine.store !== r.id || !holds(mine)) await joinTurn(sender.tab.id, r.id, { name: typeof msg.name === 'string' ? msg.name.slice(0, 120) : '', own: !!r.cartLinks });
         await releaseTurns(); // (closed tabs and finished checkouts forgotten first)
         const a = ahead((await chrome.storage.session.get(TURNS))[TURNS] || {}, key);
         return a ? { go: false, name: a.name || '', store: r.name, clearing: !!a.clear } : { go: true };

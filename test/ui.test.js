@@ -125,6 +125,49 @@ test('Watchlist: add by link, add by store + SKU, edit, reorder, pause, announce
   await page.waitForFunction(() => document.querySelectorAll('#w-list li[data-id]').length === 8);
 });
 
+test("🛍️ Shop checkout links: a section of their own under My watchlist — added by the link alone, listed there (not with the SKUs, no Open), with whether you're signed in to Shop", async () => {
+  await page.click('#pt-watch');
+  await page.waitForSelector('#sl-box');
+  assert.match(await page.textContent('#sl-box'), /Shop checkout links.*creations\.mattel\.com\/cart\/48835830579405:2,40653613531341:1/s);
+  assert.match(await page.textContent('#sl-list'), /No checkout links yet/);
+  assert.match(await page.textContent('#sl-signin'), /Not seen signed in to Shop yet/);
+  const skus = await page.locator('#w-list li[data-id]').count();
+  await page.click('#sl-add');
+  await page.waitForSelector('#w-form:not([hidden])');
+  assert.equal(await page.textContent('#w-form-title'), 'Add a Shop checkout link');
+  assert.equal(await page.isVisible('#w-store'), false, 'no store or SKU to enter: the link is all');
+  assert.equal(await page.locator('#w-store option[value="shoplink"]').count(), 0, 'not in the store picker');
+  await page.fill('#w-url', 'https://creations.mattel.com/cart/48835830579405:2,40653613531341:1');
+  await page.fill('#w-max', '120');
+  await page.click('#w-save');
+  await page.waitForSelector('#sl-list li[data-id]');
+  assert.match(await page.textContent('#sl-list li[data-id]'), /Checkout link at creations\.mattel\.com.*creations\.mattel\.com · Shop · 2 options in the link · ping at ≤ \$120\.00/s);
+  assert.equal(await page.locator('#w-list li[data-id]').count(), skus, 'not listed with the SKUs');
+  assert.equal(await page.locator('#sl-list li[data-id] a', { hasText: 'Open ↗' }).count(), 0, 'no Open (it would start a checkout)');
+  assert.equal(await page.textContent('#sl-count'), '1');
+  // Signed in to Shop in one of your browsers (the extension's check of shop.app): the section says so.
+  const owner = env.app.repo.userByUsername('owner');
+  const { device } = env.app.repo.addDevice(owner.id, 'Chrome on the desk', '1.22.0');
+  try {
+    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'in', at: Date.now(), how: 'check' } });
+    await page.reload();
+    await page.click('#pt-watch');
+    await page.waitForFunction(() => /Signed in to Shop in Chrome on the desk \(checked/.test(document.querySelector('#sl-signin').textContent));
+    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'out', at: Date.now(), how: 'check' } });
+    await page.reload();
+    await page.click('#pt-watch');
+    await page.waitForFunction(() => /Signed out of Shop in Chrome on the desk/.test(document.querySelector('#sl-signin').textContent));
+    assert.equal(await page.getAttribute('#sl-signin a', 'href'), 'https://shop.app/account');
+    assert.doesNotMatch(await page.textContent('#w-list'), /Sign in at Shop/, 'said in its own section, not over the SKUs');
+  } finally {
+    env.app.repo.deleteDevice(owner.id, device.id);
+  }
+  if (shots) await page.screenshot({ path: path.join(shots, 'shop-links.png'), fullPage: true });
+  page.once('dialog', (d) => d.accept());
+  await page.locator('#sl-list li[data-id]').getByRole('button', { name: /^Delete / }).click();
+  await page.waitForFunction(() => /No checkout links yet/.test(document.querySelector('#sl-list').textContent));
+});
+
 test('⚡ Buy without the extension still opens the product (with a one-time code)', async () => {
   const opened = [];
   page.context().on('request', (r) => { if (r.url().startsWith('https://www.kmart.com.au/')) opened.push(r.url()); });

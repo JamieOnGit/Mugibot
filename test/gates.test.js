@@ -436,5 +436,5 @@ test("Discord's ⚡ Buy reply while a run waits says where it is", () => {
   const aco = env.app.aco;
   const base = { name: 'Elite Trainer Box', store: 'demo-ebgames', status: 'waiting' };
   assert.match(aco.remoteText({ ...base, reason: 'queue', message: 'In the queue — about 23 min' }, 'Ash desktop'), /🚦 In EB Games \(dummy store\)'s virtual queue in \*\*Ash desktop\*\* — about 23 min\. It waits its turn \(never refreshing the page\), then checks out\./);
-  assert.match(aco.remoteText({ ...base, store: 'demo-jbhifi', reason: 'checkpoint', message: '' }, 'Ash desktop'), /🛡️ JB Hi-Fi \(dummy store\)'s checkpoint wants a human: solve it in \*\*Ash desktop\*\*/);
+  assert.match(aco.remoteText({ ...base, store: 'demo-jbhifi', reason: 'checkpoint', message: '' }, 'Ash desktop'), /🛡️ JB Hi-Fi \(dummy store\)'s checkpoint wants a human, in \*\*Ash desktop\*\* \(its tab is in front, waiting\)\. .*\*\*🖥️ Solve it on my computer\*\* \(Chrome Remote Desktop\) and it carries on to checkout — or \*\*📱 Finish on this phone\*\*/);
 });

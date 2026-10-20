@@ -7,6 +7,7 @@
 // the reply).
 
 import crypto from 'node:crypto';
+import { linkRows } from '../aco.js';
 import { entitlement } from '../entitlement.js';
 import { CATEGORIES } from '../catalog.js';
 import { buyAction } from '../notifier.js';
@@ -190,6 +191,15 @@ export function register(router, ctx) {
       : `It fills checkout in and stops at the final button — ${out.why}.`;
     ctx.aco.follow(out.run.id, i.token, out.device.name, how);
     const asleep = out.listening ? '' : `\n⚠️ **${out.device.name}** isn't open right now — it starts as soon as it is (within 2 minutes).`;
+    // The store's checkpoint is up right now: the computer will stop at it for a human — say so, with
+    // the two ways through from the phone (server/aco.js phoneButtons()).
+    const gate = ctx.gates ? ctx.gates.get(item.store) : null;
+    if (gate && gate.kind === 'checkpoint' && gate.status === 'up') {
+      const where = retailers.name(item.store);
+      const row = { ...out.run, user_id: user.id, device_id: null, status: 'queued', reason: '' };
+      return reply(`${ctx.aco.remoteText(out.run, out.device.name)}\n${how}${asleep}\n🛡️ **${where}'s checkpoint is up right now**: **${out.device.name}** will stop at it for a human check — a check for that browser, so solving it on your phone can't let it through. From here: **🖥️ Solve it on my computer** (Chrome Remote Desktop) when it gets there, or **📱 Finish on this phone** now — your computer won't start it, and ${where} opens here for you to pass the check and pay.`,
+        { components: linkRows(ctx.aco.phoneButtons(row)) });
+    }
     return reply(`${ctx.aco.remoteText(out.run, out.device.name)}\n${how}${asleep}`);
   }
 

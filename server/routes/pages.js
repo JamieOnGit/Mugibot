@@ -17,6 +17,8 @@ const PAGES = {
   '/app': { file: 'app.html', auth: 'user' },
   '/admin': { file: 'admin.html', auth: 'admin' },
   '/buy': { file: 'buy.html', auth: 'user' },
+  // "📱 Finish on this phone" (server/aco.js): its signed link stands in for signing in.
+  '/phone': { file: 'phone.html' },
   '/terms': { file: 'terms.html' },
   '/privacy': { file: 'privacy.html' },
 };
@@ -43,7 +45,7 @@ function render(cfg, file, cache) {
 export function servePage(ctx, req, res, url) {
   const { cfg } = ctx;
   const clean = url.pathname.replace(/\/+$/, '') || '/';
-  const page = PAGES[clean] || (/^\/buy\/[\w-]{4,60}$/.test(clean) ? PAGES['/buy'] : null);
+  const page = PAGES[clean] || (/^\/buy\/[\w-]{4,60}$/.test(clean) ? PAGES['/buy'] : /^\/phone\/[\w-]{4,60}$/.test(clean) ? PAGES['/phone'] : null);
   if (page) {
     if (page.auth && !req.user) {
       res.writeHead(302, { location: `/login?next=${encodeURIComponent(url.pathname + url.search)}` });
@@ -91,7 +93,7 @@ export function servePage(ctx, req, res, url) {
   }
   if (url.pathname === '/robots.txt') {
     res.writeHead(200, { 'content-type': 'text/plain' });
-    res.end('User-agent: *\nDisallow: /app\nDisallow: /admin\nDisallow: /buy\nDisallow: /api/\n');
+    res.end('User-agent: *\nDisallow: /app\nDisallow: /admin\nDisallow: /buy\nDisallow: /phone\nDisallow: /api/\n');
     return true;
   }
   if (/^\/(css|js|img)\//.test(url.pathname)) {

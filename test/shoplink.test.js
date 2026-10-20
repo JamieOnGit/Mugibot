@@ -1,0 +1,205 @@
+// Shop checkout links (server/retailers/shoplink.js): a store's own cart link — /cart/<variant>:<qty>,… —
+// at a store that checks out with Shop. Watched option by option (the store's /variants/<id>.js), in
+// stock once every one is, its price the link's; armed, Auto-checkout opens the link itself, which goes
+// to Shop's checkout. Signed out of Shop (it goes to the store's guest checkout instead), it doesn't
+// start; a run whose tab never reached Shop's checkout says so. Never a real store: the dummy store's
+// Mattel Creations-style shop and Shop-style checkout.
+
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { Client, Device, makeMember, startApp } from './helpers.js';
+import { startMockStore } from '../devtools/mockstore.js';
+import { extensionManifest } from '../server/extension.js';
+
+const PORSCHE = 48835830579405;
+const RLC = 40653613531341;
+const MATTEL = 'https://creations.mattel.com/cart/48835830579405:2,40653613531341:1';
+
+let env;
+let store;
+let ash;
+let desk;
+
+before(async () => {
+  store = await startMockStore();
+  env = await startApp({ demoStoreUrl: store.url, allowPrivateHosts: true, hostGapSeconds: 0 });
+  ash = await Client.signup(env.url, 'ash');
+  makeMember(env, ash);
+  for (const it of (await ash.get('/api/items')).body.items) await ash.del(`/api/items/${it.id}`);
+  desk = await Device.pair(env.url, ash, 'Ash desktop');
+  await desk.call('GET', '/api/ext/me?v=1.22.0');
+  const r = await ash.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
+  assert.equal(r.status, 200, r.text);
+});
+after(async () => {
+  await env.close();
+  await store.close();
+});
+
+const runsOf = (itemId) => env.app.db.all('SELECT * FROM aco_runs WHERE item_id = :i ORDER BY created_at DESC', { i: itemId });
+const finishRuns = () => env.app.db.run("UPDATE aco_runs SET status = 'failed' WHERE status IN ('queued', 'sent', 'started', 'waiting', 'checkout', 'placing')");
+const checkLink = (url) => env.app.monitor.checkPage(url);
+
+/** It sells out, then it's back: the monitor's checks see both. */
+async function drop(url) {
+  for (const id of [PORSCHE, RLC]) store.setVariant(id, { available: false });
+  await checkLink(url);
+  for (const id of [PORSCHE, RLC]) store.setVariant(id, { available: true });
+  await checkLink(url);
+}
+
+test('🛍️ a store\'s checkout link is a Shop checkout link — its options and quantities are the item; a store Mugibot knows keeps its own; a Shop page isn\'t one', async () => {
+  const R = env.app.retailers;
+  assert.equal(R.forUrl(MATTEL).id, 'shoplink');
+  assert.equal(R.skuFromUrl(MATTEL), '48835830579405:2,40653613531341:1');
+  assert.equal(R.forUrl('https://creations.mattel.com/cart/48835830579405:1').id, 'shoplink');
+  assert.equal(R.forUrl('https://www.jbhifi.com.au/cart/4455667788:1').id, 'jbhifi', "JB Hi-Fi's own cart link is JB Hi-Fi's");
+  assert.equal(R.forUrl('https://creations.mattel.com/products/rlc-porsche'), null, 'a product page at a store Mugibot doesn\'t know: another website');
+  assert.equal(R.forUrl(store.cartLink([[PORSCHE, 1]])).id, 'demo-shoplink', "the dummy store's link: the dummy Shop");
+  assert.equal(R.siteName('shoplink', MATTEL), 'creations.mattel.com · Shop');
+
+  let r = await ash.post('/api/items', { url: 'https://shop.app/checkout/56811323597/cn/abc/en-us/shoppay', maxPrice: 50 });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /store's own link/);
+  r = await ash.post('/api/items', { store: 'shoplink', sku: '48835830579405:2' });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /checkout link/);
+  r = await ash.post('/api/items', { url: MATTEL, maxPrice: 100, aco: true });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.store, 'shoplink');
+  assert.equal(r.body.sku, '48835830579405:2,40653613531341:1');
+  assert.equal(r.body.name, 'Checkout link at creations.mattel.com');
+  assert.equal(r.body.storeName, 'creations.mattel.com · Shop');
+  assert.equal(r.body.shopLink, true);
+  assert.equal(r.body.acoCan, true);
+  assert.equal(r.body.acoPlaces, true, "Auto-checkout presses Shop's \"Pay now\"");
+  assert.equal(r.body.acoVersion, '1.22.0');
+  await ash.del(`/api/items/${r.body.id}`);
+
+  // The extension runs on Shop's checkout, and knows each link is its own order.
+  assert.ok(extensionManifest(env.app.cfg).host_permissions.includes('https://shop.app/*'));
+  const flow = R.forExtension().find((x) => x.id === 'shoplink');
+  assert.equal(flow.cartLinks, true);
+  assert.equal(flow.flow.checkout.leaves, true);
+  // In the store picker? Only by its link.
+  assert.equal((await ash.get('/api/retailers')).body.retailers.find((x) => x.id === 'shoplink').cartLinks, true);
+  // Clear cart has no Shop bag (there's none behind a link).
+  assert.ok(!env.app.bags.storeList().some((x) => x.cartLinks));
+  // Shop's sign-in, on the login monitor's list: required (no guest checkout through it).
+  const shop = (await ash.get('/api/logins')).body.stores.find((x) => x.id === 'shoplink');
+  assert.equal(shop.required, true);
+  assert.equal(shop.cartLinks, true);
+  assert.equal(shop.signInUrl, 'https://shop.app/account');
+});
+
+test("🛍️ watched option by option (the store's /variants/<id>.js, asked honestly as Mugibot): sold out while one is; in stock once every one is, its price the link's — armed, Auto-checkout opens the link itself", async () => {
+  const link = store.cartLink([[PORSCHE, 2], [RLC, 1]]);
+  const add = await ash.post('/api/items', { url: link, name: 'RLC Porsche ×2 + membership', maxPrice: 90, aco: true });
+  assert.equal(add.status, 200, add.text);
+  const item = add.body;
+  assert.equal(item.store, 'demo-shoplink');
+  // Checked more often than the default minute: what these links are for goes in moments.
+  assert.ok(env.app.monitor.pageInterval(link) <= 20000, `every 20 seconds at most (${env.app.monitor.pageInterval(link)} ms)`);
+
+  store.state.requests.length = 0;
+  store.setVariant(RLC, { available: false });
+  await checkLink(link);
+  let it = (await ash.get('/api/items')).body.items.find((x) => x.id === item.id);
+  assert.equal(it.status, 'out_of_stock', 'one option sold out: the link can\'t be bought');
+  const asked = store.state.requests.filter((x) => /^\/creations\/variants\/\d+\.js$/.test(x.path));
+  assert.deepEqual(asked.map((x) => x.path).sort(), [`/creations/variants/${RLC}.js`, `/creations/variants/${PORSCHE}.js`].sort());
+  assert.ok(asked.every((x) => /^Mugibot\//.test(x.ua)), 'as Mugibot, honestly');
+  assert.ok(!store.state.requests.some((x) => x.path.startsWith('/creations/cart')), 'the link itself is never opened by the server (it would start a checkout)');
+  assert.equal(runsOf(item.id).length, 0);
+
+  store.setVariant(RLC, { available: true });
+  await checkLink(link);
+  it = (await ash.get('/api/items')).body.items.find((x) => x.id === item.id);
+  assert.equal(it.status, 'in_stock');
+  assert.equal(it.lastPrice, 85.99, '$38 × 2 + $9.99');
+  assert.equal(it.title, 'Hot Wheels RLC Exclusive RWB Porsche 930 ×2 + Hot Wheels Red Line Club 1-Year Digital Membership');
+  const [run] = runsOf(item.id);
+  assert.ok(run, 'armed: a run');
+  assert.equal(run.status, 'queued');
+  assert.equal(run.price, 85.99);
+  // The checkout browser opens the link itself (Shop's checkout, from it), with the run's ⚡ Buy code.
+  const next = (await desk.call('GET', '/api/ext/aco/next')).body;
+  assert.equal(next.runs.length, 1);
+  assert.equal(next.runs[0].url.split('#')[0], link);
+  assert.match(next.runs[0].storeName, /^Shop\b/);
+  const code = new URL(next.runs[0].url).hash.replace('#mgb-go=', '');
+  const claim = await desk.call('POST', '/api/ext/claim', { code });
+  assert.equal(claim.status, 200);
+  assert.equal(claim.body.aco.runId, run.id);
+  assert.equal(claim.body.aco.maxTotal, 130, 'its max, plus up to $40 delivery');
+  finishRuns();
+  await ash.del(`/api/items/${item.id}`);
+});
+
+test("🛍️ signed out of Shop (the link goes to the store's guest checkout): Auto-checkout doesn't start, and says why; a run whose tab never reached Shop's checkout says so — but not once it's got going there", async () => {
+  const link = store.cartLink([[PORSCHE, 1]]);
+  const item = (await ash.post('/api/items', { url: link, name: 'RLC Porsche', maxPrice: 60, aco: true })).body;
+  // The browser saw it signed out of Shop.
+  let r = await desk.call('POST', '/api/ext/logins', { logins: { 'demo-shoplink': { status: 'out', at: Date.now(), how: 'check' } } });
+  assert.equal(r.status, 200);
+  await drop(link);
+  let [run] = runsOf(item.id);
+  assert.equal(run.status, 'skipped');
+  assert.equal(run.reason, 'signed_out');
+  assert.match(run.message, /Shop( \(dummy store\))? only checks out signed in/);
+
+  // Signed in again: it starts. Its tab never reaches Shop's checkout (the browser says so, 25 s on).
+  await desk.call('POST', '/api/ext/logins', { logins: { 'demo-shoplink': { status: 'in', at: Date.now(), how: 'check' } } });
+  await ash.put(`/api/items/${item.id}`, { aco: true });
+  await drop(link);
+  [run] = runsOf(item.id);
+  assert.equal(run.status, 'queued', `${run.reason}: ${run.message}`);
+  await desk.call('GET', '/api/ext/aco/next');
+  r = await desk.call('POST', `/api/ext/aco/${run.id}`, { status: 'needs_you', reason: 'no_shop', message: "Shop's checkout didn't open in this browser" });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.run.status, 'needs_you');
+  assert.equal(r.body.run.reason, 'no_shop');
+  assert.equal(r.body.run.reasonText, "Shop's checkout didn't open — this browser isn't signed in to Shop");
+
+  // One that did reach it (claimed: its page reports for itself): the late "never reached" changes nothing.
+  await ash.put(`/api/items/${item.id}`, { aco: true });
+  await drop(link);
+  [run] = runsOf(item.id);
+  const next = (await desk.call('GET', '/api/ext/aco/next')).body;
+  const code = new URL(next.runs[0].url).hash.replace('#mgb-go=', '');
+  assert.equal((await desk.call('POST', '/api/ext/claim', { code })).status, 200);
+  r = await desk.call('POST', `/api/ext/aco/${run.id}`, { status: 'needs_you', reason: 'no_shop', message: 'late' });
+  assert.equal(r.body.run.status, 'started', 'left as it is');
+  finishRuns();
+  await ash.del(`/api/items/${item.id}`);
+});
+
+test('🛍️ a checkout browser with an extension older than 1.22.0 (no Shop checkout in it): not started — it says to update; Discord\'s ⚡ Buy says so too', async () => {
+  const link = store.cartLink([[RLC, 1]]);
+  const item = (await ash.post('/api/items', { url: link, name: 'RLC membership', maxPrice: 20, aco: true })).body;
+  await desk.call('GET', '/api/ext/me?v=1.21.0');
+  try {
+    await drop(link);
+    const [run] = runsOf(item.id);
+    assert.equal(run.status, 'skipped');
+    assert.equal(run.reason, 'old_extension');
+    assert.match(run.message, /Ash desktop has 1\.21\.0 — update it to 1\.22\.0/);
+    await ash.put('/api/aco', { remoteBuy: true });
+    const out = await env.app.aco.remote(env.app.repo.userByUsername('ash').id, item.id);
+    assert.match(out.error, /update it to 1\.22\.0 to buy from Shop/);
+  } finally {
+    await desk.call('GET', '/api/ext/me?v=1.22.0');
+    finishRuns();
+    await ash.del(`/api/items/${item.id}`);
+  }
+});
+
+test("🛍️ a link whose option the store doesn't sell any more: not found (said, never alerted as a restock)", async () => {
+  const link = `${store.url}/creations/cart/123456789:1`;
+  const item = (await ash.post('/api/items', { url: link, name: 'Gone' })).body;
+  await checkLink(link);
+  const it = (await ash.get('/api/items')).body.items.find((x) => x.id === item.id);
+  assert.equal(it.status, 'not_found');
+  assert.match(it.error, /isn't at the store any more/);
+  await ash.del(`/api/items/${item.id}`);
+});

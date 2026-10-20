@@ -10,7 +10,7 @@ let total = 0;
 const date = (ts) => (ts ? new Date(ts).toLocaleDateString() : '—');
 const loaders = {};
 const TABS = ['overview', 'members', 'skus', 'blacklist', 'retailers', 'integrations', 'whop', 'audit'];
-const STATUS = { in_stock: 'in stock', preorder: 'pre-order', out_of_stock: 'sold out', coming_soon: 'coming soon', not_listed: 'not listed', not_found: 'gone', blocked: 'blocked', error: 'error', pending: 'pending', unknown: 'unknown' };
+const STATUS = { in_stock: 'in stock', preorder: 'pre-order', out_of_stock: 'sold out', coming_soon: 'coming soon', in_store: 'in store only', not_listed: 'not listed', not_found: 'gone', blocked: 'blocked', error: 'error', pending: 'pending', unknown: 'unknown' };
 
 function showTab() {
   const tab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';

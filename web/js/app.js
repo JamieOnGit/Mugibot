@@ -4,7 +4,7 @@ import { setupDrops } from './drops.js';
 import { setupMonitor } from './monitor.js';
 
 const STATUS = {
-  in_stock: 'In stock', preorder: 'Pre-order open', out_of_stock: 'Sold out', coming_soon: 'Coming soon', not_listed: 'Not listed yet',
+  in_stock: 'In stock', preorder: 'Pre-order open', out_of_stock: 'Sold out', coming_soon: 'Coming soon', in_store: 'In store only', not_listed: 'Not listed yet',
   not_found: 'Page gone', blocked: 'Blocked by site', error: 'Error', unknown: 'Unknown', pending: 'Checking soon', paused: 'Paused',
 };
 const FLOW = { verified: 'verified flow', beta: 'beta flow', draft: 'draft flow', none: 'alerts only' };
@@ -486,7 +486,8 @@ function statusOf(it) {
   return it.monitor ? it.status : 'paused';
 }
 
-function itemRow(it, i) {
+/** One watchlist item. i: its place in `list` (its own list: the watchlist, or the Shop checkout links). */
+function itemRow(it, i, list = state.items) {
   const st = statusOf(it);
   // (Another website: no ⚡ Buy — Mugibot checks out at the stores it knows. Its page is the way in.)
   const buy = it.acoCan ? h('button', { class: 'btn primary small', type: 'button', disabled: !it.url, title: it.url ? '' : 'The product page hasn\'t been found yet' }, '⚡ Buy') : null;
@@ -496,8 +497,10 @@ function itemRow(it, i) {
   const move = async (dir) => {
     const ids = state.items.map((x) => x.id);
     const j = i + dir;
-    if (j < 0 || j >= ids.length) return;
-    [ids[i], ids[j]] = [ids[j], ids[i]];
+    if (j < 0 || j >= list.length) return;
+    const a = ids.indexOf(it.id);
+    const b = ids.indexOf(list[j].id);
+    [ids[a], ids[b]] = [ids[b], ids[a]];
     const r = await api('POST', '/api/items/reorder', { ids });
     state.items = r.items;
     renderItems();
@@ -505,7 +508,9 @@ function itemRow(it, i) {
   const price = it.lastPrice ?? it.price;
   const checked = it.checkedAt ? `checked ${ago(it.checkedAt)}${it.statusSource === 'browser' ? ' by your browser' : ''}` : '';
   // (Another website's product goes by its address: its made-up code isn't one anyone uses.)
-  const meta = [it.storeName, it.acoCan ? `SKU ${it.sku}` : '', money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', checked].filter(Boolean).join(' · ');
+  // (A Shop checkout link: what's in it, as the store names its options — its code is the link.)
+  const what = it.shopLink ? (it.title || `${it.sku.split(',').length} option${it.sku.includes(',') ? 's' : ''} in the link`) : it.acoCan ? `SKU ${it.sku}` : '';
+  const meta = [it.storeName, what, money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', checked].filter(Boolean).join(' · ');
   const isAdmin = state.me.user.role === 'admin';
   return h('li', { class: it.monitor ? '' : 'off', dataset: { id: it.id } },
     h('div', { class: 'info' },
@@ -518,7 +523,8 @@ function itemRow(it, i) {
     h('span', { class: `pill ${st}` }, STATUS[st] || st),
     h('div', { class: 'acts' },
       buy,
-      it.url ? h('a', { class: 'btn small', href: it.url, target: '_blank', rel: 'noopener' }, 'Open ↗') : null,
+      // (A Shop checkout link opens Shop's checkout: Open would start one, so it isn't offered.)
+      it.url && !it.shopLink ? h('a', { class: 'btn small', href: it.url, target: '_blank', rel: 'noopener' }, 'Open ↗') : null,
       h('button', { class: 'btn small', type: 'button', title: 'Check now', 'aria-label': `Check ${it.name} now`, onclick: () => checkNow(it) }, '↻'),
       h('button', { class: 'btn small', type: 'button', title: 'Move up', 'aria-label': 'Move up', onclick: () => move(-1) }, '↑'),
       h('button', { class: 'btn small', type: 'button', title: 'Move down', 'aria-label': 'Move down', onclick: () => move(1) }, '↓'),
@@ -536,14 +542,16 @@ const W_PAGE_SIZE = 10;
 function renderItems() {
   const list = $('#w-list');
   list.textContent = '';
+  // (Shop checkout links have a section of their own, below.)
+  const items = state.items.filter((it) => !it.shopLink);
   $('#w-count').textContent = state.items.length ? String(state.items.length) : '';
-  const pages = Math.max(1, Math.ceil(state.items.length / W_PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil(items.length / W_PAGE_SIZE));
   state.wPage = Math.min(Math.max(1, state.wPage || 1), pages);
-  renderPager($('#w-pager'), { page: state.wPage, size: W_PAGE_SIZE, total: state.items.length, label: 'Watchlist', onPage: (p) => { state.wPage = p; renderItems(); } });
+  renderPager($('#w-pager'), { page: state.wPage, size: W_PAGE_SIZE, total: items.length, label: 'Watchlist', onPage: (p) => { state.wPage = p; renderItems(); } });
   if (state.itemsInactive) list.append(h('li', { class: 'notice warn' }, 'Monitoring is paused while your account has no active membership.'));
-  if (!state.items.length) list.append(h('li', { class: 'empty' }, 'Nothing on your watchlist yet — press "+ Add SKU", or ☆ Watch a product in Tracked products.'));
-  // Signed out at a store you're watching: ⚡ Buy is faster signed in.
-  const out = state.logins ? state.logins.stores.filter((s) => s.status === 'out' && state.items.some((it) => it.store === s.id)) : [];
+  if (!items.length) list.append(h('li', { class: 'empty' }, 'Nothing on your watchlist yet — press "+ Add SKU", or ☆ Watch a product in Tracked products.'));
+  // Signed out at a store you're watching: ⚡ Buy is faster signed in. (Shop: said in its own section.)
+  const out = state.logins ? state.logins.stores.filter((s) => s.status === 'out' && !s.cartLinks && items.some((it) => it.store === s.id)) : [];
   // A store that only sells to signed-in customers (Amazon): ⚡ Buy and Auto-checkout can't buy there signed out.
   const must = out.filter((s) => s.required);
   if (must.length) {
@@ -558,7 +566,40 @@ function renderItems() {
       h('span', { class: 'acts' }, ...faster.slice(0, 3).map((s) => h('a', { class: 'btn small', href: s.signInUrl, target: '_blank', rel: 'noopener' }, `${s.name} ↗`)))));
   }
   const from = (state.wPage - 1) * W_PAGE_SIZE;
-  state.items.slice(from, from + W_PAGE_SIZE).forEach((it, i) => list.append(itemRow(it, from + i)));
+  items.slice(from, from + W_PAGE_SIZE).forEach((it, i) => list.append(itemRow(it, from + i, items)));
+  renderShopLinks();
+}
+
+/**
+ * 🛍️ Shop checkout links: their own list, and whether you're signed in to Shop in your browsers (the
+ * extension checks shop.app every 10 minutes) — signed out, Shop sends the link to the store's own
+ * checkout as a guest, where Mugibot doesn't run.
+ */
+function renderShopLinks() {
+  const links = state.items.filter((it) => it.shopLink);
+  const list = $('#sl-list');
+  list.textContent = '';
+  $('#sl-count').textContent = links.length ? String(links.length) : '';
+  if (!links.length) list.append(h('li', { class: 'empty' }, 'No checkout links yet — press "+ Add checkout link" and paste one.'));
+  links.forEach((it, i) => list.append(itemRow(it, i, links)));
+  const box = $('#sl-signin');
+  box.textContent = '';
+  const stores = state.logins ? state.logins.stores.filter((x) => x.cartLinks) : [];
+  // (The real Shop, unless only the dummy store's copy is on your list.)
+  const shop = stores.find((x) => links.some((it) => it.store === x.id)) || stores.find((x) => !x.demo) || stores[0];
+  if (!shop) return;
+  const where = shop.device ? ` in ${shop.device}` : '';
+  const link = (label, primary) => h('a', { class: `btn small${primary ? ' primary' : ''}`, href: shop.signInUrl, target: '_blank', rel: 'noopener' }, label);
+  if (shop.status === 'in') {
+    box.className = 'notice ok';
+    box.append(h('span', {}, `✅ Signed in to Shop${where} (${shop.how === 'check' ? 'checked' : 'seen'} ${ago(shop.at)}): your links open Shop's checkout with your details and card.`));
+  } else if (shop.status === 'out') {
+    box.className = 'notice err';
+    box.append(h('span', {}, h('b', {}, `Signed out of Shop${where}. `), "Signed out, Shop sends a checkout link to the store's own checkout as a guest: ⚡ Buy can't fill it in there, and Auto-checkout doesn't start. Sign in to Shop in your checkout browser."), link('Sign in to Shop ↗', true));
+  } else {
+    box.className = 'notice warn';
+    box.append(h('span', {}, `Not seen signed in to Shop yet${where}: sign in at shop.app in your checkout browser (the extension checks it every 10 minutes). Checkout links only open Shop's checkout while you're signed in.`), link('Open Shop ↗', false));
+  }
 }
 
 async function loadItems() {
@@ -642,7 +683,8 @@ function fillStoreSelect() {
   const sel = $('#w-store');
   sel.textContent = '';
   sel.append(h('option', { value: '' }, '— from the link —'));
-  for (const r of state.retailers) sel.append(h('option', { value: r.id }, `${r.name}${r.flowStatus === 'verified' ? '' : ` (${r.flowStatus})`}`));
+  // (Shop checkout links go by their link alone: + Add checkout link.)
+  for (const r of state.retailers.filter((x) => !x.cartLinks)) sel.append(h('option', { value: r.id }, `${r.name}${r.flowStatus === 'verified' ? '' : ` (${r.flowStatus})`}`));
 }
 
 function fillProfileSelect(selected) {
@@ -659,14 +701,27 @@ function storeNote() {
 }
 $('#w-store').addEventListener('change', storeNote);
 
-async function editItem(it) {
+const W_HELP = "Paste the product link — or pick the store and type the SKU (handy before it's listed: Mugibot finds the page when it goes up).";
+const SL_HELP = "Paste the store's checkout link: …/cart/<option>:<how many>, one or more of them (at a store that checks out with Shop). The max price is for the whole link, quantities included.";
+
+/** The add / edit form: a SKU, or (shop: true, or a Shop checkout link) a Shop checkout link. */
+async function editItem(it, { shop = false } = {}) {
   await Promise.all([loadRetailers(), loadProfiles()]);
   fillStoreSelect();
   fillProfileSelect(it ? it.profileId : '');
   state.editing = it ? it.id : null;
+  const link = shop || !!(it && it.shopLink);
   $('#w-form').hidden = false;
-  $('#w-form-title').textContent = it ? `Edit ${it.name}` : 'Add a SKU';
-  $('#w-save').textContent = it ? 'Save changes' : 'Add SKU';
+  $('#w-form').dataset.mode = link ? 'shop' : 'sku';
+  $('#w-form-title').textContent = it ? `Edit ${it.name}` : link ? 'Add a Shop checkout link' : 'Add a SKU';
+  $('#w-form-help').textContent = link ? SL_HELP : W_HELP;
+  $('#w-url-label').textContent = link ? 'Checkout link' : 'Product link ';
+  if (!link) $('#w-url-label').append(h('span', { class: 'muted' }, '(optional if you enter the SKU)'));
+  $('#w-url').placeholder = link ? 'https://creations.mattel.com/cart/48835830579405:2,40653613531341:1' : 'https://www.kmart.com.au/product/…-43818648/';
+  $('#w-url').required = link;
+  $('#w-store-row').hidden = link;
+  $('#w-store-note').hidden = link;
+  $('#w-save').textContent = it ? 'Save changes' : link ? 'Add checkout link' : 'Add SKU';
   $('#w-url').value = it ? it.url : '';
   $('#w-store').value = it && !it.url ? it.store : '';
   $('#w-sku').value = it ? it.sku : '';
@@ -677,16 +732,19 @@ async function editItem(it) {
   $('#w-aco').checked = !!(it && it.aco);
   storeNote();
   setMsg($('#w-msg'), '');
+  if (link) $('#w-form').scrollIntoView({ block: 'nearest' });
   $('#w-url').focus();
 }
 
 $('#w-add-toggle').addEventListener('click', () => editItem(null));
+$('#sl-add').addEventListener('click', () => editItem(null, { shop: true }));
 $('#w-cancel').addEventListener('click', () => { $('#w-form').hidden = true; state.editing = null; });
 $('#w-form').addEventListener('submit', (e) => {
   e.preventDefault();
   busy(e.target, async () => {
+    const shop = $('#w-form').dataset.mode === 'shop';
     const body = {
-      url: $('#w-url').value, store: $('#w-store').value, sku: $('#w-sku').value, name: $('#w-name').value,
+      url: $('#w-url').value, store: shop ? '' : $('#w-store').value, sku: shop ? '' : $('#w-sku').value, name: $('#w-name').value,
       price: $('#w-price').value, maxPrice: $('#w-max').value, profileId: $('#w-profile').value, aco: $('#w-aco').checked,
     };
     if (state.me.user.role === 'admin') body.announce = $('#w-announce').checked;
@@ -696,7 +754,7 @@ $('#w-form').addEventListener('submit', (e) => {
       $('#w-form').hidden = true;
       state.editing = null;
       await loadItems();
-      toast(body.url ? 'Watching' : 'Watching — looking for the product page', body.name || body.sku || 'SKU', 'success');
+      toast(body.url ? 'Watching' : 'Watching — looking for the product page', body.name || body.sku || (shop ? 'Checkout link' : 'SKU'), 'success');
     } catch (err) {
       setMsg($('#w-msg'), err.message);
     }
@@ -1067,8 +1125,10 @@ function readiness(it) {
   const { b: browser, here } = checkoutBrowser();
   const out = [];
   // 🧹 The bag: Auto-checkout buys the one item, so anything else in the store's bag stops it there.
+  // (A Shop checkout link is its own order: no bag of yours behind it.)
   const bag = state.bags && state.bags.stores.find((x) => x.id === it.store);
-  if (!bag) out.push({ key: 'bag', label: 'Bag', tone: 'na', text: 'No bag to empty from here at this store' });
+  if (it.shopLink) out.push({ key: 'bag', label: 'Bag', tone: 'na', text: 'No bag: the link is the order, its quantities included' });
+  else if (!bag) out.push({ key: 'bag', label: 'Bag', tone: 'na', text: 'No bag to empty from here at this store' });
   else if (bag.active) out.push({ key: 'bag', label: 'Bag', tone: 'warn', text: 'Being emptied now…' });
   else if (bag.status === 'cleared' || bag.status === 'empty') {
     const since = (state.aco.runs || []).find((r) => r.store === it.store && LEFT_IN_BAG.includes(r.status) && r.createdAt > (bag.at || 0));
@@ -1090,6 +1150,7 @@ function readiness(it) {
   const card = here ? state.armedCard : browser ? browser.card : null;
   const saved = state.cardBackup;
   if (it.acoStops === 'paypal') out.push({ key: 'card', label: 'Card', tone: 'na', text: 'This store only takes PayPal: it stops there for you' });
+  else if (it.shopLink) out.push({ key: 'card', label: 'Card', tone: 'na', text: 'Shop pays with the card saved in your Shop account' });
   else if (!browser) out.push({ key: 'card', label: 'Card', tone: 'no', text: 'Connect the extension in the browser you check out with', href: '#extension' });
   else if (card && card.ready) out.push({ key: 'card', label: 'Card', tone: 'ok', text: card.last4 ? `${card.brand} •••• ${card.last4} ready in ${browser.name}` : `Card ready in ${browser.name}` });
   else if (card && (card.saved || card.state === 'saved')) out.push({ key: 'card', label: 'Card', tone: 'no', text: `Saved in ${browser.name}, but not ready — open Card settings there`, href: '#checkout' });
@@ -1107,11 +1168,12 @@ function readiness(it) {
   const p = profiles.find((x) => x.id === it.profileId) || profiles.find((x) => x.id === (state.profiles && state.profiles.defaultId)) || profiles[0];
   const missing = p ? Object.keys(ADDRESS_NEEDS).filter((k) => !String(p[k] || '').trim()) : Object.keys(ADDRESS_NEEDS);
   if (p && !p.email && !state.me.user.email) missing.push('email');
-  out.push(!missing.length
+  out.push(it.shopLink ? { key: 'addr', label: 'Address', tone: 'na', text: 'Shop delivers to the address saved in your Shop account' } : !missing.length
     ? { key: 'addr', label: 'Address', tone: 'ok', text: `Delivers to ${p.label || 'your address'} (${p.suburb} ${p.state})` }
     : { key: 'addr', label: 'Address', tone: 'no', text: `Delivery details missing: ${missing.map((k) => ADDRESS_NEEDS[k] || k).join(', ')}`, href: '#checkout' });
   // 🧩 The checkout browser: connected, up to date, open and listening (runs wait 2 minutes for it).
-  const minV = state.aco.extensionVersion || '1.10.0';
+  // (A store the extension checks out at from a later version: Shop checkout links, on Shop's checkout.)
+  const minV = it.acoVersion && versionBelow(state.aco.extensionVersion || '1.10.0', it.acoVersion) ? it.acoVersion : state.aco.extensionVersion || '1.10.0';
   if (!browser) out.push({ key: 'browser', label: 'Browser', tone: 'no', text: 'No browser connected — install and connect the extension (Setup)', href: '#extension' });
   else if (versionBelow(browser.version, minV)) out.push({ key: 'browser', label: 'Browser', tone: 'no', text: `Update the extension in ${browser.name} to ${minV} or newer (it has ${browser.version || 'an older one'})`, href: '#update' });
   else if (browser.listening) out.push({ key: 'browser', label: 'Browser', tone: 'ok', text: `${browser.name} is open and listening` });
