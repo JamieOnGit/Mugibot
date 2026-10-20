@@ -68,6 +68,10 @@
   const markThrough = (runId) => seekFlag.save({ runId: runId || '*', through: true, at: 0 });
   // (Opening the link again, looking for the queue: not the store sending this checkout on — watchLeaving.)
   let seekingNow = false;
+  // Shopify's "Too many checkout attempts — Please wait a few minutes and try again from your cart" (a checkout
+  // pressed or opened too often): never pressed past — waited out as it asks, then the link opened again (coolDown).
+  const THROTTLE_RE = /too many checkout attempts|try again from your cart/i;
+  const throttledNow = () => THROTTLE_RE.test(((document.body && document.body.innerText) || '').slice(0, 30000));
   // (Stopped on your dashboard — said so in the panel, whatever else was going on in it.)
   let dashStopped = false;
   const STOPPED_TEXT = '🛑 You stopped this Auto-checkout on your dashboard — nothing more is pressed here.';
@@ -581,6 +585,7 @@
         await nap(Math.min(250, Math.max(0, until - Date.now())));
         if (leaving || !assistFlag.active()) return 'left';
         assistFlag.keep();
+        if (waitLive && throttledNow()) return 'throttled';
         const o = outcome();
         if (o) { await said(o, total); return 'done'; }
         // (Something it says meanwhile that's never pressed past — the payment, a decline: stopped here.)
@@ -590,6 +595,8 @@
       return null;
     };
     for (let n = 0; ; n++) {
+      // (Shopify saying "Too many checkout attempts": waited out as it asks — nothing pressed.)
+      if (waitLive && throttledNow()) return coolDown(run, total);
       // The button: free to press (the page may draw it again meanwhile) — and, pressing again, the store
       // done with whatever it's at (its page loading, a spinner, "Processing…").
       let btn = finalNow(fin);
@@ -640,6 +647,7 @@
       btn.click();
       const ans = await answer(run, total, () => leaving);
       if (ans.kind === 'done' || ans.kind === 'left') return;
+      if (ans.kind === 'throttled') return coolDown(run, total);
       if (ans.kind === 'notlive') {
         // Not on sale yet: nothing was bought. Pressed again in a couple of seconds, until it is.
         liveN += 1;
@@ -672,15 +680,49 @@
           location.reload();
           return;
         }
-        if (await pause(W.everyMs || 2000)) return;
+        const p = await pause(W.everyMs || 2000);
+        if (p === 'throttled') return coolDown(run, total);
+        if (p) return;
         continue;
       }
       if (ans.kind === 'field' && ++fieldTries > 2) return acoStop('needs_you', 'needs_details', `${retailer.name} said: "${ans.text}" — finish it yourself in this tab.`, fin, total);
       // (Turned away while it wasn't on sale yet: those presses aren't the store struggling — the waits start again.)
       const w = MGBChecks.retryWait(n - liveN);
       panel.setStatus(`⏳ ${retailer.name} said "${ans.text.slice(0, 80)}" — pressing "${fin.text}" again in ${Math.round(w / 1000)} s…`);
-      if (await pause(w)) return;
+      const p = await pause(w);
+      if (p === 'throttled') return coolDown(run, total);
+      if (p) return;
     }
+  }
+
+  /**
+   * Shopify's "Too many checkout attempts — Please wait a few minutes and try again from your cart": nothing's
+   * pressed. Waited out as it asks (checkout.waitLive.coolMs, 3 minutes), your account told meanwhile; then the link
+   * opened again — its cart's checkout, as "Return to cart" and "Checkout" would (the store's queue, if it's up:
+   * waited in) — carrying on as before.
+   */
+  async function coolDown(run, total) {
+    const W = checkoutFlow.waitLive;
+    const ms = W.coolMs || 3 * 60 * 1000;
+    const mins = Math.max(1, Math.round(ms / 60000));
+    const words = `${retailer.name} says "Too many checkout attempts — please wait a few minutes and try again from your cart"`;
+    report('step', `${words}: waiting ${mins} minute${mins === 1 ? '' : 's'} as it asks (nothing pressed), then opening the link again`, null);
+    // (It turned the press away: nothing in flight. Your account hears from the wait meanwhile.)
+    await ask({ type: 'acoReport', status: 'not_live', reason: 'not_live', message: `${words} — waiting as it asks, pressing nothing, then opening the link again.`, total: typeof total === 'number' ? total : undefined });
+    panel.setNote('⏸ Auto-checkout — waiting as the store asks');
+    for (const until = Date.now() + ms; Date.now() < until; await nap(1000)) {
+      if (!assistFlag.active()) return;
+      assistFlag.keep();
+      beat(`Waiting ${mins} minute${mins === 1 ? '' : 's'} as ${retailer.name} asks ("Too many checkout attempts"), pressing nothing — then opening the link again`);
+      panel.setStatus(`⏸ ${words}. Waiting as it asks: opening the link again in ${Math.ceil((until - Date.now()) / 1000)} s. Nothing is pressed meanwhile.`);
+    }
+    if (!assistFlag.active()) return;
+    if (!run.url) { location.reload(); return; }
+    // (Through the store's queue on the way, if it's up: carried on at Shop's checkout after — never looked for again.)
+    if (run.queue) seekFlag.save({ runId: run.runId, at: Date.now(), through: queuedThrough(run) });
+    assistFlag.keep();
+    seekingNow = true;
+    location.href = run.url;
   }
 
   /** How it went, said to your account (placed: the run's done here). */
@@ -720,6 +762,8 @@
       await nap(waitLive ? 200 : 400);
       if (left()) return { kind: 'left' };
       assistFlag.keep();
+      // (Shopify's "Too many checkout attempts": the press turned away — waited out as it asks, coolDown.)
+      if (waitLive && throttledNow()) return { kind: 'throttled' };
       const o = outcome();
       if (o) { await said(o, total); return { kind: 'done' }; }
       if (await pressReview(run)) continue;

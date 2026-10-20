@@ -2384,7 +2384,7 @@ test("🛍️ Shop under a hot drop's load: its Membership Agreement box drawn b
   }
 });
 
-test("🛍️ a Shop checkout link not on sale yet (\"This Product is not available for purchase\" to each press): \"Pay now\" pressed again every 2 s on the same checkout — never while the store's at a press — the run waiting for the sale meanwhile (told once, its presses counted), the tab's checkout flag kept good for as long as it presses; the moment it's on sale, placed, once", async () => {
+test("🛍️ a Shop checkout link not on sale yet (\"This Product is not available for purchase\" to each press): \"Pay now\" pressed again every 6 s on the same checkout — never while the store's at a press — the run waiting for the sale meanwhile (told once, its presses counted), the tab's checkout flag kept good for as long as it presses; the moment it's on sale, placed, once", async () => {
   const putBack = await roomForALink();
   const A = store.state.shopapp;
   try {
@@ -2397,12 +2397,12 @@ test("🛍️ a Shop checkout link not on sale yet (\"This Product is not availa
     await waitFor(async () => { const r = await lastRun(); return r && r.name === 'ACO RLC not live' && r.status === 'waiting' && r.reason === 'not_live'; }, { timeout: 45000, message: 'waiting: not on sale yet' })
       .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify(await lastRun())}`); });
     assert.equal(A.orders.length, 0);
-    assert.match((await lastRun()).message, /not available for purchase.*not on sale yet.*every 2 s/);
-    // Pressed again and again, a couple of seconds apart, on the same checkout (not reloaded for it).
+    assert.match((await lastRun()).message, /not available for purchase.*not on sale yet.*every 6 s/);
+    // Pressed again and again, 6 s apart, on the same checkout (not reloaded for it).
     const shown = A.shown;
-    await waitFor(() => A.refused.length >= 4, { timeout: 30000, message: 'pressed again while it says it' });
-    const at = A.payAt.slice(-4);
-    for (let i = 1; i < at.length; i++) assert.ok(at[i] - at[i - 1] >= 1800, `presses ${at[i] - at[i - 1]} ms apart`);
+    await waitFor(() => A.refused.length >= 3, { timeout: 45000, message: 'pressed again while it says it' });
+    const at = A.payAt.slice(-3);
+    for (let i = 1; i < at.length; i++) assert.ok(at[i] - at[i - 1] >= 5500, `presses ${at[i] - at[i - 1]} ms apart (every 6 s: Shopify says "Too many checkout attempts" to more)`);
     assert.equal(A.shown, shown, 'the checkout not reloaded for it');
     // Pressing for hours: the tab's checkout flag (15 minutes from when it was set) is kept good meanwhile —
     // here as if it were about to run out.
@@ -2410,7 +2410,7 @@ test("🛍️ a Shop checkout link not on sale yet (\"This Product is not availa
     assert.ok(tab, "Shop's checkout tab");
     await tab.evaluate(() => { const a = JSON.parse(sessionStorage.getItem('mgbAssist')); a.until = Date.now() + 1500; sessionStorage.setItem('mgbAssist', JSON.stringify(a)); });
     const before = A.refused.length;
-    await waitFor(() => A.refused.length >= before + 3, { timeout: 20000, message: 'still pressing once the flag would have run out' });
+    await waitFor(() => A.refused.length >= before + 3, { timeout: 45000, message: 'still pressing once the flag would have run out' });
     assert.ok(await tab.evaluate(() => JSON.parse(sessionStorage.getItem('mgbAssist')).until - Date.now() > 10 * 60 * 1000), 'the flag kept good');
     const run = await lastRun();
     assert.equal(run.status, 'waiting', 'still waiting for the sale (the presses keep it so)');
@@ -2419,11 +2419,11 @@ test("🛍️ a Shop checkout link not on sale yet (\"This Product is not availa
     assert.equal(run.steps.filter((x) => /Pressing "Pay now" again/.test(x.message)).length, 1, 'one step for the presses, its count kept up to date');
     const told = env.app.repo.listEvents(env.app.repo.userByUsername('ash').id, { limit: 500 }).filter((e) => /Not on sale yet at checkout: ACO RLC not live/.test(JSON.stringify(e)));
     assert.equal(told.length, 1, 'told once');
-    // On sale: placed at the next press.
+    // On sale: placed at the next press (6 s at most after the last one, then the press itself).
     const liveAt = Date.now();
     A.unavailable = false;
-    await waitFor(() => A.orders.length === 1, { timeout: 15000, message: 'placed once it was on sale' });
-    assert.ok(Date.now() - liveAt < 6000, `within moments (${Date.now() - liveAt} ms)`);
+    await waitFor(() => A.orders.length === 1, { timeout: 20000, message: 'placed once it was on sale' });
+    assert.ok(Date.now() - liveAt < 10000, `at the next press (${Date.now() - liveAt} ms)`);
     await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 20000, message: 'the run says placed' });
     await new Promise((r) => setTimeout(r, 2500));
     assert.equal(A.orders.length, 1, 'one order');
@@ -2487,7 +2487,7 @@ test("🛍️ Mattel Creations' real checkout, as probed (Oct 2026): \"Pay now $
     assert.deepEqual(A.discountTries, [], 'no discount code on the link: the discount box left alone');
     assert.equal(A.refused.filter((x) => /not available for purchase/.test(x)).length, 3, 'turned away three times while not on sale');
     assert.equal(A.payTries, 4, 'then taken at the fourth press');
-    for (let i = 1; i < A.payAt.length; i++) assert.ok(A.payAt[i] - A.payAt[i - 1] >= 1800, `presses ${A.payAt[i] - A.payAt[i - 1]} ms apart`);
+    for (let i = 1; i < A.payAt.length; i++) assert.ok(A.payAt[i] - A.payAt[i - 1] >= 5500, `presses ${A.payAt[i] - A.payAt[i - 1]} ms apart`);
     await waitFor(async () => (await runFor('ACO Mattel real') || {}).status === 'placed', { timeout: 20000, message: 'the run says placed' });
     const run = await runFor('ACO Mattel real');
     assert.ok(run.steps.some((x) => x.status === 'waiting' && /not available for purchase/.test(x.message)), 'said it wasn\'t on sale yet');
@@ -2561,9 +2561,12 @@ test("🛍️🏷️ a discount code the store won't take (\"Enter a valid disco
 const cartOpens = () => store.state.requests.filter((q) => q.path.startsWith('/creations/cart/')).length;
 const resetShopQueue = () => Object.assign(store.state.shopapp, { unavailable: false, queueMs: 0, bounceMs: 0 });
 
-test("🛍️🚦 Wait for queue, then ACO on a Shop checkout link not on sale yet: no queue yet — \"Pay now\" pressed, and the link opened again 15 s on (like refreshing); the store's queue goes up — the next opening lands in it and stays (the queue never refreshed, the link not opened again, the run still going); through it, \"Pay now\" every 2 s and the link never opened again; on sale: placed, once", async () => {
+test("🛍️🚦 Wait for queue, then ACO on a Shop checkout link not on sale yet: no queue yet — \"Pay now\" pressed, and the link opened again (every 90 s; 15 s here) like refreshing; the store's queue goes up — the next opening lands in it and stays (the queue never refreshed, the link not opened again, the run still going); through it, \"Pay now\" every few seconds and the link never opened again; on sale: placed, once", async () => {
   const putBack = await roomForALink();
   const A = store.state.shopapp;
+  const W = env.app.retailers.get('demo-shoplink').flow.checkout.waitLive;
+  const seekMs = W.seekMs;
+  W.seekMs = 15000;
   try {
     shopSignedIn(true);
     A.unavailable = true;
@@ -2601,7 +2604,51 @@ test("🛍️🚦 Wait for queue, then ACO on a Shop checkout link not on sale y
     assert.equal(A.orders.length, 1, 'one order');
     assert.equal(A.orders[0].agreed, true);
   } finally {
+    W.seekMs = seekMs;
     resetShopQueue();
+    await putBack();
+    await closeShopPages();
+  }
+});
+
+test("🛍️⏸ Shopify's \"Too many checkout attempts — please wait a few minutes and try again from your cart\" while it presses \"Pay now\" (not on sale yet): nothing more pressed while it says so; waited out as it asks (3 minutes; 8 s here), then the link opened again — its cart's checkout — and pressing as before; on sale: placed, once", async () => {
+  const putBack = await roomForALink();
+  const A = store.state.shopapp;
+  const W = env.app.retailers.get('demo-shoplink').flow.checkout.waitLive;
+  const coolMs = W.coolMs;
+  W.coolMs = 8000;
+  try {
+    shopSignedIn(true);
+    A.unavailable = true;
+    const link = store.cartLink([[PORSCHE, 1]]);
+    await useItems([{ url: link, name: 'ACO throttled', maxPrice: 60, aco: true }]);
+    await acoListen();
+    await dropLink(link);
+    await waitFor(() => A.refused.length >= 2, { timeout: 45000, message: 'pressing while not on sale' });
+    Object.assign(A, { throttleNext: true, throttleMs: 6000 });
+    await waitFor(() => A.throttled >= 1, { timeout: 20000, message: 'Shopify says too many checkout attempts' });
+    const presses = A.payTries;
+    const opens = cartOpens();
+    await new Promise((res) => setTimeout(res, 5000));
+    assert.equal(A.payTries, presses, 'nothing pressed while it says so');
+    assert.equal(cartOpens(), opens, 'nor the link opened');
+    await waitFor(() => cartOpens() > opens, { timeout: 20000, message: 'the link opened again after the wait' });
+    assert.equal(A.throttled, 1, 'never pressed into it again');
+    const refused = A.refused.length;
+    await waitFor(() => A.refused.length >= refused + 2, { timeout: 60000, message: 'pressing again after the wait' })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify(await runFor('ACO throttled'))}`); });
+    const at = A.payAt.slice(-2);
+    assert.ok(at[1] - at[0] >= 5500, `every 6 s, as before: ${at[1] - at[0]} ms apart`);
+    assert.ok(env.app.repo.listEvents(env.app.repo.userByUsername('ash').id, { limit: 200 }).some((e) => /Too many checkout attempts.*waiting .* as it asks/.test(e.message)));
+    A.unavailable = false;
+    await waitFor(() => A.orders.length === 1, { timeout: 30000, message: 'placed once on sale' });
+    await waitFor(async () => (await runFor('ACO throttled')).status === 'placed', { timeout: 20000, message: 'the run says placed' });
+    await new Promise((res) => setTimeout(res, 2000));
+    assert.equal(A.orders.length, 1, 'one order');
+  } finally {
+    W.coolMs = coolMs;
+    Object.assign(A, { throttleNext: false, throttleMs: 0, throttleUntil: 0 });
+    A.unavailable = false;
     await putBack();
     await closeShopPages();
   }

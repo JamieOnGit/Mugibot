@@ -637,7 +637,7 @@ order).
   said in stock. Neither stops it: the agreement is ticked and **Pay now** is
   pressed. If the store answers "not available for purchase" (not on sale yet,
   or members only), nothing's bought, and the run **stays on the checkout
-  pressing Pay now** with everything filled in: again every **2 seconds**, until
+  pressing Pay now** with everything filled in: again every **6 seconds**, until
   the store takes the order (extension 1.27.1; before, it only reloaded the page
   every 5 s, for 30 minutes). It's never pressed while the store's still at a
   press (its button busy, the page loading), and each press is asked of your
@@ -666,13 +666,28 @@ order).
   email. Not pressed yet: nothing was bought, and it never counts as a failed drop.
 - **🚦 Wait for queue, then ACO** (a button on each Shop checkout link). It opens the
   link now and, while the checkout says it isn't on sale yet, **opens it again every
-  15 seconds** — like refreshing — until the store's queue is up. The next opening
+  90 seconds** — like refreshing — until the store's queue is up. The next opening
   lands in the queue and stays there (never refreshed). Through it, it presses **Pay
-  now** every 2 seconds until the store takes the order, and never opens the link
+  now** every 6 seconds until the store takes the order, and never opens the link
   again in that run. It places a real order within your limits, so Auto-checkout must
   be on and set to **Place the order for me**. Press it when you'd join the queue
   yourself (the queue may let early arrivals through before the drop; you can watch
   its wait time in that tab).
+- **⏰ Schedule** (next to 🚦 on each Shop checkout link). Pick a time in your time
+  zone (AEDT, say "2:45 am"), and 🚦 Wait for queue, then ACO starts by itself then,
+  in your checkout browser, as if you'd pressed it. That way it isn't going for hours
+  before a drop. The button shows the time it's set for; press it again to change it,
+  or leave the time empty to cancel. It's checked when you set it and again when it
+  starts. If it can't start then (Auto-checkout switched off, say), you're told and
+  nothing starts. Keep the browser open and the computer awake. (Extension 1.27.2
+  listens for it; 1.27.1 starts it within a minute of the time.)
+- **"Too many checkout attempts"** (Shopify's, after a checkout's been pressed or
+  opened too often). "Pay now" goes every 6 seconds, and 🚦 opens the link again
+  every 90 seconds, since presses every 2 s and openings every 15 s got a member
+  this. If the store says it all the same, nothing more is pressed. The run waits
+  3 minutes, as it asks, then opens the link again: its cart's checkout, the same as
+  "Return to cart" then "Checkout", through the queue if it's up. Then it carries on
+  as before.
 - **A discount code** (Edit on the link → **Discount code**): typed into the
   checkout's "Discount code" box and **Apply** pressed before **Pay now**. Taken,
   it's on the order. Not taken ("Enter a valid discount code", or no answer in 8
@@ -685,7 +700,7 @@ order).
   Mattel's before a drop): the drop won't change that "In stock", so an armed
   link wouldn't start by itself. Start the run yourself — **⚡ Buy** (with
   Auto-checkout on and set to place the order) or **Trigger ACO** — any time
-  before the drop: it opens the checkout and presses **Pay now** every 2 seconds
+  before the drop: it opens the checkout and presses **Pay now** every 6 seconds
   until the store takes the order.
 - **Signed in to Shop only.** Signed out, Shop sends the link on to the store's
   own checkout as a guest, where Mugibot doesn't run. Whether you're signed in is

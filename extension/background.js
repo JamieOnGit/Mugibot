@@ -1204,7 +1204,8 @@ let acoLooping = false;
 
 // (clears / clearing: bags to empty — Clear cart — asked for while there are.)
 // (going: a run of yours still under way — listened for meanwhile, so one you stop on your dashboard is told here.)
-const acoWanted = (a) => !!a && (a.listen || a.clearing > 0 || (typeof a.clears === 'number' && a.clears > 0) || (a.enabled && (a.armed || a.pending)) || a.going > 0);
+// (scheduled: a ⏰ 🚦 Wait for queue, then ACO set for later — listened for, so it starts here the moment it's due.)
+const acoWanted = (a) => !!a && (a.listen || a.clearing > 0 || (typeof a.clears === 'number' && a.clears > 0) || (a.enabled && (a.armed || a.pending)) || a.going > 0 || a.scheduled > 0);
 
 async function acoLoop() {
   if (acoLooping) return;

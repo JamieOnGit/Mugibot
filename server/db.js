@@ -492,6 +492,10 @@ const MIGRATIONS = [
   `
   ALTER TABLE items ADD COLUMN discount TEXT NOT NULL DEFAULT '';
   `,
+  // 15 — 🚦 Wait for queue, then ACO at a time the member picked (a Shop checkout link's): when it starts by itself.
+  `
+  ALTER TABLE items ADD COLUMN queue_at INTEGER;
+  `,
 ];
 
 export class Db {

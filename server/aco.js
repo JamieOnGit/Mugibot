@@ -61,7 +61,7 @@ const WAIT_BEAT_MS = 10 * 60 * 1000;
 const QUEUE_MS = 2 * 60 * 60 * 1000;
 const CHECKPOINT_MS = 20 * 60 * 1000;
 // Waiting on a checkout that says it isn't on sale yet (a Shop checkout link's "not available for
-// purchase"): the browser presses "Pay now" again every couple of seconds, for up to 8 hours from when it
+// purchase"): the browser presses "Pay now" again every 6 seconds, for up to 8 hours from when it
 // was first told so (a run started the evening before a 3AM drop), and stops by itself; a run still
 // waiting this long after it was made is ended here.
 const NOT_LIVE_MS = 8.5 * 60 * 60 * 1000;
@@ -174,11 +174,16 @@ export class Aco {
     if (this.timer) return;
     this.timer = setInterval(() => this.expire(), 30 * 1000);
     this.timer.unref?.();
+    // (🚦 Wait for queue, then ACO at the times members picked: looked at every few seconds.)
+    this.schedTimer = setInterval(() => { this.startScheduled().catch(() => null); }, 5 * 1000);
+    this.schedTimer.unref?.();
   }
 
   stop() {
     clearInterval(this.timer);
     this.timer = null;
+    clearInterval(this.schedTimer);
+    this.schedTimer = null;
     for (const set of this.waiters.values()) for (const wake of set) wake();
     this.waiters.clear();
   }
@@ -224,6 +229,54 @@ export class Aco {
   /** Runs waiting for a browser to start them (a test run, for one: the item needn't be armed). */
   pendingCount(userId) {
     return this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE user_id = :u AND status = 'queued'", { u: userId }).n;
+  }
+
+  /** 🚦 Wait for queue, then ACO starts the member has set for later (their browser keeps listening for them). */
+  scheduledCount(userId) {
+    return this.db.get('SELECT COUNT(*) AS n FROM items WHERE user_id = :u AND queue_at IS NOT NULL', { u: userId }).n;
+  }
+
+  /**
+   * ⏰ 🚦 Wait for queue, then ACO at a time the member picks (a Shop checkout link's): it starts by itself then, as
+   * if its button were pressed (startScheduled). at: when (ms), or null to cancel. Checked now as it will be then.
+   */
+  scheduleQueue(userId, itemId, at) {
+    const row = this.db.get('SELECT * FROM items WHERE id = :id AND user_id = :u', { id: String(itemId || ''), u: userId });
+    if (!row) return { error: 'not_found' };
+    if (at === null) {
+      this.db.run('UPDATE items SET queue_at = NULL WHERE id = :id', { id: row.id });
+      return { item: this.repo.getItem(userId, row.id) };
+    }
+    const item = this.repo.getItem(userId, row.id);
+    const r = this.retailers.get(item.store);
+    if (!r || !r.cartLinks) return { error: 'Wait for queue, then ACO is for Shop checkout links' };
+    const s = this.settings(userId);
+    if (!s.enabled || s.mode !== 'place') return { error: 'Switch Auto-checkout on and set it to "Place the order for me" first: this presses "Pay now" for you' };
+    if (item.maxPrice === null || item.maxPrice === undefined) return { error: 'Set a max price for it first: Mugibot never pays more than that' };
+    const now = this.now();
+    if (!Number.isFinite(at) || at < now + 30 * 1000) return { error: 'Pick a time at least a minute from now' };
+    if (at > now + 7 * DAY) return { error: 'Pick a time within the next 7 days' };
+    this.db.run('UPDATE items SET queue_at = :at WHERE id = :id', { at: Math.round(at), id: row.id });
+    // (Its browser hears it has something to listen for.)
+    this.wake(userId);
+    return { item: this.repo.getItem(userId, row.id) };
+  }
+
+  /** The members' ⏰ starts that are due: each started now, as its button would (and said, if it can't start). */
+  async startScheduled() {
+    const due = this.db.all('SELECT id, user_id, name, sku, url FROM items WHERE queue_at IS NOT NULL AND queue_at <= :t', { t: this.now() });
+    for (const d of due) {
+      this.db.run('UPDATE items SET queue_at = NULL WHERE id = :id', { id: d.id });
+      const out = await this.test(d.user_id, d.id, { queue: true }).catch((e) => ({ error: e.message }));
+      if (out.error) {
+        this.repo.addEvent(d.user_id, { type: 'aco', level: 'warn', message: `⏰ ${d.name}: 🚦 Wait for queue, then ACO didn't start at the time you picked — ${out.error}`, name: d.name, sku: d.sku, url: d.url || null });
+        await this.notifier.notify(d.user_id, {
+          type: 'aco', level: 'urgent', channel: 'aco', title: `⏰ Wait for queue, then ACO didn't start: ${d.name}`, message: out.error,
+          name: d.name, sku: d.sku, url: d.url || null, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
+        }).catch(() => null);
+      }
+    }
+    return due.length;
   }
 
   /** Runs of the member's still going (their browser keeps asking meanwhile: one stopped on the dashboard is told so). */
@@ -366,7 +419,7 @@ export class Aco {
       type: 'aco', level: 'urgent', channel: 'aco',
       title: info.queue ? `🚦 Waiting for the queue, then Auto-checkout: ${item.name}` : `🤖 Auto-checkout ${info.test ? 'test ' : ''}started: ${item.name}`,
       message: info.queue
-        ? `${r.name}${price !== null ? ` · ${money(price)}` : ''}\nYour browser opens the link and, while the checkout says it isn't on sale yet, opens it again every 15 seconds until the store's queue is up. In the queue it waits its turn (never refreshing it), then presses "Pay now" every couple of seconds until the store takes the order.`
+        ? `${r.name}${price !== null ? ` · ${money(price)}` : ''}\nYour browser opens the link and, while the checkout says it isn't on sale yet, opens it again every 90 seconds until the store's queue is up. In the queue it waits its turn (never refreshing it), then presses "Pay now" every 6 seconds until the store takes the order.`
         : `${r.name}${price !== null ? ` · ${money(price)}` : ''}\n${s.mode === 'place' ? 'Your browser is checking out now, and will place the order.' : 'Your browser is filling in checkout now, and will stop at the final button for you.'}${queued ? `\n🚦 ${r.name}'s virtual queue is up: your browser waits its turn in line first (don't refresh the queue page).` : ''}`,
       name: item.name, sku: item.sku, url: item.url, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
     });
@@ -678,7 +731,8 @@ export class Aco {
     const item = row.item_id ? this.repo.getItem(userId, row.item_id) : null;
     return {
       runId: row.id, mode: row.mode, maxPrice: row.max_price, maxTotal, orderLimit, name: row.name, sku: row.sku,
-      ...(this.queueRuns.has(row.id) ? { queue: true, url: row.url || null } : {}), ...(item && item.discount ? { discount: item.discount } : {}),
+      // (url: the link, opened again after the store's "Too many checkout attempts" — or, for Wait for queue, to find its queue.)
+      url: row.url || null, ...(this.queueRuns.has(row.id) ? { queue: true } : {}), ...(item && item.discount ? { discount: item.discount } : {}),
     };
   }
 
@@ -710,7 +764,7 @@ export class Aco {
       return this.publish(userId, row.id);
     }
     if (status === 'placing' && live && row.status === 'waiting' && row.reason === 'not_live') {
-      // Pressed again on a checkout that says it isn't on sale yet (every couple of seconds, until it is): the
+      // Pressed again on a checkout that says it isn't on sale yet (every 6 seconds, until it is): the
       // run stays waiting for the sale. The press is on it — one step, its count kept up to date — and the
       // arming's used up (armed again if the wait ends with nothing bought).
       const last = parseSteps(row.steps).at(-1);
@@ -780,7 +834,7 @@ export class Aco {
         type: 'aco', level: 'urgent', channel: 'aco',
         title: reason === 'checkpoint' ? `🛡️ ${where}'s checkpoint needs you: ${row.name}` : reason === 'not_live' ? `⏳ Not on sale yet at checkout: ${row.name}` : `🚦 In ${where}'s queue: ${row.name}`,
         message: reason === 'not_live'
-          ? `${text}\nYour browser is on the checkout, everything filled in, pressing "Pay now" again every couple of seconds until the store takes the order (for up to 8 hours). Nothing has been bought yet. Keep that computer on and its tab open.`
+          ? `${text}\nYour browser is on the checkout, everything filled in, pressing "Pay now" again every 6 seconds until the store takes the order (for up to 8 hours). Nothing has been bought yet. Keep that computer on and its tab open.`
           : reason === 'checkpoint'
           ? `${where} wants a human check (hCaptcha) before checkout, in the browser that's checking out — Mugibot never touches the check itself. At the computer: solve it in the tab that opened, and it carries on to checkout. On your phone: solve it on the computer with Chrome Remote Desktop (the tab's in front), or finish it on the phone instead — the computer stops, and the store opens on the phone for you to pass the check and pay.`
           : `${text}\nYour browser is waiting its turn and carries on when it's through. Leave the queue page alone: it refreshes itself.`,

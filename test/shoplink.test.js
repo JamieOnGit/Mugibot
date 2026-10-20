@@ -373,6 +373,55 @@ test('■ Stop on the dashboard: a run still going ends at once — "Pay now" pr
   await ash.del(`/api/items/${item.id}`);
 });
 
+test('⏰ 🚦 Wait for queue, then ACO at a time you pick: set (checked now as it will be then), its browser kept listening, started by itself when due — once — and cancellable; one that can\'t start then is said, not started', async () => {
+  const link = store.cartLink([[PORSCHE, 1]]);
+  const item = (await ash.post('/api/items', { url: link, name: 'RLC Porsche (scheduled)', maxPrice: 60 })).body;
+  const ashId = env.app.repo.userByUsername('ash').id;
+  const at = Date.now() + 5 * 60 * 1000;
+  let r = await ash.post(`/api/items/${item.id}/queue-at`, { at });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.item.queueAt, at);
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).queueAt, at);
+  // Its browser listens meanwhile (nothing armed).
+  r = await desk.call('GET', '/api/ext/aco/next');
+  assert.equal(r.body.scheduled, 1);
+  // Not yet: nothing started.
+  assert.equal(await env.app.aco.startScheduled(), 0);
+  assert.equal(runsOf(item.id).length, 0);
+  // Due: started once, as the button would.
+  env.app.db.run('UPDATE items SET queue_at = :t WHERE id = :id', { t: Date.now() - 1000, id: item.id });
+  assert.equal(await env.app.aco.startScheduled(), 1);
+  let runs = runsOf(item.id);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].trigger, 'queue');
+  assert.equal(runs[0].status, 'queued');
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).queueAt, null, 'used up');
+  assert.equal(await env.app.aco.startScheduled(), 0, 'once');
+  finishRuns();
+  // Cancelled: never starts.
+  await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() + 60 * 60 * 1000 });
+  r = await ash.post(`/api/items/${item.id}/queue-at`, { at: null });
+  assert.equal(r.body.item.queueAt, null);
+  // Checked as it will be then: a time gone, or too far off; Auto-checkout not placing the order.
+  assert.equal((await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() - 1000 })).status, 409);
+  assert.equal((await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() + 8 * 86400000 })).status, 409);
+  await ash.put('/api/aco', { mode: 'fill' });
+  r = await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() + 60 * 60 * 1000 });
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /Place the order for me/);
+  // Set while placing, then switched to stop at the final button before it's due: said, not started.
+  await ash.put('/api/aco', { mode: 'place' });
+  await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() + 60 * 60 * 1000 });
+  await ash.put('/api/aco', { mode: 'fill' });
+  env.app.db.run('UPDATE items SET queue_at = :t WHERE id = :id', { t: Date.now() - 1000, id: item.id });
+  await env.app.aco.startScheduled();
+  assert.equal(runsOf(item.id).length, 1, 'not started');
+  assert.ok(env.app.repo.listEvents(ashId, { limit: 200 }).some((e) => /didn't start at the time you picked.*Place the order for me/.test(e.message)));
+  await ash.put('/api/aco', { mode: 'place' });
+  finishRuns();
+  await ash.del(`/api/items/${item.id}`);
+});
+
 test("🛍️ a link whose option the store doesn't sell any more: not found (said, never alerted as a restock)", async () => {
   const link = `${store.url}/creations/cart/123456789:1`;
   const item = (await ash.post('/api/items', { url: link, name: 'Gone' })).body;

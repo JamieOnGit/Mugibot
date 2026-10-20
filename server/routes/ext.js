@@ -143,7 +143,7 @@ export function register(router, ctx) {
       // (pending: runs waiting to start — a Trigger ACO test, for one, whose item needn't be armed.
       //  listen: this is the checkout browser, so Discord's ⚡ Buy may start a run here any time.)
       aco: {
-        enabled: ctx.aco.settings(req.user.id).enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id), listen: ctx.aco.listens(req.user, req.device), going: ctx.aco.goingCount(req.user.id),
+        enabled: ctx.aco.settings(req.user.id).enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id), listen: ctx.aco.listens(req.user, req.device), going: ctx.aco.goingCount(req.user.id), scheduled: ctx.aco.scheduledCount(req.user.id),
         // Clear cart (server/bags.js): bags for this browser to empty — it asks for them while there are.
         clears: ctx.bags.activeFor(req.user, req.device),
       },
@@ -259,7 +259,7 @@ export function register(router, ctx) {
     if (!clears.length) clears = ctx.bags.forBrowser(req.user, req.device);
     const s = ctx.aco.settings(req.user.id);
     return {
-      runs, enabled: s.enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id), listen: ctx.aco.listens(req.user, req.device), going: ctx.aco.goingCount(req.user.id),
+      runs, enabled: s.enabled, armed: ctx.aco.armedCount(req.user.id), pending: ctx.aco.pendingCount(req.user.id), listen: ctx.aco.listens(req.user, req.device), going: ctx.aco.goingCount(req.user.id), scheduled: ctx.aco.scheduledCount(req.user.id),
       // Queues to get in line at (a queue went up where something's armed, or Discord's "Join the queue"), and what's up now.
       lobbies: ctx.aco.lobbiesFor(req.user, req.device), gates: gatesUp(),
       clears, clearing: ctx.bags.activeFor(req.user, req.device),
