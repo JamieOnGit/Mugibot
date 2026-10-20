@@ -2384,34 +2384,73 @@ test("🛍️ Shop under a hot drop's load: its Membership Agreement box drawn b
   }
 });
 
-test("🛍️ a Shop checkout link not on sale yet (\"This Product is not available for purchase\" when \"Pay now\" is pressed): Auto-checkout waits on the checkout, everything in, looking again every 5 s without pressing — and the moment it's on sale, \"Pay now\": placed", async () => {
+test("🛍️ a Shop checkout link not on sale yet (\"This Product is not available for purchase\" to each press): \"Pay now\" pressed again every 2 s on the same checkout — never while the store's at a press — the run waiting for the sale meanwhile (told once, its presses counted); the moment it's on sale, placed, once", async () => {
   const putBack = await roomForALink();
+  const A = store.state.shopapp;
   try {
     shopSignedIn(true);
-    store.state.shopapp.unavailable = true;
+    A.unavailable = true;
     const link = store.cartLink([[PORSCHE, 1]]);
     await useItems([{ url: link, name: 'ACO RLC not live', maxPrice: 60, aco: true }]);
     await acoListen();
     await dropLink(link);
     await waitFor(async () => { const r = await lastRun(); return r && r.name === 'ACO RLC not live' && r.status === 'waiting' && r.reason === 'not_live'; }, { timeout: 45000, message: 'waiting: not on sale yet' })
       .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify(await lastRun())}`); });
-    assert.equal(store.state.shopapp.refused.length, 1, '"Pay now" pressed once, and refused');
-    assert.equal(store.state.shopapp.orders.length, 0);
-    assert.match((await lastRun()).message, /not available for purchase.*not on sale yet/);
-    // Looked at again (the checkout reloaded), never pressed while it still says so.
-    const shown = store.state.shopapp.shown;
-    await waitFor(() => store.state.shopapp.shown >= shown + 2, { timeout: 20000, message: 'the checkout looked at again' });
-    assert.equal(store.state.shopapp.refused.length, 1, 'not pressed again while it says it');
-    // On sale: pressed at the next look.
+    assert.equal(A.orders.length, 0);
+    assert.match((await lastRun()).message, /not available for purchase.*not on sale yet.*every 2 s/);
+    // Pressed again and again, a couple of seconds apart, on the same checkout (not reloaded for it).
+    const shown = A.shown;
+    await waitFor(() => A.refused.length >= 4, { timeout: 30000, message: 'pressed again while it says it' });
+    const at = A.payAt.slice(-4);
+    for (let i = 1; i < at.length; i++) assert.ok(at[i] - at[i - 1] >= 1800, `presses ${at[i] - at[i - 1]} ms apart`);
+    assert.equal(A.shown, shown, 'the checkout not reloaded for it');
+    const run = await lastRun();
+    assert.equal(run.status, 'waiting', 'still waiting for the sale (the presses keep it so)');
+    assert.equal(run.statusText, 'Not on sale yet — pressing "Pay now"');
+    assert.match(run.steps.at(-1).message, /Pressing "Pay now" again \(\d+\) — Shop \(dummy store\) says it isn't on sale yet/);
+    assert.equal(run.steps.filter((x) => /Pressing "Pay now" again/.test(x.message)).length, 1, 'one step for the presses, its count kept up to date');
+    const told = env.app.repo.listEvents(env.app.repo.userByUsername('ash').id, { limit: 500 }).filter((e) => /Not on sale yet at checkout: ACO RLC not live/.test(JSON.stringify(e)));
+    assert.equal(told.length, 1, 'told once');
+    // On sale: placed at the next press.
     const liveAt = Date.now();
-    store.state.shopapp.unavailable = false;
-    await waitFor(() => store.state.shopapp.orders.length === 1, { timeout: 20000, message: 'placed once it was on sale' });
-    assert.ok(Date.now() - liveAt < 12000, `within moments (${Date.now() - liveAt} ms)`);
+    A.unavailable = false;
+    await waitFor(() => A.orders.length === 1, { timeout: 15000, message: 'placed once it was on sale' });
+    assert.ok(Date.now() - liveAt < 6000, `within moments (${Date.now() - liveAt} ms)`);
     await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 20000, message: 'the run says placed' });
-    assert.equal(store.state.shopapp.refused.length, 1);
-    assert.equal(store.state.shopapp.orders[0].agreed, true);
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal(A.orders.length, 1, 'one order');
+    assert.equal(A.orders[0].agreed, true);
   } finally {
-    store.state.shopapp.unavailable = false;
+    A.unavailable = false;
+    await putBack();
+    await closeShopPages();
+  }
+});
+
+test("🛍️ Mattel Creations' real checkout, as probed (Oct 2026): \"Pay now $X\" — the total in the button — found as the final button; the membership box labelled only \"By selecting, you indicate your acceptance of the\" (its \"Membership Agreement ↗\" link outside the label, the box not required) ticked, the newsletter never; \"This Product is not available for purchase\" up before and after each press, left as it is — pressed every 2 s until it's on sale (the 4th): placed, once", async () => {
+  const putBack = await roomForALink();
+  const A = store.state.shopapp;
+  try {
+    shopSignedIn(true);
+    Object.assign(A, { real: true, unavailable: true, notice: true, sameNotice: true, liveAfter: 3 });
+    const link = store.cartLink([[PORSCHE, 1]]);
+    await useItems([{ url: link, name: 'ACO Mattel real', maxPrice: 90, aco: true }]);
+    await acoListen();
+    await dropLink(link);
+    await waitFor(() => A.orders.length === 1, { timeout: 60000, message: 'the order placed at the dummy Shop' })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify(await runFor('ACO Mattel real'))} refused=${JSON.stringify(A.refused)}`); });
+    assert.equal(A.orders[0].agreed, true, 'the membership box ticked (by the words beside its label)');
+    assert.equal(A.orders[0].marketing, false, 'the newsletter box left alone');
+    assert.equal(A.refused.filter((x) => /not available for purchase/.test(x)).length, 3, 'turned away three times while not on sale');
+    assert.equal(A.payTries, 4, 'then taken at the fourth press');
+    for (let i = 1; i < A.payAt.length; i++) assert.ok(A.payAt[i] - A.payAt[i - 1] >= 1800, `presses ${A.payAt[i] - A.payAt[i - 1]} ms apart`);
+    await waitFor(async () => (await runFor('ACO Mattel real') || {}).status === 'placed', { timeout: 20000, message: 'the run says placed' });
+    const run = await runFor('ACO Mattel real');
+    assert.ok(run.steps.some((x) => x.status === 'waiting' && /not available for purchase/.test(x.message)), 'said it wasn\'t on sale yet');
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal(A.orders.length, 1, 'one order');
+  } finally {
+    Object.assign(A, { real: false, unavailable: false, notice: false, sameNotice: false, liveAfter: 0 });
     await putBack();
     await closeShopPages();
   }

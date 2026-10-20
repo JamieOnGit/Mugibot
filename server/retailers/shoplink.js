@@ -41,8 +41,9 @@ export default {
   // Any store's cart link is one of these (retailers/index.js forUrl), unless the store is one Mugibot knows.
   cartLinks: true,
   // ⚡ Buy and Auto-checkout need the extension that runs on Shop's checkout (it says so before starting):
-  // 1.24.0 reads your Shop sign-in off the checkout's screen and waits there while it isn't on sale yet.
-  acoVersion: '1.24.0',
+  // 1.27.1 finds "Pay now" with the total in it, ticks Mattel's membership box (its words beside the label),
+  // and presses "Pay now" every couple of seconds while the checkout says it isn't on sale yet.
+  acoVersion: '1.27.1',
   flowStatus: 'beta',
   flowNote: "A store's Shop checkout link: Shop's checkout with your Shop details and card, the store's required boxes ticked, \"Pay now\". Signed in to Shop only. Tested on a Shop-style dummy checkout.",
   skuLabel: 'Checkout link',
@@ -67,7 +68,8 @@ export default {
   flow: {
     checkout: {
       path: /\/checkout\//i,
-      final: [/^pay now$/i],
+      // ("Pay now", or with the order's total in it as Mattel Creations' real checkout has it: "Pay now $47.99".)
+      final: [/^pay now(?:\s*(?:a|au|us)?\$\s?[\d,]+(?:\.\d{1,2})?(?:\s?(?:aud|usd))?)?$/i],
       // Shop's way out to the store's guest checkout: never pressed.
       notFinal: [/^check ?out as (a )?guest$/i],
       // The store's own boxes: its membership agreement (Mattel Creations'), and terms to accept.
@@ -79,13 +81,15 @@ export default {
       payment: 'account',
       // What the store says when it's sold out: nothing's bought, and it stops there.
       unavailable: [/\b(is|are) (sold out|out of stock|no longer available|unavailable)\b/i],
-      // "This Product is not available for purchase": which it may say until the drop's live (a member's
+      // "This Product is not available for purchase": which it says until the drop's live (a member's
       // Mattel checkout, Oct 2026: shown with the membership notice before anything was pressed, while the
-      // store's own data already said in stock). So it isn't a reason not to press "Pay now" once; the store
-      // saying it anew to the press (a fresh notice, the page still here), nothing's bought and the run waits
-      // on the checkout: looked at again every 5 seconds, "Pay now" pressed again only once the notice has
-      // gone — for 30 minutes at most.
-      waitLive: { notices: [/not available for purchase/i], everyMs: 5000, forMs: 30 * 60 * 1000 },
+      // store's own data already said in stock — so the link says "In stock" hours before the drop). It's
+      // no reason not to press "Pay now": the store saying it to the press, nothing's bought, and the run
+      // stays on the checkout pressing "Pay now" again every 2 seconds — never while the store's still at a
+      // press — until the store takes the order, for up to 8 hours (a run started the evening before a 3AM
+      // drop). The checkout's reloaded now and then (every 10 minutes, or after half a minute of presses
+      // the page doesn't answer at all), as a person would. (Extension 1.27.1; before, it only reloaded.)
+      waitLive: { notices: [/not available for purchase/i], everyMs: 2000, forMs: 8 * 60 * 60 * 1000, reloadMs: 10 * 60 * 1000, quietMs: 30 * 1000 },
       // Said by the store until its box is ticked (Mugibot ticks it): not a reason to stop.
       ignoreErrors: [/must accept (the )?membership agreement/i],
       // After "Pay now", Shop goes on to the store's own order page (another address): that's the order placed.

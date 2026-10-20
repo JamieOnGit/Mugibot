@@ -44,6 +44,10 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // never past a decline or a check); agreement boxes ticked (Shop's Membership Agreement); other things in the
 // bag flagged, not stopped for; EB Games' empty-cart pop-up; BIG W read by opening its page, left alone for
 // 30 minutes when it says "Access Denied" (monitor RENDER_EXTENSION_VERSION).
+// 1.27.1: Shop checkout links on Mattel Creations' real checkout — "Pay now $47.99" (the total in the button)
+// is the final button, the membership box ticked by the words beside its label, and "This Product is not
+// available for purchase" answered by pressing "Pay now" again every 2 s until the store takes the order (up
+// to 8 hours; the checkout reloaded every 10 minutes). Shop links need it (shoplink.js acoVersion).
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.

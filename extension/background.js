@@ -1896,19 +1896,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           msg = { ...msg, status, message: 'You stopped it after the final button was pressed — check your email for an order confirmation before buying it again.' };
         }
         if (status === 'not_live') {
-          // The store said it isn't on sale to the final button (or still says so): nothing was bought, so
-          // the run may press it again once it is — waiting on the checkout meanwhile (its pass kept good).
-          // Your account hears so the first time, then every half a minute or so.
+          // The store said it isn't on sale to the final button: nothing was bought, so the run presses it
+          // again in a moment (content.js pressLoop), every couple of seconds until it takes the order — the
+          // half hour for a store that's struggling counted afresh from the next press (placingAt). Your
+          // account hears so the first time (it tells you), then from each press (acoRetry, live).
           const live = run.notLive || { since: Date.now(), saidAt: 0 };
-          const say = Date.now() - live.saidAt > 30 * 1000;
-          const next = { ...run, placing: false, notLive: { since: live.since, saidAt: say ? Date.now() : live.saidAt } };
+          const say = !live.saidAt;
+          const next = { ...run, placing: false, placingAt: null, notLive: { since: live.since, saidAt: say ? Date.now() : live.saidAt } };
           await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: next, expires: Date.now() + PASS_TTL } });
-          if (!say) return { ok: true, since: live.since };
+          if (!say) return { ok: true, since: live.since, presses: run.presses || 0 };
           const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { status: 'waiting', reason: 'not_live', message: String(msg.message || '').slice(0, 300), total: typeof msg.total === 'number' ? msg.total : null });
           // (Stopped meanwhile — from the dashboard, or over on your account's side: this tab's run ends here.)
           const over = res.status === 200 && !!(res.body && res.body.run && res.body.run.active === false);
           if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...next, done: true } } });
-          return { ok: res.status === 200, since: live.since, over, text: over ? String(res.body.run.message || '') : '' };
+          return { ok: res.status === 200, since: live.since, presses: run.presses || 0, over, text: over ? String(res.body.run.message || '') : '' };
         }
         if (status === 'beat') {
           // A slow checkout (a hot drop) saying how it's going: your account hears it — that keeps the run going
@@ -1969,11 +1970,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const body = { status: 'placing', message: String(msg.message || '').slice(0, 300), total: typeof msg.total === 'number' ? msg.total : null };
         const key = passKey(sender.tab.id);
         if (run.presses) {
-          const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, again: true }).catch(() => null);
+          // (msg.live: pressed again on a checkout that says it isn't on sale yet — your account keeps the run
+          //  waiting for the sale, the press counted on it.)
+          const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, again: true, live: !!msg.live }).catch(() => null);
           const live = res && res.status === 200 && res.body && res.body.run;
+          const going = live && live.active !== false && (live.status === 'placing' || (!!msg.live && live.status === 'waiting' && live.reason === 'not_live'));
           // (Read afresh after the wait: stopped meanwhile — the panel's Stop — or another run in the tab, it isn't pressed.)
           const cur = (await chrome.storage.session.get(key))[key];
-          if (!live || live.active === false || live.status !== 'placing' || !cur || !cur.aco || cur.aco.runId !== run.runId || cur.aco.stopped || cur.aco.done) {
+          if (!going || !cur || !cur.aco || cur.aco.runId !== run.runId || cur.aco.stopped || cur.aco.done) {
             if (cur && cur.aco && cur.aco.runId === run.runId) await chrome.storage.session.set({ [key]: { ...cur, aco: { ...cur.aco, done: true } } });
             return { ok: false, ended: true };
           }

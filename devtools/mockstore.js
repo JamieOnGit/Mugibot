@@ -218,6 +218,12 @@ export function defaultShopApp() {
     // refused, as before a drop's live) — or only the notice, shown before anything's pressed while
     // "Pay now" goes through (notice: as a member's real checkout showed it, with the membership one).
     unavailable: false, notice: false,
+    // real: drawn as Mattel Creations' real checkout is (probed Oct 2026) — the box labelled only "By selecting,
+    // you indicate your acceptance of the", its "Membership Agreement ↗" link outside the label, not required;
+    // "Pay now $47.99" (the total in the button, aria-busy while it's at a press). liveAfter: on sale after this
+    // many "not available" answers (0: only when a test says). sameNotice: the notice left up as it is when
+    // "Pay now" is turned away again (not drawn anew). payAt: when each press reached the store.
+    real: false, liveAfter: 0, sameNotice: false, payAt: [],
     shipping: 32,
     checkouts: {}, orders: [], refused: [], shown: 0, guestViews: 0, accountViews: 0,
   };
@@ -2070,9 +2076,11 @@ ${body}
     if (m[3] === 'pay' && req.method === 'POST') {
       return parseBody(req).then((b) => {
         A.payTries += 1;
+        A.payAt.push(Date.now());
+        if (A.unavailable && A.liveAfter && A.refused.filter((x) => /not available/.test(x)).length >= A.liveAfter) A.unavailable = false;
         if (A.agreement && b.agreed && A.payTries <= A.busy) { A.refused.push('busy'); return json(503, { error: 'Something went wrong on our end. Please try again.' }); }
         const why = A.unavailable ? 'This Product is not available for purchase' : A.agreement && !b.agreed ? 'You must accept membership agreement before checking out' : '';
-        if (why) { A.refused.push(why); return json(422, { error: why }); }
+        if (why) { A.refused.push(why); return new Promise((r) => setTimeout(r, A.real ? 300 : 0)).then(() => json(422, { error: why })); }
         A.orders.push({ token: m[2], lines: lines.map((l) => [l.id, l.qty]), total, agreed: !!b.agreed, marketing: !!b.marketing, at: Date.now() });
         return json(200, { ok: true, next: `/creations/checkouts/cn/${m[2]}/thank-you` });
       });
@@ -2084,7 +2092,7 @@ ${body}
     const banner = (t, id = '', hidden = false) => `<div class="banner"${id ? ` id="${id}"` : ''} role="alert"${hidden ? ' hidden' : ''}>${t}</div>`;
     return html(200, `<!doctype html><html><head><meta charset="utf-8"><title>Checkout - Creations (dummy) - Shop</title>${strings}
 <style>body{font:15px system-ui;margin:0;background:#f5f3ff;color:#111}header{background:#5a31f4;color:#fff;padding:10px 20px;display:flex;justify-content:space-between}main{max-width:560px;margin:20px auto;padding:0 20px}
-section{background:#fff;border-radius:10px;padding:10px 14px;margin:10px 0}.banner{background:#fde8e8;color:#9b1c1c;border-radius:8px;padding:10px;margin:8px 0}#pay{background:#5a31f4;color:#fff;border:0;border-radius:8px;padding:14px;width:100%;font-size:16px}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style></head>
+section{background:#fff;border-radius:10px;padding:10px 14px;margin:10px 0}.banner{background:#fde8e8;color:#9b1c1c;border-radius:8px;padding:10px;margin:8px 0}.pay{background:#5a31f4;color:#fff;border:0;border-radius:8px;padding:14px;width:100%;font-size:16px}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style></head>
 <body><div class="dummy">⚠ Dummy Shop checkout for testing Mugibot — nothing here is real.</div>
 <header><b>shop</b><span class="acct">ash.shop@example.com</span></header><main>
 ${A.unavailable || A.notice ? banner('This Product is not available for purchase') : ''}
@@ -2094,19 +2102,30 @@ ${A.agreement ? banner('You must accept membership agreement before checking out
 <section><h3>Payment</h3><p>Commonwealth Bank •••• 2387</p></section>
 <section class="lines">${priced.map((l) => `<p class="line">${esc(l.v.name)}${l.qty > 1 ? ` × ${l.qty}` : ''} <span>${shopMoney(l.v.price * l.qty)}</span></p>`).join('')}
   <p>Subtotal <span>${shopMoney(subtotal)}</span></p><p>Shipping <span>${shopMoney(A.shipping)}</span></p><p class="total"><b>Total</b> AUD <b>${shopMoney(total)}</b></p></section>
-${A.agreement && A.hiddenBox ? '<div class="agree"><input type="checkbox" id="membership" name="membership" required style="display:none"><label for="membership"><span class="tick" aria-hidden="true">☐</span> By selecting, you indicate your acceptance of the <a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></label></div>'
+${A.agreement && A.real ? '<div class="agree"><div class="row"><div class="cb"><input type="checkbox" id="CheckboxPS1-3" name="membership"><div class="mark"><span><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6l3 3 5-6" fill="none" stroke="currentColor"/></svg></span></div></div><label for="CheckboxPS1-3">By selecting, you indicate your acceptance of the</label></div><a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></div>'
+    : A.agreement && A.hiddenBox ? '<div class="agree"><input type="checkbox" id="membership" name="membership" required style="display:none"><label for="membership"><span class="tick" aria-hidden="true">☐</span> By selecting, you indicate your acceptance of the <a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></label></div>'
     : A.agreement ? '<label class="agree"><input type="checkbox" id="membership" name="membership" required> By selecting, you indicate your acceptance of the <a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></label>' : ''}
 <label><input type="checkbox" id="marketing" name="marketing"> Email me with news and offers</label>
-<p><button type="button" id="pay">Pay now</button></p>
+<p>${A.real ? `<button aria-busy="false" aria-label="Pay now\n${shopMoney(total)}" aria-live="polite" id="checkout-pay-button" class="pay" type="submit"><span><span>Pay now</span> <span>${shopMoney(total)}</span></span></button>` : '<button type="button" id="pay" class="pay">Pay now</button>'}</p>
 <p><a href="${esc(back)}" id="guest">Check out as guest</a></p>
 </main>
 <script>
-  document.getElementById('pay').addEventListener('click', async () => {
-    const box = document.getElementById('membership');
-    if (box && !box.checked) { document.getElementById('agree-err').hidden = false; return; }
+  const real = ${A.real ? 'true' : 'false'};
+  const same = ${A.sameNotice ? 'true' : 'false'};
+  const pay = document.querySelector('.pay');
+  pay.addEventListener('click', async () => {
+    const box = document.querySelector('input[name="membership"]');
+    if (!real && box && !box.checked) { document.getElementById('agree-err').hidden = false; return; }
+    if (pay.getAttribute('aria-busy') === 'true') return;
+    pay.setAttribute('aria-busy', 'true');
     const r = await fetch(location.pathname.replace(/shoppay$/, 'pay'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agreed: !!(box && box.checked), marketing: document.getElementById('marketing').checked }) });
     const d = await r.json();
-    if (!r.ok) { const b = document.createElement('div'); b.className = 'banner'; b.setAttribute('role', 'alert'); b.textContent = d.error; document.querySelector('main').prepend(b); return; }
+    if (!r.ok) {
+      pay.setAttribute('aria-busy', 'false');
+      // (The same words already up, on a checkout that leaves them as they are: not drawn again.)
+      if (same && [...document.querySelectorAll('[role="alert"]')].some((x) => !x.hidden && x.textContent === d.error)) return;
+      const b = document.createElement('div'); b.className = 'banner'; b.setAttribute('role', 'alert'); b.textContent = d.error; document.querySelector('main').prepend(b); return;
+    }
     location.href = d.next;
   });
 </script></body></html>`);

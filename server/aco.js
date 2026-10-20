@@ -61,9 +61,10 @@ const WAIT_BEAT_MS = 10 * 60 * 1000;
 const QUEUE_MS = 2 * 60 * 60 * 1000;
 const CHECKPOINT_MS = 20 * 60 * 1000;
 // Waiting on a checkout that says it isn't on sale yet (a Shop checkout link's "not available for
-// purchase"): the browser looks again every few seconds, for 30 minutes from when it was first told so,
-// and stops by itself; a run still waiting this long after it was made (its browser lost) is ended here.
-const NOT_LIVE_MS = 90 * 60 * 1000;
+// purchase"): the browser presses "Pay now" again every couple of seconds, for up to 8 hours from when it
+// was first told so (a run started the evening before a 3AM drop), and stops by itself; a run still
+// waiting this long after it was made is ended here.
+const NOT_LIVE_MS = 8.5 * 60 * 60 * 1000;
 // Next in line at a store (another checkout of the member's there goes first): this long at most.
 const TURN_MS = 20 * 60 * 1000;
 // A queue's lobby (a browser told to get in line) lasts while the queue's up, or this long.
@@ -145,7 +146,7 @@ export function toRun(r) {
     // (Drop to order, for a placed run: how fast it was.)
     tookMs: r.status === 'placed' ? tookMs(parseSteps(r.steps)) : null,
     mode: r.mode, trigger: r.trigger, status: r.status, reason: r.reason || '',
-    statusText: r.status === 'waiting' && r.reason === 'checkpoint' ? 'Waiting for you at the checkpoint' : r.status === 'waiting' && r.reason === 'turn' ? 'Next in line' : STATUS_WORD[r.status] || r.status,
+    statusText: r.status === 'waiting' && r.reason === 'checkpoint' ? 'Waiting for you at the checkpoint' : r.status === 'waiting' && r.reason === 'turn' ? 'Next in line' : r.status === 'waiting' && r.reason === 'not_live' ? 'Not on sale yet — pressing "Pay now"' : STATUS_WORD[r.status] || r.status,
     reasonText: r.reason ? (REASONS[r.reason] || r.reason) : '', message: r.message || '', steps: parseSteps(r.steps),
     active: ACTIVE.includes(r.status), createdAt: r.created_at, updatedAt: r.updated_at,
   };
@@ -661,7 +662,7 @@ export class Aco {
    * What happened, from the browser: status 'checkout' | 'ready' | 'placing' | 'placed' | 'needs_you' | 'failed',
    * reason (REASONS), message, total.
    */
-  async report(userId, runId, { status, reason = '', message = '', total = null, pressed = false, again = false }) {
+  async report(userId, runId, { status, reason = '', message = '', total = null, pressed = false, again = false, live = false }) {
     const row = this.get(userId, runId);
     if (!row) return null;
     // Done is done — except a payment the member finished themselves (the bank's check) turning out placed;
@@ -682,6 +683,16 @@ export class Aco {
       if (!ACTIVE.includes(row.status)) return toRun(row);
       this.step(row.id, row.status, message);
       this.repo.addEvent(userId, { type: 'aco', level: 'warn', message: `🤖 ${row.name}: ${message}`, name: row.name, sku: row.sku, url: row.url || null });
+      return this.publish(userId, row.id);
+    }
+    if (status === 'placing' && live && row.status === 'waiting' && row.reason === 'not_live') {
+      // Pressed again on a checkout that says it isn't on sale yet (every couple of seconds, until it is): the
+      // run stays waiting for the sale. The press is on it — one step, its count kept up to date — and the
+      // arming's used up (armed again if the wait ends with nothing bought).
+      const last = parseSteps(row.steps).at(-1);
+      if (last && last.status === 'placing' && String(last.message || '').replace(/\d+/g, '#') === String(message || '').replace(/\d+/g, '#')) this.restep(row.id, message);
+      else this.step(row.id, 'placing', message || 'Final button pressed');
+      this.disarm(userId, row.item_id);
       return this.publish(userId, row.id);
     }
     if (status === 'checkout' || status === 'placing') {
@@ -745,7 +756,7 @@ export class Aco {
         type: 'aco', level: 'urgent', channel: 'aco',
         title: reason === 'checkpoint' ? `🛡️ ${where}'s checkpoint needs you: ${row.name}` : reason === 'not_live' ? `⏳ Not on sale yet at checkout: ${row.name}` : `🚦 In ${where}'s queue: ${row.name}`,
         message: reason === 'not_live'
-          ? `${text}\nYour browser is waiting on the checkout, everything filled in: it looks again every few seconds and presses "Pay now" the moment the store lets it (up to 30 minutes). Nothing has been bought.`
+          ? `${text}\nYour browser is on the checkout, everything filled in, pressing "Pay now" again every couple of seconds until the store takes the order (for up to 8 hours). Nothing has been bought yet. Keep that computer on and its tab open.`
           : reason === 'checkpoint'
           ? `${where} wants a human check (hCaptcha) before checkout, in the browser that's checking out — Mugibot never touches the check itself. At the computer: solve it in the tab that opened, and it carries on to checkout. On your phone: solve it on the computer with Chrome Remote Desktop (the tab's in front), or finish it on the phone instead — the computer stops, and the store opens on the phone for you to pass the check and pay.`
           : `${text}\nYour browser is waiting its turn and carries on when it's through. Leave the queue page alone: it refreshes itself.`,
@@ -974,6 +985,16 @@ export class Aco {
     return run;
   }
 
+  /** The run's last step said again, as it is now (a count gone up): its words and time. */
+  restep(id, message) {
+    const row = this.db.get('SELECT steps FROM aco_runs WHERE id = :id', { id });
+    if (!row) return;
+    const steps = parseSteps(row.steps);
+    if (!steps.length) return;
+    steps[steps.length - 1] = { ...steps[steps.length - 1], at: this.now(), message: String(message || '').slice(0, 300) };
+    this.db.run('UPDATE aco_runs SET steps = :s, updated_at = :t WHERE id = :id', { s: JSON.stringify(steps), t: this.now(), id });
+  }
+
   step(id, status, message) {
     const row = this.db.get('SELECT steps FROM aco_runs WHERE id = :id', { id });
     if (!row) return;
@@ -1010,7 +1031,7 @@ export class Aco {
     const now = this.now();
     const stale = this.db.all(`SELECT * FROM aco_runs WHERE (status = 'queued' AND created_at < :pick) OR (status = 'sent' AND created_at < :sent)
       OR (status IN ('started', 'checkout') AND updated_at < :run) OR (status = 'placing' AND updated_at < :placing)
-      OR (status = 'waiting' AND (updated_at < :beat OR (reason = 'checkpoint' AND created_at < :cp) OR (reason = 'turn' AND created_at < :turn) OR (reason = 'not_live' AND created_at < :live) OR created_at < :queue))`,
+      OR (status = 'waiting' AND (updated_at < :beat OR (reason = 'checkpoint' AND created_at < :cp) OR (reason = 'turn' AND created_at < :turn) OR (reason = 'not_live' AND created_at < :live) OR (reason <> 'not_live' AND created_at < :queue)))`,
     { pick: now - PICKUP_MS, sent: now - SENT_MS, run: now - RUN_MS, placing: now - PLACING_MS, beat: now - WAIT_BEAT_MS, cp: now - CHECKPOINT_MS, turn: now - TURN_MS, live: now - NOT_LIVE_MS, queue: now - QUEUE_MS });
     for (const row of stale) {
       if (row.status === 'queued' || row.status === 'sent') this.finish(row.user_id, row, 'expired', 'no_browser', '').catch(() => null);
@@ -1020,6 +1041,11 @@ export class Aco {
         const lost = row.updated_at < now - WAIT_BEAT_MS;
         if (row.reason === 'not_live' && !lost) {
           this.finish(row.user_id, row, 'failed', 'not_live', `${where}'s checkout still said it isn't on sale — nothing was bought, and it's armed again for when it is.`).catch(() => null);
+          continue;
+        }
+        // (Lost touch while it pressed "Pay now" on a checkout that wasn't on sale: the last press may have gone through.)
+        if (row.reason === 'not_live' && parseSteps(row.steps).some((x) => x.status === 'placing')) {
+          this.finish(row.user_id, row, 'needs_you', 'unconfirmed', `Lost touch with your browser while it was pressing "Pay now" at ${where} — check your email from the store before buying it again.`).catch(() => null);
           continue;
         }
         this.finish(row.user_id, row, 'failed', 'timeout', lost ? `Lost touch with your browser while it waited at ${where} — is it still open?`

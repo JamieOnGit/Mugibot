@@ -95,7 +95,9 @@ var MGBFill = (function () {
     if (MANUAL_RE.test(t) || any(C.manual, t)) return 'manual';
     // (Words that aren't the final button at this store: EB Games' "Pay Now" is a kind of payment.)
     if (any(C.notFinal, t)) return any(C.choose, t) ? 'choose' : null;
-    if (FINAL_RE.test(t) || any(C.final, t) || any(C.final, label)) return 'final';
+    // (The final button with the order's total in it — Shop's "Pay now $47.99": its words without the amount.)
+    var bare = t.replace(/\s*(?:(?:a|au|us)?\$\s?[\d,]+(?:\.\d{1,2})?|[\d,]+\.\d{2})(?:\s?(?:aud|usd))?$/, '').trim();
+    if (FINAL_RE.test(t) || (bare && bare !== t && FINAL_RE.test(bare)) || any(C.final, t) || any(C.final, label)) return 'final';
     if (any(C.choose, t)) return 'choose';
     if (EXCLUDE_RE.test(t)) return null;
     if (GUEST_RE.test(t) || any(C.guest, t)) return 'guest';
@@ -463,6 +465,24 @@ var MGBFill = (function () {
    * (never marketing). Real tick boxes, and ones drawn as role="checkbox". Each at most twice per page
    * (a store that ticks it back: left as it says).
    */
+  /**
+   * The words beside a tick box that its label leaves out — Mattel's real checkout labels its box only "By
+   * selecting, you indicate your acceptance of the", its "Membership Agreement ↗" link outside the label: the
+   * biggest block around the box (up to 5 levels up) that holds no other box or field, in 250 letters or fewer.
+   */
+  function rowText(el) {
+    var best = '';
+    var p = el.parentElement;
+    for (var i = 0; p && i < 5 && p !== document.body; i++, p = p.parentElement) {
+      var others = toArray(p.querySelectorAll('input, select, textarea, [role="checkbox"], [role="switch"]')).filter(function (x) { return x !== el && !el.contains(x) && !x.contains(el) && (x.getAttribute('type') || '').toLowerCase() !== 'hidden'; });
+      if (others.length) break;
+      var t = (p.innerText || '').replace(/\s+/g, ' ').trim();
+      if (t.length > 250) break;
+      best = t;
+    }
+    return best;
+  }
+
   function setTicks(root, C, out) {
     toArray(root.querySelectorAll('input[type="checkbox"], [role="checkbox"], [role="switch"]')).forEach(function (el) {
       var real = el.matches('input');
@@ -471,7 +491,7 @@ var MGBFill = (function () {
       if (!real && el.querySelector('input[type="checkbox"]')) return;
       var l = el.closest('label') || el.parentElement;
       if (!isVisible(el) && !(l && isVisible(l))) return;
-      var words = (labelText(el) + ' ' + describe(el) + (real ? '' : ' ' + textOf(el))).replace(/\s+/g, ' ');
+      var words = (labelText(el) + ' ' + describe(el) + (real ? '' : ' ' + textOf(el)) + ' ' + rowText(el)).replace(/\s+/g, ' ');
       var required = real ? el.required || el.getAttribute('aria-required') === 'true' : el.getAttribute('aria-required') === 'true';
       var want = any(C.tick, words) ? true : any(C.untick, words) ? false : C.tickRequired && required ? true
         : CONSENT_RE.test(words) && !NOT_CONSENT_RE.test(words) && !PAID_RE.test(words) ? true : null;
