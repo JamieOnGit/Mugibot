@@ -42,7 +42,7 @@ export default {
   cartLinks: true,
   // ⚡ Buy and Auto-checkout need the extension that runs on Shop's checkout (it says so before starting):
   // 1.27.1 finds "Pay now" with the total in it, ticks Mattel's membership box (its words beside the label),
-  // and presses "Pay now" every couple of seconds while the checkout says it isn't on sale yet.
+  // and presses "Pay now" every 6 seconds while the checkout says it isn't on sale yet.
   acoVersion: '1.27.1',
   flowStatus: 'beta',
   flowNote: "A store's Shop checkout link: Shop's checkout with your Shop details and card, the store's required boxes ticked, \"Pay now\". Signed in to Shop only. Tested on a Shop-style dummy checkout.",
@@ -85,7 +85,7 @@ export default {
       // Mattel checkout, Oct 2026: shown with the membership notice before anything was pressed, while the
       // store's own data already said in stock — so the link says "In stock" hours before the drop). It's
       // no reason not to press "Pay now": the store saying it to the press, nothing's bought, and the run
-      // stays on the checkout pressing "Pay now" again every 2 seconds — never while the store's still at a
+      // stays on the checkout pressing "Pay now" again every 6 seconds — never while the store's still at a
       // press — until the store takes the order, for up to 8 hours (a run started the evening before a 3AM
       // drop). "Pay now" sends the order to Shopify, which checks then whether it's for sale. The checkout's
       // reloaded only now and then (every 10 minutes — a reload can put it back in the store's checkout queue
@@ -95,7 +95,12 @@ export default {
       // reloaded, every 5 s, and pressed once the notice had gone.)
       // Wait for queue, then ACO (its own button): the link opened again every seekMs while it isn't on sale, until
       // it goes to the store's queue — then never again in that run.
-      waitLive: { notices: [/not available for purchase/i], everyMs: 2000, forMs: 8 * 60 * 60 * 1000, reloadMs: 10 * 60 * 1000, quietMs: 20 * 1000, seekMs: 15 * 1000 },
+      // Shopify says "Too many checkout attempts — please wait a few minutes and try again from your cart" to a
+      // checkout pressed or opened too often (a member's, Oct 2026: every few seconds, the link opened again every
+      // 15 s): so "Pay now" every 6 s and the link opened again every 90 s, and when it says so all the same, nothing
+      // is pressed for coolMs (3 minutes) — then the link's opened again (its cart's checkout, as "Return to cart" and
+      // "Checkout" would), carrying on as before. (Extension 1.27.2.)
+      waitLive: { notices: [/not available for purchase/i], everyMs: 6000, forMs: 8 * 60 * 60 * 1000, reloadMs: 10 * 60 * 1000, quietMs: 20 * 1000, seekMs: 90 * 1000, coolMs: 3 * 60 * 1000 },
       // Said by the store until its box is ticked (Mugibot ticks it): not a reason to stop.
       ignoreErrors: [/must accept (the )?membership agreement/i],
       // After "Pay now", Shop goes on to the store's own order page (another address): that's the order placed.

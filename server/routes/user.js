@@ -265,6 +265,24 @@ export function register(router, ctx) {
     return out;
   }, { auth: 'none' });
 
+  // ⏰ 🚦 Wait for queue, then ACO at a time you pick (a Shop checkout link's): { at: ms } — or { at: null } to cancel.
+  router.post('/api/items/:id/queue-at', async (req) => {
+    if (!limiter.hit(`queue-at:${req.user.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const at = req.body && req.body.at === null ? null : Number(req.body && req.body.at);
+    const out = ctx.aco.scheduleQueue(req.user.id, str(req.params.id, 40), at);
+    if (out.error === 'not_found') throw notFound('SKU');
+    if (out.error) throw new HttpError(409, out.error);
+    return { item: out.item };
+  }, { entitled: true });
+
+  // Stop: one of your runs, ended from the dashboard (its browser told; a press it's about to make is refused).
+  router.post('/api/aco/runs/:id/stop', async (req) => {
+    if (!limiter.hit(`aco-stop:${req.user.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const out = await ctx.aco.stopRun(req.user.id, str(req.params.id, 40));
+    if (out.error === 'not_found') throw notFound('Run');
+    return { run: out.run };
+  });
+
   // Trigger ACO: a test run for one item, now — as if it had just dropped (the same limits and checks).
   router.post('/api/aco/test/:id', async (req) => {
     if (!limiter.hit(`aco-test:${req.user.id}`, 10, 60 * 1000)) throw new HttpError(429, 'Slow down a little');

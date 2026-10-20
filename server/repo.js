@@ -34,6 +34,8 @@ const toItem = (r) => r && ({
   dropWatch: r.drop_watch || null,
   // A Shop checkout link's discount code, typed in at its checkout before "Pay now" ('' = none).
   discount: r.discount || '',
+  // 🚦 Wait for queue, then ACO, starting by itself then (a time you picked), or null.
+  queueAt: r.queue_at || null,
 });
 const parseLogins = (v) => { try { const o = JSON.parse(v || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
 const toDevice = (r) => r && ({

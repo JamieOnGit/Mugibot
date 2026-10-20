@@ -91,7 +91,7 @@ test('arming an item needs a max price, at a store Mugibot can check out at', as
   ashBrowser = await Device.pair(env.url, ash, 'Ash laptop');
   const ext = (await ashBrowser.call('GET', '/api/ext/items')).body;
   // (listen: it's the checkout browser, the only one connected — Discord's ⚡ Buy may start a run here any time.)
-  assert.deepEqual(ext.aco, { enabled: true, armed: 1, pending: 0, listen: true, clears: 0 });
+  assert.deepEqual(ext.aco, { enabled: true, armed: 1, pending: 0, listen: true, going: 0, scheduled: 0, clears: 0 });
   assert.equal(ext.items.find((x) => x.id === it.id).aco, true);
 });
 
@@ -126,8 +126,9 @@ test('a drop starts a run: the browser picks it up, checks out and places the or
   assert.match(run.url, /^https:\/\/www\.kmart\.com\.au\/product\/.+#mgb-go=/, "the store's own page, with a one-time ⚡ Buy code");
   assert.equal(run.mode, 'place');
   // What this checkout may do by itself: the item's max plus delivery, never over the member's limit.
-  // (orderLimit: the most with other things already in the bag — the limit an order, within the day's spending.)
-  assert.deepEqual(claim.aco, { runId: run.id, mode: 'place', maxPrice: 380, maxTotal: 400, orderLimit: 400, name: 'Day UPC', sku: item.sku });
+  // (orderLimit: the most with other things already in the bag — the limit an order, within the day's spending.
+  //  url: the link, opened again if the store asks it to wait and try again — Shopify's "Too many checkout attempts".)
+  assert.deepEqual(claim.aco, { runId: run.id, mode: 'place', maxPrice: 380, maxTotal: 400, orderLimit: 400, name: 'Day UPC', sku: item.sku, url: item.url });
   assert.equal(lastRun(item.id).status, 'started');
 
   assert.equal((await report(run.id, { status: 'checkout', message: "At Kmart's checkout" })).status, 200);
@@ -605,7 +606,7 @@ test('⚡ Buy you press yourself (the dashboard\'s, a channel link, the store pa
   // On your watchlist: the item's max (one of it, plus delivery), within your limit an order and the day's spending.
   let r = await own({ id: item.id }, 100);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.aco, { runId: r.body.aco.runId, mode: 'place', maxPrice: 120, maxTotal: 160, orderLimit: 300, name: 'Own Buy ETB', sku: item.sku });
+  assert.deepEqual(r.body.aco, { runId: r.body.aco.runId, mode: 'place', maxPrice: 120, maxTotal: 160, orderLimit: 300, name: 'Own Buy ETB', sku: item.sku, url: item.url });
   const row = env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: r.body.aco.runId });
   assert.equal(row.status, 'started');
   assert.equal(row.trigger, 'buy');

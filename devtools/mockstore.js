@@ -231,6 +231,9 @@ export function defaultShopApp() {
     // Its discount box, drawn as Mattel's real one (name "reductions", "Discount code", Apply off until something's
     // typed, "Apply Discount Code"): codes it takes (code → $ off), the codes tried, and those applied.
     discounts: { RLC10: 10 }, discountTries: [],
+    // Shopify's "Too many checkout attempts" (a member's, Oct 2026): throttleNext, the next "Pay now" gets it and
+    // so does every press and every checkout opened for throttleMs; throttled counts them.
+    throttleNext: false, throttleMs: 0, throttleUntil: 0, throttled: 0,
     shipping: 32,
     checkouts: {}, orders: [], refused: [], shown: 0, guestViews: 0, accountViews: 0,
   };
@@ -2103,6 +2106,8 @@ ${body}
       return parseBody(req).then((b) => {
         A.payTries += 1;
         A.payAt.push(Date.now());
+        if (A.throttleNext) { A.throttleNext = false; A.throttleUntil = Date.now() + A.throttleMs; }
+        if (Date.now() < A.throttleUntil) { A.throttled += 1; return json(429, { throttled: true }); }
         if (A.unavailable && A.liveAfter && A.refused.filter((x) => /not available/.test(x)).length >= A.liveAfter) A.unavailable = false;
         // (The queue reset at the drop: this press sent back to the store's queue, nothing bought.)
         if (A.bounceMs) {
@@ -2146,6 +2151,7 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
 <p>${A.real ? `<button aria-busy="false" aria-label="Pay now\n${shopMoney(total)}" aria-live="polite" id="checkout-pay-button" class="pay" type="submit"><span><span>Pay now</span> <span>${shopMoney(total)}</span></span></button>` : '<button type="button" id="pay" class="pay">Pay now</button>'}</p>
 <p><a href="${esc(back)}" id="guest">Check out as guest</a></p>
 </main>
+<div id="throttle" role="dialog" aria-modal="true" style="position:fixed;inset:0;background:rgba(0,0,0,.5);align-items:center;justify-content:center;display:${Date.now() < A.throttleUntil ? 'flex' : 'none'}"><div style="background:#fff;padding:20px;border-radius:8px"><p>Too many checkout attempts</p><p>Please wait a few minutes and try again from your cart.</p><a href="/creations/cart">Return to cart</a></div></div>
 <script>
   const real = ${A.real ? 'true' : 'false'};
   const same = ${A.sameNotice ? 'true' : 'false'};
@@ -2179,6 +2185,7 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     const r = await fetch(location.pathname.replace(/shoppay$/, 'pay'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agreed: !!(box && box.checked), marketing: document.getElementById('marketing').checked, back: location.pathname + location.search, discount, rewards: !!(document.querySelector('input[name="rewards"]') || {}).checked }) });
     const d = await r.json();
     if (d.queue) { location.href = d.queue; return; }
+    if (d.throttled) { pay.setAttribute('aria-busy', 'false'); document.getElementById('throttle').style.display = 'flex'; return; }
     if (!r.ok) {
       pay.setAttribute('aria-busy', 'false');
       // (The same words already up, on a checkout that leaves them as they are: not drawn again.)

@@ -329,6 +329,99 @@ test('🛍️🚦🏷️ Wait for queue, then ACO, and a discount code: a run of
   await ash.del(`/api/items/${item.id}`);
 });
 
+test('■ Stop on the dashboard: a run still going ends at once — "Pay now" pressed already (turned away: not on sale), for you to check; its browser told on its next ask, and its next press refused; not pressed yet, nothing bought — never counted as a drop that failed', async () => {
+  const link = store.cartLink([[PORSCHE, 1]]);
+  const item = (await ash.post('/api/items', { url: link, name: 'RLC Porsche (stop)', maxPrice: 60, aco: true })).body;
+  const ashId = env.app.repo.userByUsername('ash').id;
+  await drop(link);
+  let [run] = runsOf(item.id);
+  await desk.call('GET', '/api/ext/aco/next');
+  const say = (body) => desk.call('POST', `/api/ext/aco/${run.id}`, body);
+  await say({ status: 'checkout', message: "At Shop's checkout" });
+  await say({ status: 'placing', message: 'Pressing "Pay now"', total: 70 });
+  await say({ status: 'waiting', reason: 'not_live', message: 'Shop says "This Product is not available for purchase" — not on sale yet' });
+  const dms = () => env.app.repo.listEvents(ashId, { limit: 500 }).filter((e) => /RLC Porsche \(stop\)/.test(JSON.stringify(e)) && /needs you|didn't buy/i.test(JSON.stringify(e))).length;
+  const before = dms();
+  let r = await ash.post(`/api/aco/runs/${run.id}/stop`);
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.run.status, 'needs_you');
+  assert.equal(r.body.run.reason, 'stopped');
+  assert.equal(r.body.run.active, false);
+  assert.match(r.body.run.message, /You stopped it on your dashboard.*turned away: not on sale yet.*check your email/);
+  await new Promise((res) => setTimeout(res, 50));
+  assert.equal(dms(), before, 'no DM for what you did yourself');
+  r = await desk.call('GET', '/api/ext/aco/next');
+  assert.ok(r.body.stops.includes(run.id), 'its browser told');
+  r = await say({ status: 'placing', live: true, again: true, message: 'Pressing "Pay now" again (2) — not on sale yet', total: 70 });
+  assert.equal(r.body.run.active, false, 'its next press refused');
+  assert.equal(env.app.db.get('SELECT status FROM aco_runs WHERE id = :id', { id: run.id }).status, 'needs_you');
+  // Not pressed yet: nothing bought, and it isn't a failed drop (3 a day disarm an item).
+  await ash.put(`/api/items/${item.id}`, { aco: true });
+  await drop(link);
+  [run] = runsOf(item.id);
+  r = await ash.post(`/api/aco/runs/${run.id}/stop`);
+  assert.equal(r.body.run.status, 'failed');
+  assert.match(r.body.run.message, /nothing was bought/);
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).aco, true, 'still armed');
+  for (let i = 0; i < 3; i++) env.app.db.run("INSERT INTO aco_runs (id, user_id, item_id, store, sku, name, url, mode, trigger, status, reason, message, steps, created_at, updated_at) VALUES (:id, :u, :i, 'demo-shoplink', 'x', 'x', '', 'place', 'server', 'failed', 'stopped', '', '[]', :t, :t)", { id: `acr_stop${i}`, u: ashId, i: item.id, t: Date.now() });
+  await drop(link);
+  assert.notEqual(runsOf(item.id)[0].reason, 'too_many_failures', 'stopped runs never count as failed drops');
+  // Stopped again: as it was. Not yours: not found.
+  assert.equal((await ash.post(`/api/aco/runs/${run.id}/stop`)).body.run.status, 'failed');
+  assert.equal((await ash.post('/api/aco/runs/acr_nope/stop')).status, 404);
+  finishRuns();
+  await ash.del(`/api/items/${item.id}`);
+});
+
+test('⏰ 🚦 Wait for queue, then ACO at a time you pick: set (checked now as it will be then), its browser kept listening, started by itself when due — once — and cancellable; one that can\'t start then is said, not started', async () => {
+  const link = store.cartLink([[PORSCHE, 1]]);
+  const item = (await ash.post('/api/items', { url: link, name: 'RLC Porsche (scheduled)', maxPrice: 60 })).body;
+  const ashId = env.app.repo.userByUsername('ash').id;
+  const at = Date.now() + 5 * 60 * 1000;
+  let r = await ash.post(`/api/items/${item.id}/queue-at`, { at });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.item.queueAt, at);
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).queueAt, at);
+  // Its browser listens meanwhile (nothing armed).
+  r = await desk.call('GET', '/api/ext/aco/next');
+  assert.equal(r.body.scheduled, 1);
+  // Not yet: nothing started.
+  assert.equal(await env.app.aco.startScheduled(), 0);
+  assert.equal(runsOf(item.id).length, 0);
+  // Due: started once, as the button would.
+  env.app.db.run('UPDATE items SET queue_at = :t WHERE id = :id', { t: Date.now() - 1000, id: item.id });
+  assert.equal(await env.app.aco.startScheduled(), 1);
+  let runs = runsOf(item.id);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].trigger, 'queue');
+  assert.equal(runs[0].status, 'queued');
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).queueAt, null, 'used up');
+  assert.equal(await env.app.aco.startScheduled(), 0, 'once');
+  finishRuns();
+  // Cancelled: never starts.
+  await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() + 60 * 60 * 1000 });
+  r = await ash.post(`/api/items/${item.id}/queue-at`, { at: null });
+  assert.equal(r.body.item.queueAt, null);
+  // Checked as it will be then: a time gone, or too far off; Auto-checkout not placing the order.
+  assert.equal((await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() - 1000 })).status, 409);
+  assert.equal((await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() + 8 * 86400000 })).status, 409);
+  await ash.put('/api/aco', { mode: 'fill' });
+  r = await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() + 60 * 60 * 1000 });
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /Place the order for me/);
+  // Set while placing, then switched to stop at the final button before it's due: said, not started.
+  await ash.put('/api/aco', { mode: 'place' });
+  await ash.post(`/api/items/${item.id}/queue-at`, { at: Date.now() + 60 * 60 * 1000 });
+  await ash.put('/api/aco', { mode: 'fill' });
+  env.app.db.run('UPDATE items SET queue_at = :t WHERE id = :id', { t: Date.now() - 1000, id: item.id });
+  await env.app.aco.startScheduled();
+  assert.equal(runsOf(item.id).length, 1, 'not started');
+  assert.ok(env.app.repo.listEvents(ashId, { limit: 200 }).some((e) => /didn't start at the time you picked.*Place the order for me/.test(e.message)));
+  await ash.put('/api/aco', { mode: 'place' });
+  finishRuns();
+  await ash.del(`/api/items/${item.id}`);
+});
+
 test("🛍️ a link whose option the store doesn't sell any more: not found (said, never alerted as a restock)", async () => {
   const link = `${store.url}/creations/cart/123456789:1`;
   const item = (await ash.post('/api/items', { url: link, name: 'Gone' })).body;

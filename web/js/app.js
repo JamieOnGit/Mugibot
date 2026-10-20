@@ -498,9 +498,15 @@ function itemRow(it, i, list = state.items) {
   // (A Shop checkout link: its checkout opened again and again until the store's queue is up, then in line, then "Pay now".)
   const queue = it.shopLink && it.acoCan ? h('button', {
     class: 'btn small', type: 'button', disabled: !it.url,
-    title: 'Opens the link now and, while the checkout says it isn\'t on sale yet, opens it again every 15 seconds until the store\'s queue is up — then waits in line (never refreshing it) and presses "Pay now" until the store takes the order',
+    title: 'Opens the link now and, while the checkout says it isn\'t on sale yet, opens it again every 90 seconds until the store\'s queue is up — then waits in line (never refreshing it) and presses "Pay now" until the store takes the order',
   }, '🚦 Wait for queue, then ACO') : null;
   queue?.addEventListener('click', () => queueAco(it, queue));
+  // (The same, by itself at a time you pick — a drop's: so it isn't going for hours before it.)
+  const later = it.shopLink && it.acoCan ? h('button', {
+    class: `btn small${it.queueAt ? ' primary' : ''}`, type: 'button', disabled: !it.url,
+    title: it.queueAt ? `🚦 Wait for queue, then ACO starts by itself at ${whenAt(it.queueAt)} — press to change or cancel it` : 'Start 🚦 Wait for queue, then ACO by itself at a time you pick (your time zone)',
+  }, it.queueAt ? `⏰ ${whenAt(it.queueAt)}` : '⏰ Schedule') : null;
+  later?.addEventListener('click', () => scheduleQueueAco(it, later));
   const move = async (dir) => {
     const ids = state.items.map((x) => x.id);
     const j = i + dir;
@@ -517,7 +523,7 @@ function itemRow(it, i, list = state.items) {
   // (Another website's product goes by its address: its made-up code isn't one anyone uses.)
   // (A Shop checkout link: what's in it, as the store names its options — its code is the link.)
   const what = it.shopLink ? (it.title || `${it.sku.split(',').length} option${it.sku.includes(',') ? 's' : ''} in the link`) : it.acoCan ? `SKU ${it.sku}` : '';
-  const meta = [it.storeName, what, money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', it.discount ? `🏷️ code ${it.discount}` : '', checked].filter(Boolean).join(' · ');
+  const meta = [it.storeName, what, money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', it.discount ? `🏷️ code ${it.discount}` : '', it.queueAt ? `⏰ 🚦 starts ${whenAt(it.queueAt)}` : '', checked].filter(Boolean).join(' · ');
   const isAdmin = state.me.user.role === 'admin';
   return h('li', { class: it.monitor ? '' : 'off', dataset: { id: it.id } },
     h('div', { class: 'info' },
@@ -532,6 +538,7 @@ function itemRow(it, i, list = state.items) {
     h('div', { class: 'acts' },
       buy,
       queue,
+      later,
       // (A Shop checkout link opens Shop's checkout: Open would start one, so it isn't offered.)
       it.url && !it.shopLink ? h('a', { class: 'btn small', href: it.url, target: '_blank', rel: 'noopener' }, 'Open ↗') : null,
       h('button', { class: 'btn small', type: 'button', title: 'Check now', 'aria-label': `Check ${it.name} now`, onclick: () => checkNow(it) }, '↻'),
@@ -1347,11 +1354,59 @@ $('#ar-recheck').addEventListener('click', async (e) => {
 });
 $('#aco-show').addEventListener('change', () => { state.acoPage = 1; renderArmed(); });
 
+/** "2:45 am", or "Wed 2:45 am" when it isn't today — in this browser's time zone (AEDT, in Australia's east). */
+function whenAt(ms) {
+  const d = new Date(ms);
+  const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], { weekday: 'short' })} ${t}`;
+}
+/** This browser's time zone, as it's usually written ("AEDT"). */
+function tzName() {
+  try { return new Intl.DateTimeFormat([], { timeZoneName: 'short' }).formatToParts(new Date()).find((p) => p.type === 'timeZoneName').value; } catch { return 'your time'; }
+}
+/** A time typed in ("2:45 am", "2.45am", "14:30", "3"): the next one from now (today, or tomorrow once it's passed), or null. */
+function nextTime(v) {
+  const m = String(v || '').trim().toLowerCase().replace(/\s+/g, ' ').match(/^(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|a|p)?$/);
+  if (!m) return null;
+  let hh = Number(m[1]);
+  const mm = Number(m[2] || 0);
+  if (mm > 59) return null;
+  if (m[3]) {
+    if (hh < 1 || hh > 12) return null;
+    hh = (hh % 12) + (m[3].startsWith('p') ? 12 : 0);
+  } else if (hh > 23) return null;
+  const d = new Date();
+  d.setHours(hh, mm, 0, 0);
+  if (d.getTime() <= Date.now() + 30 * 1000) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+
+/** ⏰ Schedule: 🚦 Wait for queue, then ACO by itself at a time you pick — or changed, or cancelled. */
+async function scheduleQueueAco(it, btn) {
+  const s = (state.aco && state.aco.settings) || {};
+  if (!s.enabled || s.mode !== 'place') { toast('Auto-checkout first', 'Switch Auto-checkout on and set it to "Place the order for me" (Checkout page) — this presses "Pay now" for you.', 'warn', 9000); return; }
+  const tz = tzName();
+  const v = prompt(`⏰ 🚦 Wait for queue, then ACO by itself — ${it.name}\n\nAt what time (${tz})? For example 2:45 am. Today, or tomorrow once that time's passed.\n${it.queueAt ? `\nIt's set for ${whenAt(it.queueAt)} now. Leave it empty to cancel it.` : ''}`, it.queueAt ? new Date(it.queueAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '');
+  if (v === null) return;
+  const at = v.trim() ? nextTime(v) : null;
+  if (v.trim() && !at) { toast("Couldn't read that time", 'Try 2:45 am, or 14:30.', 'warn'); return; }
+  btn.disabled = true;
+  try {
+    await api('POST', `/api/items/${it.id}/queue-at`, { at });
+    toast(at ? `⏰ Set for ${whenAt(at)} (${tz})` : '⏰ Cancelled', at ? `🚦 Wait for queue, then ACO starts by itself then, in your checkout browser — keep it open and the computer awake. It places a real order, within your limits.` : `${it.name} won't start by itself.`, 'success', 9000);
+    askExtension('acoListen', {}, 4000);
+    await loadItems();
+  } catch (e) {
+    toast("Couldn't set it", e.message, 'warn');
+    btn.disabled = false;
+  }
+}
+
 /** Wait for queue, then ACO (a Shop checkout link): a run now that gets in the store's queue the moment it's up, then places the order. */
 async function queueAco(it, btn) {
   const s = (state.aco && state.aco.settings) || {};
   if (!s.enabled || s.mode !== 'place') { toast('Auto-checkout first', 'Switch Auto-checkout on and set it to "Place the order for me" (Checkout page) — this presses "Pay now" for you.', 'warn', 9000); return; }
-  if (!confirm(`Wait for queue, then ACO: ${it.name}?\n\nYour checkout browser opens the link now. While the checkout says it isn't on sale yet, it opens the link again every 15 seconds — like refreshing — until the store's queue is up. In the queue it waits its turn and never refreshes it. Then, on the checkout, it presses "Pay now" every couple of seconds until the store takes the order: it PLACES A REAL ORDER, within your limits (up to ${money(it.maxPrice)} plus delivery). Sent back to the queue at the drop, it waits there again.\n\nKeep that computer on and the tab open. Stop it any time with the panel's Stop, or on the Checkout page.`)) return;
+  if (!confirm(`Wait for queue, then ACO: ${it.name}?\n\nYour checkout browser opens the link now. While the checkout says it isn't on sale yet, it opens the link again every 90 seconds — like refreshing — until the store's queue is up. In the queue it waits its turn and never refreshes it. Then, on the checkout, it presses "Pay now" every couple of seconds until the store takes the order: it PLACES A REAL ORDER, within your limits (up to ${money(it.maxPrice)} plus delivery). Sent back to the queue at the drop, it waits there again.\n\nKeep that computer on and the tab open. Stop it any time with the panel's Stop, or on the Checkout page.`)) return;
   btn.disabled = true;
   try {
     const { run } = await api('POST', `/api/aco/test/${it.id}`, { queue: true });
@@ -1392,6 +1447,21 @@ async function triggerAco(it, maxInput, btn) {
   }
 }
 
+/** ■ Stop on a run that's still going: over on your account, and its browser presses nothing more. */
+async function stopRun(r, btn) {
+  if (!confirm(`Stop this Auto-checkout run?\n\n${r.name}\n\nYour checkout browser presses nothing more for it. Its tab is left as it is.`)) return;
+  btn.disabled = true;
+  try {
+    const { run } = await api('POST', `/api/aco/runs/${r.id}/stop`);
+    toast('Auto-checkout stopped', run && run.status === 'needs_you' ? '"Pay now" had been pressed — check your email from the store before buying it again.' : 'Nothing was bought.', 'success');
+    await loadAco();
+    renderAcoRuns();
+  } catch (e) {
+    toast("Couldn't stop it", e.message, 'warn');
+    btn.disabled = false;
+  }
+}
+
 // Run history: 10 to a page.
 const RUNS_PAGE_SIZE = 10;
 function renderAcoRuns() {
@@ -1423,6 +1493,8 @@ function renderAcoRuns() {
           h('div', { class: 'name' }, r.name),
           h('div', { class: 'meta' }, [state.retailers.find((x) => x.id === r.store)?.name || r.store, money2, TRIGGER[r.trigger] || '', r.mode === 'fill' ? 'stop at the final button' : '', typeof r.tookMs === 'number' ? `⏱ ${secs(r.tookMs)} drop to order` : ''].filter(Boolean).join(' · '))),
         h('span', { class: `pill ${ACO_TONE[r.status] || ''}` }, r.statusText),
+        // (Still going — its tab closed by mistake, say, or not wanted any more: stopped from here.)
+        r.active ? h('button', { class: 'btn small danger aco-stop', type: 'button', title: 'Stop this Auto-checkout run: its browser presses nothing more', onclick: (e) => stopRun(r, e.currentTarget) }, '■ Stop') : null,
         h('time', { class: 'muted small', datetime: new Date(r.createdAt).toISOString(), title: when(r.createdAt) }, ago(r.createdAt))),
       r.reasonText || r.message ? h('div', { class: `why ${ACO_TONE[r.status] || ''}` }, r.reasonText && r.message && !r.message.startsWith(r.reasonText) ? `${r.reasonText}: ${r.message}` : (r.message || r.reasonText)) : null,
       h('details', { class: 'aco-detail' }, h('summary', {}, `Steps (${r.steps.length})`), steps)));

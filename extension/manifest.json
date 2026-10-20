@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Mugibot",
-  "version": "1.27.1",
+  "version": "1.27.2",
   "description": "⚡ Buy from your Mugibot watchlist or Discord ping: straight to checkout with it in your bag, filled in up to the final button.",
   "permissions": ["storage", "alarms", "scripting"],
   "host_permissions": [],

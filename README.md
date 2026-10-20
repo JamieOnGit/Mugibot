@@ -330,7 +330,7 @@ npm test
   Shop's account page is left out, and a "signed out" reading never holds a run
   back; a tab that never reaches Shop says so (the link: signed out), but not
   once it got going (the link: signed in); not on sale at the checkout, "Pay now"
-  pressed again every 2 s on the same checkout — said once, the run waiting for
+  pressed again every 6 s on the same checkout — said once, the run waiting for
   the sale, its presses counted — placed the moment it's on sale; Mattel's real
   checkout as probed ("Pay now $X", the membership box's words beside its label,
   the notice left up) the same. In Chromium, as a member's real checkout looked (signed in, "Sign in to
