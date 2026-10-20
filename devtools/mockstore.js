@@ -151,7 +151,8 @@ export function defaultShops() {
       // button left as it is meanwhile, like a store that shows nothing while it works). Kmart's final
       // button drawn greyed out, turned on finalGreyedMs after the payment step opens.
       // (placeKeepsError: its last error left up while it works on the next press, word for word.)
-      placeBusy: 0, placeTries: 0, placeSlowMs: 0, finalGreyedMs: 0, placeKeepsError: false,
+      // (placeBusyText: what it says instead — "There was a problem processing your payment", say.)
+      placeBusy: 0, placeTries: 0, placeSlowMs: 0, finalGreyedMs: 0, placeKeepsError: false, placeBusyText: '',
       // denied: its bot protection (BIG W's Akamai) answers every page "Access Denied" (deniedServed counts them).
       denied: false, deniedServed: 0,
       // savedCard (EB Games signed in): how it shows the card it has for you — a member's showed "...2387 08/27".
@@ -2646,7 +2647,7 @@ ${A.agreement && A.hiddenBox ? '<div class="agree"><input type="checkbox" id="me
       const b = await parseBody(req);
       S.placeTries += 1;
       if (S.placeSlowMs) await new Promise((r) => setTimeout(r, S.placeSlowMs));
-      if (S.placeTries <= S.placeBusy) return json(503, { ok: false, error: "We're experiencing high demand right now. Something went wrong — please try again." });
+      if (S.placeTries <= S.placeBusy) return json(503, { ok: false, error: S.placeBusyText || "We're experiencing high demand right now. Something went wrong — please try again." });
       if (S.decline) { S.declined = (S.declined || 0) + 1; return json(402, { ok: false, error: 'Your card was declined. Please try another card.' }); }
       if (S.threeDS) { S.challenged = (S.challenged || 0) + 1; return json(200, { ok: false, challenge: `${cardOrigin}/acs/challenge` }); }
       S.orders.push({ cart: S.cart.slice(), data: { ...S.data }, form: b, ts: Date.now() });

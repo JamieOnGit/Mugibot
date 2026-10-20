@@ -267,6 +267,8 @@ test("BIG W (its bot protection resets every server's connection): the server ne
     const first = await round();
     assert.equal(first.length, 1, 'one BIG W page a round');
     assert.equal(first[0].render, true, 'opened in the extension\'s window, as you would');
+    // (The other one's turn, pushed back a little so a long BIG W list never keeps other stores out: the next round.)
+    clock.offset += 61 * 1000;
     const second = await round();
     assert.equal(second.length, 1);
     assert.deepEqual([first[0].id, second[0].id].sort(), [a.id, b.id].sort());

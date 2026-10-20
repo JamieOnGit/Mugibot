@@ -18,7 +18,8 @@ var MGBChecks = (function () {
   var OURS = '#mugibot-qc, #mugibot-banner';
   // A card already saved with the store or its wallet (Shop Pay, a store account), shown instead of card boxes.
   // (EB Games shows its "...2387 08/27"; others "•••• 4242", "**** 4242", "ending in 4242".)
-  var SAVED_CARD_RE = /(ending|ends) (in|with) \d{4}|(?:(?:•|\*|x|·|\.){2,}|…)\s?\d{4}\b/i;
+  // (Dots or "…" before the digits only with an expiry after them, or a card's name before: "Loading...\n2026" isn't a card.)
+  var SAVED_CARD_RE = /(ending|ends) (in|with) \d{4}|(?:•|\*|x|·){2,}[ \t\u00a0]?\d{4}\b|(?:\.{2,}|…)[ \t\u00a0]?\d{4}[ \t\u00a0]+\d{2}[ \t]?\/[ \t]?\d{2}\b|\b(?:visa|mastercard|master card|amex|american express|card)\b[^\n]{0,24}(?:\.{2,}|…)[ \t\u00a0]?\d{4}\b/i;
 
   function visible(el) {
     var r = el.getBoundingClientRect();
@@ -171,16 +172,31 @@ var MGBChecks = (function () {
     return re.test((main.innerText || '').slice(0, 20000));
   }
 
-  // After the final button: what the store said about a box (filled in again, then pressed again) — anything
-  // else it says (it's busy, something went wrong, try again, even sold out for now) is the store under load:
-  // pressed again, a little later each time, up to half an hour. A decline, your bank's check or a human
-  // check is never pressed through (outcome(), above).
+  // After the final button, what the store said:
+  // - 'declined': the payment didn't go through — never pressed again;
+  // - 'stop': anything about the payment, the card, your bank, a human check or being blocked — never pressed
+  //   past (for you, with what it said);
+  // - 'working': it's still at it ("Processing…", "Please wait") — waited for, never pressed again meanwhile;
+  // - 'field': a box it says is wrong (not the card's) — filled in again, then pressed again (twice at most);
+  // - 'busy': the store plainly struggling (high demand, try again, too many requests, a 503, something went
+  //   wrong — or sold out just now: under a drop's load stock comes back) — pressed again, a little later each
+  //   time, up to half an hour;
+  // - 'other': anything else — not a reason to press again (for you, with what it said).
+  var STOP_RE = /payment|card|bank|authenticat|verif|captcha|human|robot|blocked|denied|refused|not approved|fraud|security code|\bcvv\b|\bcvc\b|expir/i;
+  var WORKING_RE = /processing|please wait|placing your order|submitting|one moment|hang tight|\bloading\b/i;
+  var NOT_WORKING_RE = /problem|error|fail|unable|could ?n.?t|cannot|can.?t|sorry|wrong|invalid|declin|try again/i;
   var FIELD_ERR_RE = /\brequired\b|\binvalid\b|\bincorrect\b|not (a )?valid|please (enter|select|choose|provide|fill|check|complete|tick|accept|agree)|must (be|accept|select|enter|agree|tick)|\bmissing\b|enter a valid|doesn.?t match|is too (short|long)|needs attention/i;
+  var BUSY_RE = /high (demand|traffic|volume)|try again|too many requests|(service|temporarily) unavailable|\b50[234]\b|something went wrong|server (error|is busy|busy)|timed? ?out|\bbusy\b|overloaded|experiencing (issues|difficulties|delays|high)|unable to (complete|process) (your )?(request|order)|out of stock|sold out|no longer available|not enough stock|insufficient (stock|inventory|quantity)|\bunavailable\b/i;
   function errorKind(text) {
     var t = String(text || '');
     if (!t) return '';
     if (DECLINE_RE.test(t)) return 'declined';
-    return FIELD_ERR_RE.test(t) ? 'field' : 'busy';
+    // ("Please wait while we process your payment" is it still at it; "a problem processing your payment" isn't.)
+    if (WORKING_RE.test(t) && !NOT_WORKING_RE.test(t)) return 'working';
+    if (STOP_RE.test(t)) return 'stop';
+    if (FIELD_ERR_RE.test(t)) return 'field';
+    if (BUSY_RE.test(t)) return 'busy';
+    return 'other';
   }
   // How long before pressing again: as a person would (3 s, 5 s, 8 s… then every 20 s).
   var RETRY_WAITS = [3000, 5000, 8000, 10000, 15000, 15000, 20000];
@@ -188,9 +204,6 @@ var MGBChecks = (function () {
   // The longest an Auto-checkout run keeps at it on the checkout: the final button turning on, and pressing
   // it again while the store's struggling (a hot drop) — then it stops, nothing bought.
   var RETRY_MS = 30 * 60 * 1000;
-  // No answer at all to a press (nothing said, its button free, nothing busy): this long, then pressed again.
-  // (A store still working on it shows so — its button greyed out or busy, a spinner — and is waited for.)
-  var NO_ANSWER_MS = 20000;
 
-  return { CONFIRM_RE: CONFIRM_RE, DECLINE_RE: DECLINE_RE, RETRY_MS: RETRY_MS, NO_ANSWER_MS: NO_ANSWER_MS, errorKind: errorKind, retryWait: retryWait, orderTotal: orderTotal, pageError: pageError, markErrors: markErrors, missingRequired: missingRequired, outcome: outcome, savedCardShown: savedCardShown, unavailable: unavailable, visible: visible };
+  return { CONFIRM_RE: CONFIRM_RE, DECLINE_RE: DECLINE_RE, RETRY_MS: RETRY_MS, errorKind: errorKind, retryWait: retryWait, orderTotal: orderTotal, pageError: pageError, markErrors: markErrors, missingRequired: missingRequired, outcome: outcome, savedCardShown: savedCardShown, unavailable: unavailable, visible: visible };
 })();

@@ -451,6 +451,9 @@ var MGBFill = (function () {
   // checkout won't go without it. (Never one to save your details, or a marketing one.)
   var CONSENT_RE = /\b(accept(ance)?|agree(ment)?|i have read|acknowledge|consent)\b[\s\S]{0,80}\b(terms|conditions|agreement|policy|policies|rules)\b|\bmembership agreement\b|\b(terms|conditions)\b[\s\S]{0,40}\b(accept|agree)/i;
   var NOT_CONSENT_RE = /save (my|this|your)|remember me|keep me signed|create an account|use (this|my) (address|card) for/i;
+  // (Nor one that adds something you pay for — a protection plan, a warranty, a subscription, a price in its words —
+  //  however it says "I agree": "Add 2-year Protection Plan ($29) — I accept the plan terms".)
+  var PAID_RE = /\$\s?\d|\d\s?(aud|usd)\b|\bplan\b|protection|warranty|insurance|\bcover(age)?\b|subscri|premium|\bjoin\b|per (month|year|week)|\/\s?(mo|month|yr|year)\b|donat|\btip\b|gift wrap|add-?on|upgrade|\btrial\b/i;
 
   /**
    * The flow's boxes to have ticked (C.tick: Shopify's "Use shipping address as billing address", Shop
@@ -470,7 +473,7 @@ var MGBFill = (function () {
       var words = (labelText(el) + ' ' + describe(el) + (real ? '' : ' ' + textOf(el))).replace(/\s+/g, ' ');
       var required = real ? el.required || el.getAttribute('aria-required') === 'true' : el.getAttribute('aria-required') === 'true';
       var want = any(C.tick, words) ? true : any(C.untick, words) ? false : C.tickRequired && required ? true
-        : CONSENT_RE.test(words) && !NOT_CONSENT_RE.test(words) ? true : null;
+        : CONSENT_RE.test(words) && !NOT_CONSENT_RE.test(words) && !PAID_RE.test(words) ? true : null;
       if (want && MARKETING_RE.test(words)) want = null;
       var checked = real ? el.checked : el.getAttribute('aria-checked') === 'true';
       if (want === null || checked === want) return;
@@ -756,6 +759,8 @@ var MGBFill = (function () {
     setStatus('Filling in checkout…');
     while (Date.now() < deadline) {
       if (opts.isActive && !opts.isActive()) { setStatus('Stopped.'); return 'stopped'; }
+      // (A slow checkout — over a minute in, whatever it's waiting on: your account hears it's still going.)
+      if (Date.now() - startedAt > 60000) beat('Still filling in checkout — the store is slow');
       if (done.test(location.pathname)) { setStatus('Order placed.'); return 'done'; }
 
       // "Add a protection plan?" and the like: closed, never accepted.

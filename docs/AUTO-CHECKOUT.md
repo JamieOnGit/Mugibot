@@ -223,21 +223,38 @@ then, so a drop that isn't busy goes exactly as fast as before:
   There's no wait to "check the details": the checks below are instant reads of the
   page. A final button the store draws greyed out while it finishes the last boxes
   is waited for (up to 30 minutes) and pressed the moment it turns on.
-- **Pressed again while the store's struggling** (1.27.0). The store answers "high
-  demand, please try again", "something went wrong", a 503, or nothing at all
-  20 seconds on: it's pressed again, a little later each time (3, 5, 8, 10, 15
+- **Pressed again while the store says it's struggling** (1.27.0). When the store
+  answers "high demand", "please try again", "something went wrong", "too many
+  requests", a 503 or a time-out — or "sold out" just then (under a drop's load,
+  stock comes back) — it's pressed again, a little later each time (3, 5, 8, 10, 15
   seconds… then every 20), for up to **30 minutes** from the first press. Your
-  details are filled in again and the total checked again before each press, and
-  every press is in your activity. While the store is still working on a press (its
-  button greyed out or busy, a spinner, the page loading) it's never pressed again,
-  and a message that was already up before the press isn't taken for the store's
-  answer. It never presses past a decline, your bank's check, a human check or an
-  order confirmation. A box the store says is wrong is filled in again (twice at
-  most, then it's yours). After 30 minutes: "pressed … for 30 minutes and the store
-  never took the order — nothing more pressed" (most likely sold out). This is the
-  same at every store Mugibot checks out at, for drop watches' finds there, and for
-  Shop checkout links. Your account hears from the run every half a minute
-  meanwhile, so a slow checkout is never closed as stale.
+  details are filled in again and the total read and checked again before each
+  press, and every press is in your activity.
+  - **Your account says yes first.** Before each press after the first, your browser
+    asks your account whether the run's still going. A run it has ended (stopped,
+    timed out) is never pressed again.
+  - **Never on silence.** A store that says nothing after the press may be taking
+    the order, so it's waited for, never pressed again. It's also waited for while
+    it's still working ("Processing…", its button greyed out or busy, a spinner, the
+    page loading). After 30 minutes with no answer: "check your email before buying
+    it again".
+  - **Never past the payment.** Never past a decline, your bank's check, a human
+    check or an order confirmation. Anything about the payment, the card, your bank
+    or a human check ("a problem processing your payment", "verify you're human")
+    stops the run for you. So do words it doesn't know.
+  - **Old messages don't count.** A message that was already up before the press
+    isn't taken for the store's answer.
+  - **Boxes, then you.** A box the store says is wrong (not the card) is filled in
+    again, twice at most, then it's yours.
+  - **Back at checkout after a press.** Only when the page says it's struggling is
+    it pressed again. Anything else is only watched.
+  - **After 30 minutes of "try again"**, it stops: "kept turning it away — nothing
+    more pressed; check your email before buying it again" (most likely sold out).
+    It counts towards the day's limits, in case a press went through.
+  - **Everywhere the same.** Every store Mugibot checks out at, drop watches' finds
+    there, Shop checkout links, and checkouts in a frame. Your account hears from
+    the run every half a minute meanwhile, so a slow checkout is never closed as
+    stale. A press it heard about late still counts as an order.
 - **Your account** waits up to 5 minutes (was 2: as long as the run's code lasts)
   for a store's slow page to take a run up once your browser's opened it — and
   your browser never opens a second tab for a run whose first one is still
@@ -435,12 +452,14 @@ After **3 failures in a day** it stops trying and disarms until you arm it again
   item's max. (Shop checkout links and Shopify cart links open a checkout of their
   own: never mixed.) Empty your bags before a drop to buy only the one thing.
 - **The order total.** Delivery included, read from the checkout page. It must
-  be within the item's max price + $40 (for delivery) and your "most an order may
-  cost". If it can't read the total, it stops.
+  be within the item's max price + $40 (for delivery), your "most an order may
+  cost", and what's left of the day's spending. If it can't read the total, it stops.
 - **Agreement boxes ticked.** A box accepting the store's terms or a membership
   agreement (Shop's "By selecting, you indicate your acceptance of the Membership
   Agreement") is ticked before pressing, even one the page draws over a hidden box.
-  A newsletter or marketing box never is.
+  Some boxes are never ticked: newsletter or marketing boxes, and anything that adds
+  something you'd pay for (a protection plan, a warranty, a subscription, a price in
+  its words), however it says "I agree".
 - **The card went in — every box of it.** It checks the store's card boxes,
   including boxes from a payment provider (one frame per box at Kmart, Shopify
   stores and Target). A card the store or Shop Pay already has for you ("Visa
@@ -462,8 +481,9 @@ the store's struggling, for up to 30 minutes: Hot drops, above):
 | Your bank's check (3-D Secure, a code, "confirm in your banking app") | ⚠️ **Needs you:** finish it in the tab that's open |
 | A "check you're human" box (CAPTCHA) | ⚠️ **Needs you** |
 | A box the store says is wrong, still wrong after it's filled in again twice | ⚠️ **Needs you:** what it said |
-| The store busy, "try again", or no answer, for 30 minutes of presses | ❌ **Failed:** the store never took the order |
-| The store still working on a press 30 minutes on | ⚠️ **Needs you:** check your email from the store before buying again |
+| Anything about the payment, the card, your bank or a human check, or words it doesn't know | ⚠️ **Needs you:** what it said (nothing more pressed) |
+| The store busy, "try again" or sold out, for 30 minutes of presses | ⚠️ **Needs you:** it kept turning it away — check your email before buying again |
+| No answer, or still working on a press, 30 minutes on | ⚠️ **Needs you:** check your email from the store before buying again |
 
 It **never** gets past your bank's check or a store's bot check. It stops and
 tells you.

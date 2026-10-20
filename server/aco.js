@@ -39,6 +39,9 @@ import { productLink, startBuy } from './routes/user.js';
 
 // Still on its way: waiting for a browser, opening the store, at checkout, pressing the final button.
 const ACTIVE = ['queued', 'sent', 'started', 'waiting', 'checkout', 'placing'];
+// The oldest extension a checkout you start yourself places the order in (Aco.own: 1.27.0 presses the final
+// button again only when the store says it's struggling, and asks your account first). Older: it stops there.
+const OWN_EXTENSION_VERSION = '1.27.0';
 const DONE = new Set(['placed', 'ready', 'needs_you', 'failed', 'skipped', 'expired']);
 // A browser has this long to pick a run up, and a run this long to finish.
 const PICKUP_MS = 2 * 60 * 1000;
@@ -315,8 +318,8 @@ export class Aco {
     if (item.maxPrice === null || item.maxPrice === undefined) return skip('no_max');
     if (price !== null && price > item.maxPrice) return skip('over_max', `${money(price)} is over your max of ${money(item.maxPrice)}.`);
     if (price !== null && price > s.maxOrder) return skip('over_limit', `${money(price)} is over your limit of ${money(s.maxOrder)} an order.`);
-    // (A drop's failures count — not Trigger ACO's, nor a ⚡ Buy pressed in Discord.)
-    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND trigger NOT IN ('test', 'remote') AND created_at > :since", { i: item.id, since: now - DAY }).n;
+    // (A drop's failures count — not Trigger ACO's, nor a ⚡ Buy pressed in Discord or by you.)
+    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND trigger NOT IN ('test', 'remote', 'buy') AND created_at > :since", { i: item.id, since: now - DAY }).n;
     if (fails >= MAX_FAILS && !info.test) {
       this.disarm(userId, item.id);
       return skip('too_many_failures', 'Arm it again to keep trying.');
@@ -440,7 +443,7 @@ export class Aco {
     const store = item ? item.store : product && String(product.store || '');
     const r = store ? this.retailers.get(store) : null;
     if (!r || !r.flow || !this.retailers.enabled(r)) return null;
-    if (r.acoVersion && olderVersion(device.version, r.acoVersion)) return null;
+    if (olderVersion(device.version, OWN_EXTENSION_VERSION) || (r.acoVersion && olderVersion(device.version, r.acoVersion))) return null;
     if (item && this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return null;
     const known = [price, item && item.lastPrice, item && item.price].find((p) => typeof p === 'number' && Number.isFinite(p) && p > 0) ?? null;
     // (Its max is for one: two of it, twice that — never over the limit an order.)
@@ -647,8 +650,10 @@ export class Aco {
    */
   passFor(userId, row) {
     const s = this.settings(userId);
-    const maxTotal = Math.min(s.maxOrder, (row.max_price ?? s.maxOrder) + 40);
-    const orderLimit = Math.max(0, Math.round(Math.min(s.maxOrder, s.spendPerDay - this.today(userId).spent) * 100) / 100);
+    // (Never more than what's left of the day's spending, either.)
+    const left = Math.max(0, Math.round((s.spendPerDay - this.today(userId).spent) * 100) / 100);
+    const maxTotal = Math.min(s.maxOrder, (row.max_price ?? s.maxOrder) + 40, left);
+    const orderLimit = Math.min(s.maxOrder, left);
     return { runId: row.id, mode: row.mode, maxPrice: row.max_price, maxTotal, orderLimit, name: row.name, sku: row.sku };
   }
 
@@ -656,11 +661,15 @@ export class Aco {
    * What happened, from the browser: status 'checkout' | 'ready' | 'placing' | 'placed' | 'needs_you' | 'failed',
    * reason (REASONS), message, total.
    */
-  async report(userId, runId, { status, reason = '', message = '', total = null, pressed = false }) {
+  async report(userId, runId, { status, reason = '', message = '', total = null, pressed = false, again = false }) {
     const row = this.get(userId, runId);
     if (!row) return null;
-    // Done is done — except a payment the member finished themselves (the bank's check) turning out placed.
-    if (DONE.has(row.status) && !(row.status === 'needs_you' && status === 'placed')) return toRun(row);
+    // Done is done — except a payment the member finished themselves (the bank's check) turning out placed;
+    // and a run closed here for want of news (timed out) whose final button the browser did press after all:
+    // that's an order, counted towards the day's limits and the arming used up. (Pressing it *again*, the
+    // browser asks first — again — and a closed run says no.)
+    const late = (row.status === 'failed' && row.reason === 'timeout') && !again && (status === 'placing' || status === 'placed');
+    if (DONE.has(row.status) && !(row.status === 'needs_you' && status === 'placed') && !late) return toRun(row);
     if (typeof total === 'number' && Number.isFinite(total) && total > 0) this.db.run('UPDATE aco_runs SET total = :t WHERE id = :id', { t: Math.round(total * 100) / 100, id: row.id });
     if (status === 'note') {
       // Something the member should know, said on the run (other things in the bag, being bought too) — and in their activity.

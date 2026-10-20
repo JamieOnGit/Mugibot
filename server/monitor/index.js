@@ -496,16 +496,24 @@ export class Monitor {
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(user.id, 'alerts', {}) || {}) };
     if (!settings.browserChecks) return [];
     const now = this.now();
-    const rows = this.db.all(`SELECT i.*, c.status AS page_status, c.fail_count AS page_fails, c.checked_at AS page_checked, c.error AS page_error
-      FROM items i LEFT JOIN page_checks c ON c.url = i.url AND i.url != ''
-      WHERE i.user_id = :u AND i.monitor = 1 AND i.browser_next_at <= :now ORDER BY i.browser_next_at, i.position LIMIT 40`, { u: user.id, now });
-    const out = [];
-    // (A store whose pages are opened in the browser's window to be read — BIG W's: one at a time, at its pace.)
-    const rendering = new Set();
+    // (A store whose pages are opened in the browser's window to be read — BIG W's: one at a time, at its pace —
+    //  and only by an extension that does: 1.27.0; an older one would ask for the page in the background, what
+    //  got browsers turned away there. A browser that hasn't said its version is taken for an older one, and
+    //  that store's items left out of its list altogether, for a browser that can.)
     const pace = (r) => (r && r.monitor && r.monitor.browserSeconds ? r.monitor.browserSeconds * 1000 : this.browserInterval);
     const render = (r) => !!(r && r.monitor && r.monitor.render);
-    // (An older extension would ask for the page in the background — what got browsers turned away there.)
-    const cantRender = !!version && olderVersion(version, RENDER_EXTENSION_VERSION);
+    const cantRender = !version || olderVersion(version, RENDER_EXTENSION_VERSION);
+    const unopened = cantRender ? this.retailers.list.filter(render).map((r) => r.id) : [];
+    const notThese = unopened.length ? `AND i.store NOT IN (${unopened.map((_, n) => `:r${n}`).join(', ')})` : '';
+    const rows = this.db.all(`SELECT i.*, c.status AS page_status, c.fail_count AS page_fails, c.checked_at AS page_checked, c.error AS page_error
+      FROM items i LEFT JOIN page_checks c ON c.url = i.url AND i.url != ''
+      WHERE i.user_id = :u AND i.monitor = 1 AND i.browser_next_at <= :now ${notThese} ORDER BY i.browser_next_at, i.position LIMIT 40`,
+    { u: user.id, now, ...Object.fromEntries(unopened.map((id, n) => [`r${n}`, id])) });
+    const out = [];
+    const rendering = new Set();
+    // (Left for later this round — BIG W's one page a round: its turn pushed back a little, so a long BIG W
+    //  list never keeps the other stores' checks out of the round.)
+    const later = (table, id) => this.db.run(`UPDATE ${table} SET browser_next_at = :n WHERE id = :id`, { n: now + this.browserInterval, id });
     for (const it of rows) {
       const r = this.retailers.get(it.store);
       const other = it.store === 'other';
@@ -520,7 +528,8 @@ export class Monitor {
       if (!(serverOff || serverStruggling || serverSilent || searchBlocked || it.status_source === 'browser')) continue;
       if (other && !this.siteAllowed(it.url, sites, want)) continue;
       if (render(r)) {
-        if (cantRender || rendering.has(r.id)) continue;
+        if (cantRender) continue;
+        if (rendering.has(r.id)) { later('items', it.id); continue; }
         // (Seen by a live search just now: nothing more to open.)
         if (it.status_source === 'sweep' && it.checked_at && now - it.checked_at < SWEEP_FRESH_MS) {
           this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
@@ -548,7 +557,8 @@ export class Monitor {
       for (const url of this.catalog.failingSitePages()) this.siteAllowed(url, sites, want);
       for (const p of [...whole, ...failing].slice(0, 5 - out.length)) {
         const r = this.retailers.get(p.store);
-        if (render(r) && (cantRender || rendering.has(r.id))) continue;
+        if (render(r) && cantRender) continue;
+        if (render(r) && rendering.has(r.id)) { later('products', p.id); continue; }
         if (render(r) && p.status_source === 'sweep' && p.sweep_seen_at && now - p.sweep_seen_at < SWEEP_FRESH_MS) {
           this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: p.id });
           continue;

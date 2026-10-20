@@ -1343,6 +1343,8 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
     const before = bigwPages().length;
     let r = await sw.evaluate(() => globalThis.mugibotRunChecks());
     assert.equal(r.checked, 1, 'one BIG W page at a time');
+    // (The other one's turn, pushed back a minute — the next round: here, now.)
+    env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u AND checked_at IS NULL', { u: userId });
     r = await sw.evaluate(() => globalThis.mugibotRunChecks());
     assert.equal(r.checked, 1, 'the next one in the next round');
     const items = env.app.repo.listItems(userId);
@@ -2062,7 +2064,7 @@ test('🔥 Auto-checkout at a store struggling under a hot drop (Kmart): "high d
   assert.equal(S.orders.length, 1, 'one order');
   const run = await runFor('ACO retry');
   assert.equal(run.total, 110);
-  assert.ok(run.steps.some((x) => x.status === 'placing' && /Pressing "Checkout securely" again \(2\) — Kmart \(dummy store\) hasn't taken the order yet/.test(x.message)), JSON.stringify(run.steps));
+  assert.ok(run.steps.some((x) => x.status === 'placing' && /Pressing "Checkout securely" again — Kmart \(dummy store\) hasn't taken the order yet/.test(x.message)), JSON.stringify(run.steps));
   const userId = env.app.repo.userByUsername('ash').id;
   assert.ok(env.app.repo.listEvents(userId).some((e) => /Auto-checkout pressed "Checkout securely" again \(3\)/.test(e.message)), 'each press in your activity');
   await new Promise((r) => setTimeout(r, 1500));
@@ -2080,6 +2082,35 @@ test("🔥 a slow store at the final button: its last \"please try again\" still
   await waitFor(async () => (await runFor('ACO slow answer') || {}).status === 'placed', { timeout: 60000, message: 'placed on the second press' });
   assert.equal(S.placeTries, 2, 'pressed twice: once turned away, then taken — never while it was still working on one');
   assert.equal(S.orders.length, 1);
+  await closeStorePages('kmart');
+});
+
+test('🔥 a store that says nothing for 25 s after "Checkout securely" (no spinner, its button free): never pressed again on silence — it may be taking the order — and placed once when it answers', async () => {
+  freshDay();
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO silent', aco: true, maxPrice: 120 }]);
+  const S = store.shop('kmart');
+  S.placeSlowMs = 25000;
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await runFor('ACO silent') || {}).status === 'placed', { timeout: 75000, message: 'placed once it answered' });
+  assert.equal(S.placeTries, 1, 'pressed once');
+  assert.equal(S.orders.length, 1);
+  await closeStorePages('kmart');
+});
+
+test('🔥 "There was a problem processing your payment" to the final button: never pressed past — the run stops for you (nothing more pressed), whatever the 30 minutes', async () => {
+  freshDay();
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO payment problem', aco: true, maxPrice: 120 }]);
+  const S = store.shop('kmart');
+  Object.assign(S, { placeBusy: 5, placeBusyText: 'There was a problem processing your payment' });
+  await acoListen();
+  await drop('kmart', '43818587');
+  await waitFor(async () => (await runFor('ACO payment problem') || {}).status === 'needs_you', { timeout: 60000, message: 'stopped for you' });
+  const run = await runFor('ACO payment problem');
+  assert.match(run.message, /There was a problem processing your payment/);
+  await new Promise((r) => setTimeout(r, 4000));
+  assert.equal(S.placeTries, 1, 'pressed once, never again');
+  assert.equal(S.orders.length, 0);
   await closeStorePages('kmart');
 });
 

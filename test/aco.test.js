@@ -597,8 +597,9 @@ test('⚡ Buy you press yourself (the dashboard\'s, a channel link, the store pa
   // (price: what the page or the alert said — none known, the most it may cost is your limit an order.)
   const own = (product, price) => device.call('POST', '/api/ext/aco/own', { product: { ...product, price } });
   // An older extension (or one that hasn't said its version): left at the final button, as before.
-  const olderAco = env.app.retailers.get('kmart').acoVersion;
-  if (olderAco) assert.equal((await own({ id: item.id }, 100)).body.aco, null, 'an extension older than the store needs');
+  assert.equal((await own({ id: item.id }, 100)).body.aco, null, "a browser that hasn't said its version");
+  await device.call('GET', '/api/ext/me?v=1.26.0');
+  assert.equal((await own({ id: item.id }, 100)).body.aco, null, 'an extension older than 1.27.0');
   await device.call('GET', `/api/ext/me?v=${encodeURIComponent('1.27.0')}`);
 
   // On your watchlist: the item's max (one of it, plus delivery), within your limit an order and the day's spending.
@@ -632,7 +633,7 @@ test('⚡ Buy you press yourself (the dashboard\'s, a channel link, the store pa
   // A product that isn't on your watchlist (the page's own): up to your limit an order.
   r = await own({ store: 'kmart', sku: '43990099', name: 'A Link From Elsewhere', url: 'https://www.kmart.com.au/product/elsewhere-43990099/' }, 90);
   assert.equal(r.body.aco.maxPrice, 300);
-  assert.equal(r.body.aco.maxTotal, 300);
+  assert.equal(r.body.aco.maxTotal, 240.05, "your limit an order — never over what's left of the day's spending");
   const elsewhere = env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: r.body.aco.runId });
   assert.deepEqual([elsewhere.item_id, elsewhere.sku, elsewhere.name], [null, '43990099', 'A Link From Elsewhere']);
   await report(r.body.aco.runId, { status: 'failed', reason: 'stopped' }, device);

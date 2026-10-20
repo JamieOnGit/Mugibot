@@ -290,7 +290,7 @@ export function register(router, ctx) {
     const reason = str(req.body.reason, 30);
     const run = await ctx.aco.report(req.user.id, str(req.params.id, 40), {
       status: str(req.body.status, 20), reason: !reason || REASONS[reason] ? reason : 'error', message: str(req.body.message, 300),
-      total: num(req.body.total, { min: 0, max: 100000, def: null }), pressed: req.body.pressed === true,
+      total: num(req.body.total, { min: 0, max: 100000, def: null }), pressed: req.body.pressed === true, again: req.body.again === true,
     });
     if (!run) throw new HttpError(404, 'That Auto-checkout run was not found');
     return { ok: true, run };

@@ -44,7 +44,7 @@ var MGBBag = (function () {
   var NOT_FOUND = /page not found|\b404\b|can.?t (find|be found) (that|this|the) page|page (doesn.?t|does not) exist/i;
   // The store saying your bag's empty, anywhere on the page — its bag page, or a pop-up over the page it sent
   // the tab to instead (EB Games: "Oh no! currently your cart is empty.", over its home page).
-  var EMPTY_SAID = /\b(bag|cart|basket|trolley) is (currently |now )?empty\b|\bno (items|products) in (your )?(shopping )?(bag|cart|basket|trolley)\b|\bnothing in (your )?(shopping )?(bag|cart|basket|trolley)\b|\byour (shopping )?(bag|cart|basket|trolley) (is )?empty\b|\bempty (shopping )?(bag|cart|basket|trolley)\b/i;
+  var EMPTY_SAID = /\b(bag|cart|basket|trolley) is (currently |now )?empty\b|\bno (items|products) in (your )?(shopping )?(bag|cart|basket|trolley)\b|\bnothing in (your )?(shopping )?(bag|cart|basket|trolley)\b|\byour (shopping )?(bag|cart|basket|trolley) (is )?empty\b/i;
 
   function read(id) {
     try { var p = JSON.parse(sessionStorage.getItem(KEY) || 'null'); return p && p.id === id ? p : null; } catch (e) { return null; }
@@ -160,6 +160,8 @@ var MGBBag = (function () {
       var el = els[i];
       var t = String(el.innerText || el.textContent || '');
       if (t.length > 240 || !EMPTY_SAID.test(t) || Q.inAnyPanel(el) || !Q.isVisible(el)) continue;
+      // (A button or link's words — "Empty cart", "Empty your bag" — are something to press, not the bag saying so.)
+      if (el.closest('button, a, [role="button"], label, select, option')) continue;
       // (Its own words — not a whole page that happens to hold them, nor "you may also like".)
       if (el.closest(RECOMMENDATIONS) || el.closest(OTHER_LIST)) continue;
       return true;
