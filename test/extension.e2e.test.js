@@ -1360,9 +1360,11 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
     r = await sw.evaluate(() => globalThis.mugibotRunChecks());
     assert.equal(r.checked, 1);
     assert.equal(S.deniedServed, 1);
-    const denied = env.app.repo.listItems(userId).find((i) => i.status === 'blocked');
+    // (Its last known stock kept — a refused check says nothing about stock — with why it couldn't look.)
+    const denied = env.app.repo.listItems(userId).find((i) => /Access Denied/.test(i.error || ''));
     assert.ok(denied, JSON.stringify(env.app.repo.listItems(userId)));
-    assert.match(denied.error, /Access Denied/);
+    assert.ok(['in_stock', 'out_of_stock'].includes(denied.status), denied.status);
+    assert.match(denied.error, /asks it for nothing more from here for 30 minutes/);
     due();
     r = await sw.evaluate(() => globalThis.mugibotRunChecks());
     assert.equal(r.checked, 0, 'nothing more asked of BIG W from this browser');
