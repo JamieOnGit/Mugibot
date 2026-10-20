@@ -299,6 +299,8 @@ test('Drops (the monitor): add a monitor, live alerts, product page with price h
   await page.waitForSelector('#m-detail[open]');
   assert.match(await page.textContent('#md-state'), /\$360\.00\s*\$379\.00/, 'the price, and the old one struck through');
   await page.click('#md-close');
+  // (Its close puts the address back, just after the click: then on to the next one.)
+  await page.waitForFunction(() => location.hash === '#monitor');
   // No old price (never on sale before), or a page that hasn't answered yet: nothing written as "null".
   const once = cat.upsertProduct({ store: 'other', sku: 'microsoft.com/8wg5vqp0x4h3', url: 'https://www.microsoft.com/en-au/d/xbox-series-x25-limited-edition/8wg5vqp0x4h3', category: 'nontcg' });
   cat.updateProduct(once.id, { status: 'error', error: 'The store took too long to answer' });
@@ -309,6 +311,8 @@ test('Drops (the monitor): add a monitor, live alerts, product page with price h
   assert.doesNotMatch(await page.textContent('#md-state'), /null/);
   assert.match(await page.textContent('#md-state'), /—$/);
   await page.click('#md-close');
+  // (Its close puts the address back, just after the click: then on to the next one.)
+  await page.waitForFunction(() => location.hash === '#monitor');
   cat.db.run('DELETE FROM products WHERE id = :id', { id: once.id });
 
   // Settings and the Check log are pages of their own (admins): Live · Settings · Check log.
