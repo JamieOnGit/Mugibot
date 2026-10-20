@@ -2052,14 +2052,19 @@ test("🤖 Auto-checkout at a Kmart that won't add it: no blind trip to checkout
   await browserApi('PUT', `/api/items/${it.id}`, { aco: false });
 });
 
-test('🔥 Auto-checkout at a store struggling under a hot drop (Kmart): "high demand — please try again" to its final button twice — pressed again a few seconds later each time (it says so), and the third press is taken: placed, once', async () => {
+test('🔥 Auto-checkout at a store struggling under a hot drop (Kmart): "high demand — please try again" to its final button twice — pressed again a few seconds later each time (it says so), and the third press is taken: placed, once', async (t) => {
+  t.after(() => closeStorePages('kmart'));
   freshDay();
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO retry', aco: true, maxPrice: 120 }]);
   const S = store.shop('kmart');
   S.placeBusy = 2;
   await acoListen();
   await drop('kmart', '43818587');
-  await waitFor(async () => (await runFor('ACO retry') || {}).status === 'placed', { timeout: 60000, message: 'placed on the third press' });
+  await waitFor(async () => (await runFor('ACO retry') || {}).status === 'placed', { timeout: 60000, message: 'placed on the third press' })
+    .catch(async (e) => {
+      const said = await Promise.all(ctx.pages().filter((pg) => pg.url().startsWith(store.url)).map(async (pg) => `${pg.url()}: ${await pg.locator('#mugibot-qc').textContent().catch(() => '-')}`));
+      throw new Error(`${e.message}: ${S.placeTries} presses, ${JSON.stringify((await runFor('ACO retry') || {}).steps)} — ${said.join(' | ')}`);
+    });
   assert.equal(S.placeTries, 3, 'three presses: turned away twice, then taken');
   assert.equal(S.orders.length, 1, 'one order');
   const run = await runFor('ACO retry');
@@ -2072,7 +2077,8 @@ test('🔥 Auto-checkout at a store struggling under a hot drop (Kmart): "high d
   await closeStorePages('kmart');
 });
 
-test("🔥 a slow store at the final button: its last \"please try again\" still up, word for word, while it works on the next press (6 s each) — not taken for its answer: never pressed again meanwhile — two presses, one order", async () => {
+test("🔥 a slow store at the final button: its last \"please try again\" still up, word for word, while it works on the next press (6 s each) — not taken for its answer: never pressed again meanwhile — two presses, one order", async (t) => {
+  t.after(() => closeStorePages('kmart'));
   freshDay();
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO slow answer', aco: true, maxPrice: 120 }]);
   const S = store.shop('kmart');
@@ -2085,7 +2091,8 @@ test("🔥 a slow store at the final button: its last \"please try again\" still
   await closeStorePages('kmart');
 });
 
-test('🔥 a store that says nothing for 25 s after "Checkout securely" (no spinner, its button free): never pressed again on silence — it may be taking the order — and placed once when it answers', async () => {
+test('🔥 a store that says nothing for 25 s after "Checkout securely" (no spinner, its button free): never pressed again on silence — it may be taking the order — and placed once when it answers', async (t) => {
+  t.after(() => closeStorePages('kmart'));
   freshDay();
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO silent', aco: true, maxPrice: 120 }]);
   const S = store.shop('kmart');
@@ -2098,7 +2105,8 @@ test('🔥 a store that says nothing for 25 s after "Checkout securely" (no spin
   await closeStorePages('kmart');
 });
 
-test('🔥 "There was a problem processing your payment" to the final button: never pressed past — the run stops for you (nothing more pressed), whatever the 30 minutes', async () => {
+test('🔥 "There was a problem processing your payment" to the final button: never pressed past — the run stops for you (nothing more pressed), whatever the 30 minutes', async (t) => {
+  t.after(() => closeStorePages('kmart'));
   freshDay();
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO payment problem', aco: true, maxPrice: 120 }]);
   const S = store.shop('kmart');
@@ -2114,7 +2122,8 @@ test('🔥 "There was a problem processing your payment" to the final button: ne
   await closeStorePages('kmart');
 });
 
-test('🔥 the final button drawn greyed out (the store still working on the last boxes), turned on 8 s later: waited for (your account told), then pressed the moment it is — once', async () => {
+test('🔥 the final button drawn greyed out (the store still working on the last boxes), turned on 8 s later: waited for (your account told), then pressed the moment it is — once', async (t) => {
+  t.after(() => closeStorePages('kmart'));
   freshDay();
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO greyed', aco: true, maxPrice: 120 }]);
   const S = store.shop('kmart');

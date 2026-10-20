@@ -93,7 +93,12 @@ var MGBChecks = (function () {
     return bad ? '"' + (bad.getAttribute('aria-label') || bad.name || bad.id || 'a field').slice(0, 40) + '" needs attention' : '';
   }
 
-  /** What the page says now, marked (just before the final button's pressed): pageError(…, true) reads only what it says after. */
+  /**
+   * What the page says now, marked (just before the final button's pressed): pageError(…, true) reads only what
+   * it says after. A message the page draws again — cleared and put back, word for word, quicker than it's looked
+   * at (a store's "please try again" after each press) — is said anew: watched for, and its mark taken off.
+   */
+  var errWatch = null;
   function markErrors(doc) {
     doc = doc || document;
     Array.prototype.forEach.call(doc.querySelectorAll(ERROR_SEL), function (el) {
@@ -101,6 +106,16 @@ var MGBChecks = (function () {
       if (t) el.setAttribute('data-mgb-err', t);
     });
     Array.prototype.forEach.call(doc.querySelectorAll('[aria-invalid="true"]'), function (el) { el.setAttribute('data-mgb-err', '1'); });
+    if (errWatch) errWatch.disconnect();
+    if (typeof MutationObserver === 'undefined' || !doc.body) return;
+    errWatch = new MutationObserver(function (list) {
+      list.forEach(function (m) {
+        var el = m.target && (m.target.nodeType === 1 ? m.target : m.target.parentElement);
+        var marked = el && el.closest ? el.closest('[data-mgb-err]') : null;
+        if (marked) marked.removeAttribute('data-mgb-err');
+      });
+    });
+    errWatch.observe(doc.body, { subtree: true, childList: true, characterData: true });
   }
 
   /**
