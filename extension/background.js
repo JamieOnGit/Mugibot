@@ -1853,7 +1853,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // (Pressed again in the same tab: the run it started before, never pressed, is over — not left going.)
         const before = await passFor(sender);
         if (before && before.aco && before.aco.runId && !before.aco.done && !before.aco.placing) {
-          api('POST', `/api/ext/aco/${encodeURIComponent(before.aco.runId)}`, { status: 'failed', reason: 'stopped', message: 'Started again from the store panel' }).catch(() => null);
+          // (Ended first, so a checkout of the same item can start a run of its own.)
+          await api('POST', `/api/ext/aco/${encodeURIComponent(before.aco.runId)}`, { status: 'failed', reason: 'stopped', message: 'Started again from the store panel' }).catch(() => null);
         }
         if (msg.product && typeof msg.product === 'object') {
           const res = await api('POST', '/api/ext/aco/own', { product: msg.product }).catch(() => null);
@@ -1886,8 +1887,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!sender.tab) return null;
         const pass = sender.frameId === 0 ? await passFor(sender) : ((await checkoutFrame(sender)) || {}).pass;
         if (!pass || !pass.aco || !pass.aco.runId) return null;
-        const status = String(msg.status || '');
+        let status = String(msg.status || '');
         const run = { ...pass.aco };
+        // Stopped after the final button was pressed (in this page or its checkout frame): the order may have gone
+        // through — for you to check, and counted in the day's limits; never "nothing was bought".
+        if (status === 'failed' && msg.reason === 'stopped' && run.placing) {
+          status = 'needs_you';
+          msg = { ...msg, status, message: 'You stopped it after the final button was pressed — check your email for an order confirmation before buying it again.' };
+        }
         if (status === 'not_live') {
           // The store said it isn't on sale to the final button (or still says so): nothing was bought, so
           // the run may press it again once it is — waiting on the checkout meanwhile (its pass kept good).
@@ -1960,21 +1967,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const now = Date.now();
         if (run.placingAt && now - run.placingAt > RETRY_MS) return { ok: false, over: true, since: run.placingAt };
         const body = { status: 'placing', message: String(msg.message || '').slice(0, 300), total: typeof msg.total === 'number' ? msg.total : null };
+        const key = passKey(sender.tab.id);
         if (run.presses) {
           const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, again: true }).catch(() => null);
           const live = res && res.status === 200 && res.body && res.body.run;
-          if (!live || live.active === false || live.status !== 'placing') {
-            await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...run, done: true } } });
+          // (Read afresh after the wait: stopped meanwhile — the panel's Stop — or another run in the tab, it isn't pressed.)
+          const cur = (await chrome.storage.session.get(key))[key];
+          if (!live || live.active === false || live.status !== 'placing' || !cur || !cur.aco || cur.aco.runId !== run.runId || cur.aco.stopped || cur.aco.done) {
+            if (cur && cur.aco && cur.aco.runId === run.runId) await chrome.storage.session.set({ [key]: { ...cur, aco: { ...cur.aco, done: true } } });
             return { ok: false, ended: true };
           }
         } else {
           api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, body).catch(() => null);
         }
-        run.presses = (run.presses || 0) + 1;
-        run.placing = true;
-        run.placingAt = run.placingAt || now;
-        await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: run, expires: now + PASS_TTL } });
-        return { ok: true, n: run.presses, since: run.placingAt };
+        // (Only its press count and times changed — on the pass as it is now.)
+        const cur = (await chrome.storage.session.get(key))[key] || pass;
+        const next = { ...(cur.aco || run), presses: (run.presses || 0) + 1, placing: true, placingAt: run.placingAt || now };
+        await chrome.storage.session.set({ [key]: { ...cur, aco: next, expires: now + PASS_TTL } });
+        return { ok: true, n: next.presses, since: next.placingAt };
       }
       case 'acoOthers': {
         // Other things in the store's bag already: the run goes on (they're bought too), and says so.

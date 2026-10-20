@@ -474,6 +474,7 @@ test("Auto-checkout's read of a store's answer to its final button (extension/ch
     // Still at it: waited for.
     'Please wait while we process your payment': 'working',
     'Processing your order…': 'working',
+    'Processing your order — please do not refresh or try again': 'working',
     'There was a problem processing your payment': 'stop',
     // A box it says is wrong: filled in again.
     'Please enter a valid postcode': 'field',
@@ -495,7 +496,7 @@ test("Auto-checkout's read of a store's answer to its final button (extension/ch
   assert.deepEqual([0, 1, 2, 3, 6, 50].map(C.retryWait), [3000, 5000, 8000, 10000, 20000, 20000], '3 s, 5 s, 8 s… then every 20 s');
   assert.equal(C.RETRY_MS, 30 * 60 * 1000);
   const doc = (text) => ({ querySelector: () => ({ innerText: text }), body: { innerText: text } });
-  for (const shown of ['...2387 08/27', 'Visa ending in 4242', '•••• 4242', '**** 4242', 'Mastercard …2387']) assert.equal(C.savedCardShown(doc(`Payment ${shown}`), null, false), true, shown);
+  for (const shown of ['...2387 08/27', '...2387\n08/27', '...238708/27', '...2387 08/2027', 'Visa ending in 4242', '•••• 4242', '**** 4242', 'Mastercard …2387']) assert.equal(C.savedCardShown(doc(`Payment ${shown}`), null, false), true, shown);
   for (const not of ['Order total $109.95 · 2 items · Pickup 2387 Main Rd', 'Loading...\n2026', 'Super-Premium Coll…\n2025', 'Collection... 2025']) assert.equal(C.savedCardShown(doc(not), null, false), false, `no card shown: ${not}`);
   assert.equal(C.savedCardShown(doc('...2387 08/27'), null, true), false, 'card boxes on the page: they need filling, whatever else shows');
 });

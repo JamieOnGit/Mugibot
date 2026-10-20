@@ -682,3 +682,33 @@ test("a run's notes (other things in the bag, being bought too) go on its histor
   await report(run.id, { status: 'note', message: 'late' }, device);
   assert.ok(!(await c.get('/api/aco')).body.runs[0].steps.some((x) => x.message === 'late'));
 });
+
+test('a press the browser made after the run was closed here for want of news (timed out): counted as an order — needs you, disarmed, in the day\'s limits — and never pressed again', async () => {
+  const c = await Client.signup(env.url, 'late-lou');
+  makeMember(env, c);
+  await c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 300, perDay: 5, spendPerDay: 900 });
+  const device = await Device.pair(env.url, c);
+  for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  const item = (await c.post('/api/items', { url: 'https://www.kmart.com.au/product/late-test-43990031/', name: 'Late ETB', maxPrice: 120, aco: true })).body;
+  await env.app.monitor.alertRestock(itemRow(item.id), { status: 'in_stock', price: 100, source: 'sweep' });
+  const { run } = await pickUp(device);
+  await report(run.id, { status: 'checkout' }, device);
+  // Closed here: no news for too long.
+  env.app.db.run("UPDATE aco_runs SET status = 'failed', reason = 'timeout' WHERE id = :id", { id: run.id });
+  // Pressing again, the browser asks first: a closed run says no.
+  let r = (await report(run.id, { status: 'placing', again: true }, device)).body.run;
+  assert.equal(r.status, 'failed');
+  assert.equal(r.active, false);
+  // Its first press, heard late: an order after all — for you to check.
+  r = (await report(run.id, { status: 'placing', total: 110, message: 'Pressing "Checkout securely"' }, device)).body.run;
+  assert.equal(r.status, 'needs_you');
+  assert.equal(r.reason, 'unconfirmed');
+  assert.ok(r.steps.some((x) => x.status === 'placing'));
+  assert.equal(itemRow(item.id).aco, 0, 'the arming used up');
+  assert.deepEqual((await c.get('/api/aco')).body.today, { orders: 1, spent: 110 });
+  // …and never pressed again from here.
+  r = (await report(run.id, { status: 'placing', again: true }, device)).body.run;
+  assert.equal(r.status, 'needs_you');
+  // The order confirmed after all: placed.
+  assert.equal((await report(run.id, { status: 'placed', total: 110 }, device)).body.run.status, 'placed');
+});

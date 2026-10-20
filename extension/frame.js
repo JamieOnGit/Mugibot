@@ -135,8 +135,8 @@
       }
       const values = MGBFill.fieldValues(data.profile, data.card);
       if (MGBChecks.pageError(document) || MGBChecks.missingRequired(document)) MGBFill.fillFields(document, values, { flow: C });
-      const err = MGBChecks.pageError(document);
-      if (err && !['busy', 'working'].includes(MGBChecks.errorKind(err))) return stop('needs_you', 'needs_details', `The form says: "${err}" — fix it and press the button yourself.`);
+      const err = MGBChecks.pageErrors(document).find((t) => !['busy', 'working'].includes(MGBChecks.errorKind(t)));
+      if (err) return stop('needs_you', 'needs_details', `The form says: "${err}" — fix it and press the button yourself.`);
       const missing = MGBChecks.missingRequired(document);
       if (missing) return stop('needs_you', 'needs_details', `"${missing}" still needs filling in — fill it and press the button yourself.`);
       let total = MGBChecks.orderTotal(document);
@@ -152,6 +152,10 @@
       const now = () => (f.el.isConnected && MGBFill.isVisible(f.el) ? f.el : [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')].find((el) => MGBFill.isVisible(el) && (el.innerText || el.value || '').trim() === f.text) || null);
       const pageBusy = () => typeof MGBQuick !== 'undefined' && MGBQuick.pageBusy();
       const working = () => MGBChecks.errorKind(MGBChecks.pageError(document)) === 'working';
+      // (Of everything the form says, the first that isn't one of these kinds; a box marked wrong or still empty.)
+      const saysOther = (ok) => MGBChecks.pageErrors(document).find((t) => !ok.includes(MGBChecks.errorKind(t))) || '';
+      const fieldShown = () => !!MGBChecks.missingRequired(document) || [...document.querySelectorAll('[aria-invalid="true"]')].some((el) => MGBFill.isVisible(el));
+      const stopFor = (t) => (MGBChecks.errorKind(t) === 'declined' ? stop('failed', 'card_declined', `${name} said: ${t}`, total) : stop('needs_you', 'needs_details', `${name} says: "${t}" — finish it yourself in this tab (nothing more pressed).`, total));
       const said = async (o) => {
         status(o.status === 'placed' ? '🤖 Order placed.' : o.message);
         await acoReport(o.status, o.reason, o.status === 'placed' ? `Order confirmed at ${name}` : o.message, total);
@@ -160,7 +164,8 @@
       for (let n = 0; ; n++) {
         // Its button free (and, pressing again, the form done with whatever it's at).
         let btn = now();
-        for (const since = Date.now(); off(btn) || working() || (n > 0 && pageBusy());) {
+        let waited = false;
+        for (const since = Date.now(); off(btn) || working() || (n > 0 && pageBusy()); waited = true) {
           if (Date.now() - since > MGBChecks.RETRY_MS) return stop('needs_you', n > 0 ? 'unconfirmed' : 'needs_details', n > 0 ? `${name} was still busy with "${f.text}" after 30 minutes — check your email for an order confirmation before buying it again.` : `"${f.text}" didn't become available in 30 minutes — check the form and press it yourself.`, total);
           const o = MGBChecks.outcome(document, C.done, name);
           if (o) return said(o);
@@ -169,9 +174,14 @@
           await wait(250);
           btn = now();
         }
-        if (n > 0) {
-          // Before pressing again: filled in still, and the total — read again — within the limit.
+        if (n > 0 || waited) {
+          // Before pressing again (or after waiting on the form): filled in still, nothing it says that's never
+          // pressed past, nothing it needs still empty, and the total — read again — within the limit.
           MGBFill.fillFields(document, values, { flow: C });
+          const says = saysOther(n > 0 ? ['busy', 'working', 'field'] : ['busy', 'working']);
+          if (says) return stopFor(says);
+          const empty = MGBChecks.missingRequired(document);
+          if (empty) return stop('needs_you', 'needs_details', `"${empty}" still needs filling in — fill it and press the button yourself.`, total);
           total = MGBChecks.orderTotal(document);
           if (!within(total)) return;
         }
@@ -202,7 +212,7 @@
           const k = e ? MGBChecks.errorKind(e) : '';
           if (e && k !== 'working' && Date.now() - errSince > 2500 && !off(now())) {
             if (k === 'declined') { await said({ status: 'failed', reason: 'card_declined', message: `${name} said: ${e}` }); return; }
-            if (k === 'busy' || k === 'field') { ans = { kind: k === 'field' ? 'field' : 'again', text: e }; continue; }
+            if (k === 'busy' || (k === 'field' && fieldShown())) { ans = { kind: k === 'field' ? 'field' : 'again', text: e }; continue; }
             // (The payment, the card, your bank, a human check — or words it doesn't know: never pressed past.)
             await said({ status: 'needs_you', reason: 'needs_details', message: `${name} said: "${e}" — finish it yourself in this tab (nothing more pressed).` });
             return;
@@ -217,6 +227,8 @@
           await wait(250);
           const o = MGBChecks.outcome(document, C.done, name);
           if (o) return said(o);
+          const says = saysOther(['busy', 'working', 'field']);
+          if (says) return stopFor(says);
         }
       }
     }

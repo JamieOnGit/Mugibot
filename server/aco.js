@@ -671,6 +671,12 @@ export class Aco {
     const late = (row.status === 'failed' && row.reason === 'timeout') && !again && (status === 'placing' || status === 'placed');
     if (DONE.has(row.status) && !(row.status === 'needs_you' && status === 'placed') && !late) return toRun(row);
     if (typeof total === 'number' && Number.isFinite(total) && total > 0) this.db.run('UPDATE aco_runs SET total = :t WHERE id = :id', { t: Math.round(total * 100) / 100, id: row.id });
+    if (late && status === 'placing') {
+      // (Pressed after the run had been closed here: counted as an order — for the member to check — and never
+      //  pressed again: a run that's needs-you refuses the browser's "again".)
+      this.step(row.id, 'placing', message || 'Final button pressed');
+      return this.finish(userId, this.get(userId, row.id), 'needs_you', 'unconfirmed', `The final button was pressed after this run had timed out here — check your email from ${this.retailers.name(row.store)} before buying it again.`);
+    }
     if (status === 'note') {
       // Something the member should know, said on the run (other things in the bag, being bought too) — and in their activity.
       if (!ACTIVE.includes(row.status)) return toRun(row);

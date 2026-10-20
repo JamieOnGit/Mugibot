@@ -162,7 +162,12 @@
   // button — the store says again when it's pressed (notLiveYet).
   const waitLive = !!(checkoutFlow && checkoutFlow.waitLive);
   const liveNotices = waitLive ? (checkoutFlow.waitLive.notices || []).filter((re) => re && re.test) : [];
-  const pageError = (anew) => MGBChecks.pageError(document, [].concat((checkoutFlow && checkoutFlow.ignoreErrors) || [], liveNotices), anew);
+  const errIgnore = [].concat((checkoutFlow && checkoutFlow.ignoreErrors) || [], liveNotices);
+  const pageError = (anew) => MGBChecks.pageError(document, errIgnore, anew);
+  /** The first thing the page says — of everything it says — that isn't one of these kinds (MGBChecks.errorKind), or ''. */
+  const saysOther = (ok) => MGBChecks.pageErrors(document, errIgnore).find((t) => !ok.includes(MGBChecks.errorKind(t))) || '';
+  /** A box the store marked wrong, or one it needs still empty: a "box is wrong" answer with something to show for it. */
+  const fieldShown = () => !!MGBChecks.missingRequired(document) || [...document.querySelectorAll('[aria-invalid="true"]')].some((el) => MGBFill.isVisible(el));
   /** The checkout's "not on sale" notices on the screen (checkout.waitLive.notices). */
   const noticeEls = () => (liveNotices.length ? [...document.querySelectorAll('[role="alert"], [aria-live], p, div, span, li')]
     .filter((el) => el.children.length <= 2 && MGBFill.isVisible(el) && !el.closest('#mugibot-qc'))
@@ -397,10 +402,10 @@
     // The page's own say on the boxes: filled in once more if it says one's wrong or empty, then checked.
     const values = MGBFill.fieldValues(data.profile, data.card);
     if (pageError() || MGBChecks.missingRequired(document)) MGBFill.fillFields(document, values, { flow: checkoutFlow });
-    const err = pageError();
     // (The store saying it's struggling, or still at it, before anything's pressed: pressed all the same — it
-    //  says again if it won't take it. Anything else it says is for you.)
-    if (err && !['busy', 'working'].includes(MGBChecks.errorKind(err))) return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);
+    //  says again if it won't take it. Anything else it says — any of it — is for you.)
+    const err = saysOther(['busy', 'working']);
+    if (err) return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);
     const missing = MGBChecks.missingRequired(document);
     if (missing) return acoStop('needs_you', 'needs_details', `"${missing}" still needs filling in — fill it and press the button yourself.`, fin);
     const total = orderTotal();
@@ -438,7 +443,9 @@
       // The button: free to press (the page may draw it again meanwhile) — and, pressing again, the store
       // done with whatever it's at (its page loading, a spinner, "Processing…").
       let btn = finalNow(fin);
+      let waited = false;
       for (const since = Date.now(); isOff(btn) || stillWorking() || (n > 0 && (finalBusy() || MGBQuick.pageBusy()));) {
+        waited = true;
         if (leaving) return;
         if (Date.now() - since > MGBChecks.RETRY_MS) return acoStop('needs_you', n > 0 ? 'unconfirmed' : 'needs_details', n > 0 ? `${retailer.name} was still busy with "${fin.text}" after 30 minutes — check your email for an order confirmation before buying it again.` : `"${fin.text}" didn't become available in 30 minutes — check the page and press it yourself.`, fin, total);
         const o = outcome();
@@ -448,9 +455,14 @@
         await MGBFlows.wait(250);
         btn = finalNow(fin);
       }
-      if (n > 0) {
-        // Before pressing again: its boxes ticked and filled in still, and the total — read again — within the limit.
+      if (n > 0 || waited) {
+        // Before pressing again (or after waiting on the store): its boxes ticked and filled in still, nothing it
+        // says that's never pressed past, nothing it needs still empty, and the total — read again — within the limit.
         MGBFill.fillFields(document, values, { flow: checkoutFlow });
+        const says = saysOther(n > 0 ? ['busy', 'working', 'field'] : ['busy', 'working']);
+        if (says) return MGBChecks.errorKind(says) === 'declined' ? acoStop('failed', 'card_declined', `${retailer.name} said: ${says}`, fin, total) : acoStop('needs_you', 'needs_details', `${retailer.name} says: "${says}" — finish it yourself in this tab (nothing more pressed).`, fin, total);
+        const empty = MGBChecks.missingRequired(document);
+        if (empty) return acoStop('needs_you', 'needs_details', `"${empty}" still needs filling in — fill it and press the button yourself.`, fin, total);
         total = orderTotal();
         if (!totalOk(run, fin, total)) return;
       }
@@ -465,6 +477,8 @@
       panel.setStatus(go.n === 1 ? `🤖 Placing your order ($${total.toFixed(2)})…` : `🤖 Pressing "${fin.text}" again (${go.n}) — ${retailer.name}'s struggling…`);
       report('step', `Auto-checkout pressed "${fin.text}"${go.n > 1 ? ` again (${go.n})` : ''} (total $${total.toFixed(2)})`, null);
       if (checkoutFlow.leaves && !watching) { watching = true; watchLeaving(fin.text, total); }
+      // (Stopped meanwhile — from the panel: nothing more pressed.)
+      if (!assistFlag.active()) return;
       markNotices();
       // (What the page said before this press isn't its answer to it: only something it says anew.)
       MGBChecks.markErrors(document);
@@ -476,9 +490,12 @@
       panel.setStatus(`⏳ ${retailer.name} said "${ans.text.slice(0, 80)}" — pressing "${fin.text}" again in ${Math.round(w / 1000)} s…`);
       for (const until = Date.now() + w; Date.now() < until;) {
         await MGBFlows.wait(250);
-        if (leaving) return;
+        if (leaving || !assistFlag.active()) return;
         const o = outcome();
         if (o) return said(o, total);
+        // (Something it says meanwhile that's never pressed past — the payment, a decline: stopped here.)
+        const stop = saysOther(['busy', 'working', 'field']);
+        if (stop) return MGBChecks.errorKind(stop) === 'declined' ? said({ status: 'failed', reason: 'card_declined', message: `${retailer.name} said: ${stop}` }, total) : said({ status: 'needs_you', reason: 'needs_details', message: `${retailer.name} said: "${stop}" — finish it yourself in this tab (nothing more pressed).` }, total);
       }
     }
   }
@@ -532,7 +549,8 @@
       if (err && k !== 'working' && Date.now() - errSince > 2500 && !finalBusy()) {
         if (k === 'declined') { await said({ status: 'failed', reason: 'card_declined', message: `${retailer.name} said: ${err}` }, total); return { kind: 'done' }; }
         if (k === 'busy') return { kind: 'again', text: err };
-        if (k === 'field') return { kind: 'field', text: err };
+        // (A box it says is wrong — with a box to show for it: one marked wrong, or one still empty.)
+        if (k === 'field' && fieldShown()) return { kind: 'field', text: err };
         // (The payment, the card, your bank, a human check — or words it doesn't know: never pressed past.)
         await said({ status: 'needs_you', reason: 'needs_details', message: `${retailer.name} said: "${err}" — finish it yourself in this tab (nothing more pressed).` }, total);
         return { kind: 'done' };
@@ -568,7 +586,10 @@
         if (o) await acoReport(o.status, o.reason, o.message);
         if (o && o.status === 'placed') { assistFlag.off(); ask({ type: 'endFill' }); }
         if (o) return;
-        if (!retrying(data.aco) || (checkoutFlow && checkoutFlow.inFrame) || !(await busySaid(5000))) { watchOutcome(data.aco, null); return; }
+        // (Its last "place order" stage — City Beach's: pressed by watchOutcome at once, not waited on.)
+        const onReview = !!(checkoutFlow && checkoutFlow.review && checkoutFlow.review.path instanceof RegExp && checkoutFlow.review.path.test(location.pathname + location.search));
+        if (!retrying(data.aco) || (checkoutFlow && checkoutFlow.inFrame) || onReview || !(await busySaid(5000))) { watchOutcome(data.aco, null); return; }
+        await MGBFlows.wait(MGBChecks.retryWait(0)); // (a little later, as on the same page)
       }
       if (checkoutFlow && checkoutFlow.inFrame) {
         // The whole checkout is in a frame (Global-e's, for Premium Bandai): frame.js runs it in there —

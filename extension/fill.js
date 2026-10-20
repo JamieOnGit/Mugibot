@@ -453,7 +453,8 @@ var MGBFill = (function () {
   var NOT_CONSENT_RE = /save (my|this|your)|remember me|keep me signed|create an account|use (this|my) (address|card) for/i;
   // (Nor one that adds something you pay for — a protection plan, a warranty, a subscription, a price in its words —
   //  however it says "I agree": "Add 2-year Protection Plan ($29) — I accept the plan terms".)
-  var PAID_RE = /\$\s?\d|\d\s?(aud|usd)\b|\bplan\b|protection|warranty|insurance|\bcover(age)?\b|subscri|premium|\bjoin\b|per (month|year|week)|\/\s?(mo|month|yr|year)\b|donat|\btip\b|gift wrap|add-?on|upgrade|\btrial\b/i;
+  // (Words of what's being sold, not a store's name: "Premium Bandai's policy", "data protection" are fine.)
+  var PAID_RE = /\$\s?\d|\d\s?(aud|usd)\b|\bplan\b|protection plan|(device|product|purchase|package|parcel|shipping|order) protection|warranty|insurance|\bcover(age)? for\b|subscri|premium (plan|membership|subscription)|\bjoin\b|per (month|year|week)|\/\s?(mo|month|yr|year)\b|donat|\btip\b|gift wrap|add-?on|upgrade|\btrial\b/i;
 
   /**
    * The flow's boxes to have ticked (C.tick: Shopify's "Use shipping address as billing address", Shop
