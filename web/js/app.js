@@ -1392,6 +1392,21 @@ async function triggerAco(it, maxInput, btn) {
   }
 }
 
+/** ■ Stop on a run that's still going: over on your account, and its browser presses nothing more. */
+async function stopRun(r, btn) {
+  if (!confirm(`Stop this Auto-checkout run?\n\n${r.name}\n\nYour checkout browser presses nothing more for it. Its tab is left as it is.`)) return;
+  btn.disabled = true;
+  try {
+    const { run } = await api('POST', `/api/aco/runs/${r.id}/stop`);
+    toast('Auto-checkout stopped', run && run.status === 'needs_you' ? '"Pay now" had been pressed — check your email from the store before buying it again.' : 'Nothing was bought.', 'success');
+    await loadAco();
+    renderAcoRuns();
+  } catch (e) {
+    toast("Couldn't stop it", e.message, 'warn');
+    btn.disabled = false;
+  }
+}
+
 // Run history: 10 to a page.
 const RUNS_PAGE_SIZE = 10;
 function renderAcoRuns() {
@@ -1423,6 +1438,8 @@ function renderAcoRuns() {
           h('div', { class: 'name' }, r.name),
           h('div', { class: 'meta' }, [state.retailers.find((x) => x.id === r.store)?.name || r.store, money2, TRIGGER[r.trigger] || '', r.mode === 'fill' ? 'stop at the final button' : '', typeof r.tookMs === 'number' ? `⏱ ${secs(r.tookMs)} drop to order` : ''].filter(Boolean).join(' · '))),
         h('span', { class: `pill ${ACO_TONE[r.status] || ''}` }, r.statusText),
+        // (Still going — its tab closed by mistake, say, or not wanted any more: stopped from here.)
+        r.active ? h('button', { class: 'btn small danger aco-stop', type: 'button', title: 'Stop this Auto-checkout run: its browser presses nothing more', onclick: (e) => stopRun(r, e.currentTarget) }, '■ Stop') : null,
         h('time', { class: 'muted small', datetime: new Date(r.createdAt).toISOString(), title: when(r.createdAt) }, ago(r.createdAt))),
       r.reasonText || r.message ? h('div', { class: `why ${ACO_TONE[r.status] || ''}` }, r.reasonText && r.message && !r.message.startsWith(r.reasonText) ? `${r.reasonText}: ${r.message}` : (r.message || r.reasonText)) : null,
       h('details', { class: 'aco-detail' }, h('summary', {}, `Steps (${r.steps.length})`), steps)));

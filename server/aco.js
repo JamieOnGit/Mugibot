@@ -164,6 +164,7 @@ export class Aco {
     this.lobbies = new Map(); // userId → Map(store → { id, store, url, by, at, sent }): browsers told to get in line
     this.cards = new Map(); // deviceId → { state, at }: what each browser says of its card (from 1.20) — never the card
     this.variants = new Map(); // runId → the listing's only option (a drop's run opens the store's add-to-cart link)
+    this.stops = new Map(); // runId → { userId, at }: runs stopped from the dashboard, told to the member's browsers (10 minutes)
     this.queueRuns = new Set(); // runIds of Wait for queue, then ACO (a Shop checkout link's: its tab opens the link again until the queue's up)
     this.phoneKey = purposeKey(cfg.dataKey, 'phone-handover');
     this.timer = null;
@@ -223,6 +224,11 @@ export class Aco {
   /** Runs waiting for a browser to start them (a test run, for one: the item needn't be armed). */
   pendingCount(userId) {
     return this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE user_id = :u AND status = 'queued'", { u: userId }).n;
+  }
+
+  /** Runs of the member's still going (their browser keeps asking meanwhile: one stopped on the dashboard is told so). */
+  goingCount(userId) {
+    return this.db.get(`SELECT COUNT(*) AS n FROM aco_runs WHERE user_id = :u AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { u: userId }).n;
   }
 
   /**
@@ -321,7 +327,7 @@ export class Aco {
     if (price !== null && price > item.maxPrice) return skip('over_max', `${money(price)} is over your max of ${money(item.maxPrice)}.`);
     if (price !== null && price > s.maxOrder) return skip('over_limit', `${money(price)} is over your limit of ${money(s.maxOrder)} an order.`);
     // (A drop's failures count — not Trigger ACO's, nor a ⚡ Buy pressed in Discord or by you.)
-    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND trigger NOT IN ('test', 'remote', 'buy', 'queue') AND created_at > :since", { i: item.id, since: now - DAY }).n;
+    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND reason <> 'stopped' AND trigger NOT IN ('test', 'remote', 'buy', 'queue') AND created_at > :since", { i: item.id, since: now - DAY }).n;
     if (fails >= MAX_FAILS && !info.test) {
       this.disarm(userId, item.id);
       return skip('too_many_failures', 'Arm it again to keep trying.');
@@ -967,7 +973,33 @@ export class Aco {
     return out;
   }
 
-  async finish(userId, row, status, reason, message) {
+  /**
+   * Stop: a run of the member's ended from the dashboard (its tab closed by mistake, or not wanted any more).
+   * Over here at once; their browsers are told (stopsFor), so its tab presses nothing more — and a press it
+   * was about to make asks first anyway, and is refused. "Pay now" pressed already: for them to check.
+   */
+  async stopRun(userId, runId) {
+    const row = this.get(userId, runId);
+    if (!row) return { error: 'not_found' };
+    if (!ACTIVE.includes(row.status)) return { run: toRun(row) };
+    const where = this.retailers.name(row.store);
+    const pressed = row.status === 'placing' || parseSteps(row.steps).some((x) => x.status === 'placing');
+    const run = pressed
+      ? await this.finish(userId, row, 'needs_you', 'stopped', `You stopped it on your dashboard. Its browser had pressed "Pay now" at ${where}${row.reason === 'not_live' ? ' (turned away: not on sale yet)' : ''} — check your email from the store before buying it again.`, { quiet: true })
+      : await this.finish(userId, row, 'failed', 'stopped', `You stopped it on your dashboard — nothing was bought.`, { quiet: true });
+    this.queueRuns.delete(row.id);
+    this.stops.set(row.id, { userId, at: this.now() });
+    for (const [id, s] of this.stops) if (this.now() - s.at > 10 * 60 * 1000) this.stops.delete(id);
+    this.wake(userId);
+    return { run };
+  }
+
+  /** The member's runs stopped from the dashboard in the last 10 minutes (each browser stops its tab for them). */
+  stopsFor(user) {
+    return [...this.stops].filter(([, s]) => s.userId === user.id && this.now() - s.at < 10 * 60 * 1000).map(([id]) => id);
+  }
+
+  async finish(userId, row, status, reason, message, { quiet = false } = {}) {
     const now = this.now();
     const pressed = row.status === 'placing' || parseSteps(row.steps).some((x) => x.status === 'placing');
     const text = message || REASONS[reason] || '';
@@ -994,7 +1026,7 @@ export class Aco {
       failed: { level: 'warn', title: `❌ Auto-checkout didn't buy ${row.name}`, message: `${storeName}\n${text}${pressed || remote ? '' : ' It stays armed for the next drop.'}` },
       expired: { level: 'warn', title: `❌ Auto-checkout didn't start: ${row.name}`, message: `${storeName}\n${text}` },
     }[status];
-    if (ev && reason !== 'disarmed') {
+    if (ev && reason !== 'disarmed' && !quiet) {
       await this.notifier.notify(userId, {
         type: 'aco', channel: 'aco', ...ev, name: row.name, sku: row.sku, url: row.url || null,
         buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],

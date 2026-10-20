@@ -1203,7 +1203,8 @@ async function sweepLoop() {
 let acoLooping = false;
 
 // (clears / clearing: bags to empty — Clear cart — asked for while there are.)
-const acoWanted = (a) => !!a && (a.listen || a.clearing > 0 || (typeof a.clears === 'number' && a.clears > 0) || (a.enabled && (a.armed || a.pending)));
+// (going: a run of yours still under way — listened for meanwhile, so one you stop on your dashboard is told here.)
+const acoWanted = (a) => !!a && (a.listen || a.clearing > 0 || (typeof a.clears === 'number' && a.clears > 0) || (a.enabled && (a.armed || a.pending)) || a.going > 0);
 
 async function acoLoop() {
   if (acoLooping) return;
@@ -1233,6 +1234,8 @@ async function acoLoop() {
       quiet = 0;
       // Runs first: every moment counts in a drop.
       for (const run of res.body.runs || []) await startRun(run).catch(() => null);
+      // Runs you stopped on your dashboard: their tabs here press nothing more.
+      if ((res.body.stops || []).length) await stopRuns(res.body.stops).catch(() => null);
       await releaseTurns().catch(() => null);
       if (Array.isArray(res.body.gates)) await noteGatesUp(res.body.gates);
       // A store's queue went up where you have something armed (or you pressed "Join the queue"): get in line —
@@ -1423,6 +1426,31 @@ async function heldUpTick() {
 const awayAco = (aco) => ({ ...aco, away: Date.now(), placing: false, placingAt: null, notLive: { since: (aco.notLive && aco.notLive.since) || Date.now(), saidAt: 0 } });
 // (The tabs of runs pressing "Pay now" while it isn't on sale: tabId → runId, watched for going quiet.)
 const LIVE_TABS = 'liveTabs';
+
+/**
+ * Runs you stopped on your dashboard (your account says which, for 10 minutes): each one's tab here is told — it
+ * presses nothing more (its pass says stopped: a press it was about to make is refused here too) — and it's out of
+ * the line at its store, held-up queue waits included.
+ */
+const stoppedHere = new Set();
+async function stopRuns(ids) {
+  const want = new Set(ids.filter((id) => typeof id === 'string' && !stoppedHere.has(id)));
+  if (!want.size) return;
+  for (const [key, pass] of Object.entries(await chrome.storage.session.get(null))) {
+    if (!key.startsWith('fill:') || !pass || !pass.aco || !want.has(pass.aco.runId)) continue;
+    const tabId = Number(key.slice('fill:'.length));
+    await chrome.storage.session.set({ [key]: { ...pass, aco: { ...pass.aco, done: true, stopped: true } } });
+    chrome.tabs.sendMessage(tabId, { type: 'acoStopped' }).catch(() => null);
+    turnEnded(tabId).catch(() => null);
+  }
+  const { [HELD_UP]: held = {}, [LIVE_TABS]: live = {} } = await chrome.storage.session.get([HELD_UP, LIVE_TABS]);
+  for (const [t, h] of Object.entries(held)) if (want.has(h.runId)) delete held[t];
+  for (const [t, r] of Object.entries(live)) if (want.has(r)) delete live[t];
+  await chrome.storage.session.set({ [HELD_UP]: held, [LIVE_TABS]: live });
+  // (One still next in line at its store, no tab yet: out of the line.)
+  await withTurns((t) => { for (const id of want) delete t[`r:${id}`]; });
+  for (const id of want) stoppedHere.add(id);
+}
 
 async function isSweepWindow(windowId) {
   return (await sweepWindow()).windowId === windowId;

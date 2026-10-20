@@ -68,6 +68,9 @@
   const markThrough = (runId) => seekFlag.save({ runId: runId || '*', through: true, at: 0 });
   // (Opening the link again, looking for the queue: not the store sending this checkout on — watchLeaving.)
   let seekingNow = false;
+  // (Stopped on your dashboard — said so in the panel, whatever else was going on in it.)
+  let dashStopped = false;
+  const STOPPED_TEXT = '🛑 You stopped this Auto-checkout on your dashboard — nothing more is pressed here.';
 
   // The ⚡ Buy code: grabbed by capture.js as the page started loading (or still in the address).
   let goCode = null;
@@ -619,7 +622,8 @@
       const go = await ask({ type: 'acoRetry', message, total, live: !!live });
       if (!go || !go.ok) {
         if (go && go.over) return acoStop('needs_you', 'not_placed', `Pressed "${fin.text}" again and again for ${Math.round((Date.now() - go.since) / 60000)} minutes and ${retailer.name} kept turning it away — nothing more pressed. Check your email before buying it again.`, fin, total);
-        panel.setStatus(`🤖 This checkout ended on your account meanwhile — nothing more pressed.`);
+        if (dashStopped) panel.setNote('🛑 Auto-checkout stopped');
+        panel.setStatus(dashStopped ? STOPPED_TEXT : `🤖 This checkout ended on your account meanwhile — nothing more pressed.`);
         return; // (the run ended meanwhile: stopped, timed out, or finished on your phone)
       }
       aco = { ...(aco || run), placing: true, placingAt: (aco && aco.placingAt) || go.since };
@@ -963,6 +967,18 @@
       // (A checkout running in a frame on this page stops too: this tab's checkout pass is gone.)
       if (checkoutFlow && checkoutFlow.inFrame) ask({ type: 'endFill' });
     },
+  });
+  // Stopped on your dashboard (■ Stop): nothing more is pressed in this tab — on any page of the run, its first
+  // included — and the checkout's left as it is, for you.
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== 'acoStopped') return;
+    dashStopped = true;
+    assistFlag.off();
+    panel.setNote('🛑 Auto-checkout stopped');
+    panel.setStatus(STOPPED_TEXT);
+    // (What the run was saying a moment ago — its press under way — never shows over it.)
+    panel.setStatus = () => {};
+    panel.setNote = () => {};
   });
 
   /** A ⚡ Buy (or Auto-checkout run) confirmed for this tab: to checkout with it — when it's its turn at this store. */

@@ -2435,6 +2435,40 @@ test("🛍️ a Shop checkout link not on sale yet (\"This Product is not availa
   }
 });
 
+test("🛍️ ■ Stop on the dashboard while a Shop link's run presses \"Pay now\" (not on sale yet): its tab is told at once and presses nothing more — the run over, for you to check; the checkout left as it is", async () => {
+  const putBack = await roomForALink();
+  const A = store.state.shopapp;
+  try {
+    shopSignedIn(true);
+    A.unavailable = true;
+    const link = store.cartLink([[PORSCHE, 1]]);
+    await useItems([{ url: link, name: 'ACO stopped', maxPrice: 60, aco: true }]);
+    await acoListen();
+    await dropLink(link);
+    await waitFor(() => A.refused.length >= 2, { timeout: 45000, message: 'pressing while not on sale' });
+    const run = await runFor('ACO stopped');
+    const r = await browserApi('POST', `/api/aco/runs/${run.id}/stop`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.run.reason, 'stopped');
+    await new Promise((res) => setTimeout(res, 4000));
+    const pressed = A.refused.length;
+    await new Promise((res) => setTimeout(res, 8000));
+    assert.equal(A.refused.length, pressed, 'nothing pressed after the stop');
+    assert.equal(A.orders.length, 0);
+    const tab = ctx.pages().find((pg) => /\/shopapp\/checkout\//.test(pg.url()));
+    assert.ok(tab, 'the checkout left open');
+    const panelText = await tab.evaluate(() => (document.querySelector('#mugibot-qc') || {}).innerText || '');
+    if (!/stopped this Auto-checkout/.test(panelText)) throw new Error(`panel: ${panelText} sess=${await sw.evaluate(async () => JSON.stringify(Object.fromEntries(Object.entries(await chrome.storage.session.get(null)).filter(([k]) => k.startsWith('fill:')))).slice(0, 800))}`);
+    const after = await runFor('ACO stopped');
+    assert.equal(after.active, false);
+    assert.equal(after.status, 'needs_you');
+  } finally {
+    A.unavailable = false;
+    await putBack();
+    await closeShopPages();
+  }
+});
+
 test("🛍️ Mattel Creations' real checkout, as probed (Oct 2026): \"Pay now $X\" — the total in the button — found as the final button; the membership box labelled only \"By selecting, you indicate your acceptance of the\" (its \"Membership Agreement ↗\" link outside the label, the box not required) ticked, the newsletter never; \"This Product is not available for purchase\" up before and after each press, left as it is — pressed every 2 s until it's on sale (the 4th): placed, once", async () => {
   const putBack = await roomForALink();
   const A = store.state.shopapp;

@@ -52,6 +52,8 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // queue, then ACO (the link opened again every 15 s until the queue's up); a link's discount code typed in and
 // applied first (cleared if not taken); a box that signs you up to anything never ticked. Waits timed by the
 // extension (a hidden tab's timers are held back), the tab's checkout flag kept good. Shop links need it.
+// 1.27.2: a run stopped on your dashboard (its ■ Stop) is stopped in its tab here too — before its first press
+// as well (later presses ask your account first, so 1.27.1 stops at its next one).
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.

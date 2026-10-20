@@ -265,6 +265,14 @@ export function register(router, ctx) {
     return out;
   }, { auth: 'none' });
 
+  // Stop: one of your runs, ended from the dashboard (its browser told; a press it's about to make is refused).
+  router.post('/api/aco/runs/:id/stop', async (req) => {
+    if (!limiter.hit(`aco-stop:${req.user.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const out = await ctx.aco.stopRun(req.user.id, str(req.params.id, 40));
+    if (out.error === 'not_found') throw notFound('Run');
+    return { run: out.run };
+  });
+
   // Trigger ACO: a test run for one item, now — as if it had just dropped (the same limits and checks).
   router.post('/api/aco/test/:id', async (req) => {
     if (!limiter.hit(`aco-test:${req.user.id}`, 10, 60 * 1000)) throw new HttpError(429, 'Slow down a little');

@@ -658,6 +658,12 @@ order).
   in to Shop in the last 12 hours), and once the tab's back on Shop's checkout it
   carries on — the ⚡ Buy code it opened with, left behind in the queue, replaced by a
   fresh one — pressing **Pay now** again. (Extension 1.27.1.)
+- **■ Stop** (on a run that's still going, in the Run history — its tab closed by mistake,
+  say, or not wanted any more; extension 1.27.2). The run ends on your account at once,
+  with no DM. Your checkout browser hears within seconds and its tab presses nothing
+  more, even before its first press. Any press it was about to make asks your account
+  first and is refused. "Pay now" pressed already: it ends as needs-you, so check your
+  email. Not pressed yet: nothing was bought, and it never counts as a failed drop.
 - **🚦 Wait for queue, then ACO** (a button on each Shop checkout link). It opens the
   link now and, while the checkout says it isn't on sale yet, **opens it again every
   15 seconds** — like refreshing — until the store's queue is up. The next opening
