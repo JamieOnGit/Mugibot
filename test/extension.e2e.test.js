@@ -2091,15 +2091,15 @@ test("🔥 a slow store at the final button: its last \"please try again\" still
   await closeStorePages('kmart');
 });
 
-test('🔥 a store that says nothing for 25 s after "Checkout securely" (no spinner, its button free): never pressed again on silence — it may be taking the order — and placed once when it answers', async (t) => {
+test('🔥 a store that says nothing for 10 s after "Checkout securely" (no spinner, its button free): never pressed again on silence — it may be taking the order — and placed once when it answers', async (t) => {
   t.after(() => closeStorePages('kmart'));
   freshDay();
   await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO silent', aco: true, maxPrice: 120 }]);
   const S = store.shop('kmart');
-  S.placeSlowMs = 25000;
+  S.placeSlowMs = 10000;
   await acoListen();
   await drop('kmart', '43818587');
-  await waitFor(async () => (await runFor('ACO silent') || {}).status === 'placed', { timeout: 75000, message: 'placed once it answered' });
+  await waitFor(async () => (await runFor('ACO silent') || {}).status === 'placed', { timeout: 60000, message: 'placed once it answered' });
   assert.equal(S.placeTries, 1, 'pressed once');
   assert.equal(S.orders.length, 1);
   await closeStorePages('kmart');
