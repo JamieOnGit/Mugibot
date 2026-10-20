@@ -27,7 +27,7 @@ before(async () => {
   makeMember(env, ash);
   for (const it of (await ash.get('/api/items')).body.items) await ash.del(`/api/items/${it.id}`);
   desk = await Device.pair(env.url, ash, 'Ash desktop');
-  await desk.call('GET', '/api/ext/me?v=1.24.0');
+  await desk.call('GET', '/api/ext/me?v=1.27.1');
   const r = await ash.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 200, perDay: 6, spendPerDay: 900 });
   assert.equal(r.status, 200, r.text);
 });
@@ -73,7 +73,7 @@ test('🛍️ a store\'s checkout link is a Shop checkout link — its options a
   assert.equal(r.body.shopLink, true);
   assert.equal(r.body.acoCan, true);
   assert.equal(r.body.acoPlaces, true, "Auto-checkout presses Shop's \"Pay now\"");
-  assert.equal(r.body.acoVersion, '1.24.0');
+  assert.equal(r.body.acoVersion, '1.27.1');
   await ash.del(`/api/items/${r.body.id}`);
 
   // The extension runs on Shop's checkout, and knows each link is its own order.
@@ -222,7 +222,12 @@ test("🛍️ not on sale yet at the checkout (\"not available for purchase\" to
   await desk.call('GET', '/api/ext/aco/next');
   await say({ status: 'placing', message: 'Pressing "Pay now"', total: 70 });
   await say({ status: 'waiting', reason: 'not_live', message: 'not on sale yet' });
-  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 91 * 60 * 1000 WHERE id = :id', { id: run.id });
+  // (Not after 2 hours — a queue's limit — nor 3: a run started the evening before a 3AM drop keeps waiting.)
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 3 * 60 * 60 * 1000 WHERE id = :id', { id: run.id });
+  env.app.aco.expire();
+  await new Promise((res) => setTimeout(res, 50));
+  assert.equal(env.app.db.get('SELECT status FROM aco_runs WHERE id = :id', { id: run.id }).status, 'waiting', 'still waiting 3 hours on');
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 5.6 * 60 * 60 * 1000 WHERE id = :id', { id: run.id });
   env.app.aco.expire();
   await new Promise((res) => setTimeout(res, 50));
   run = env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: run.id });
@@ -234,24 +239,94 @@ test("🛍️ not on sale yet at the checkout (\"not available for purchase\" to
   await ash.del(`/api/items/${item.id}`);
 });
 
-test('🛍️ a checkout browser with an extension older than 1.24.0 (one that reads Shop\'s sign-in off its pages, and stops at "not available"): not started — it says to update; Discord\'s ⚡ Buy says so too', async () => {
+test("🛍️ not on sale yet, \"Pay now\" pressed again every couple of seconds (live presses): the run stays waiting for the sale — one step for the presses, its count kept up to date, Stop from your account heard at the next press — and its browser lost after a press, it's needs-you (the last press may have gone through), never armed again", async () => {
+  const link = store.cartLink([[PORSCHE, 1]]);
+  const item = (await ash.post('/api/items', { url: link, name: 'RLC Porsche (pressing)', maxPrice: 60, aco: true })).body;
+  await drop(link);
+  let [run] = runsOf(item.id);
+  await desk.call('GET', '/api/ext/aco/next');
+  const say = (body) => desk.call('POST', `/api/ext/aco/${run.id}`, body);
+  await say({ status: 'checkout', message: "At Shop's checkout" });
+  await say({ status: 'placing', message: 'Pressing "Pay now" — total $70.00', total: 70 });
+  await say({ status: 'waiting', reason: 'not_live', message: 'Shop says "This Product is not available for purchase" — not on sale yet' });
+  let r;
+  for (let n = 2; n <= 6; n++) r = await say({ status: 'placing', live: true, again: true, message: `Pressing "Pay now" again (${n}) — Shop says it isn't on sale yet (for 0 min)`, total: 70 });
+  assert.equal(r.body.run.status, 'waiting', 'still waiting for the sale');
+  assert.equal(r.body.run.reason, 'not_live');
+  assert.equal(r.body.run.active, true);
+  assert.equal(r.body.run.statusText, 'Not on sale yet — pressing "Pay now"');
+  const presses = r.body.run.steps.filter((x) => /Pressing "Pay now" again/.test(x.message));
+  assert.equal(presses.length, 1, 'one step for them');
+  assert.match(presses[0].message, /again \(6\)/, 'its count up to date');
+  assert.equal(presses[0].status, 'placing');
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).aco, false, 'the arming used up while it presses');
+  // Its browser lost (nothing heard for 10 minutes) after a press: for you to check, never armed again.
+  env.app.db.run('UPDATE aco_runs SET updated_at = updated_at - 11 * 60 * 1000 WHERE id = :id', { id: run.id });
+  env.app.aco.expire();
+  await new Promise((res) => setTimeout(res, 50));
+  run = env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: run.id });
+  assert.equal(run.status, 'needs_you');
+  assert.equal(run.reason, 'unconfirmed');
+  assert.match(run.message, /pressing "Pay now" .* check your email/);
+  assert.equal((await ash.get('/api/items')).body.items.find((x) => x.id === item.id).aco, false);
+  // A closed run refuses the next press: the browser stops pressing.
+  r = await say({ status: 'placing', live: true, again: true, message: 'Pressing "Pay now" again (7) — Shop says it isn\'t on sale yet (for 11 min)', total: 70 });
+  assert.equal(r.body.run.active, false);
+  assert.equal(env.app.db.get('SELECT status FROM aco_runs WHERE id = :id', { id: run.id }).status, 'needs_you');
+  finishRuns();
+  await ash.del(`/api/items/${item.id}`);
+});
+
+test('🛍️ a checkout browser with an extension older than 1.27.1 (one that can\'t find Mattel\'s "Pay now $47.99", nor tick its membership box, and doesn\'t press "Pay now" while it says "not available"): not started — it says to update; Discord\'s ⚡ Buy says so too', async () => {
   const link = store.cartLink([[RLC, 1]]);
   const item = (await ash.post('/api/items', { url: link, name: 'RLC membership', maxPrice: 20, aco: true })).body;
-  await desk.call('GET', '/api/ext/me?v=1.23.0');
+  await desk.call('GET', '/api/ext/me?v=1.27.0');
   try {
     await drop(link);
     const [run] = runsOf(item.id);
     assert.equal(run.status, 'skipped');
     assert.equal(run.reason, 'old_extension');
-    assert.match(run.message, /Ash desktop has 1\.23\.0 — update it to 1\.24\.0/);
+    assert.match(run.message, /Ash desktop has 1\.27\.0 — update it to 1\.27\.1/);
     await ash.put('/api/aco', { remoteBuy: true });
     const out = await env.app.aco.remote(env.app.repo.userByUsername('ash').id, item.id);
-    assert.match(out.error, /update it to 1\.24\.0 to buy from Shop/);
+    assert.match(out.error, /update it to 1\.27\.1 to buy from Shop/);
   } finally {
-    await desk.call('GET', '/api/ext/me?v=1.24.0');
+    await desk.call('GET', '/api/ext/me?v=1.27.1');
     finishRuns();
     await ash.del(`/api/items/${item.id}`);
   }
+});
+
+test('🛍️🚦🏷️ Wait for queue, then ACO, and a discount code: a run of its own that places the order, its pass saying so (the link to open again) and carrying the code; only while Auto-checkout places the order', async () => {
+  const link = store.cartLink([[PORSCHE, 1]]);
+  const item = (await ash.post('/api/items', { url: link, name: 'RLC Porsche (queue)', maxPrice: 60, discount: ' rlc 10 ' })).body;
+  assert.equal(item.discount, 'rlc10', 'kept without its spaces');
+  assert.equal((await ash.put(`/api/items/${item.id}`, { aco: true })).body.discount, 'rlc10', 'kept when the link is armed');
+  let r = await ash.post(`/api/aco/test/${item.id}`, { queue: true });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.run.trigger, 'queue');
+  const ashId = env.app.repo.userByUsername('ash').id;
+  const pass = env.app.aco.passFor(ashId, env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: r.body.run.id }));
+  assert.equal(pass.queue, true);
+  assert.equal(pass.url, link);
+  assert.equal(pass.discount, 'rlc10');
+  finishRuns();
+  // An ordinary run of it: the code, but no looking for the queue.
+  r = await ash.post(`/api/aco/test/${item.id}`);
+  const plain = env.app.aco.passFor(ashId, env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: r.body.run.id }));
+  assert.equal(plain.queue, undefined);
+  assert.equal(plain.discount, 'rlc10');
+  finishRuns();
+  // The code cleared: none.
+  assert.equal((await ash.put(`/api/items/${item.id}`, { discount: '' })).body.discount, '');
+  // Only while Auto-checkout places the order (it presses "Pay now").
+  await ash.put('/api/aco', { mode: 'fill' });
+  r = await ash.post(`/api/aco/test/${item.id}`, { queue: true });
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /Place the order for me/);
+  await ash.put('/api/aco', { mode: 'place' });
+  finishRuns();
+  await ash.del(`/api/items/${item.id}`);
 });
 
 test("🛍️ a link whose option the store doesn't sell any more: not found (said, never alerted as a restock)", async () => {

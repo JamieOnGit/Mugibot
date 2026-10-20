@@ -621,21 +621,66 @@ order).
   of yours is typed there, and Shop's choices are left as they are. Any box the
   store needs ticked to check out is ticked: Mattel Creations' **"By selecting,
   you indicate your acceptance of the Membership Agreement"**, and any box the
-  checkout marks as required — never a newsletter or marketing box. **"Check
-  out as guest"** is never pressed. ⚡ Buy stops at **Pay now** for you;
-  Auto-checkout checks the total against your limits and presses it once. Shop
-  then goes on to the store's own order page, and that's the order seen placed.
+  checkout marks as required — never a newsletter or marketing box. (Mattel's
+  real checkout labels its box only "By selecting, you indicate your acceptance
+  of the", with the "Membership Agreement ↗" link beside the label, and doesn't
+  mark it required: from extension 1.27.1 the words around the box are read too,
+  so it's ticked.) **"Check out as guest"** is never pressed. ⚡ Buy stops at
+  **Pay now** for you; Auto-checkout checks the total against your limits and
+  presses it. (Mattel's real button reads **"Pay now $47.99"**, the total in it:
+  found as the final button from 1.27.1 — before, the run said "Couldn't find the
+  next step".) Shop then goes on to the store's own order page, and that's the
+  order seen placed.
 - **"This Product is not available for purchase"** (and "You must accept
   membership agreement") can be up on the checkout before anything's pressed —
   a member's Mattel checkout showed both, while the store's own data already
   said in stock. Neither stops it: the agreement is ticked and **Pay now** is
   pressed. If the store answers "not available for purchase" (not on sale yet,
-  or members only), nothing's bought, and the run **waits on the checkout** with
-  everything filled in: it looks again every 5 seconds (the page reloaded, as a
-  person refreshing it would) without pressing anything, and presses **Pay now**
-  the moment the notice has gone. You get one DM when it starts waiting. After
-  30 minutes still not on sale it stops — nothing bought — and the item is
-  **armed again** for when it is.
+  or members only), nothing's bought, and the run **stays on the checkout
+  pressing Pay now** with everything filled in: again every **2 seconds**, until
+  the store takes the order (extension 1.27.1; before, it only reloaded the page
+  every 5 s, for 30 minutes). It's never pressed while the store's still at a
+  press (its button busy, the page loading), and each press is asked of your
+  account first, so Stop on the dashboard is heard at the next press. The
+  checkout's reloaded every 10 minutes (or after half a minute of presses the
+  page doesn't answer at all), as a person would. The run says **Not on sale yet
+  — pressing "Pay now"**, with the presses counted; you get one DM when it starts.
+  It keeps at it for up to **8 hours**, so a run started the evening before a
+  3AM drop is still pressing at 3AM — keep that computer on, awake, and its tab
+  open. Still not on sale after that, it stops — nothing bought — and the item is
+  **armed again**. If your browser goes quiet after a press, the run ends as
+  needs-you (check your email), never armed again.
+- **The store's checkout queue** (Mattel's at a drop: "You're in line to check out
+  … Don't refresh this page", on the store's own site, where Mugibot doesn't run).
+  A link that goes there — on its way to Shop's checkout, or sent back from it at the
+  drop — is waited for there, never refreshed: the run says it's in the queue, keeps
+  going (it isn't taken for "signed out of Shop" while this browser was seen signed
+  in to Shop in the last 12 hours), and once the tab's back on Shop's checkout it
+  carries on — the ⚡ Buy code it opened with, left behind in the queue, replaced by a
+  fresh one — pressing **Pay now** again. (Extension 1.27.1.)
+- **🚦 Wait for queue, then ACO** (a button on each Shop checkout link). It opens the
+  link now and, while the checkout says it isn't on sale yet, **opens it again every
+  15 seconds** — like refreshing — until the store's queue is up. The next opening
+  lands in the queue and stays there (never refreshed). Through it, it presses **Pay
+  now** every 2 seconds until the store takes the order, and never opens the link
+  again in that run. It places a real order within your limits, so Auto-checkout must
+  be on and set to **Place the order for me**. Press it when you'd join the queue
+  yourself (the queue may let early arrivals through before the drop; you can watch
+  its wait time in that tab).
+- **A discount code** (Edit on the link → **Discount code**): typed into the
+  checkout's "Discount code" box and **Apply** pressed before **Pay now**. Taken,
+  it's on the order. Not taken ("Enter a valid discount code", or no answer in 8
+  seconds): the box is cleared and **Pay now** pressed without it. Left empty, the
+  discount box is never touched.
+- **Never ticked** at Mattel: "I agree to sign-up for Mattel Rewards" (no box that
+  signs you up to anything), nor the news-and-offers box (left as the store has it).
+- **A link that already says In stock** (the store's own data says the options
+  can be bought, while its checkout still says "not available for purchase" —
+  Mattel's before a drop): the drop won't change that "In stock", so an armed
+  link wouldn't start by itself. Start the run yourself — **⚡ Buy** (with
+  Auto-checkout on and set to place the order) or **Trigger ACO** — any time
+  before the drop: it opens the checkout and presses **Pay now** every 2 seconds
+  until the store takes the order.
 - **Signed in to Shop only.** Signed out, Shop sends the link on to the store's
   own checkout as a guest, where Mugibot doesn't run. Whether you're signed in is
   read **on Shop's checkout itself**, from what's on the screen: your email by

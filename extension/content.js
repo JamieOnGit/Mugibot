@@ -57,6 +57,18 @@
   // asked of the extension (a checkout's frames can be ready first).
   MGBFill.startFocusBroker();
 
+  // Wait for queue, then ACO (a Shop checkout link's run, aco.queue): when this tab last opened the link again
+  // looking for the store's queue, and whether it's been through that queue since — then it never looks again.
+  const seekFlag = {
+    read: () => { try { return JSON.parse(sessionStorage.getItem('mgbSeek') || 'null'); } catch { return null; } },
+    save: (v) => { try { sessionStorage.setItem('mgbSeek', JSON.stringify(v)); } catch { /* ignore */ } },
+  };
+  /** Been through the store's queue in this run (this tab). */
+  const queuedThrough = (run) => { const f = seekFlag.read(); return !!(f && f.through && (f.runId === run.runId || f.runId === '*')); };
+  const markThrough = (runId) => seekFlag.save({ runId: runId || '*', through: true, at: 0 });
+  // (Opening the link again, looking for the queue: not the store sending this checkout on — watchLeaving.)
+  let seekingNow = false;
+
   // The ⚡ Buy code: grabbed by capture.js as the page started loading (or still in the address).
   let goCode = null;
   try {
@@ -67,6 +79,12 @@
   if (!goCode) {
     const m = location.hash.match(/mgb-go=([A-Za-z0-9_-]{8,64})/);
     if (m) goCode = m[1];
+  }
+  // (No code: a Shop checkout link's tab through the store's queue at last, the code it opened with left
+  //  behind there? Its run's, fresh — background.js heldUp.)
+  if (!goCode) {
+    const q = await ask({ type: 'queueReturn' });
+    if (q && q.code) { goCode = q.code; markThrough(q.runId); }
   }
 
   // Your watchlist and the stores' flows, and the ⚡ Buy code confirmed — both at once. (A code claimed
@@ -134,6 +152,9 @@
     off: () => { try { sessionStorage.removeItem(ASSIST_KEY); } catch { /* ignore */ } },
     read: () => { try { const a = JSON.parse(sessionStorage.getItem(ASSIST_KEY) || 'null'); return a && Date.now() < a.until ? a : null; } catch { return null; } },
     active: () => !!assistFlag.read(),
+    // Kept good while a run's still at it on this page — pressing for hours, waiting on a slow store: once a
+    // minute at most. Never brought back once it's gone (stopped from the panel, or over).
+    keep: () => { const a = assistFlag.read(); if (a && a.until - Date.now() < ASSIST_TTL - 60000) assistFlag.on(a.profileId); },
   };
   let busy = false;
   let assisting = false;
@@ -159,7 +180,7 @@
   const orderTotal = () => MGBChecks.orderTotal(document);
   // A checkout that says it isn't on sale until the drop's live (checkout.waitLive: Shop checkout links'
   // "This Product is not available for purchase"): that notice isn't a reason not to press its final
-  // button — the store says again when it's pressed (notLiveYet).
+  // button — the store says again when it's pressed, and it's pressed again every few seconds (pressLoop).
   const waitLive = !!(checkoutFlow && checkoutFlow.waitLive);
   const liveNotices = waitLive ? (checkoutFlow.waitLive.notices || []).filter((re) => re && re.test) : [];
   const errIgnore = [].concat((checkoutFlow && checkoutFlow.ignoreErrors) || [], liveNotices);
@@ -234,10 +255,10 @@
       await MGBFlows.wait(400);
       let o = outcome();
       if (!o && await pressReview(run)) continue;
-      // The store said no to the final button (a Shop link's "not available for purchase"): a notice shown
-      // anew since the press, the page still here 8 seconds on and its button free again — so nothing was
-      // bought. It waits here for the sale. (The same notice merely still up is no answer: left as it is.)
-      const notLive = !o && waitLive && Date.now() - started > 8000 && !finalBusy() ? freshNotice() : '';
+      // The store said no to the final button (a Shop link's "not available for purchase"): its notice up, the
+      // page still here 8 seconds on and its button free again — so nothing was bought. It's pressed again
+      // from a fresh look at the checkout (notLiveYet).
+      const notLive = !o && waitLive && Date.now() - started > 8000 && !finalBusy() && !MGBQuick.pageBusy() && !stillWorking() ? noticeText(noticeEls()) : '';
       if (notLive) return notLiveYet(run, notLive, total);
       // The store refused the press (a box it says is wrong), and it's still saying so a few seconds on: for you.
       const err = o ? '' : pageError();
@@ -267,28 +288,107 @@
   }
 
   /**
-   * Not on sale yet (checkout.waitLive): the store said "not available for purchase" to the final button,
-   * or still says it now. Nothing was bought. The run waits on this checkout, everything in, and looks
-   * again every few seconds (the page reloaded, like a person refreshing it): the final button is pressed
-   * again only once the notice has gone. At most checkout.waitLive.forMs, then it stops and says so.
+   * Not on sale yet (checkout.waitLive), seen on a checkout the page came back to after a press: nothing was
+   * bought. Said, and the checkout looked at afresh in a moment — where "Pay now" is pressed again, every few
+   * seconds, until the store takes the order (pressLoop).
    */
   async function notLiveYet(run, words, total) {
     const W = checkoutFlow.waitLive;
-    const every = Math.max(2, Math.round((W.everyMs || 5000) / 1000));
-    const res = await ask({ type: 'acoReport', status: 'not_live', reason: 'not_live', message: `${retailer.name} says "${words}" — not on sale yet. Waiting on the checkout with everything in, looking again every ${every} s, to press "Pay now" the moment it is.`, total: typeof total === 'number' ? total : undefined });
+    const res = await ask({ type: 'acoReport', status: 'not_live', reason: 'not_live', message: liveSaid(words, W), total: typeof total === 'number' ? total : undefined });
     if (!res || !res.ok || res.over) {
       panel.setStatus(res && res.over ? `🤖 ${res.text || 'This run is over.'}` : `🤖 ${retailer.name} says "${words}" — nothing was bought.`);
       return;
     }
-    if (Date.now() - res.since > (W.forMs || 30 * 60 * 1000)) {
-      return acoStop('failed', 'not_live', `${retailer.name} still says "${words}" after ${Math.round((Date.now() - res.since) / 60000)} minutes — nothing was bought, and it's armed again for when it's on sale.`, null, total);
-    }
-    panel.setNote('🤖 Auto-checkout — waiting for it to go on sale');
-    panel.setStatus(`⏳ ${retailer.name} says "${words}" — not on sale yet. Waiting here with everything filled in: looking again every ${every} s, and "Pay now" is pressed the moment it is.`);
-    // (This tab stays in the run while it waits: its checkout flag kept, like its pass.)
+    if (Date.now() - res.since > W.forMs) return acoStop('failed', 'not_live', liveOver(words, res.since), null, total);
+    panel.setStatus(`⏳ ${retailer.name} says "${words}" — not on sale yet. Pressing "Pay now" again in a moment…`);
+    // (This tab stays in the run: its checkout flag kept, like its pass.)
     const flag = assistFlag.read();
     assistFlag.on(flag && flag.profileId);
-    setTimeout(() => location.reload(), every * 1000);
+    setTimeout(() => location.reload(), W.everyMs || 2000);
+  }
+  /** What your account hears the first time the store says it isn't on sale (it tells you). */
+  const liveSaid = (words, W, seek = false) => `${retailer.name} says "${words}" — not on sale yet. ${seek ? `Opening the link again every ${Math.round((W.seekMs || 15000) / 1000)} s until the store's queue is up (then waiting in line, never refreshing it), and p` : 'P'}ressing "Pay now" on the checkout every ${Math.round((W.everyMs || 2000) / 1000)} s, everything in, until it takes the order (for up to ${Math.round(W.forMs / 3600000)} hours).`;
+  const liveOver = (words, since) => `${retailer.name} still said "${words}" after ${Math.round((Date.now() - since) / 60000)} minutes of pressing "Pay now" — nothing was bought, and it's armed again for when it's on sale.`;
+  /** "3 min", "2 h 5 min": how long it's been. */
+  const took = (ms) => { const m = Math.floor(ms / 60000); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
+
+  // A Shop checkout link's discount code (aco.discount, yours, typed in beforehand on the link): into the checkout's
+  // discount box, Apply pressed, before "Pay now" — on each checkout (one opened again has none). The store not
+  // taking it (its error, or no answer in 8 s): the box cleared, and "Pay now" without it — never tried again in
+  // the run, unless it was turned down while the checkout still said it isn't on sale (tried again on the next
+  // checkout). No code: the discount box is left alone.
+  const DISCOUNT_RE = /discount|promo|coupon|gift ?card|reduction/i;
+  function discountBox() {
+    return [...document.querySelectorAll('input')].find((el) => {
+      const type = (el.getAttribute('type') || 'text').toLowerCase();
+      if (!['text', 'search', ''].includes(type) || !MGBFill.isVisible(el) || el.disabled || el.closest('#mugibot-qc')) return false;
+      return DISCOUNT_RE.test([el.name, el.id, el.placeholder, el.getAttribute('aria-label'), el.labels && el.labels[0] ? el.labels[0].innerText : ''].join(' '));
+    }) || null;
+  }
+  /** The box's Apply button: beside it (a few levels up), "Apply" in its words or its label. */
+  function applyButton(box) {
+    for (let p = box.parentElement, i = 0; p && i < 5; p = p.parentElement, i++) {
+      const b = [...p.querySelectorAll('button, input[type="submit"], [role="button"]')].find((x) => MGBFill.isVisible(x) && /^apply\b/i.test(((x.innerText || x.value || '').trim() || x.getAttribute('aria-label') || '').trim()));
+      if (b) return b;
+    }
+    return null;
+  }
+  const discountErrors = () => MGBChecks.pageErrors(document, []).filter((t) => DISCOUNT_RE.test(t) || /\b(code|isn.?t valid|not valid|invalid|can.?t be (used|applied)|cannot be (used|applied)|expired)\b/i.test(t));
+  function clearBox(box) {
+    box.focus();
+    try { box.select(); document.execCommand('delete'); } catch { /* below */ }
+    if (box.value) {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(box, '');
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+  let discountIgnored = false;
+  async function applyDiscount(run) {
+    const code = String(run.discount || '').trim();
+    if (!code) return;
+    const key = `mgbDiscount:${run.runId}`;
+    let was = '';
+    try { was = sessionStorage.getItem(key) || ''; } catch { /* ignore */ }
+    // (Given up on in this run: its error never stops anything.)
+    const giveUp = (why, retry) => {
+      try { sessionStorage.setItem(key, retry ? 'retry' : 'failed'); } catch { /* ignore */ }
+      if (!discountIgnored) { discountIgnored = true; errIgnore.push(DISCOUNT_RE, /enter a valid (discount|code)/i); }
+      report('step', `${retailer.name} didn't take the discount code "${code}" (${why}) — cleared it; pressing "Pay now" without it`, null);
+    };
+    if (was === 'failed') { if (!discountIgnored) { discountIgnored = true; errIgnore.push(DISCOUNT_RE, /enter a valid (discount|code)/i); } return; }
+    const upper = code.toUpperCase();
+    const shown = () => (document.body.innerText || '').toUpperCase().includes(upper);
+    const box = discountBox();
+    // (On this checkout already: shown as applied.)
+    if (shown() && !(box && box.value)) return;
+    if (!box) { report('step', `No discount box on ${retailer.name}'s checkout for "${code}" — pressing "Pay now" without it`, null); return; }
+    const before = new Set(discountErrors());
+    panel.setStatus(`🏷️ Typing in your discount code "${code}"…`);
+    MGBFill.typeInto(box, code, 'discount', true);
+    let btn = null;
+    for (const until = Date.now() + 2000; Date.now() < until; await nap(100)) {
+      btn = applyButton(box);
+      if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') break;
+    }
+    if (!btn || btn.disabled) { clearBox(box); giveUp('no Apply button to press', false); return; }
+    btn.click();
+    for (const until = Date.now() + 8000; Date.now() < until; await nap(200)) {
+      const errs = discountErrors().filter((t) => !before.has(t));
+      if (errs.length || box.getAttribute('aria-invalid') === 'true') {
+        clearBox(box);
+        giveUp(errs[0] ? `"${errs[0].slice(0, 80)}"` : 'it said the code was wrong', noticeEls().length > 0);
+        return;
+      }
+      // (Taken: shown on the checkout as applied — the box emptied, or at least its answer in.)
+      if (shown() && (!box.isConnected || !box.value || box.value.toUpperCase() !== upper)) {
+        try { sessionStorage.setItem(key, 'applied'); } catch { /* ignore */ }
+        report('step', `Applied the discount code "${code}" at ${retailer.name}`, null);
+        return;
+      }
+    }
+    clearBox(box);
+    giveUp('no answer in 8 seconds', noticeEls().length > 0);
   }
 
   /** Stop short of the final button, say why, and leave the rest to you. */
@@ -326,8 +426,11 @@
       let to = null;
       try { to = new URL(e.destination.url); } catch { return; }
       // (Another page of this checkout: that page says how it went.)
-      if (said || MGBFlows.forLocation(retailers, to) === retailer) return;
+      if (said || seekingNow || MGBFlows.forLocation(retailers, to) === retailer) return;
       said = true;
+      // (Sent back to the store while it still said "not available for purchase" — its queue, reset at the drop:
+      //  nothing was bought. Waited for there, and pressed again once back — background.js heldUp.)
+      if (!done.test(to.pathname) && waitLive && noticeEls().length) { ask({ type: 'acoAway' }); return; }
       if (done.test(to.pathname)) acoReport('placed', '', `Order placed — ${retailer.name} went on to ${to.host}'s order page`, total);
       else acoReport('needs_you', 'unconfirmed', `"${label}" was pressed and ${retailer.name} went on to ${to.host} — check your email for the order confirmation before buying it again.`, total);
     });
@@ -370,14 +473,8 @@
     // The store says it won't sell it now (Shop checkout links: "This Product is not available for purchase"): nothing's bought.
     const refused = MGBChecks.unavailable(document, checkoutFlow);
     if (refused) return acoStop('failed', 'sold_out', `${retailer.name} says "${refused}" — nothing was bought.`, fin);
-    // (Not on sale yet, a checkout that says so until the drop's live: the first time, "Pay now" is pressed
-    //  anyway — the notice may only be about a box it's just ticked, and the store says again if not.
-    //  Already told no by the store (run.notLive): only once the notice has gone, a moment after the boxes.)
-    if (run.notLive && run.mode === 'place' && noticeEls().length) {
-      await MGBFlows.wait(1500);
-      const still = noticeText(noticeEls());
-      if (still) return notLiveYet(run, still, orderTotal());
-    }
+    // (Not on sale yet, a checkout that says so until the drop's live: "Pay now" is pressed all the same —
+    //  the store says again if it won't take it, and it's pressed again every few seconds until it does.)
     // A store that only takes PayPal at checkout (The Games Cube): Auto-checkout can't pay there.
     if (checkoutFlow && checkoutFlow.payment === 'paypal') {
       return acoStop('needs_you', 'paypal_only', `${retailer.name} only takes PayPal at checkout — your details are in; press "${fin.text}" and pay with PayPal yourself.`, fin);
@@ -399,6 +496,8 @@
     const saved = ownCard && !boxes && (MGBChecks.savedCardShown(document, checkoutFlow, false) || frames.some((f) => f.saved));
     if (ownCard && !saved && !data.card) return acoStop('needs_you', 'card_missing', 'No card is saved in the extension — add it (icon → Card settings) and finish this yourself.', fin);
     if (ownCard && !saved && checkoutFlow && checkoutFlow.payment === 'card' && !(await cardIn())) return acoStop('needs_you', 'card_not_filled', "Your card didn't go into the store's card boxes — type it in and press the button yourself.", fin);
+    // Your discount code (a Shop checkout link's), typed in and applied first — or, not taken, cleared.
+    await applyDiscount(run);
     // The page's own say on the boxes: filled in once more if it says one's wrong or empty, then checked.
     const values = MGBFill.fieldValues(data.profile, data.card);
     if (pageError() || MGBChecks.missingRequired(document)) MGBFill.fillFields(document, values, { flow: checkoutFlow });
@@ -424,6 +523,25 @@
     }
     return false;
   }
+  // (Whether the store took a press up at all — its button busy or off for a moment, however briefly: noted as
+  //  it happens, so a quick answer isn't missed between looks.)
+  let pressTaken = false;
+  let pressWatch = null;
+  function watchPress(btn) {
+    pressTaken = false;
+    if (pressWatch) pressWatch.disconnect();
+    pressWatch = null;
+    if (typeof MutationObserver === 'undefined' || !btn) return;
+    pressWatch = new MutationObserver(() => {
+      if (btn.disabled || btn.getAttribute('aria-busy') === 'true' || btn.getAttribute('aria-disabled') === 'true') pressTaken = true;
+    });
+    pressWatch.observe(btn, { attributes: true, attributeFilter: ['aria-busy', 'disabled', 'aria-disabled'] });
+  }
+  // A wait timed by the extension, not by this page: Chrome holds a hidden page's own timers back (to once a
+  // minute after 5 minutes hidden — a locked screen, a window over it), and a run at the final button — pressing
+  // "Pay now" for hours, or a struggling store's half hour — mustn't slow to that. (The page's own timer if the
+  // extension doesn't answer.)
+  const nap = async (ms) => { if (!(await ask({ type: 'nap', ms }))) await MGBFlows.wait(ms); };
   /** The store saying it's still at it ("Processing…", "Please wait"): waited for, never pressed meanwhile. */
   const stillWorking = () => MGBChecks.errorKind(pageError()) === 'working';
 
@@ -433,12 +551,41 @@
    * when the store says it's struggling (busy, try again, sold out just now), for up to half an hour. Each
    * press is asked of the extension first: it keeps count and the 30 minutes, and before pressing again it
    * asks your account whether the run's still going.
+   * Not on sale yet (checkout.waitLive: Shop's "This Product is not available for purchase" to the press):
+   * nothing's bought, and it's pressed again every couple of seconds until the store takes the order — for
+   * hours if need be (a run started the evening before a 3AM drop), never while the store's at a press.
    */
   async function pressLoop(run, fin, values, total) {
     let leaving = false;
     addEventListener('beforeunload', () => { leaving = true; }, { once: true });
     let fieldTries = 0;
     let watching = false;
+    // (Not on sale yet: since when the store's said so — kept by the extension through a reload — the presses
+    //  it's turned away on this page, and since when the page hasn't answered a press at all.)
+    const W = waitLive ? checkoutFlow.waitLive : null;
+    let live = run.notLive && W ? { since: run.notLive.since, presses: run.presses || 0 } : null;
+    let liveN = 0;
+    let quietSince = 0;
+    const loaded = Date.now();
+    // (Wait for queue, then ACO: back on Shop's checkout well after opening the link again — it was held up on the
+    //  store's site: its queue. Through it, so it's never looked for again.)
+    const sought = seekFlag.read();
+    if (run.queue && sought && sought.runId === run.runId && !sought.through && sought.at && Date.now() - sought.at > 25000) markThrough(run.runId);
+    const seeking = () => !!(run.queue && run.url && W && !queuedThrough(run));
+    /** Waited out before pressing again, the page watched meanwhile: 'done' if it said how it went (said), 'left', or null. */
+    const pause = async (ms) => {
+      for (const until = Date.now() + ms; Date.now() < until;) {
+        await nap(Math.min(250, Math.max(0, until - Date.now())));
+        if (leaving || !assistFlag.active()) return 'left';
+        assistFlag.keep();
+        const o = outcome();
+        if (o) { await said(o, total); return 'done'; }
+        // (Something it says meanwhile that's never pressed past — the payment, a decline: stopped here.)
+        const stop = saysOther(['busy', 'working', 'field']);
+        if (stop) { await said(MGBChecks.errorKind(stop) === 'declined' ? { status: 'failed', reason: 'card_declined', message: `${retailer.name} said: ${stop}` } : { status: 'needs_you', reason: 'needs_details', message: `${retailer.name} said: "${stop}" — finish it yourself in this tab (nothing more pressed).` }, total); return 'done'; }
+      }
+      return null;
+    };
     for (let n = 0; ; n++) {
       // The button: free to press (the page may draw it again meanwhile) — and, pressing again, the store
       // done with whatever it's at (its page loading, a spinner, "Processing…").
@@ -447,12 +594,13 @@
       for (const since = Date.now(); isOff(btn) || stillWorking() || (n > 0 && (finalBusy() || MGBQuick.pageBusy()));) {
         waited = true;
         if (leaving) return;
-        if (Date.now() - since > MGBChecks.RETRY_MS) return acoStop('needs_you', n > 0 ? 'unconfirmed' : 'needs_details', n > 0 ? `${retailer.name} was still busy with "${fin.text}" after 30 minutes — check your email for an order confirmation before buying it again.` : `"${fin.text}" didn't become available in 30 minutes — check the page and press it yourself.`, fin, total);
+        if (Date.now() - since > (live ? W.forMs : MGBChecks.RETRY_MS)) return acoStop('needs_you', n > 0 ? 'unconfirmed' : 'needs_details', n > 0 ? `${retailer.name} was still busy with "${fin.text}" after 30 minutes — check your email for an order confirmation before buying it again.` : `"${fin.text}" didn't become available in 30 minutes — check the page and press it yourself.`, fin, total);
         const o = outcome();
         if (o) return said(o, total);
+        assistFlag.keep();
         panel.setStatus(isOff(btn) ? `⏳ Waiting for ${retailer.name}'s "${fin.text}" to turn on (the store's slow)…` : `⏳ ${retailer.name} is still working on it…`);
         beat(isOff(btn) ? `Waiting for "${fin.text}" to turn on — ${retailer.name}'s checkout is slow (up to 30 minutes)` : `Waiting for ${retailer.name} to finish what it's doing`);
-        await MGBFlows.wait(250);
+        await nap(250);
         btn = finalNow(fin);
       }
       if (n > 0 || waited) {
@@ -466,37 +614,68 @@
         total = orderTotal();
         if (!totalOk(run, fin, total)) return;
       }
-      const message = n === 0 ? `Pressing "${fin.text}" — total $${total.toFixed(2)}` : `Pressing "${fin.text}" again — ${retailer.name} hasn't taken the order yet`;
-      const go = await ask({ type: 'acoRetry', message, total });
+      const message = live ? `Pressing "${fin.text}" again (${live.presses + 1}) — ${retailer.name} says it isn't on sale yet (for ${took(Date.now() - live.since)})`
+        : n === 0 ? `Pressing "${fin.text}" — total $${total.toFixed(2)}` : `Pressing "${fin.text}" again — ${retailer.name} hasn't taken the order yet`;
+      const go = await ask({ type: 'acoRetry', message, total, live: !!live });
       if (!go || !go.ok) {
         if (go && go.over) return acoStop('needs_you', 'not_placed', `Pressed "${fin.text}" again and again for ${Math.round((Date.now() - go.since) / 60000)} minutes and ${retailer.name} kept turning it away — nothing more pressed. Check your email before buying it again.`, fin, total);
         panel.setStatus(`🤖 This checkout ended on your account meanwhile — nothing more pressed.`);
         return; // (the run ended meanwhile: stopped, timed out, or finished on your phone)
       }
       aco = { ...(aco || run), placing: true, placingAt: (aco && aco.placingAt) || go.since };
-      panel.setStatus(go.n === 1 ? `🤖 Placing your order ($${total.toFixed(2)})…` : `🤖 Pressing "${fin.text}" again (${go.n}) — ${retailer.name}'s struggling…`);
-      report('step', `Auto-checkout pressed "${fin.text}"${go.n > 1 ? ` again (${go.n})` : ''} (total $${total.toFixed(2)})`, null);
+      if (!live) panel.setStatus(go.n === 1 ? `🤖 Placing your order ($${total.toFixed(2)})…` : `🤖 Pressing "${fin.text}" again (${go.n}) — ${retailer.name}'s struggling…`);
+      // (In your activity: each press — or, not on sale yet, the first and then one every 150 or so: every 5 minutes.)
+      if (!live || live.presses % 150 === 0) report('step', `Auto-checkout pressed "${fin.text}"${go.n > 1 ? ` again (${go.n})` : ''} (total $${total.toFixed(2)})${live ? ` — ${retailer.name} says it isn't on sale yet` : ''}`, null);
       if (checkoutFlow.leaves && !watching) { watching = true; watchLeaving(fin.text, total); }
       // (Stopped meanwhile — from the panel: nothing more pressed.)
       if (!assistFlag.active()) return;
       markNotices();
       // (What the page said before this press isn't its answer to it: only something it says anew.)
       MGBChecks.markErrors(document);
+      watchPress(btn);
       btn.click();
       const ans = await answer(run, total, () => leaving);
       if (ans.kind === 'done' || ans.kind === 'left') return;
-      if (ans.kind === 'field' && ++fieldTries > 2) return acoStop('needs_you', 'needs_details', `${retailer.name} said: "${ans.text}" — finish it yourself in this tab.`, fin, total);
-      const w = MGBChecks.retryWait(n);
-      panel.setStatus(`⏳ ${retailer.name} said "${ans.text.slice(0, 80)}" — pressing "${fin.text}" again in ${Math.round(w / 1000)} s…`);
-      for (const until = Date.now() + w; Date.now() < until;) {
-        await MGBFlows.wait(250);
-        if (leaving || !assistFlag.active()) return;
-        const o = outcome();
-        if (o) return said(o, total);
-        // (Something it says meanwhile that's never pressed past — the payment, a decline: stopped here.)
-        const stop = saysOther(['busy', 'working', 'field']);
-        if (stop) return MGBChecks.errorKind(stop) === 'declined' ? said({ status: 'failed', reason: 'card_declined', message: `${retailer.name} said: ${stop}` }, total) : said({ status: 'needs_you', reason: 'needs_details', message: `${retailer.name} said: "${stop}" — finish it yourself in this tab (nothing more pressed).` }, total);
+      if (ans.kind === 'notlive') {
+        // Not on sale yet: nothing was bought. Pressed again in a couple of seconds, until it is.
+        liveN += 1;
+        const res = await ask({ type: 'acoReport', status: 'not_live', reason: 'not_live', message: liveSaid(ans.text, W, seeking()), total });
+        if (!res || !res.ok || res.over) {
+          panel.setStatus(res && res.over ? `🤖 ${res.text || 'This run is over.'}` : `🤖 ${retailer.name} says "${ans.text}" — nothing was bought.`);
+          return;
+        }
+        live = { since: res.since, presses: res.presses || (live ? live.presses + 1 : 1) };
+        if (Date.now() - live.since > W.forMs) return acoStop('failed', 'not_live', liveOver(ans.text, live.since), null, total);
+        quietSince = ans.answered ? 0 : quietSince || Date.now();
+        panel.setNote(seeking() ? '🚦 Wait for queue, then ACO — looking for the store\'s queue' : '🤖 Auto-checkout — pressing "Pay now" until it goes on sale');
+        panel.setStatus(seeking()
+          ? `⏳ ${retailer.name} says "${ans.text}" — not on sale yet, and no queue yet. Opening the link again every ${Math.round((W.seekMs || 15000) / 1000)} s until the store's queue is up (then it waits in line), pressing "${fin.text}" meanwhile: pressed ${live.presses} time${live.presses === 1 ? '' : 's'} in ${took(Date.now() - live.since)}. Keep this tab open.`
+          : `⏳ ${retailer.name} says "${ans.text}" — not on sale yet. Pressing "${fin.text}" every ${Math.round(W.everyMs / 1000)} s until it takes the order: pressed ${live.presses} time${live.presses === 1 ? '' : 's'} in ${took(Date.now() - live.since)}. Keep this tab open.`);
+        // Wait for queue, then ACO: the link opened again — like refreshing — until it goes to the store's queue
+        // (where it stays: Mugibot never runs there, nor refreshes it), then never again in this run.
+        if (seeking() && Date.now() - loaded > (W.seekMs || 15000)) {
+          seekFlag.save({ runId: run.runId, at: Date.now(), through: false });
+          assistFlag.keep();
+          seekingNow = true;
+          location.href = run.url;
+          return;
+        }
+        // The checkout looked at afresh now and then, as a person would (every 10 minutes) — or sooner when its
+        // page doesn't answer the presses at all (it may only see the sale once it's loaded again).
+        if (!seeking() && (Date.now() - loaded > (W.reloadMs || 600000) || (quietSince && Date.now() - quietSince > (W.quietMs || 30000)))) {
+          const flag = assistFlag.read();
+          assistFlag.on(flag && flag.profileId);
+          location.reload();
+          return;
+        }
+        if (await pause(W.everyMs || 2000)) return;
+        continue;
       }
+      if (ans.kind === 'field' && ++fieldTries > 2) return acoStop('needs_you', 'needs_details', `${retailer.name} said: "${ans.text}" — finish it yourself in this tab.`, fin, total);
+      // (Turned away while it wasn't on sale yet: those presses aren't the store struggling — the waits start again.)
+      const w = MGBChecks.retryWait(n - liveN);
+      panel.setStatus(`⏳ ${retailer.name} said "${ans.text.slice(0, 80)}" — pressing "${fin.text}" again in ${Math.round(w / 1000)} s…`);
+      if (await pause(w)) return;
     }
   }
 
@@ -532,17 +711,25 @@
   async function answer(run, total, left) {
     const started = Date.now();
     let errSince = 0;
+    let sawBusy = false;
     for (;;) {
-      await MGBFlows.wait(400);
+      await nap(waitLive ? 200 : 400);
       if (left()) return { kind: 'left' };
+      assistFlag.keep();
       const o = outcome();
       if (o) { await said(o, total); return { kind: 'done' }; }
       if (await pressReview(run)) continue;
-      // The store said no to the final button (a Shop link's "not available for purchase"): a notice shown
-      // anew since the press, the page still here 8 seconds on and its button free again — so nothing was
-      // bought. It waits here for the sale. (The same notice merely still up is no answer: left as it is.)
-      const notLive = waitLive && Date.now() - started > 8000 && !finalBusy() ? freshNotice() : '';
-      if (notLive) { await notLiveYet(run, notLive, total); return { kind: 'done' }; }
+      // The store said no to the final button (a Shop link's "not available for purchase"): its notice up once
+      // it's done with the press — the page still here, its button free again and the store not at anything —
+      // drawn anew, or after its button was busy (it answered), or (a page that shows neither) 4 s on. Nothing
+      // was bought: 'notlive', pressed again in a moment. (Gone, the notice: on sale — the press is watched.)
+      const free = !finalBusy() && !MGBQuick.pageBusy() && !stillWorking();
+      if (!free || pressTaken) sawBusy = true;
+      if (waitLive && free && Date.now() - started > 1000) {
+        const words = noticeText(noticeEls());
+        const fresh = !!freshNotice();
+        if (words && (fresh || sawBusy || Date.now() - started > 4000)) return { kind: 'notlive', text: words, answered: fresh || sawBusy };
+      }
       const err = pageError(true);
       errSince = err ? errSince || Date.now() : 0;
       const k = err ? MGBChecks.errorKind(err) : '';
@@ -559,8 +746,9 @@
         await said({ status: 'needs_you', reason: 'unconfirmed', message: `${retailer.name} still hadn't answered "Pay" after 30 minutes — check your email for the order confirmation before buying it again.` }, total);
         return { kind: 'done' };
       }
-      // (Still at it — its button busy, the page loading, "Processing…" — or nothing said yet: waited for.)
-      beat(`Pressed — waiting for ${retailer.name} to answer (it's slow)`);
+      // (Still at it — its button busy, the page loading, "Processing…" — or nothing said yet: waited for. Your
+      //  account hears after a few seconds of it: a quick answer is no slow checkout.)
+      if (Date.now() - started > 5000) beat(`Pressed — waiting for ${retailer.name} to answer (it's slow)`);
     }
   }
 
@@ -1028,8 +1216,16 @@
     const r = await acoReport('started', '', `Through ${retailer.name}'s ${through === 'checkpoint' ? 'checkpoint' : 'virtual queue'} — carrying on`);
     if (r && r.over) { endedElsewhere(r.text); return; }
   }
+  // Back on Shop's checkout from the store's queue (a run held up there — background.js heldUp): carried on
+  // here, even if this tab's checkout flag ran out while it waited in line.
+  if (!store.read() && !assistFlag.active() && checkoutFlow && checkoutFlow.waitLive && checkoutFlow.path instanceof RegExp && checkoutFlow.path.test(location.pathname)) {
+    const back = await ask({ type: 'acoInfo' });
+    if (back && back.away && back.mode === 'place') { assistFlag.on(null); markThrough(back.runId); }
+  }
   // Carry on where we left off after the store changed page (an Auto-checkout run: still this tab's).
   if (store.read() || assistFlag.active()) aco = await ask({ type: 'acoInfo' });
+  // (Back from the store's queue: through it — never looked for again in this run.)
+  if (aco && aco.away) markThrough(aco.runId);
   if (aco) panel.setNote('🤖 Auto-checkout');
   // The store's checkpoint (or queue) partway through: wait there, then carry on.
   if (gate && (store.read() || assistFlag.active())) { waitAtGate(gate); return; }

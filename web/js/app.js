@@ -495,6 +495,12 @@ function itemRow(it, i, list = state.items) {
   // The one-time ⚡ Buy code is asked for as the button goes down, so the store opens the moment it's clicked.
   buy?.addEventListener('pointerdown', () => primeBuy(it));
   buy?.addEventListener('click', () => goBuy(it));
+  // (A Shop checkout link: its checkout opened again and again until the store's queue is up, then in line, then "Pay now".)
+  const queue = it.shopLink && it.acoCan ? h('button', {
+    class: 'btn small', type: 'button', disabled: !it.url,
+    title: 'Opens the link now and, while the checkout says it isn\'t on sale yet, opens it again every 15 seconds until the store\'s queue is up — then waits in line (never refreshing it) and presses "Pay now" until the store takes the order',
+  }, '🚦 Wait for queue, then ACO') : null;
+  queue?.addEventListener('click', () => queueAco(it, queue));
   const move = async (dir) => {
     const ids = state.items.map((x) => x.id);
     const j = i + dir;
@@ -511,7 +517,7 @@ function itemRow(it, i, list = state.items) {
   // (Another website's product goes by its address: its made-up code isn't one anyone uses.)
   // (A Shop checkout link: what's in it, as the store names its options — its code is the link.)
   const what = it.shopLink ? (it.title || `${it.sku.split(',').length} option${it.sku.includes(',') ? 's' : ''} in the link`) : it.acoCan ? `SKU ${it.sku}` : '';
-  const meta = [it.storeName, what, money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', checked].filter(Boolean).join(' · ');
+  const meta = [it.storeName, what, money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', it.discount ? `🏷️ code ${it.discount}` : '', checked].filter(Boolean).join(' · ');
   const isAdmin = state.me.user.role === 'admin';
   return h('li', { class: it.monitor ? '' : 'off', dataset: { id: it.id } },
     h('div', { class: 'info' },
@@ -525,6 +531,7 @@ function itemRow(it, i, list = state.items) {
     h('span', { class: `pill ${st}` }, STATUS[st] || st),
     h('div', { class: 'acts' },
       buy,
+      queue,
       // (A Shop checkout link opens Shop's checkout: Open would start one, so it isn't offered.)
       it.url && !it.shopLink ? h('a', { class: 'btn small', href: it.url, target: '_blank', rel: 'noopener' }, 'Open ↗') : null,
       h('button', { class: 'btn small', type: 'button', title: 'Check now', 'aria-label': `Check ${it.name} now`, onclick: () => checkNow(it) }, '↻'),
@@ -743,6 +750,8 @@ async function editItem(it, { shop = false } = {}) {
   $('#w-max').value = it && typeof it.maxPrice === 'number' ? it.maxPrice : '';
   $('#w-announce').checked = !!(it && it.announce);
   $('#w-aco').checked = !!(it && it.aco);
+  $('#w-discount-row').hidden = !link;
+  $('#w-discount').value = (it && it.discount) || '';
   storeNote();
   setMsg($('#w-msg'), '');
   if (link) $('#w-form').scrollIntoView({ block: 'nearest' });
@@ -760,6 +769,7 @@ $('#w-form').addEventListener('submit', (e) => {
       url: $('#w-url').value, store: shop ? '' : $('#w-store').value, sku: shop ? '' : $('#w-sku').value, name: $('#w-name').value,
       price: $('#w-price').value, maxPrice: $('#w-max').value, profileId: $('#w-profile').value, aco: $('#w-aco').checked,
     };
+    if (shop) body.discount = $('#w-discount').value.trim();
     if (state.me.user.role === 'admin') body.announce = $('#w-announce').checked;
     try {
       if (state.editing) await api('PUT', `/api/items/${state.editing}`, body);
@@ -1053,7 +1063,7 @@ const ACO_STEP = {
   placed: 'Order placed', ready: 'Filled in', needs_you: 'Needs you', failed: 'Failed', skipped: "Didn't start", expired: "Didn't start",
 };
 const ACO_FILTER = { placed: ['placed'], needs: ['needs_you', 'ready'], failed: ['failed', 'expired'], skipped: ['skipped'] };
-const TRIGGER = { sweep: 'seen by the live monitor', server: 'seen by the monitor', browser: 'seen by your browser', manual: 'reported by an admin', test: 'test run (Trigger ACO)', remote: '⚡ Buy pressed in Discord' };
+const TRIGGER = { sweep: 'seen by the live monitor', server: 'seen by the monitor', browser: 'seen by your browser', manual: 'reported by an admin', test: 'test run (Trigger ACO)', queue: '🚦 Wait for queue, then ACO', remote: '⚡ Buy pressed in Discord' };
 const versionBelow = (a, b) => {
   const pa = String(a || '0').split('.').map(Number);
   const pb = String(b || '0').split('.').map(Number);
@@ -1336,6 +1346,25 @@ $('#ar-recheck').addEventListener('click', async (e) => {
   }
 });
 $('#aco-show').addEventListener('change', () => { state.acoPage = 1; renderArmed(); });
+
+/** Wait for queue, then ACO (a Shop checkout link): a run now that gets in the store's queue the moment it's up, then places the order. */
+async function queueAco(it, btn) {
+  const s = (state.aco && state.aco.settings) || {};
+  if (!s.enabled || s.mode !== 'place') { toast('Auto-checkout first', 'Switch Auto-checkout on and set it to "Place the order for me" (Checkout page) — this presses "Pay now" for you.', 'warn', 9000); return; }
+  if (!confirm(`Wait for queue, then ACO: ${it.name}?\n\nYour checkout browser opens the link now. While the checkout says it isn't on sale yet, it opens the link again every 15 seconds — like refreshing — until the store's queue is up. In the queue it waits its turn and never refreshes it. Then, on the checkout, it presses "Pay now" every couple of seconds until the store takes the order: it PLACES A REAL ORDER, within your limits (up to ${money(it.maxPrice)} plus delivery). Sent back to the queue at the drop, it waits there again.\n\nKeep that computer on and the tab open. Stop it any time with the panel's Stop, or on the Checkout page.`)) return;
+  btn.disabled = true;
+  try {
+    const { run } = await api('POST', `/api/aco/test/${it.id}`, { queue: true });
+    if (run.status === 'skipped') toast("Auto-checkout didn't start", run.message || run.reasonText, 'warn');
+    else toast('🚦 Waiting for the queue, then Auto-checkout', `Your checkout browser is opening ${it.storeName} — follow it here, or in the run history (Checkout page).`, 'success');
+    askExtension('acoListen', {}, 4000);
+    await Promise.all([loadItems(), loadAco()]);
+  } catch (e) {
+    toast("Couldn't start it", e.message, 'warn');
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 /** Trigger ACO: a test run for one item, now (after saying what it will do). */
 async function triggerAco(it, maxInput, btn) {

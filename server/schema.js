@@ -114,6 +114,8 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
     announce: isAdmin ? bool(src.announce, false) : !!(existing && existing.announce),
     // Auto-checkout (docs/AUTO-CHECKOUT.md): bought by itself when it drops, never above its max price.
     aco: bool(src.aco, false),
+    // A Shop checkout link's discount code: typed in at Shop's checkout, Apply pressed, before "Pay now" ('' = none).
+    discount: r && r.cartLinks ? String(src.discount ?? '').replace(/\s+/g, '').slice(0, 60) : '',
   };
   if (out.price === null && input && input.price === undefined && existing) out.price = existing.price;
   if (out.aco) {

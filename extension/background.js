@@ -1331,6 +1331,16 @@ async function notReachedShop(run, tabId, since = Date.now() - SHOP_REACH_MS) {
     setTimeout(() => { notReachedShop(run, tabId, since).catch(() => null); }, 10 * 1000);
     return;
   }
+  // (Got there meanwhile: its checkout's under way.)
+  const pass = tabId != null ? (await chrome.storage.session.get(passKey(tabId)))[passKey(tabId)] : null;
+  if (pass && pass.aco && pass.aco.runId === run.id) return;
+  // Seen signed in to Shop in this browser lately: not on Shop's checkout yet is the store's queue, most
+  // likely (Mattel Creations' checkout queue at a drop, on the store's own site, where Mugibot doesn't run) —
+  // waited for, never refreshed; it carries on at Shop's checkout once it's through (heldUp, below).
+  if (tab && (await shopSignedInLately(run.store))) {
+    await holdUp(tabId, run.id, 'entry');
+    return;
+  }
   const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.id)}`, {
     status: 'needs_you', reason: 'no_shop',
     message: "Shop's checkout didn't open in this browser: the link went on to the store's own checkout, as a guest — sign in to Shop (shop.app) here, and finish this one in its tab yourself.",
@@ -1338,6 +1348,81 @@ async function notReachedShop(run, tabId, since = Date.now() - SHOP_REACH_MS) {
   // (Your account only takes it while the run hadn't got going: then it's said, and this browser's signed out of Shop.)
   if (res.status === 200 && res.body && res.body.run && res.body.run.reason === 'no_shop') await noteLogin(run.store, 'out', 'run');
 }
+
+/** Seen signed in to Shop in this browser in the last 12 hours (on its checkout, or a run that got there). */
+async function shopSignedInLately(store) {
+  const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
+  const l = all[store];
+  return !!(l && l.status === 'in' && Date.now() - l.at < 12 * 60 * 60 * 1000);
+}
+
+// A Shop checkout link's tab held up on the store's own site, where Mugibot doesn't run — the store's
+// checkout queue at a drop (Mattel Creations'): on its way to Shop's checkout ('entry'), or sent back there
+// from Shop's checkout while it said "not available for purchase" ('away': the queue reset at the drop).
+// It's waited for, never refreshed: your account hears so every few minutes (the run kept going), the tab's
+// pass is kept good, and once the tab's back on Shop's checkout the run carries on there (queueReturn,
+// acoInfo). tabId → { runId, kind, since, beatAt }.
+const HELD_UP = 'shopHeldUp';
+const HELD_BEAT_MS = 3 * 60 * 1000;
+const HELD_MAX_MS = 3 * 60 * 60 * 1000;
+// (A run pressing "Pay now" while it isn't on sale: its tab heard from all the time — nap, acoRetry. Quiet this
+//  long, and not at a press, it's left Shop's checkout without a word: reloaded into the store's queue.)
+const LIVE_QUIET_MS = 45 * 1000;
+const tabSeen = new Map();
+let heldTimer = null;
+const heldText = (kind) => (kind === 'entry'
+  ? "Not on Shop's checkout yet: the store's queue, most likely (Mattel's at a drop) — your browser waits in it (leave that tab alone: Mugibot never refreshes a queue) and carries on at Shop's checkout once it's through. (If that tab shows the store's own checkout asking for your email instead, you're signed out of Shop: sign in at shop.app and press ⚡ Buy again.)"
+  : "In the store's queue, most likely — the tab went on to the store's own site from Shop's checkout (Mattel's queue at a drop), where Mugibot doesn't run. Your browser waits in line (leave that tab alone: Mugibot never refreshes a queue), then presses \"Pay now\" on Shop's checkout until the store takes the order. Nothing has been bought yet.");
+
+async function holdUp(tabId, runId, kind) {
+  const { [HELD_UP]: held = {} } = await chrome.storage.session.get(HELD_UP);
+  if (!held[tabId] || held[tabId].runId !== runId || held[tabId].kind !== kind) held[tabId] = { runId, kind, since: Date.now(), beatAt: 0 };
+  await chrome.storage.session.set({ [HELD_UP]: held });
+  await heldUpTick();
+}
+
+/** Every 15 s while a tab's held up (or a run's pressing "Pay now" while it isn't on sale): see above. */
+async function heldUpTick() {
+  clearTimeout(heldTimer);
+  heldTimer = null;
+  const now = Date.now();
+  const { [HELD_UP]: held = {}, [LIVE_TABS]: live = {} } = await chrome.storage.session.get([HELD_UP, LIVE_TABS]);
+  // A run pressing "Pay now" whose tab's gone quiet, not at a press: reloaded into the store's queue.
+  for (const [tabId, runId] of Object.entries(live)) {
+    const key = passKey(Number(tabId));
+    const pass = (await chrome.storage.session.get(key))[key];
+    const tab = await chrome.tabs.get(Number(tabId)).catch(() => null);
+    if (!tab || !pass || !pass.aco || pass.aco.runId !== runId || pass.aco.done || pass.aco.stopped) { delete live[tabId]; continue; }
+    if (!tabSeen.has(Number(tabId))) tabSeen.set(Number(tabId), now);
+    if (pass.aco.away || pass.aco.placing || now - tabSeen.get(Number(tabId)) < LIVE_QUIET_MS || held[tabId]) continue;
+    await chrome.storage.session.set({ [key]: { ...pass, aco: awayAco(pass.aco), expires: now + PASS_TTL } });
+    held[tabId] = { runId, kind: 'away', since: now, beatAt: 0 };
+  }
+  for (const [tabId, h] of Object.entries(held)) {
+    const key = passKey(Number(tabId));
+    const pass = (await chrome.storage.session.get(key))[key];
+    const tab = await chrome.tabs.get(Number(tabId)).catch(() => null);
+    const mine = pass && pass.aco && pass.aco.runId === h.runId;
+    // (Closed; over; through to Shop's checkout — the run carrying on there; or too long.)
+    if (!tab || now - h.since > HELD_MAX_MS || (h.kind === 'entry' ? mine : !mine || pass.aco.done || pass.aco.stopped || !pass.aco.away)) { delete held[tabId]; continue; }
+    if (h.kind === 'away') await chrome.storage.session.set({ [key]: { ...pass, expires: now + PASS_TTL } });
+    if (now - h.beatAt < HELD_BEAT_MS) continue;
+    h.beatAt = now;
+    const res = await api('POST', `/api/ext/aco/${encodeURIComponent(h.runId)}`, { status: 'waiting', reason: h.kind === 'entry' ? 'queue' : 'not_live', message: heldText(h.kind) }).catch(() => null);
+    // (Stopped meanwhile — from the dashboard — or over on your account's side: this tab waits no more.)
+    if (res && res.status === 200 && res.body && res.body.run && res.body.run.active === false) {
+      delete held[tabId];
+      if (mine) await chrome.storage.session.set({ [key]: { ...pass, aco: { ...pass.aco, done: true } } });
+    }
+  }
+  await chrome.storage.session.set({ [HELD_UP]: held, [LIVE_TABS]: live });
+  if (Object.keys(held).length || Object.keys(live).length) heldTimer = setTimeout(() => { heldUpTick().catch(() => null); }, 15 * 1000);
+}
+
+/** The run, sent back to the store's queue while it said "not available for purchase": nothing in flight, said again once back. */
+const awayAco = (aco) => ({ ...aco, away: Date.now(), placing: false, placingAt: null, notLive: { since: (aco.notLive && aco.notLive.since) || Date.now(), saidAt: 0 } });
+// (The tabs of runs pressing "Pay now" while it isn't on sale: tabId → runId, watched for going quiet.)
+const LIVE_TABS = 'liveTabs';
 
 async function isSweepWindow(windowId) {
   return (await sweepWindow()).windowId === windowId;
@@ -1716,12 +1801,14 @@ chrome.runtime.onStartup.addListener(ensureAlarm);
 ensureAlarm();
 sweepLoop().catch(() => null);
 acoLoop().catch(() => null);
+heldUpTick().catch(() => null);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== CHECK_ALARM) return;
   runChecks().catch(() => null);
   sweepLoop().catch(() => null);
   acoLoop().catch(() => null);
   releaseTurns().catch(() => null); // (a checkout waiting for you that's had its few minutes)
+  if (!heldTimer) heldUpTick().catch(() => null); // (a Shop checkout link's tab held up in the store's queue)
   checkLogins().catch(() => null);
   updateInfo().catch(() => null); // keeps the "NEW" badge on the toolbar icon up to date
 });
@@ -1775,6 +1862,7 @@ const fromExtensionPage = (sender) => sender.id === chrome.runtime.id && String(
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     if (!msg || typeof msg !== 'object' || sender.id !== chrome.runtime.id) return null;
+    if (sender.tab && sender.frameId === 0) tabSeen.set(sender.tab.id, Date.now());
     switch (msg.type) {
       // From store pages
       case 'state': {
@@ -1864,6 +1952,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true, aco };
       }
       case 'fillData': return fillData(sender, msg.part, typeof msg.profileId === 'string' ? msg.profileId : null);
+      case 'nap': {
+        // A store page's wait, timed here (content.js nap): Chrome holds a hidden page's own timers back — to once
+        // a minute after 5 minutes — and a checkout pressing "Pay now" for hours mustn't slow to that.
+        await new Promise((r) => setTimeout(r, Math.max(0, Math.min(5000, Number(msg.ms) || 0))));
+        return { ok: true };
+      }
       case 'gate': {
         // A store page: is it the store's queue (or checkpoint)? Tracked per tab — see noteGate.
         if (!sender.tab || sender.frameId !== 0 || typeof msg.store !== 'string') return null;
@@ -1896,19 +1990,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           msg = { ...msg, status, message: 'You stopped it after the final button was pressed — check your email for an order confirmation before buying it again.' };
         }
         if (status === 'not_live') {
-          // The store said it isn't on sale to the final button (or still says so): nothing was bought, so
-          // the run may press it again once it is — waiting on the checkout meanwhile (its pass kept good).
-          // Your account hears so the first time, then every half a minute or so.
+          // The store said it isn't on sale to the final button: nothing was bought, so the run presses it
+          // again in a moment (content.js pressLoop), every couple of seconds until it takes the order — the
+          // half hour for a store that's struggling counted afresh from the next press (placingAt). Your
+          // account hears so the first time (it tells you), then from each press (acoRetry, live).
           const live = run.notLive || { since: Date.now(), saidAt: 0 };
-          const say = Date.now() - live.saidAt > 30 * 1000;
-          const next = { ...run, placing: false, notLive: { since: live.since, saidAt: say ? Date.now() : live.saidAt } };
+          const say = !live.saidAt;
+          const next = { ...run, placing: false, placingAt: null, away: null, notLive: { since: live.since, saidAt: say ? Date.now() : live.saidAt } };
           await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: next, expires: Date.now() + PASS_TTL } });
-          if (!say) return { ok: true, since: live.since };
+          const { [LIVE_TABS]: liveTabs = {} } = await chrome.storage.session.get(LIVE_TABS);
+          if (liveTabs[sender.tab.id] !== run.runId) {
+            await chrome.storage.session.set({ [LIVE_TABS]: { ...liveTabs, [sender.tab.id]: run.runId } });
+            if (!heldTimer) heldTimer = setTimeout(() => { heldUpTick().catch(() => null); }, 15 * 1000);
+          }
+          if (!say) return { ok: true, since: live.since, presses: run.presses || 0 };
           const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { status: 'waiting', reason: 'not_live', message: String(msg.message || '').slice(0, 300), total: typeof msg.total === 'number' ? msg.total : null });
           // (Stopped meanwhile — from the dashboard, or over on your account's side: this tab's run ends here.)
           const over = res.status === 200 && !!(res.body && res.body.run && res.body.run.active === false);
           if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...next, done: true } } });
-          return { ok: res.status === 200, since: live.since, over, text: over ? String(res.body.run.message || '') : '' };
+          return { ok: res.status === 200, since: live.since, presses: run.presses || 0, over, text: over ? String(res.body.run.message || '') : '' };
         }
         if (status === 'beat') {
           // A slow checkout (a hot drop) saying how it's going: your account hears it — that keeps the run going
@@ -1916,7 +2016,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const key = passKey(sender.tab.id);
           const cur = (await chrome.storage.session.get(key))[key];
           if (cur && cur.aco && cur.aco.runId === run.runId) await chrome.storage.session.set({ [key]: { ...cur, expires: Date.now() + PASS_TTL } });
-          if (!run.done && !run.stopped) api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { status: run.placing ? 'placing' : 'checkout', message: String(msg.message || '').slice(0, 300) }).catch(() => null);
+          // (Not on sale yet, between presses: still waiting for the sale, as far as your account's concerned.)
+          const body = run.notLive && !run.placing ? { status: 'waiting', reason: 'not_live' } : { status: run.placing ? 'placing' : 'checkout' };
+          if (!run.done && !run.stopped) api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, message: String(msg.message || '').slice(0, 300) }).catch(() => null);
           return { ok: true };
         }
         if (status === 'checkout') {
@@ -1969,11 +2071,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const body = { status: 'placing', message: String(msg.message || '').slice(0, 300), total: typeof msg.total === 'number' ? msg.total : null };
         const key = passKey(sender.tab.id);
         if (run.presses) {
-          const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, again: true }).catch(() => null);
+          // (msg.live: pressed again on a checkout that says it isn't on sale yet — your account keeps the run
+          //  waiting for the sale, the press counted on it.)
+          const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, again: true, live: !!msg.live }).catch(() => null);
           const live = res && res.status === 200 && res.body && res.body.run;
+          const going = live && live.active !== false && (live.status === 'placing' || (!!msg.live && live.status === 'waiting' && live.reason === 'not_live'));
           // (Read afresh after the wait: stopped meanwhile — the panel's Stop — or another run in the tab, it isn't pressed.)
           const cur = (await chrome.storage.session.get(key))[key];
-          if (!live || live.active === false || live.status !== 'placing' || !cur || !cur.aco || cur.aco.runId !== run.runId || cur.aco.stopped || cur.aco.done) {
+          if (!going || !cur || !cur.aco || cur.aco.runId !== run.runId || cur.aco.stopped || cur.aco.done) {
             if (cur && cur.aco && cur.aco.runId === run.runId) await chrome.storage.session.set({ [key]: { ...cur, aco: { ...cur.aco, done: true } } });
             return { ok: false, ended: true };
           }
@@ -1982,7 +2087,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         // (Only its press count and times changed — on the pass as it is now.)
         const cur = (await chrome.storage.session.get(key))[key] || pass;
-        const next = { ...(cur.aco || run), presses: (run.presses || 0) + 1, placing: true, placingAt: run.placingAt || now };
+        // (Pressing on Shop's checkout: not held up in the store's queue — heldUp — whatever it last looked like.)
+        const next = { ...(cur.aco || run), presses: (run.presses || 0) + 1, placing: true, placingAt: run.placingAt || now, away: null };
         await chrome.storage.session.set({ [key]: { ...cur, aco: next, expires: now + PASS_TTL } });
         return { ok: true, n: next.presses, since: next.placingAt };
       }
@@ -2008,7 +2114,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // The store page: is this tab running an Auto-checkout run (and how far has it got)?
         if (!sender.tab) return null;
         const pass = sender.frameId === 0 ? await passFor(sender) : ((await checkoutFrame(sender)) || {}).pass;
+        // (Back on Shop's checkout from the store's queue: no longer held up — it carries on here.)
+        if (pass && pass.aco && pass.aco.away && sender.frameId === 0) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...pass.aco, away: null } } });
         return pass && pass.aco && !pass.aco.done ? pass.aco : null;
+      }
+      case 'queueReturn': {
+        // A page with no ⚡ Buy code: a Shop checkout link's tab through the store's queue at last (the code it
+        // opened with left behind there)? A fresh code for its run, to carry on with here.
+        if (!sender.tab || sender.frameId !== 0) return null;
+        const { [HELD_UP]: held = {} } = await chrome.storage.session.get(HELD_UP);
+        const h = held[sender.tab.id];
+        if (!h || h.kind !== 'entry') return null;
+        const res = await api('POST', `/api/ext/aco/${encodeURIComponent(h.runId)}/link`, {}).catch(() => null);
+        const m = res && res.status === 200 && res.body && String(res.body.url || '').match(/mgb-go=([A-Za-z0-9_-]{8,64})/);
+        return m ? { code: m[1], runId: h.runId } : null;
+      }
+      case 'acoAway': {
+        // Shop's checkout went on to the store's own site while it said "not available for purchase" (its queue,
+        // reset at the drop): nothing was bought — held up there (above), and carried on once it's back.
+        if (!sender.tab || sender.frameId !== 0) return null;
+        const pass = await passFor(sender);
+        if (!pass || !pass.aco || !pass.aco.runId || pass.aco.done || pass.aco.stopped || pass.aco.mode !== 'place') return { ok: false };
+        await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: awayAco(pass.aco), expires: Date.now() + PASS_TTL } });
+        await holdUp(sender.tab.id, pass.aco.runId, 'away');
+        return { ok: true };
       }
       case 'cardFrame': {
         // A payment frame: how many card boxes it found, and how many it filled.

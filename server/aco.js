@@ -61,9 +61,10 @@ const WAIT_BEAT_MS = 10 * 60 * 1000;
 const QUEUE_MS = 2 * 60 * 60 * 1000;
 const CHECKPOINT_MS = 20 * 60 * 1000;
 // Waiting on a checkout that says it isn't on sale yet (a Shop checkout link's "not available for
-// purchase"): the browser looks again every few seconds, for 30 minutes from when it was first told so,
-// and stops by itself; a run still waiting this long after it was made (its browser lost) is ended here.
-const NOT_LIVE_MS = 90 * 60 * 1000;
+// purchase"): the browser presses "Pay now" again every couple of seconds, for up to 8 hours from when it
+// was first told so (a run started the evening before a 3AM drop), and stops by itself; a run still
+// waiting this long after it was made is ended here.
+const NOT_LIVE_MS = 8.5 * 60 * 60 * 1000;
 // Next in line at a store (another checkout of the member's there goes first): this long at most.
 const TURN_MS = 20 * 60 * 1000;
 // A queue's lobby (a browser told to get in line) lasts while the queue's up, or this long.
@@ -145,7 +146,7 @@ export function toRun(r) {
     // (Drop to order, for a placed run: how fast it was.)
     tookMs: r.status === 'placed' ? tookMs(parseSteps(r.steps)) : null,
     mode: r.mode, trigger: r.trigger, status: r.status, reason: r.reason || '',
-    statusText: r.status === 'waiting' && r.reason === 'checkpoint' ? 'Waiting for you at the checkpoint' : r.status === 'waiting' && r.reason === 'turn' ? 'Next in line' : STATUS_WORD[r.status] || r.status,
+    statusText: r.status === 'waiting' && r.reason === 'checkpoint' ? 'Waiting for you at the checkpoint' : r.status === 'waiting' && r.reason === 'turn' ? 'Next in line' : r.status === 'waiting' && r.reason === 'not_live' ? 'Not on sale yet — pressing "Pay now"' : STATUS_WORD[r.status] || r.status,
     reasonText: r.reason ? (REASONS[r.reason] || r.reason) : '', message: r.message || '', steps: parseSteps(r.steps),
     active: ACTIVE.includes(r.status), createdAt: r.created_at, updatedAt: r.updated_at,
   };
@@ -163,6 +164,7 @@ export class Aco {
     this.lobbies = new Map(); // userId → Map(store → { id, store, url, by, at, sent }): browsers told to get in line
     this.cards = new Map(); // deviceId → { state, at }: what each browser says of its card (from 1.20) — never the card
     this.variants = new Map(); // runId → the listing's only option (a drop's run opens the store's add-to-cart link)
+    this.queueRuns = new Set(); // runIds of Wait for queue, then ACO (a Shop checkout link's: its tab opens the link again until the queue's up)
     this.phoneKey = purposeKey(cfg.dataKey, 'phone-handover');
     this.timer = null;
   }
@@ -304,7 +306,7 @@ export class Aco {
     const running = this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id });
     if (running) return null;
     const price = typeof info.price === 'number' ? info.price : null;
-    const base = { userId, item, price, mode: s.mode, trigger: info.test ? 'test' : info.manual ? 'manual' : info.source || '' };
+    const base = { userId, item, price, mode: s.mode, trigger: info.queue ? 'queue' : info.test ? 'test' : info.manual ? 'manual' : info.source || '' };
     // (info.later: the monitor's list of alerts to send once every member's run is made — monitor/index.js applyAll.)
     const later = Array.isArray(info.later) ? info.later : null;
     const skip = (reason, message) => this.skip(base, reason, message, later);
@@ -319,7 +321,7 @@ export class Aco {
     if (price !== null && price > item.maxPrice) return skip('over_max', `${money(price)} is over your max of ${money(item.maxPrice)}.`);
     if (price !== null && price > s.maxOrder) return skip('over_limit', `${money(price)} is over your limit of ${money(s.maxOrder)} an order.`);
     // (A drop's failures count — not Trigger ACO's, nor a ⚡ Buy pressed in Discord or by you.)
-    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND trigger NOT IN ('test', 'remote', 'buy') AND created_at > :since", { i: item.id, since: now - DAY }).n;
+    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND trigger NOT IN ('test', 'remote', 'buy', 'queue') AND created_at > :since", { i: item.id, since: now - DAY }).n;
     if (fails >= MAX_FAILS && !info.test) {
       this.disarm(userId, item.id);
       return skip('too_many_failures', 'Arm it again to keep trying.');
@@ -340,7 +342,12 @@ export class Aco {
     const device = this.checkoutDevice(userId);
     if (r.acoVersion && device && olderVersion(device.version, r.acoVersion)) return skip('old_extension', `${device.name} has ${device.version || 'an older version'} — update it to ${r.acoVersion} (Setup → Extension).`);
 
-    const run = this.create(base, 'queued', '', `Dropped at ${r.name}${price !== null ? ` for ${money(price)}` : ''} — waiting for your browser to check out.`);
+    const run = this.create(base, 'queued', '', info.queue ? `Wait for queue, then ACO — waiting for your browser to open ${r.name}.` : `Dropped at ${r.name}${price !== null ? ` for ${money(price)}` : ''} — waiting for your browser to check out.`);
+    // (Wait for queue, then ACO: the tab's pass says so — its checkout looks again until the store's queue is up.)
+    if (info.queue) {
+      this.queueRuns.add(run.id);
+      if (this.queueRuns.size > 500) this.queueRuns.delete(this.queueRuns.values().next().value);
+    }
     // (The search's listing says its only option: the run goes straight to the store's add-to-cart link
     // with it, even before the catalogue knows the product — a brand-new listing's, say.)
     if (/^\d{1,20}$/.test(String(info.variantId || ''))) {
@@ -351,8 +358,10 @@ export class Aco {
     const queued = this.ctx.gates && this.ctx.gates.queueUp(item.store);
     const tell = () => this.notifier.notify(userId, {
       type: 'aco', level: 'urgent', channel: 'aco',
-      title: `🤖 Auto-checkout ${info.test ? 'test ' : ''}started: ${item.name}`,
-      message: `${r.name}${price !== null ? ` · ${money(price)}` : ''}\n${s.mode === 'place' ? 'Your browser is checking out now, and will place the order.' : 'Your browser is filling in checkout now, and will stop at the final button for you.'}${queued ? `\n🚦 ${r.name}'s virtual queue is up: your browser waits its turn in line first (don't refresh the queue page).` : ''}`,
+      title: info.queue ? `🚦 Waiting for the queue, then Auto-checkout: ${item.name}` : `🤖 Auto-checkout ${info.test ? 'test ' : ''}started: ${item.name}`,
+      message: info.queue
+        ? `${r.name}${price !== null ? ` · ${money(price)}` : ''}\nYour browser opens the link and, while the checkout says it isn't on sale yet, opens it again every 15 seconds until the store's queue is up. In the queue it waits its turn (never refreshing it), then presses "Pay now" every couple of seconds until the store takes the order.`
+        : `${r.name}${price !== null ? ` · ${money(price)}` : ''}\n${s.mode === 'place' ? 'Your browser is checking out now, and will place the order.' : 'Your browser is filling in checkout now, and will stop at the final button for you.'}${queued ? `\n🚦 ${r.name}'s virtual queue is up: your browser waits its turn in line first (don't refresh the queue page).` : ''}`,
       name: item.name, sku: item.sku, url: item.url, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
     });
     if (later) later.push(tell);
@@ -361,18 +370,22 @@ export class Aco {
   }
 
   /** Trigger ACO: a test run for one of the member's items, now. { run } — or { error } saying why not. */
-  async test(userId, itemId) {
+  async test(userId, itemId, { queue = false } = {}) {
     const row = this.db.get('SELECT * FROM items WHERE id = :id AND user_id = :u', { id: String(itemId || ''), u: userId });
     if (!row) return { error: 'not_found' };
     const item = this.repo.getItem(userId, row.id);
     const r = this.retailers.get(item.store);
     if (!r || !r.flow) return { error: `Auto-checkout works at stores Mugibot has a checkout for — not ${r ? r.name : 'this one'} yet` };
     if (!this.settings(userId).enabled) return { error: 'Switch Auto-checkout on first (above)' };
+    // Wait for queue, then ACO: a Shop checkout link's (its checkout tells "not on sale yet" and goes on to the
+    // store's queue), placing the order.
+    if (queue && !r.cartLinks) return { error: 'Wait for queue, then ACO is for Shop checkout links' };
+    if (queue && this.settings(userId).mode !== 'place') return { error: 'Set Auto-checkout to "Place the order for me" first (above): this presses "Pay now" for you' };
     if (item.maxPrice === null || item.maxPrice === undefined) return { error: 'Set a max price for it first: Mugibot never pays more than that' };
     if (!item.url) return { error: "Its product page isn't known yet — paste its link into the item" };
     if (this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return { error: 'It\'s already checking out — wait for that run to finish' };
     const price = typeof item.lastPrice === 'number' ? item.lastPrice : typeof item.price === 'number' ? item.price : null;
-    const run = await this.trigger(row, { price, test: true });
+    const run = await this.trigger(row, { price, test: true, queue });
     return run ? { run } : { error: "Auto-checkout didn't start" };
   }
 
@@ -611,7 +624,7 @@ export class Aco {
     for (const row of rows) {
       if (!alive()) break;
       const item = row.item_id ? this.repo.getItem(user.id, row.item_id) : null;
-      if (!item || (!item.aco && row.trigger !== 'test' && row.trigger !== 'remote') || !item.url) {
+      if (!item || (!item.aco && !['test', 'remote', 'queue'].includes(row.trigger)) || !item.url) {
         // Switched off (or removed) before a browser picked it up: it didn't start, and isn't a failure.
         this.finish(user.id, row, 'expired', 'disarmed', '').catch(() => null);
         continue;
@@ -654,14 +667,20 @@ export class Aco {
     const left = Math.max(0, Math.round((s.spendPerDay - this.today(userId).spent) * 100) / 100);
     const maxTotal = Math.min(s.maxOrder, (row.max_price ?? s.maxOrder) + 40, left);
     const orderLimit = Math.min(s.maxOrder, left);
-    return { runId: row.id, mode: row.mode, maxPrice: row.max_price, maxTotal, orderLimit, name: row.name, sku: row.sku };
+    // (queue: Wait for queue, then ACO — its checkout opens the link again until the store's queue is up: url.
+    //  discount: a Shop checkout link's discount code, typed in at its checkout before "Pay now".)
+    const item = row.item_id ? this.repo.getItem(userId, row.item_id) : null;
+    return {
+      runId: row.id, mode: row.mode, maxPrice: row.max_price, maxTotal, orderLimit, name: row.name, sku: row.sku,
+      ...(this.queueRuns.has(row.id) ? { queue: true, url: row.url || null } : {}), ...(item && item.discount ? { discount: item.discount } : {}),
+    };
   }
 
   /**
    * What happened, from the browser: status 'checkout' | 'ready' | 'placing' | 'placed' | 'needs_you' | 'failed',
    * reason (REASONS), message, total.
    */
-  async report(userId, runId, { status, reason = '', message = '', total = null, pressed = false, again = false }) {
+  async report(userId, runId, { status, reason = '', message = '', total = null, pressed = false, again = false, live = false }) {
     const row = this.get(userId, runId);
     if (!row) return null;
     // Done is done — except a payment the member finished themselves (the bank's check) turning out placed;
@@ -682,6 +701,16 @@ export class Aco {
       if (!ACTIVE.includes(row.status)) return toRun(row);
       this.step(row.id, row.status, message);
       this.repo.addEvent(userId, { type: 'aco', level: 'warn', message: `🤖 ${row.name}: ${message}`, name: row.name, sku: row.sku, url: row.url || null });
+      return this.publish(userId, row.id);
+    }
+    if (status === 'placing' && live && row.status === 'waiting' && row.reason === 'not_live') {
+      // Pressed again on a checkout that says it isn't on sale yet (every couple of seconds, until it is): the
+      // run stays waiting for the sale. The press is on it — one step, its count kept up to date — and the
+      // arming's used up (armed again if the wait ends with nothing bought).
+      const last = parseSteps(row.steps).at(-1);
+      if (last && last.status === 'placing' && String(last.message || '').replace(/\d+/g, '#') === String(message || '').replace(/\d+/g, '#')) this.restep(row.id, message);
+      else this.step(row.id, 'placing', message || 'Final button pressed');
+      this.disarm(userId, row.item_id);
       return this.publish(userId, row.id);
     }
     if (status === 'checkout' || status === 'placing') {
@@ -745,7 +774,7 @@ export class Aco {
         type: 'aco', level: 'urgent', channel: 'aco',
         title: reason === 'checkpoint' ? `🛡️ ${where}'s checkpoint needs you: ${row.name}` : reason === 'not_live' ? `⏳ Not on sale yet at checkout: ${row.name}` : `🚦 In ${where}'s queue: ${row.name}`,
         message: reason === 'not_live'
-          ? `${text}\nYour browser is waiting on the checkout, everything filled in: it looks again every few seconds and presses "Pay now" the moment the store lets it (up to 30 minutes). Nothing has been bought.`
+          ? `${text}\nYour browser is on the checkout, everything filled in, pressing "Pay now" again every couple of seconds until the store takes the order (for up to 8 hours). Nothing has been bought yet. Keep that computer on and its tab open.`
           : reason === 'checkpoint'
           ? `${where} wants a human check (hCaptcha) before checkout, in the browser that's checking out — Mugibot never touches the check itself. At the computer: solve it in the tab that opened, and it carries on to checkout. On your phone: solve it on the computer with Chrome Remote Desktop (the tab's in front), or finish it on the phone instead — the computer stops, and the store opens on the phone for you to pass the check and pay.`
           : `${text}\nYour browser is waiting its turn and carries on when it's through. Leave the queue page alone: it refreshes itself.`,
@@ -974,6 +1003,16 @@ export class Aco {
     return run;
   }
 
+  /** The run's last step said again, as it is now (a count gone up): its words and time. */
+  restep(id, message) {
+    const row = this.db.get('SELECT steps FROM aco_runs WHERE id = :id', { id });
+    if (!row) return;
+    const steps = parseSteps(row.steps);
+    if (!steps.length) return;
+    steps[steps.length - 1] = { ...steps[steps.length - 1], at: this.now(), message: String(message || '').slice(0, 300) };
+    this.db.run('UPDATE aco_runs SET steps = :s, updated_at = :t WHERE id = :id', { s: JSON.stringify(steps), t: this.now(), id });
+  }
+
   step(id, status, message) {
     const row = this.db.get('SELECT steps FROM aco_runs WHERE id = :id', { id });
     if (!row) return;
@@ -1010,7 +1049,7 @@ export class Aco {
     const now = this.now();
     const stale = this.db.all(`SELECT * FROM aco_runs WHERE (status = 'queued' AND created_at < :pick) OR (status = 'sent' AND created_at < :sent)
       OR (status IN ('started', 'checkout') AND updated_at < :run) OR (status = 'placing' AND updated_at < :placing)
-      OR (status = 'waiting' AND (updated_at < :beat OR (reason = 'checkpoint' AND created_at < :cp) OR (reason = 'turn' AND created_at < :turn) OR (reason = 'not_live' AND created_at < :live) OR created_at < :queue))`,
+      OR (status = 'waiting' AND (updated_at < :beat OR (reason = 'checkpoint' AND created_at < :cp) OR (reason = 'turn' AND created_at < :turn) OR (reason = 'not_live' AND created_at < :live) OR (reason <> 'not_live' AND created_at < :queue)))`,
     { pick: now - PICKUP_MS, sent: now - SENT_MS, run: now - RUN_MS, placing: now - PLACING_MS, beat: now - WAIT_BEAT_MS, cp: now - CHECKPOINT_MS, turn: now - TURN_MS, live: now - NOT_LIVE_MS, queue: now - QUEUE_MS });
     for (const row of stale) {
       if (row.status === 'queued' || row.status === 'sent') this.finish(row.user_id, row, 'expired', 'no_browser', '').catch(() => null);
@@ -1018,8 +1057,15 @@ export class Aco {
       else if (row.status === 'waiting') {
         const where = this.retailers.name(row.store);
         const lost = row.updated_at < now - WAIT_BEAT_MS;
-        if (row.reason === 'not_live' && !lost) {
+        // (Still in the store's queue it was sent back to from Shop's checkout: its last press may have gone through.)
+        const away = row.reason === 'not_live' && /^In the store's queue/i.test(row.message || '');
+        if (row.reason === 'not_live' && !lost && !away) {
           this.finish(row.user_id, row, 'failed', 'not_live', `${where}'s checkout still said it isn't on sale — nothing was bought, and it's armed again for when it is.`).catch(() => null);
+          continue;
+        }
+        // (Lost touch while it pressed "Pay now" on a checkout that wasn't on sale: the last press may have gone through.)
+        if (row.reason === 'not_live' && parseSteps(row.steps).some((x) => x.status === 'placing')) {
+          this.finish(row.user_id, row, 'needs_you', 'unconfirmed', `Lost touch with your browser while it was pressing "Pay now" at ${where} — check your email from the store before buying it again.`).catch(() => null);
           continue;
         }
         this.finish(row.user_id, row, 'failed', 'timeout', lost ? `Lost touch with your browser while it waited at ${where} — is it still open?`

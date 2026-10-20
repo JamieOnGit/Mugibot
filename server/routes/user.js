@@ -268,7 +268,7 @@ export function register(router, ctx) {
   // Trigger ACO: a test run for one item, now — as if it had just dropped (the same limits and checks).
   router.post('/api/aco/test/:id', async (req) => {
     if (!limiter.hit(`aco-test:${req.user.id}`, 10, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
-    const out = await ctx.aco.test(req.user.id, str(req.params.id, 40));
+    const out = await ctx.aco.test(req.user.id, str(req.params.id, 40), { queue: !!(req.body && req.body.queue === true) });
     if (out.error === 'not_found') throw notFound('SKU');
     if (out.error) throw new HttpError(409, out.error);
     return { run: out.run };

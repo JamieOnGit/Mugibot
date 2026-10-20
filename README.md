@@ -326,12 +326,14 @@ npm test
   its own, a Shop page isn't one; watched option by option (honestly as Mugibot,
   the link never opened by the server), in stock once every one is, its price the
   link's, checked every 5 s; armed, the browser opens the link itself; with an
-  extension before 1.24.0 it doesn't start; an older extension's reading of
+  extension before 1.27.1 it doesn't start; an older extension's reading of
   Shop's account page is left out, and a "signed out" reading never holds a run
   back; a tab that never reaches Shop says so (the link: signed out), but not
-  once it got going (the link: signed in); not on sale at the checkout, the run
-  waits — said once — places when it is, or after 30 minutes stops and is armed
-  again. In Chromium, as a member's real checkout looked (signed in, "Sign in to
+  once it got going (the link: signed in); not on sale at the checkout, "Pay now"
+  pressed again every 2 s on the same checkout — said once, the run waiting for
+  the sale, its presses counted — placed the moment it's on sale; Mattel's real
+  checkout as probed ("Pay now $X", the membership box's words beside its label,
+  the notice left up) the same. In Chromium, as a member's real checkout looked (signed in, "Sign in to
   your account" in the page's code, the membership notice and "not available for
   purchase" up from the start): the agreement ticked, the newsletter box and
   "Check out as guest" left alone, the total checked, "Pay now" — placed as Shop
