@@ -32,6 +32,8 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // a link that never reaches Shop (signed out of it) said in seconds. The store's acoVersion says so.
 // 1.23.0: the panel's "Add to bag → Checkout" checks out a product that isn't on your watchlist (read off
 // its page); an admin's browser searches each store on its own, side by side (busy=…), not one after another.
+// 1.24.0: Shop checkout links — your Shop sign-in read off the checkout's screen (never shop.app's own pages
+// or any page's source), and a checkout that says it isn't on sale yet waited on, "Pay now" the moment it is.
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.

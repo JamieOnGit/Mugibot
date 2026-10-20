@@ -768,6 +768,7 @@ a.ck:hover { border-color: currentColor; }
 
 /* The Monitor page's lists: Tracked products · My watchlist · My activity */
 .mon-ptabs-hd { padding-bottom: 0; border-bottom: 1px solid var(--line); }
+.mon-adds { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .mon-ptabs { display: flex; gap: 2px; flex-wrap: wrap; margin-right: auto; }
 .mon-ptab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 650; padding: 6px 10px 10px; margin-bottom: -1px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .mon-ptab:hover { color: var(--fg); }
@@ -945,3 +946,6 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 .sl-box code { overflow-wrap: anywhere; }
 .sl-box #sl-signin { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; justify-content: space-between; }
 .sl-box #sl-signin:empty { display: none; }
+.sl-seen { font-size: 13px; margin-top: 2px; }
+.sl-seen.ok { color: var(--ok); }
+.sl-seen.err { color: var(--err); }

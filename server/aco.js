@@ -54,6 +54,10 @@ const FOLLOW_MS = 14 * 60 * 1000;
 const WAIT_BEAT_MS = 10 * 60 * 1000;
 const QUEUE_MS = 2 * 60 * 60 * 1000;
 const CHECKPOINT_MS = 20 * 60 * 1000;
+// Waiting on a checkout that says it isn't on sale yet (a Shop checkout link's "not available for
+// purchase"): the browser looks again every few seconds, for 30 minutes from when it was first told so,
+// and stops by itself; a run still waiting this long after it was made (its browser lost) is ended here.
+const NOT_LIVE_MS = 90 * 60 * 1000;
 // Next in line at a store (another checkout of the member's there goes first): this long at most.
 const TURN_MS = 20 * 60 * 1000;
 // A queue's lobby (a browser told to get in line) lasts while the queue's up, or this long.
@@ -99,6 +103,7 @@ export const REASONS = {
   checkpoint: "The store's checkpoint wants a human to solve it",
   phone: 'You finished it on your phone instead',
   no_shop: "Shop's checkout didn't open — this browser isn't signed in to Shop",
+  not_live: "The store's checkout says it isn't on sale yet",
   old_extension: 'The extension in your checkout browser is too old for this store',
   turn: 'Next in line: your other checkout at this store goes first (a store has one bag)',
   timeout: 'It took too long',
@@ -252,16 +257,6 @@ export class Aco {
     }));
   }
 
-  /** The latest any of this member's browsers saw: 'in' | 'out' | null, for a store. */
-  loginStatus(userId, store) {
-    let best = null;
-    for (const d of this.repo.listDevices(userId)) {
-      const l = d.logins && d.logins[store];
-      if (l && (!best || l.at > best.at)) best = l;
-    }
-    return best ? best.status : null;
-  }
-
   /** Orders and spending in the last 24 hours (a pressed final button counts, confirmed or not). */
   today(userId) {
     const rows = this.db.all(`SELECT price, total FROM aco_runs WHERE user_id = :u AND created_at > :since
@@ -327,9 +322,10 @@ export class Aco {
     const going = busy ? ` (${busy} checking out now)` : '';
     if (s.mode === 'place' && day.orders >= s.perDay) return skip('daily_orders', `${day.orders} of ${s.perDay} today${going}.`);
     if (s.mode === 'place' && day.spent + (price ?? item.maxPrice) > s.spendPerDay) return skip('daily_spend', `${money(day.spent)} of ${money(s.spendPerDay)} spent today${going}.`);
-    if (s.signedInOnly && this.loginStatus(userId, item.store) !== 'in') return skip('signed_out', `Sign in at ${r.name} in the browser with the extension.`);
-    // Stores that only check out signed in (Amazon): not while you're seen signed out there.
-    if (r.account && r.account.required && this.loginStatus(userId, item.store) === 'out') return skip('signed_out', `${r.name} only checks out signed in — sign in there in the browser with the extension.`);
+    // (Whether you're signed in at the store never holds a run back: each store's checkout goes either way —
+    //  as a guest, or with your saved details — and a reading of it can be old or wrong (a member signed in at
+    //  BIG W was taken for signed out). A store that only sells signed in says so on its own page, and the
+    //  run stops there, buying nothing.)
     if (!this.repo.listDevices(userId).length) return skip('no_browser', 'Connect the extension in the browser you keep open.');
     // A store the extension only checks out at from a version on (Shop checkout links: 1.22.0, on Shop's checkout).
     const device = this.checkoutDevice(userId);
@@ -393,7 +389,6 @@ export class Aco {
     const device = this.checkoutDevice(userId);
     if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension, and ⚡ Buy runs there from anywhere.` };
     if (this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return { error: `It's already checking out in ${device.name}.` };
-    if (r.account && r.account.required && this.loginStatus(userId, item.store) === 'out') return { error: `${r.name} only sells to signed-in customers — sign in there in ${device.name} first.` };
     if (r.acoVersion && olderVersion(device.version, r.acoVersion)) return { error: `${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}) — update it to ${r.acoVersion} to buy from ${r.name} (${this.cfg.baseUrl}/app#update).` };
 
     // Place the order, or fill checkout in and stop at the final button (and why).
@@ -500,6 +495,28 @@ export class Aco {
     return others.length;
   }
 
+  /**
+   * A Shop checkout link's checkout as it last opened: 'in' (Shop's checkout opened and its ⚡ Buy or
+   * Auto-checkout code was taken up there — only signed in does it get that far) or 'out' (it went on to
+   * the store's guest checkout instead), and how it was seen.
+   */
+  noteShopSeen(userId, item, status, how) {
+    const r = item && this.retailers.get(item.store);
+    if (!r || !r.cartLinks) return;
+    const all = this.repo.getData(userId, 'shopSeen', null) || {};
+    all[item.id] = { status, at: this.now(), how };
+    // (Only links still on the watchlist.)
+    const ids = new Set(this.repo.listItems(userId).filter((x) => x.store === item.store).map((x) => x.id));
+    this.repo.setData(userId, 'shopSeen', Object.fromEntries(Object.entries(all).filter(([id]) => ids.has(id))));
+    this.hub.publish(userId, 'watch', { id: item.id });
+  }
+
+  rearm(userId, itemId) {
+    const n = this.db.run('UPDATE items SET aco = 1, aco_at = :t WHERE id = :i AND user_id = :u AND aco = 0', { t: this.now(), i: itemId, u: userId }).changes;
+    if (n) this.hub.publish(userId, 'watch', { id: itemId, aco: true });
+    return n > 0;
+  }
+
   disarm(userId, itemId) {
     const n = this.db.run('UPDATE items SET aco = 0, aco_at = NULL WHERE id = :i AND user_id = :u AND aco = 1', { i: itemId, u: userId }).changes;
     if (n) this.hub.publish(userId, 'watch', { id: itemId, aco: false });
@@ -602,7 +619,7 @@ export class Aco {
       if (status === 'placing') this.disarm(userId, row.item_id);
       return this.publish(userId, row.id);
     }
-    if (status === 'waiting') return this.waiting(userId, row, reason === 'checkpoint' || reason === 'turn' ? reason : 'queue', message);
+    if (status === 'waiting') return this.waiting(userId, row, ['checkpoint', 'turn', 'not_live'].includes(reason) ? reason : 'queue', message);
     if (status === 'started' && row.status === 'waiting') {
       // Through the queue (or past the checkpoint): carrying on.
       this.db.run("UPDATE aco_runs SET status = 'started', reason = '', updated_at = :t WHERE id = :id", { t: this.now(), id: row.id });
@@ -613,6 +630,7 @@ export class Aco {
     // (A Shop link's tab that never reached Shop's checkout, as the browser saw it: only while the run's
     // still not picked up there — a checkout that got going is reporting for itself.)
     if (reason === 'no_shop' && !['sent', 'queued'].includes(row.status)) return toRun(row);
+    if (reason === 'no_shop' && row.item_id) this.noteShopSeen(userId, this.repo.getItem(userId, row.item_id), 'out', 'run');
     // (pressed: the browser pressed the final button — its "placing", sent without waiting, may not be here yet.)
     if (pressed && row.status !== 'placing' && !parseSteps(row.steps).some((x) => x.status === 'placing')) {
       this.step(row.id, 'placing', 'Final button pressed');
@@ -629,8 +647,14 @@ export class Aco {
    * in a moment, and its "started" message said what's happening).
    */
   async waiting(userId, row, reason, message) {
-    if (!['queued', 'sent', 'started', 'checkout', 'waiting'].includes(row.status)) return toRun(row);
-    const first = row.status !== 'waiting' || row.reason !== reason;
+    // (Not on sale yet: also after "Pay now" was pressed — the store said no, so nothing was bought.)
+    const from = reason === 'not_live' ? ['started', 'checkout', 'waiting', 'placing'] : ['queued', 'sent', 'started', 'checkout', 'waiting'];
+    if (!from.includes(row.status)) return toRun(row);
+    // (Not on sale yet: said once a run, however many times its button's pressed and refused — a wait in a
+    //  queue before it doesn't count.)
+    const first = reason === 'not_live'
+      ? row.reason !== 'not_live' && !parseSteps(row.steps).some((x) => x.status === 'waiting' && /not on sale yet|isn't on sale/i.test(x.message || ''))
+      : row.status !== 'waiting' || row.reason !== reason;
     const text = message || REASONS[reason];
     this.db.run("UPDATE aco_runs SET status = 'waiting', reason = :r, message = :m, updated_at = :t WHERE id = :id", { r: reason, m: text, t: this.now(), id: row.id });
     const last = parseSteps(row.steps).at(-1);
@@ -640,8 +664,10 @@ export class Aco {
       const where = this.retailers.name(row.store);
       await this.notifier.notify(userId, {
         type: 'aco', level: 'urgent', channel: 'aco',
-        title: reason === 'checkpoint' ? `🛡️ ${where}'s checkpoint needs you: ${row.name}` : `🚦 In ${where}'s queue: ${row.name}`,
-        message: reason === 'checkpoint'
+        title: reason === 'checkpoint' ? `🛡️ ${where}'s checkpoint needs you: ${row.name}` : reason === 'not_live' ? `⏳ Not on sale yet at checkout: ${row.name}` : `🚦 In ${where}'s queue: ${row.name}`,
+        message: reason === 'not_live'
+          ? `${text}\nYour browser is waiting on the checkout, everything filled in: it looks again every few seconds and presses "Pay now" the moment the store lets it (up to 30 minutes). Nothing has been bought.`
+          : reason === 'checkpoint'
           ? `${where} wants a human check (hCaptcha) before checkout, in the browser that's checking out — Mugibot never touches the check itself. At the computer: solve it in the tab that opened, and it carries on to checkout. On your phone: solve it on the computer with Chrome Remote Desktop (the tab's in front), or finish it on the phone instead — the computer stops, and the store opens on the phone for you to pass the check and pay.`
           : `${text}\nYour browser is waiting its turn and carries on when it's through. Leave the queue page alone: it refreshes itself.`,
         name: row.name, sku: row.sku, url: row.url || null,
@@ -841,6 +867,10 @@ export class Aco {
     this.step(row.id, status, text);
     // Bought (or it may have been), or filled in for them: armed again only by the member.
     if (status === 'placed' || status === 'ready' || pressed) this.disarm(userId, row.item_id);
+    // Waiting on a checkout that said it isn't on sale to its final button, every time it was pressed (a
+    // Shop checkout link's "not available for purchase"): nothing was bought, so it's armed again for when
+    // it is. (Only from that wait: a run ended as anything else after a press has its arming used up.)
+    if (reason === 'not_live' && row.status === 'waiting' && row.reason === 'not_live' && row.item_id) this.rearm(userId, row.item_id);
     // A drop watch's find bought (or it may have been): one purchase per watch — its other finds are
     // disarmed, and what it finds from now on isn't armed (a broad watch would buy every listing that matches).
     if (status === 'placed' || (pressed && status === 'needs_you')) this.oncePerWatch(userId, row.item_id);
@@ -901,14 +931,18 @@ export class Aco {
     const now = this.now();
     const stale = this.db.all(`SELECT * FROM aco_runs WHERE (status IN ('queued', 'sent') AND created_at < :pick)
       OR (status IN ('started', 'checkout') AND updated_at < :run) OR (status = 'placing' AND updated_at < :placing)
-      OR (status = 'waiting' AND (updated_at < :beat OR (reason = 'checkpoint' AND created_at < :cp) OR (reason = 'turn' AND created_at < :turn) OR created_at < :queue))`,
-    { pick: now - PICKUP_MS, run: now - RUN_MS, placing: now - PLACING_MS, beat: now - WAIT_BEAT_MS, cp: now - CHECKPOINT_MS, turn: now - TURN_MS, queue: now - QUEUE_MS });
+      OR (status = 'waiting' AND (updated_at < :beat OR (reason = 'checkpoint' AND created_at < :cp) OR (reason = 'turn' AND created_at < :turn) OR (reason = 'not_live' AND created_at < :live) OR created_at < :queue))`,
+    { pick: now - PICKUP_MS, run: now - RUN_MS, placing: now - PLACING_MS, beat: now - WAIT_BEAT_MS, cp: now - CHECKPOINT_MS, turn: now - TURN_MS, live: now - NOT_LIVE_MS, queue: now - QUEUE_MS });
     for (const row of stale) {
       if (row.status === 'queued' || row.status === 'sent') this.finish(row.user_id, row, 'expired', 'no_browser', '').catch(() => null);
       else if (row.status === 'placing') this.finish(row.user_id, row, 'needs_you', 'unconfirmed', 'The final button was pressed, but no order confirmation showed. Check your email from the store before buying again.').catch(() => null);
       else if (row.status === 'waiting') {
         const where = this.retailers.name(row.store);
         const lost = row.updated_at < now - WAIT_BEAT_MS;
+        if (row.reason === 'not_live' && !lost) {
+          this.finish(row.user_id, row, 'failed', 'not_live', `${where}'s checkout still said it isn't on sale — nothing was bought, and it's armed again for when it is.`).catch(() => null);
+          continue;
+        }
         this.finish(row.user_id, row, 'failed', 'timeout', lost ? `Lost touch with your browser while it waited at ${where} — is it still open?`
           : row.reason === 'checkpoint' ? `${where}'s checkpoint wasn't solved within 20 minutes`
             : row.reason === 'turn' ? `Your other checkout at ${where} was still going after 20 minutes — it stopped waiting for its turn`

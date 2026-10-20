@@ -100,7 +100,7 @@ export class Monitor {
   pageInterval(url) {
     // A store whose items are checked more often (Shop checkout links: what they're for goes in moments).
     const r = this.retailers.forUrl(url);
-    const own = r && r.monitor && r.monitor.intervalSeconds ? Math.max(this.cfg.monitor.minIntervalSeconds, r.monitor.intervalSeconds) * 1000 : Infinity;
+    const own = r && r.monitor && r.monitor.intervalSeconds ? Math.max(r.monitor.floorSeconds ?? this.cfg.monitor.minIntervalSeconds, r.monitor.intervalSeconds) * 1000 : Infinity;
     const m = this.db.get(`SELECT MIN(COALESCE(m.interval_seconds, :def)) AS s, COUNT(*) AS n FROM products p JOIN monitors m ON m.product_id = p.id, page_checks c
       WHERE c.url = :url AND m.paused = 0 AND ${PRODUCTS_FOR_PAGE}`, { url, def: this.cfg.monitor.urlIntervalSeconds });
     if (!m || !m.n) return Math.min(own, this.interval);

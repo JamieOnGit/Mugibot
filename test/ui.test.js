@@ -130,7 +130,7 @@ test("🛍️ Shop checkout links: a section of their own under My watchlist —
   await page.waitForSelector('#sl-box');
   assert.match(await page.textContent('#sl-box'), /Shop checkout links.*creations\.mattel\.com\/cart\/48835830579405:2,40653613531341:1/s);
   assert.match(await page.textContent('#sl-list'), /No checkout links yet/);
-  assert.match(await page.textContent('#sl-signin'), /Not seen signed in to Shop yet/);
+  assert.match(await page.textContent('#sl-signin'), /Not seen on Shop's checkout yet/);
   const skus = await page.locator('#w-list li[data-id]').count();
   await page.click('#sl-add');
   await page.waitForSelector('#w-form:not([hidden])');
@@ -145,15 +145,21 @@ test("🛍️ Shop checkout links: a section of their own under My watchlist —
   assert.equal(await page.locator('#w-list li[data-id]').count(), skus, 'not listed with the SKUs');
   assert.equal(await page.locator('#sl-list li[data-id] a', { hasText: 'Open ↗' }).count(), 0, 'no Open (it would start a checkout)');
   assert.equal(await page.textContent('#sl-count'), '1');
+  assert.match(await page.textContent('#sl-list li[data-id] .sl-seen'), /Not opened yet: press ⚡ Buy once to check/);
   // Signed in to Shop in one of your browsers (the extension's check of shop.app): the section says so.
   const owner = env.app.repo.userByUsername('owner');
-  const { device } = env.app.repo.addDevice(owner.id, 'Chrome on the desk', '1.22.0');
+  const { device } = env.app.repo.addDevice(owner.id, 'Chrome on the desk', '1.24.0');
   try {
-    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'in', at: Date.now(), how: 'check' } });
+    // (An older extension's reading of Shop's account page: not believed.)
+    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'out', at: Date.now(), how: 'check' } });
     await page.reload();
     await page.click('#pt-watch');
-    await page.waitForFunction(() => /Signed in to Shop in Chrome on the desk \(checked/.test(document.querySelector('#sl-signin').textContent));
-    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'out', at: Date.now(), how: 'check' } });
+    await page.waitForFunction(() => /Not seen on Shop's checkout yet/.test(document.querySelector('#sl-signin').textContent));
+    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'in', at: Date.now(), how: 'page' } });
+    await page.reload();
+    await page.click('#pt-watch');
+    await page.waitForFunction(() => /Signed in to Shop in Chrome on the desk \(seen on Shop's checkout/.test(document.querySelector('#sl-signin').textContent));
+    env.app.repo.setDeviceLogins(owner.id, device.id, { shoplink: { status: 'out', at: Date.now() + 1000, how: 'page' } });
     await page.reload();
     await page.click('#pt-watch');
     await page.waitForFunction(() => /Signed out of Shop in Chrome on the desk/.test(document.querySelector('#sl-signin').textContent));

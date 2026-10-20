@@ -108,6 +108,7 @@ async function showList(name, { load = true } = {}) {
   }
   for (const p of $$('.mon-ppanel')) p.hidden = p.dataset.ppanel !== list;
   $('#w-add-toggle').hidden = list !== 'watch';
+  $('#sl-add').hidden = list !== 'watch';
   if (!load) return;
   if (list === 'watch') await loadWatch();
   else if (list === 'armed') await loadArmed();
@@ -519,6 +520,7 @@ function itemRow(it, i, list = state.items) {
         it.dropWatch ? h('a', { class: 'pill info', href: '#drops', title: 'Found by one of your drop watches (it goes when the watch does)' }, '🎯') : null),
       h('div', { class: 'meta' }, meta, ' ', h('span', { class: `flow flow-${it.flowStatus}` }, FLOW[it.flowStatus] || '')),
       it.error ? h('div', { class: 'meta warn-text' }, it.error) : null,
+      it.shopLink ? shopSeenLine(it) : null,
       !it.url ? h('div', { class: 'meta' }, 'Waiting for the product page to be listed — it\'s found automatically from the SKU.') : null),
     h('span', { class: `pill ${st}` }, STATUS[st] || st),
     h('div', { class: 'acts' },
@@ -570,10 +572,19 @@ function renderItems() {
   renderShopLinks();
 }
 
+/** A Shop checkout link: whether Shop's checkout knew you the last time the link was opened. */
+function shopSeenLine(it) {
+  const s = it.shopSeen;
+  const by = s && s.how === 'run' ? 'Auto-checkout' : '⚡ Buy';
+  if (s && s.status === 'in') return h('div', { class: 'sl-seen ok' }, `✅ Signed in to Shop on this link: its checkout opened with your Shop details (${by}, ${ago(s.at)}).`);
+  if (s && s.status === 'out') return h('div', { class: 'sl-seen err' }, `⚠️ Signed out of Shop on this link: it went on to the store's guest checkout (${ago(s.at)}). Sign in to Shop in your checkout browser.`);
+  return h('div', { class: 'sl-seen muted' }, 'Not opened yet: press ⚡ Buy once to check — it opens Shop\'s checkout, ticks the boxes and stops at "Pay now" (nothing is bought).');
+}
+
 /**
- * 🛍️ Shop checkout links: their own list, and whether you're signed in to Shop in your browsers (the
- * extension checks shop.app every 10 minutes) — signed out, Shop sends the link to the store's own
- * checkout as a guest, where Mugibot doesn't run.
+ * 🛍️ Shop checkout links: their own list, and whether you're signed in to Shop in your browsers (as
+ * Shop's checkout last showed it) — signed out, Shop sends the link to the store's own checkout as a
+ * guest, where Mugibot doesn't run.
  */
 function renderShopLinks() {
   const links = state.items.filter((it) => it.shopLink);
@@ -590,15 +601,17 @@ function renderShopLinks() {
   if (!shop) return;
   const where = shop.device ? ` in ${shop.device}` : '';
   const link = (label, primary) => h('a', { class: `btn small${primary ? ' primary' : ''}`, href: shop.signInUrl, target: '_blank', rel: 'noopener' }, label);
+  // (Read on Shop's checkout itself — your email and saved details on it — never from shop.app's own
+  //  pages: Shop Pay can know you on a checkout while those show you signed out.)
   if (shop.status === 'in') {
     box.className = 'notice ok';
-    box.append(h('span', {}, `✅ Signed in to Shop${where} (${shop.how === 'check' ? 'checked' : 'seen'} ${ago(shop.at)}): your links open Shop's checkout with your details and card.`));
+    box.append(h('span', {}, `✅ Signed in to Shop${where} (seen on Shop's checkout ${ago(shop.at)}): your links open Shop's checkout with your details and card.`));
   } else if (shop.status === 'out') {
     box.className = 'notice err';
-    box.append(h('span', {}, h('b', {}, `Signed out of Shop${where}. `), "Signed out, Shop sends a checkout link to the store's own checkout as a guest: ⚡ Buy can't fill it in there, and Auto-checkout doesn't start. Sign in to Shop in your checkout browser."), link('Sign in to Shop ↗', true));
+    box.append(h('span', {}, h('b', {}, `Signed out of Shop${where}: `), `a link went on to the store's own checkout as a guest ${ago(shop.at)}, where ⚡ Buy can't fill it in. Sign in to Shop in your checkout browser. (Auto-checkout still tries each drop, and says so if it happens again.)`), link('Sign in to Shop ↗', true));
   } else {
     box.className = 'notice warn';
-    box.append(h('span', {}, `Not seen signed in to Shop yet${where}: sign in at shop.app in your checkout browser (the extension checks it every 10 minutes). Checkout links only open Shop's checkout while you're signed in.`), link('Open Shop ↗', false));
+    box.append(h('span', {}, `Not seen on Shop's checkout yet${where}. Press ⚡ Buy on a link once: it opens Shop's checkout and stops at "Pay now", and the link then says whether Shop knew you.`), link('Open Shop ↗', false));
   }
 }
 
@@ -1085,7 +1098,6 @@ function renderAcoSettings() {
   $('#aco-max').value = s.maxOrder;
   $('#aco-perday').value = s.perDay;
   $('#aco-spend').value = s.spendPerDay;
-  $('#aco-signedin').checked = !!s.signedInOnly;
 }
 
 // ---------------------------------------------------------------------------
@@ -1121,7 +1133,6 @@ function checkoutBrowser() {
  * can't tell from here.
  */
 function readiness(it) {
-  const s = state.aco.settings;
   const { b: browser, here } = checkoutBrowser();
   const out = [];
   // 🧹 The bag: Auto-checkout buys the one item, so anything else in the store's bag stops it there.
@@ -1139,12 +1150,12 @@ function readiness(it) {
   else out.push({ key: 'bag', label: 'Bag', tone: 'warn', text: 'Not emptied from here yet: anything already in it stops the run — press Clear bag to be sure', fix: 'bag' });
   // 🔑 Signed in at the store: faster (the store fills in your saved details) — or needed, at some.
   const l = state.logins && state.logins.stores.find((x) => x.id === it.store);
-  if (!l || !l.at) out.push({ key: 'signin', label: 'Sign-in', tone: l && l.required ? 'no' : 'na', text: l && l.required ? `${l.name} only sells signed in: open it once in your checkout browser and sign in` : 'Not seen yet: open the store once in your checkout browser', href: l && l.signInUrl });
+  // (Never stops a run: it goes signed in or not — only a store that sells signed in alone stops it, at its own sign-in page.)
+  if (!l || !l.at) out.push({ key: 'signin', label: 'Sign-in', tone: l && l.required ? 'warn' : 'na', text: l && l.required ? `${l.name} only sells signed in: open it once in your checkout browser and sign in` : 'Not seen yet: open the store once in your checkout browser', href: l && l.signInUrl });
   else if (l.status === 'in') out.push({ key: 'signin', label: 'Sign-in', tone: 'ok', text: `Signed in (${l.how === 'check' ? 'checked' : 'seen'} ${ago(l.at)})` });
   else if (l.status === 'out') {
-    const must = l.required || s.signedInOnly;
-    out.push({ key: 'signin', label: 'Sign-in', tone: must ? 'no' : 'warn', href: l.signInUrl,
-      text: l.required ? `Signed out — ${l.name} only sells signed in` : s.signedInOnly ? 'Signed out — your settings only check out where you\'re signed in' : 'Signed out — it checks out as a guest, but signed in is faster' });
+    out.push({ key: 'signin', label: 'Sign-in', tone: 'warn', href: l.signInUrl,
+      text: l.required ? `Seen signed out ${ago(l.at)} — ${l.name} only sells signed in: it still tries, and stops at its sign-in page if you are` : `Seen signed out ${ago(l.at)} — it checks out as a guest then (signed in is a little faster)` });
   } else out.push({ key: 'signin', label: 'Sign-in', tone: 'na', text: "Couldn't tell whether you're signed in", href: l.signInUrl });
   // 💳 The card, in the browser that checks out (a store that only takes PayPal stops there: no card needed).
   const card = here ? state.armedCard : browser ? browser.card : null;
@@ -1579,7 +1590,7 @@ $('#aco-form').addEventListener('submit', (e) => {
   busy(e.target, async () => {
     try {
       const mode = ($$('input[name="aco-mode"]').find((r) => r.checked) || {}).value || 'place';
-      const r = await api('PUT', '/api/aco', { mode, maxOrder: $('#aco-max').value, perDay: $('#aco-perday').value, spendPerDay: $('#aco-spend').value, signedInOnly: $('#aco-signedin').checked });
+      const r = await api('PUT', '/api/aco', { mode, maxOrder: $('#aco-max').value, perDay: $('#aco-perday').value, spendPerDay: $('#aco-spend').value });
       Object.assign(state.aco, r);
       renderAcoSettings();
       setMsg($('#aco-msg'), 'Saved.', true);

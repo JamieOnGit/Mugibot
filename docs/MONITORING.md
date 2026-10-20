@@ -240,6 +240,12 @@ isn't searched any less often (at least half a second between two searches):
   keyword is searched instead for 15 minutes (the live log says so), then the
   list again. A refusal is Kmart's, as for any search: it slows down.
 - Target: page 1 of each keyword every ~15 s, every page every ~1–2 minutes.
+  A Target product page is read from Target's own page data first: a product
+  with neither home delivery nor click & collect is out of stock (its "Add To
+  Basket" greyed out), even while its JSON-LD for search engines says "InStock"
+  — as a member's 30th Celebration pre-order did. (Target draws every Add To
+  Basket greyed out and turns it on with its own code, so the button in the
+  page itself says nothing.)
   Target's own CDN keeps a copy of a search page for a short while, so a
   change can take a minute or two to show up there. Mugibot doesn't try to
   get around their cache.
@@ -392,7 +398,7 @@ Settings (environment variables): `VIP_FAST_SECONDS` (5), `VIP_SLOW_SECONDS`
 
 A member's **checkout link** at a store that checks out with Shop
 (`…/cart/<variant>:<qty>,…`, on **My watchlist → 🛍️ Shop checkout links**) is watched
-by the server every 20 seconds, option by option: the store's own
+by the server every 5 seconds, option by option: the store's own
 `/variants/<id>.js` for each, read honestly as Mugibot, in stock once every one is,
 its price the link's (each option's price times its quantity). The link itself is
 never opened by the server, and never by members' browsers' checks (it would start

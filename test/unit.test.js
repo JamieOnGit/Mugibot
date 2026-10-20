@@ -18,6 +18,7 @@ import { RateLimiter, parseCookies } from '../server/http.js';
 import { RETAILER_DEFS, Retailers, serialize } from '../server/retailers/index.js';
 import { DEFAULT_ACO, acoSettings, alerts, item, profile, profiles, username } from '../server/schema.js';
 import { makeZip } from '../server/zip.js';
+import { extractProduct } from '../server/monitor/extract.js';
 import { loadConfig } from '../server/config.js';
 import { entitlement } from '../server/entitlement.js';
 import { Whop, signWebhook } from '../server/whop.js';
@@ -412,3 +413,19 @@ test('the buy button by its words, the same at every store: "Add to cart", "Add 
   assert.equal(core.match(/var NOT_ADD = (\/.*\/i);/)[1], String(NOT_ADD));
 });
 
+
+test("Target's own page data beats its JSON-LD: a pre-order with neither home delivery nor click & collect (\"Add To Basket\" greyed out) is out of stock, though its JSON-LD says InStock; one with them is in stock; the greyed-out button Target draws on every page counts for nothing", () => {
+  // (As Target's real pages are, Oct 2026: every Add To Basket drawn greyed out, and turned on by Target's
+  //  own code from product.deliveryModes in __NEXT_DATA__.)
+  const page = (modes, name) => `<html><head><script type="application/ld+json">{"@context":"https://schema.org/","@type":"Product","name":"${name}","sku":"73528173","offers":{"@type":"Offer","price":"360","availability":"https://schema.org/InStock","priceCurrency":"AUD"}}</script></head><body>
+    <script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { product: { code: '73528173', name, deliveryModes: modes } } } })}</script>
+    <h1>${name}</h1><button cursor="select" aria-disabled="true" data-visual-disabled="true" data-testid="add-to-cart-button"><style>.css-x{color:#fff}</style><p>Add To Basket</p></button></body></html>`;
+  const off = { clickAndCollect: { available: false }, homeDelivery: { available: false }, expressDelivery: { available: true } };
+  const on = { clickAndCollect: { available: true }, homeDelivery: { available: true }, expressDelivery: { available: true } };
+  const greyed = extractProduct(page(off, 'Pre-Order Pokemon TCG: 30th Celebration Ultra-Premium Collection - Night'));
+  assert.deepEqual([greyed.status, greyed.decidedBy, greyed.price], ['out_of_stock', 'store-data', 360]);
+  const buyable = extractProduct(page(on, 'Pokemon 30th Anniversary Battle Figure Multipack'));
+  assert.deepEqual([buyable.status, buyable.decidedBy], ['in_stock', 'json-ld']);
+  // Click & collect only (or home delivery only): it can be ordered.
+  assert.equal(extractProduct(page({ ...off, clickAndCollect: { available: true } }, 'C&C only')).status, 'in_stock');
+});

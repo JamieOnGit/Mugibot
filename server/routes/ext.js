@@ -162,6 +162,8 @@ export function register(router, ctx) {
     const aco = row.run_id ? ctx.aco.claimed(req.user.id, row.run_id, req.device) : null;
     // (The product's page: where to go once through a store's queue, which may let you in at its front page.)
     const item = row.item_id ? repo.getItem(req.user.id, row.item_id) : null;
+    // (A Shop checkout link's code is only taken up on Shop's checkout: it opened signed in for that link.)
+    if (item) ctx.aco.noteShopSeen(req.user.id, item, 'in', aco ? 'run' : 'buy');
     return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, aco };
   }, { auth: 'device', entitled: true });
 
@@ -218,7 +220,9 @@ export function register(router, ctx) {
       if (!retailers.get(store) || !v || typeof v !== 'object') continue;
       if (!['in', 'out', 'unknown'].includes(v.status)) continue;
       const at = Number(v.at);
-      out[store] = { status: v.status, at: Number.isFinite(at) && at > 0 && at <= now + 60000 ? Math.round(at) : now, how: v.how === 'check' ? 'check' : 'page' };
+      // how: 'check' (a page fetched), 'page' (the page you have open), 'screen' (read off the screen: Shop's
+      // checkout), 'run' (a checkout link that went on to the store's guest checkout).
+      out[store] = { status: v.status, at: Number.isFinite(at) && at > 0 && at <= now + 60000 ? Math.round(at) : now, how: ['check', 'screen', 'run'].includes(v.how) ? v.how : 'page' };
     }
     const logins = repo.setDeviceLogins(req.user.id, req.device.id, out);
     if (logins && Object.keys(out).length) ctx.hub.publish(req.user.id, 'devices', {});

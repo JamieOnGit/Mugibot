@@ -121,7 +121,7 @@
                   <button type="button" role="tab" class="mon-ptab" data-ptab="drops" id="pt-drops" aria-controls="pp-drops">🎯 Drop watches <span class="mon-meta" id="dw-count"></span></button>
                   <button type="button" role="tab" class="mon-ptab" data-ptab="activity" id="pt-activity" aria-controls="pp-activity">My activity</button>
                 </div>
-                <button class="btn small primary" id="w-add-toggle" type="button" hidden>+ Add SKU</button>
+                <div class="mon-adds"><button class="btn small primary" id="w-add-toggle" type="button" hidden>+ Add SKU</button><button class="btn small primary" id="sl-add" type="button" hidden>+ Add checkout link</button></div>
               </header>
               <div class="mon-ppanel" data-ppanel="tracked" id="pp-tracked" role="tabpanel" aria-labelledby="pt-tracked">
                 <div class="filters sn-filters" role="search">
@@ -171,8 +171,8 @@
                 </div>
                 <!-- 🛍️ Shop checkout links: a store's own checkout link (…/cart/<variant>:<qty>) at stores that check out with Shop -->
                 <section class="card sl-box" id="sl-box" aria-labelledby="sl-title">
-                  <div class="sl-head"><h3 id="sl-title">🛍️ Shop checkout links <span class="mon-meta" id="sl-count"></span></h3><button class="btn small primary" id="sl-add" type="button">+ Add checkout link</button></div>
-                  <p class="muted small">For stores that check out with <b>Shop</b> (Shop Pay), when you have the store's checkout link itself — like <code>https://creations.mattel.com/cart/48835830579405:2,40653613531341:1</code> (each option, and how many). Mugibot checks every option in the link about every 20 seconds, and once they're all in stock you get a DM with <b>⚡ Buy</b>. Armed for 🤖 Auto-checkout, it's bought by itself: the link opens Shop's checkout with your Shop address, delivery and card, any box the store needs ticked to check out is ticked (a membership agreement — never newsletters), and <b>Pay now</b> is pressed, within your limits. The max price is for the whole link, quantities included (delivery's on top: up to $40 more).</p>
+                  <div class="sl-head"><h3 id="sl-title">🛍️ Shop checkout links <span class="mon-meta" id="sl-count"></span></h3></div>
+                  <p class="muted small">For stores that check out with <b>Shop</b> (Shop Pay), when you have the store's checkout link itself — like <code>https://creations.mattel.com/cart/48835830579405:2,40653613531341:1</code> (each option, and how many). Mugibot checks every option in the link every 5 seconds, and once they're all in stock you get a DM with <b>⚡ Buy</b>. Armed for 🤖 Auto-checkout, it's bought by itself: the link opens Shop's checkout with your Shop address, delivery and card, any box the store needs ticked to check out is ticked (a membership agreement — never newsletters), and <b>Pay now</b> is pressed, within your limits. The max price is for the whole link, quantities included (delivery's on top: up to $40 more). If the checkout says it isn't on sale yet ("not available for purchase"), Auto-checkout waits there and looks again every few seconds, pressing <b>Pay now</b> the moment it is.</p>
                   <div class="notice" id="sl-signin" role="status"></div>
                   <ul class="items" id="sl-list"></ul>
                 </section>
@@ -433,7 +433,6 @@
               <div><label for="aco-perday">Orders a day</label><input id="aco-perday" type="number" min="1" max="10" step="1" required></div>
               <div><label for="aco-spend">Spending a day ($)</label><input id="aco-spend" type="number" min="1" max="20000" step="1" required></div>
             </div>
-            <label class="check"><input type="checkbox" id="aco-signedin"> <span>Only at stores where this browser is signed in (checkout is faster signed in: the store fills in your saved details)</span></label>
             <p class="muted small">Every order is also checked at checkout: the total (delivery included) must be within the item's max price + $40 and your limit above. Anything off — another item in the bag, a declined card, your bank's or the store's check — and it stops and tells you. It never gets past a bot check or your bank's check.</p>
             <div class="form-actions"><button class="btn primary" type="submit">Save</button><span class="msg" id="aco-msg"></span></div>
           </form>

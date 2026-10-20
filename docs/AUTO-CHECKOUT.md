@@ -24,9 +24,13 @@ is bought for an item until they **arm** it, and each arming buys **once**.
    - **Most an order may cost.** Delivery included. Default $400.
    - **Orders a day.** Over 24 hours. Default 2.
    - **Spending a day.** Default $600.
-   - **Only at stores where this browser is signed in** (optional). Signed in,
-     checkout is faster because the store fills in your saved details.
-     The sign-in status comes from the store login monitor.
+   - **Signed in or not, it goes.** Each store's checkout is followed either
+     way: as a guest with your delivery details and card, or signed in with the
+     details the store has saved (a little faster). Whether you're signed in
+     never holds a run back — a reading can be old or wrong (a member signed in
+     at BIG W was taken for signed out), and that would cost the drop. (The
+     "Only at stores where this browser is signed in" setting is gone for that
+     reason.)
 4. **Arm items.** On the Drops page's **🤖 Armed** list (the tab next to My
    watchlist: 10 to a page; "Armed only" shows just those), or with "🤖
    Auto-checkout this item when it drops" when you add or edit an item on your
@@ -36,8 +40,9 @@ is bought for an item until they **arm** it, and each arming buys **once**.
    column — with the item's **checks** under its name, always in the same order:
    - **Bag**: emptied (Clear cart) and nothing left in it since — a run that got
      to the store and ended without an order may have left its item there;
-   - **Sign-in**: whether your checkout browser is signed in at the store (needed
-     at Amazon, or with "Only at stores where this browser is signed in");
+   - **Sign-in**: whether your checkout browser was last seen signed in at the
+     store (only ever !, never ✗: it checks out either way; Amazon only sells
+     signed in, and stops at its own sign-in page if you aren't);
    - **Card**: ready in your checkout browser (that browser says so, from
      extension 1.20, so you can see it from your phone too);
    - **Address**: the item's delivery details complete (its own address, else
@@ -129,8 +134,9 @@ There's nothing to sign in to on the phone, and no browser needed there.
   first (as its link always did). It isn't armed by it.
 - **Your checkout browser isn't open?** The reply says so. The run waits 2
   minutes for it, then shows as "didn't start".
-- **A store that only sells signed in** (Amazon): it doesn't start if your
-  checkout browser was last seen signed out there, and says to sign in first.
+- **A store that only sells signed in** (Amazon): it starts all the same — if
+  you really are signed out there, Amazon's own sign-in page stops it, buying
+  nothing.
 - **Switch it off** under "⚡ Buy from your phone" on the Checkout page.
   The button then says it's off.
 - In the Run history it's "⚡ Buy pressed in Discord". The day's limits count
@@ -384,7 +390,7 @@ ending, and an email if "Email me when checkout is waiting for me" is on (Setup 
 | 🛒 Filled in, waiting for you | "Stop at the final button" mode |
 | ⚠️ Needs you | Your bank's check, a bot check, the total over your limit, no confirmation after pressing |
 | ❌ Failed | Sold out by the time your browser got there, not added to the bag, couldn't reach checkout, card declined, the card didn't go in, another item in the bag, it took too long |
-| ⏭️ Didn't start | Over the item's max price, over your order or daily limits, 3 failures today, signed out (if you chose that, or at a store that only sells signed in: Amazon), no browser with the extension open, membership not active |
+| ⏭️ Didn't start | Over the item's max price, over your order or daily limits, 3 failures today, no browser with the extension open, membership not active |
 
 ### Your card through extension updates: no passphrase, nothing to type
 
@@ -476,17 +482,18 @@ presses Link's "Confirm" — then "Place order".
 ### 🛍️ Shop checkout links
 
 At a store that checks out with **Shop** (Shop Pay), you can watch and arm the
-store's **checkout link** itself — Monitor → **My watchlist** → **🛍️ Shop checkout
-links** → **+ Add checkout link**, e.g.
+store's **checkout link** itself — Monitor → **My watchlist** → **+ Add checkout
+link** (next to + Add SKU; the links are listed under **🛍️ Shop checkout links**), e.g.
 `https://creations.mattel.com/cart/48835830579405:2,40653613531341:1` (each option,
 and how many). The link is the order, its quantities included, so its **max price
 is for the whole link** (delivery on top, up to $40 more, within your limit an
 order).
 
 - **Watching.** Mugibot's server asks the store about each option in the link
-  every 20 seconds, the way its own pages do (`/variants/<id>.js`), honestly as
-  Mugibot. It's in stock once **every** option is; its price is the link's. The
-  link itself is never opened by the server (it would start a checkout).
+  every **5 seconds**, the way its own pages do (`/variants/<id>.js`, a tiny
+  answer), honestly as Mugibot, a second apart at a store. It's in stock once
+  **every** option is; its price is the link's. The link itself is never opened
+  by the server (it would start a checkout).
 - **⚡ Buy and Auto-checkout** open the link as it is, which goes straight to
   Shop's checkout with your Shop address, delivery and card already in — nothing
   of yours is typed there, and Shop's choices are left as they are. Any box the
@@ -496,19 +503,37 @@ order).
   out as guest"** is never pressed. ⚡ Buy stops at **Pay now** for you;
   Auto-checkout checks the total against your limits and presses it once. Shop
   then goes on to the store's own order page, and that's the order seen placed.
-- **The store won't sell it** ("This Product is not available for purchase", as
-  Mattel says when you're not a member): it stops there, nothing pressed, and
-  says so.
+- **"This Product is not available for purchase"** (and "You must accept
+  membership agreement") can be up on the checkout before anything's pressed —
+  a member's Mattel checkout showed both, while the store's own data already
+  said in stock. Neither stops it: the agreement is ticked and **Pay now** is
+  pressed. If the store answers "not available for purchase" (not on sale yet,
+  or members only), nothing's bought, and the run **waits on the checkout** with
+  everything filled in: it looks again every 5 seconds (the page reloaded, as a
+  person refreshing it would) without pressing anything, and presses **Pay now**
+  the moment the notice has gone. You get one DM when it starts waiting. After
+  30 minutes still not on sale it stops — nothing bought — and the item is
+  **armed again** for when it is.
 - **Signed in to Shop only.** Signed out, Shop sends the link on to the store's
-  own checkout as a guest, where Mugibot doesn't run. So the extension checks
-  `shop.app/account` every 10 minutes with your cookies (the store login monitor,
-  read-only), the section shows whether you're signed in, and Auto-checkout
-  doesn't start while you're seen signed out (Discord's ⚡ Buy says so). A run
-  whose tab doesn't reach Shop's checkout within 25 seconds says so — "Shop's
-  checkout didn't open" — and is left in its tab for you.
+  own checkout as a guest, where Mugibot doesn't run. Whether you're signed in is
+  read **on Shop's checkout itself**, from what's on the screen: your email by
+  Shop's logo, or "Check out as guest" (Shop only offers that to someone it
+  knows). Shop's own account page isn't a sign: Shop Pay can know you on a
+  checkout while shop.app shows you signed out, and Shop's pages carry the words
+  "Sign in to your account" in their code either way (until extension 1.24.0
+  Mugibot read those, and took a member who was signed in for signed out).
+  - **Each link** shows how its checkout last opened: **✅ Signed in to Shop on
+    this link** (its ⚡ Buy or Auto-checkout got to Shop's checkout), **⚠️ Signed
+    out** (it went on to the store's guest checkout), or **Not opened yet** —
+    press ⚡ Buy once to check: it opens Shop's checkout, ticks the boxes and
+    stops at Pay now, buying nothing.
+  - A reading of "signed out" never holds a run back: signed in since (and not
+    seen), it would cost the drop, while a run that's really signed out finds
+    out within 25 seconds — "Shop's checkout didn't open" — buying nothing, and
+    is left in its tab for you.
 - **No bag**: each link is its own order, so Shop links never wait for each other
   or for another checkout, and Clear cart has nothing to empty for them.
-- Needs the extension **1.22.0** (it runs on `shop.app`): with an older one in
+- Needs the extension **1.24.0** (it runs on `shop.app`): with an older one in
   your checkout browser, Auto-checkout doesn't start and says to update.
 
 At **Premium Bandai** the whole checkout is in Global-e's frame. Mugibot runs it

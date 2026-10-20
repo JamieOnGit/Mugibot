@@ -8,6 +8,7 @@ import { BAGS_EXTENSION_VERSION } from '../bags.js';
 import { ACO_EXTENSION_VERSION, EXTENSION_VERSION, REMOTE_EXTENSION_VERSION, RESTORE_EXTENSION_VERSION, storeUrl } from '../extension.js';
 import { DUMMY_PRODUCTS, STARTER_ITEMS, dummyProductPath } from '../presets.js';
 import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, bool, cardBackupInfo, cardRestoreInfo, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
+import { latestLogin } from '../retailers/index.js';
 import { publicUser } from './auth.js';
 
 const notFound = (what) => new HttpError(404, `${what} not found`);
@@ -56,7 +57,12 @@ export function register(router, ctx) {
   router.get('/api/retailers', async () => ({ retailers: retailers.publicList() }));
 
   // --- Watchlist ---------------------------------------------------------------
-  router.get('/api/items', async (req) => ({ items: repo.listItems(req.user.id).map(withStore), active: entitlement(req.user, repo.now()).active }));
+  router.get('/api/items', async (req) => {
+    // A Shop checkout link: whether Shop's checkout last opened signed in for it (aco.js noteShopSeen).
+    const seen = repo.getData(req.user.id, 'shopSeen', null) || {};
+    const items = repo.listItems(req.user.id).map(withStore).map((it) => (it.shopLink ? { ...it, shopSeen: seen[it.id] || null } : it));
+    return { items, active: entitlement(req.user, repo.now()).active };
+  });
 
   router.post('/api/items', async (req) => {
     if (repo.countItems(req.user.id) >= cfg.limits.items) throw bad(`You can watch up to ${cfg.limits.items} SKUs`);
@@ -298,11 +304,7 @@ export function register(router, ctx) {
   router.get('/api/logins', async (req) => {
     const devices = repo.listDevices(req.user.id);
     const stores = retailers.list.filter((r) => r.account && retailers.enabled(r) && (!r.demo || cfg.demoStoreUrl)).map((r) => {
-      let best = null;
-      for (const d of devices) {
-        const l = d.logins && d.logins[r.id];
-        if (l && (!best || l.at > best.at)) best = { ...l, device: d.name };
-      }
+      const best = latestLogin(r, devices);
       return {
         id: r.id, name: r.name, demo: !!r.demo, signInUrl: `${r.base}${r.account.signIn || ''}`, cartLinks: !!r.cartLinks,
         // required: the store only sells to signed-in customers (Amazon: no guest checkout).
