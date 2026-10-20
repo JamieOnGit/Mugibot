@@ -586,6 +586,8 @@ test('Membership tab: become a member through Whop, then it shows the membership
   await p2.check('#su-terms');
   await p2.click('#signup button[type=submit]');
   await p2.waitForURL(/\/app/);
+  // (The banner is drawn once the page has your account, a moment after the page itself loads.)
+  await p2.waitForFunction(() => /Start your membership/.test(document.querySelector('#banner').textContent));
   assert.match(await p2.textContent('#banner'), /Start your membership \(A\$19\.99 \/ month\)/);
   await p2.click('a[data-tab="account"]');
   await p2.waitForSelector('#m-subscribe:not([hidden])');
@@ -1118,6 +1120,8 @@ test('🎯 Drop watches: one box for a link or words — the form shows where to
   await page.goto(`${env.url}/app#drops`);
   await page.waitForSelector('#pp-drops:not([hidden]) #dw-form');
   assert.equal(await page.getAttribute('#pt-drops', 'aria-selected'), 'true');
+  // (The list is drawn once your drop watches have loaded, a moment after the form shows.)
+  await page.waitForFunction(() => document.querySelector('#dw-mine').textContent.trim() !== '');
   assert.match(await page.textContent('#dw-mine'), /No drop watches yet/);
   // An admin: where drops for everyone go (#non-tcg-alerts: made with the store channels, earlier) —
   // and, without it, one click makes it.
