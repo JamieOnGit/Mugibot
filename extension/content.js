@@ -298,8 +298,9 @@
 
   /** The card is in — every box of it: on the page, or in the payment provider's boxes (up to 15 s for those). */
   async function cardIn() {
-    // (Looked at four times a second: the final button is pressed the moment the card's in.)
-    for (let i = 0; i < 60; i++) {
+    // (Looked at four times a second: the final button is pressed the moment the card's in. A checkout
+    //  still coming in — a busy drop — gets up to a minute for its card boxes.)
+    for (let started = Date.now(); Date.now() - started < 15000 || (Date.now() - started < 60000 && MGBQuick.pageBusy());) {
       if (await cardReady(true)) return true;
       await MGBFlows.wait(250);
     }
@@ -366,16 +367,30 @@
     if (err) return acoStop('needs_you', 'needs_details', `The page says: "${err}" — fix it and press the button yourself.`, fin);
     const missing = MGBChecks.missingRequired(document);
     if (missing) return acoStop('needs_you', 'needs_details', `"${missing}" still needs filling in — fill it and press the button yourself.`, fin);
-    const total = orderTotal();
+    let total = orderTotal();
     if (total === null) return acoStop('needs_you', 'no_total', "Couldn't read the order total to check it against your limit — check it and press the button yourself.", fin);
     if (total > run.maxTotal) return acoStop('needs_you', 'over_limit', `The total, $${total.toFixed(2)}, is over your limit of $${run.maxTotal.toFixed(2)} — check it and press the button yourself if it's right.`, fin, total);
     // The button, ready to press (some turn on a moment after the last box is filled).
     let btn = fin.el;
-    for (let i = 0; i < 25 && (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true' || !MGBFill.isVisible(btn)); i++) {
+    // (5 s — or, a checkout still coming in, up to 45 s.)
+    const finStarted = Date.now();
+    for (; (Date.now() - finStarted < 5000 || (Date.now() - finStarted < 45000 && MGBQuick.pageBusy())) && (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true' || !MGBFill.isVisible(btn));) {
       await MGBFlows.wait(200);
       if (!btn.isConnected) btn = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')].find((el) => MGBFill.isVisible(el) && (el.innerText || el.value || '').trim() === fin.text) || btn;
     }
     if (!btn.isConnected || btn.disabled || btn.getAttribute('aria-disabled') === 'true') return acoStop('needs_you', 'needs_details', `"${fin.text}" didn't become available — check the page and press it yourself.`, fin, total);
+    // (Read again just before pressing: a checkout still coming in can add its delivery or fees, or a
+    //  message, while its button turns on.)
+    if (Date.now() - finStarted > 300) {
+      const err2 = pageError();
+      if (err2) return acoStop('needs_you', 'needs_details', `The page says: "${err2}" — fix it and press the button yourself.`, fin);
+      const missing2 = MGBChecks.missingRequired(document);
+      if (missing2) return acoStop('needs_you', 'needs_details', `"${missing2}" still needs filling in — fill it and press the button yourself.`, fin);
+      const total2 = orderTotal();
+      if (total2 === null) return acoStop('needs_you', 'no_total', "Couldn't read the order total to check it against your limit — check it and press the button yourself.", fin);
+      if (total2 > run.maxTotal) return acoStop('needs_you', 'over_limit', `The total, $${total2.toFixed(2)}, is over your limit of $${run.maxTotal.toFixed(2)} — check it and press the button yourself if it's right.`, fin, total2);
+      total = total2;
+    }
     // Said first (the page may leave the moment it's pressed): this run's final button, pressed once.
     await acoReport('placing', '', `Pressing "${fin.text}" — total $${total.toFixed(2)}`, total);
     panel.setStatus(`🤖 Placing your order ($${total.toFixed(2)})…`);
@@ -529,8 +544,9 @@
         waitAtGate(late);
         return;
       }
-      // (On its way: the flow's own progress carries it from here.)
-      if (fresh && (holdStore.read() || {}).provisional) holdStore.clear();
+      // (On its way: the flow's own progress carries it from here. Its page looked at again — a store's
+      //  error page under load — it's kept, for the run to pick up on the new page.)
+      if (fresh && result !== 'reload' && (holdStore.read() || {}).provisional) holdStore.clear();
       // Stopped short of checkout (sold out, not added…): the store's next checkout goes now. (Auto-checkout's runs say so themselves.)
       if (!aco && ['error', 'timeout', 'stopped'].includes(result)) ask({ type: 'turnEnd' });
       if (result === 'checkout') atCheckout();
@@ -610,7 +626,9 @@
     holdStore.save({ ...claimed, kind: null, provisional: true, page: location.pathname + location.search, at: Date.now() });
     // The buy box can take a few seconds to appear on a fresh page load.
     const waitMs = (MGBFlows.part(retailer, 'product').waitMs) || 12000;
-    go(true, { product, waitForButtonMs: waitMs });
+    // (canReload: a store's error page under load is looked at again — this run picks up on the new page,
+    //  kept by the hold above; isGate: never a queue's page.)
+    go(true, { product, waitForButtonMs: waitMs, canReload: true, isGate: () => !!seenGate(), onReload: () => reloadFor(product) });
   }
 
   /**
@@ -645,6 +663,21 @@
     }
     panel.setStatus(`Its turn — opening ${retailer.name} afresh…`);
     location.reload();
+  }
+
+  /**
+   * The store's error page under load, looked at again: the product's own page (the store may have sent
+   * this tab to an error page of its own, "/sorry") — this run's hold kept for either address, for the
+   * run to pick up on whichever comes in.
+   */
+  function reloadFor(product) {
+    let to = null;
+    try { to = product && product.url ? new URL(product.url, location.href) : null; } catch { to = null; }
+    const here = location.pathname + location.search;
+    if (!to || to.origin !== location.origin || to.pathname + to.search === here) { location.reload(); return; }
+    const h = holdStore.read();
+    if (h) holdStore.save({ ...h, page: to.pathname + to.search, also: here });
+    location.replace(to.href);
   }
 
   // ---------------------------------------------------------------------------
@@ -727,6 +760,8 @@
 
   if (goCode) {
     const claim = held ? held.claim : await claiming;
+    // (A new ⚡ Buy in this tab: its own error-page reloads, counted from none.)
+    if (!held && claim && claim.ok) MGBQuick.slowReloads(0);
     if (claim && claim.ok) {
       const listed = items.find((p) => p.id === claim.itemId) || items.find((p) => p.sku === claim.sku);
       const product = { ...(listed || {}), sku: claim.sku, name: claim.name || (listed && listed.name) || claim.sku, url: claim.url || (listed && listed.url) || null, store: retailer.id };
@@ -759,7 +794,7 @@
   // its progress kept by the flow — carries on as that, below.)
   if (!goCode && held && store.read()) { holdStore.clear(); held = null; }
   // (Kept only in case its page reloaded: anywhere else, it's not carried on — you went somewhere else.)
-  if (!goCode && held && held.provisional && !gate && held.page !== location.pathname + location.search) { holdStore.clear(); held = null; }
+  if (!goCode && held && held.provisional && !gate && held.page !== location.pathname + location.search && held.also !== location.pathname + location.search) { holdStore.clear(); held = null; }
   if (!goCode && held) {
     aco = (await ask({ type: 'acoInfo' })) || held.claim.aco || null;
     if (gate) {

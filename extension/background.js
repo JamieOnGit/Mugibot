@@ -1139,6 +1139,13 @@ async function openStoreTab(url, { active = true } = {}) {
  * (turn: false — its turn has come.)
  */
 async function startRun(run, { turn = true } = {}) {
+  // Sent again while its tab is still coming in (a store slowed right down by a busy drop takes longer
+  // than the server waits to hear back): that tab carries on — never a second one, which could add it
+  // twice. (A tab that has come in and still not taken the run up couldn't — its claim failed: a new
+  // tab, as ever. So does one that's been loading longer than the run's code lasts.)
+  const going = Object.entries((await chrome.storage.session.get(TURNS))[TURNS] || {}).find(([k, e]) => k.startsWith('t:') && e.runId === run.id);
+  const goingTab = going && (await chrome.tabs.get(Number(going[0].slice(2))).catch(() => null));
+  if (goingTab && goingTab.status === 'loading' && Date.now() - (going[1].since || 0) < 5 * 60 * 1000) return null;
   // This browser is in that store's queue (a tab of yours waiting its turn): the run waits for it to
   // get through, rather than ask the store again (which could cost the place in line).
   const g = await gatesNow();
@@ -1169,7 +1176,7 @@ async function startRun(run, { turn = true } = {}) {
     delete t[key];
     if (tab) t[`t:${tab.id}`] = { store: e.store, since: e.since, runId: e.runId, name: e.name, tabId: tab.id, own: !!e.own };
   });
-  if (tab && shopLink) setTimeout(() => { notReachedShop(run).catch(() => null); }, SHOP_REACH_MS);
+  if (tab && shopLink) setTimeout(() => { notReachedShop(run, tab.id).catch(() => null); }, SHOP_REACH_MS);
   const { acoRecent = [] } = await chrome.storage.local.get('acoRecent');
   await chrome.storage.local.set({ acoRecent: [{ id: run.id, name: run.name, store: run.storeName, at: Date.now() }, ...acoRecent].slice(0, 10) });
   return tab;
@@ -1186,7 +1193,15 @@ async function isShopLink(storeId) {
 // nothing. Not on Shop's checkout this long after its tab opened: your account hears so (the tab is left
 // as it is, for you), and this browser counts as signed out of Shop until it's seen signed in again.
 const SHOP_REACH_MS = 25 * 1000;
-async function notReachedShop(run) {
+// (A busy drop: Shop's checkout can take a while to come in — looked at again every 10 s while its tab is
+//  still loading, this long at most.)
+const SHOP_SLOW_MS = 3 * 60 * 1000;
+async function notReachedShop(run, tabId, since = Date.now() - SHOP_REACH_MS) {
+  const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
+  if (tab && tab.status === 'loading' && Date.now() - since < SHOP_SLOW_MS) {
+    setTimeout(() => { notReachedShop(run, tabId, since).catch(() => null); }, 10 * 1000);
+    return;
+  }
   const res = await api('POST', `/api/ext/aco/${encodeURIComponent(run.id)}`, {
     status: 'needs_you', reason: 'no_shop',
     message: "Shop's checkout didn't open in this browser: the link went on to the store's own checkout, as a guest — sign in to Shop (shop.app) here, and finish this one in its tab yourself.",

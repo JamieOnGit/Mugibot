@@ -152,7 +152,7 @@ var MGBBag = (function () {
 
   /** Nothing in the bag: the page says so, or its count says 0 — or, with neither, none of the store's products on it. */
   function empty(R) {
-    if (Q.bagLooksEmpty()) return true;
+    if (Q.bagLooksEmpty({ drawer: true })) return true;
     var c = MGBQuick.bagCount();
     if (c === 0) return true;
     if (c > 0) return false;
@@ -169,7 +169,8 @@ var MGBBag = (function () {
 
   /** The store's bag page (not a page not found, nor somewhere it sent the tab instead). */
   function onBag(R) {
-    return !notFound() && (MGBQuick.onBagPage(R) || removes(R).length > 0);
+    // (Or its cart open in a pop-up over another page: EB Games' cart opens over its home page.)
+    return !notFound() && (MGBQuick.onBagPage(R) || removes(R).length > 0 || !!MGBQuick.bagDrawer());
   }
 
   /** The store's own link to its bag (in its header), when the address Mugibot knows isn't it. */
@@ -195,7 +196,7 @@ var MGBBag = (function () {
   async function settled(R) {
     for (var end = Date.now() + 10000; document.readyState !== 'complete' && Date.now() < end;) await wait(100);
     for (var until = Date.now() + 6000; Date.now() < until;) {
-      if (notFound() || removes(R).length || removeAll(R) || Q.bagLooksEmpty() || MGBQuick.bagCount() === 0) return;
+      if (notFound() || removes(R).length || removeAll(R) || Q.bagLooksEmpty({ drawer: true }) || MGBQuick.bagCount() === 0) return;
       await wait(200);
     }
   }
@@ -341,7 +342,7 @@ var MGBBag = (function () {
         // (The pressed button greyed out — "Removing…": the store's still at it.)
         if (el.isConnected && Q.isVisible(el) && (Q.isDisabled(el) || el.getAttribute('aria-busy') === 'true')) return false;
         var c = MGBQuick.bagCount();
-        if ((count != null && c != null && c < count) || Q.bagLooksEmpty()) return true;
+        if ((count != null && c != null && c < count) || Q.bagLooksEmpty({ drawer: true })) return true;
         if (!all && !zero) return removes(R).length < lines;
         return !el.isConnected || !Q.isVisible(el) || productLines(R) < shown;
       };

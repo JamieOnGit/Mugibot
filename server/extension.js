@@ -34,6 +34,9 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // its page); an admin's browser searches each store on its own, side by side (busy=…), not one after another.
 // 1.24.0: Shop checkout links — your Shop sign-in read off the checkout's screen (never shop.app's own pages
 // or any page's source), and a checkout that says it isn't on sale yet waited on, "Pay now" the moment it is.
+// 1.25.0: hot drops — a store's slow page waited for while it's plainly still coming in (its Add button, the
+// add, checkout), its error page looked at again after a wait (never a queue's), a slow add never pressed
+// twice nor left for the bag early, and no second tab for a run; a cart in a pop-up (EB Games') read as the bag.
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.

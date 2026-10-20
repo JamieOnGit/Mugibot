@@ -258,7 +258,7 @@ the passphrase backup.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 388 tests in about sixteen minutes:
+the 394 tests in about seventeen minutes:
 
 ```bash
 npm install
@@ -300,6 +300,14 @@ npm test
   pages are): a product with neither home delivery nor click & collect in
   Target's own page data is out of stock, though its JSON-LD says InStock; one
   with either is in stock.
+- **Hot drops: a store slowed right down** (end to end, a dummy Kmart under load):
+  its buy box 18 s in coming ("Loading…") and its cart 20 s in answering — waited
+  through, added once, never to the bag early, on to checkout; its Add button
+  greyed out 20 s — waited for, then pressed; its product page answering "Too
+  many requests" twice — looked at again each time, then added; and a sold-out
+  product still said so in seconds (nothing waited for).
+- **EB Games' cart as a pop-up** (end to end): already empty, it's "already empty",
+  not "couldn't find your bag".
 - **A product that isn't on your watchlist** (end to end, a real Chrome with the
   extension): the panel reads it off the page and checks it out — Kmart's
   checkout with one in the cart and the card in, JB Hi-Fi's Shopify checkout —
