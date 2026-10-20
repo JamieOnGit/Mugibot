@@ -19,6 +19,7 @@ import { RETAILER_DEFS, Retailers, serialize } from '../server/retailers/index.j
 import { DEFAULT_ACO, acoSettings, alerts, item, profile, profiles, username } from '../server/schema.js';
 import { makeZip } from '../server/zip.js';
 import { extractProduct } from '../server/monitor/extract.js';
+import { siteAnswer, siteUrl } from '../server/monitor/listing.js';
 import { loadConfig } from '../server/config.js';
 import { entitlement } from '../server/entitlement.js';
 import { Whop, signWebhook } from '../server/whop.js';
@@ -287,6 +288,7 @@ test('extension built for a live server: only that server and the stores; module
   assert.ok(m.host_permissions.includes('https://ac.cnstrc.com/*'), "Kmart's search provider, for an admin's browser sweeping Kmart");
   assert.equal(m.host_permissions[0], 'https://app.mugibot.example/*');
   assert.ok(m.host_permissions.includes('https://www.kmart.com.au/*'), 'stores (for in-browser checks)');
+  assert.deepEqual(m.optional_host_permissions, ['https://*/*'], "other websites: only asked for (one website at a time, by its owner pressing Allow) when a drop watch there refuses the server");
   for (const h of ['https://www.thegamescube.com/*', 'https://gamerholic.com.au/*', 'https://www.pokemoncenter.com/*', 'https://p-bandai.com/*']) assert.ok(m.host_permissions.includes(h), h);
   assert.ok(m.content_scripts.some((cs) => cs.all_frames && cs.matches.includes('https://*.global-e.com/*') && cs.js.includes('frame.js')), "Premium Bandai's checkout, in Global-e's frame");
   assert.ok(!JSON.stringify(m).includes('127.0.0.1'), 'no local addresses in a live build');
@@ -428,4 +430,25 @@ test("Target's own page data beats its JSON-LD: a pre-order with neither home de
   assert.deepEqual([buyable.status, buyable.decidedBy], ['in_stock', 'json-ld']);
   // Click & collect only (or home delivery only): it can be ordered.
   assert.equal(extractProduct(page({ ...off, clickAndCollect: { available: true } }, 'C&C only')).status, 'in_stock');
+});
+
+test("another website's answer for a drop watch is read the same from the server and from a browser", () => {
+  assert.equal(siteUrl('https://shop.example/', 'xbox series x', 'search'), 'https://shop.example/search?q=xbox%20series%20x');
+  assert.match(siteUrl('https://shop.example', 'xbox', 'suggest'), /^https:\/\/shop\.example\/search\/suggest\.json\?q=xbox&resources%5Btype%5D=product/);
+  assert.equal(siteUrl('https://shop.example/new?x=1', 'xbox', 'page'), 'https://shop.example/new?x=1');
+  const refused = siteAnswer({ way: 'search', status: 403, by: 'your browser' });
+  assert.deepEqual([refused.ok, refused.refused], [false, true]);
+  assert.match(refused.error, /refused your browser \(HTTP 403\)/);
+  assert.match(siteAnswer({ way: 'search', status: 429 }).error, /refused Mugibot/);
+  assert.equal(siteAnswer({ way: 'search', status: 500 }).refused, undefined);
+  assert.equal(siteAnswer({ way: 'suggest', status: 200, type: 'text/html', text: '<html></html>' }).error, 'Not a Shopify shop');
+  const suggest = siteAnswer({ way: 'suggest', status: 200, type: 'application/json', url: 'https://shop.example/search/suggest.json', text: JSON.stringify({ resources: { results: { products: [{ handle: 'xbox-x', title: 'Xbox Series X', url: '/products/xbox-x', price: '799.00', available: true }] } } }) });
+  assert.equal(suggest.ok, true);
+  assert.deepEqual(suggest.products.map((p) => [p.title, p.url]), [['Xbox Series X', 'https://shop.example/products/xbox-x']]);
+  const page = siteAnswer({ way: 'search', status: 200, type: 'text/html', url: 'https://shop.example/search?q=xbox', text: '<html><body><main><ul><li class="product-card"><a href="/products/xbox-x">Xbox Series X</a> <span class="price">$799.00</span></li></ul></main></body></html>' });
+  assert.equal(page.ok, true);
+  assert.equal(page.products[0].title, 'Xbox Series X');
+  assert.deepEqual(siteAnswer({ way: 'search', status: 200, type: 'text/html', text: '<html><body><p>No results</p></body></html>' }), { ok: true, products: [] }, 'nothing with those words yet: fine');
+  const bot = siteAnswer({ way: 'page', status: 200, type: 'text/html', text: '<html><head><title>Just a moment...</title></head><body>Checking your browser before accessing. Verify you are human.</body></html>' });
+  assert.equal(bot.refused, true, 'a bot check instead of the page');
 });

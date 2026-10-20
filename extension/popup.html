@@ -34,6 +34,13 @@
       <div class="row"><b style="flex:0 0 auto">In-browser checks</b> <span id="checks-status" class="muted" style="text-align:right"></span></div>
       <p class="row" style="margin-top:6px"><button id="check-now">Check my SKUs now</button></p>
     </div>
+    <div class="card" id="sites" hidden>
+      <b>Websites refusing Mugibot's server</b>
+      <ul id="sites-list" class="list"></ul>
+      <p class="muted" style="font-size:12px;margin:4px 0 6px">Drop watches there can be checked from this browser instead, as a visitor would — once you let the extension read them. Only these websites, nothing else.</p>
+      <p class="row"><button id="sites-allow" class="primary" type="button">Allow checks from this browser</button></p>
+      <div id="sites-msg" class="msg"></div>
+    </div>
     <div class="card" id="logins">
       <div class="row"><b style="flex:0 0 auto">Store sign-ins</b> <span id="logins-sum" class="muted" style="text-align:right"></span></div>
       <ul id="logins-list" class="list"></ul>

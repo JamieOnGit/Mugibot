@@ -24,7 +24,7 @@ import { CATEGORIES, linkName, productName } from '../catalog.js';
 import { newId } from '../crypto.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { bad, bool, httpUrl, item as checkItem, num, str } from '../schema.js';
-import { norm, parseGeneric, parseShopifyProducts, parseShopifySuggest } from './listing.js';
+import { norm, siteAnswer, siteUrl } from './listing.js';
 import { MonitorAdmin } from './manage.js';
 import { publicError } from './public.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
@@ -39,6 +39,8 @@ const MAX_BACKOFF_MS = 30 * 60 * 1000;
 // Statuses that say whether something's on sale (not a failed or empty read).
 // (In the store's shops only — Kmart's "In store only" — is a reading too: not on sale online yet.)
 const READ = new Set([STATUS.IN_STOCK, STATUS.PREORDER, STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.NOT_LISTED, STATUS.IN_STORE]);
+// A read that failed (refused, or an error).
+const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
 const NO_ACO = 'Auto-checkout works at stores Mugibot has a checkout for — at another website you get the alert, and buy it there yourself';
 // What an admin's watch for everyone posts in the channel chosen for it: its drops, restocks (and
 // pre-orders) and price drops.
@@ -109,6 +111,10 @@ export class Drops {
     this.timer = null;
     this.busy = false;
     this.dest = null; // the Discord server's channels and roles, for the admins' pickers (a minute)
+    // Other websites that refuse the server, read from a browser: when each watch is next due there, and last read there.
+    this.browserNext = new Map();
+    this.browserOkAt = new Map();
+    this.browserFails = new Map();
     // (Set by app.js: monitor, sweeper, ctx.)
   }
 
@@ -533,10 +539,7 @@ export class Drops {
 
   /** One read of another website for words: { ok, products, refused, error }. */
   async read(site, words, way) {
-    const base = site.replace(/[?#].*$/, '').replace(/\/+$/, '');
-    const q = encodeURIComponent(words);
-    const url = way === 'suggest' ? `${base}/search/suggest.json?q=${q}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last`
-      : way === 'search' ? `${base}/search?q=${q}` : site;
+    const url = siteUrl(site, words, way);
     let res;
     try {
       const timeoutMs = Math.min(this.cfg.monitor.timeoutMs, 20000);
@@ -544,26 +547,9 @@ export class Drops {
     } catch (e) {
       return { ok: false, error: e instanceof BlockedUrlError ? e.message : e.name === 'TimeoutError' ? 'The website took too long to answer' : "Couldn't reach the website" };
     }
-    if ([401, 403, 429, 503].includes(res.status)) return { ok: false, refused: true, error: `The website refused Mugibot (HTTP ${res.status}) — it's asked again later` };
-    if (!res.ok) return { ok: false, error: `The website answered HTTP ${res.status}` };
-    const text = (await res.text()).slice(0, 3_000_000);
     const type = (res.headers && res.headers.get('content-type')) || '';
-    const final = res.url || url;
-    if (way === 'suggest') {
-      if (!/json/.test(type)) return { ok: false, error: 'Not a Shopify shop' };
-      const parsed = parseShopifySuggest(text, { base: final });
-      return parsed.problem ? { ok: false, error: 'Not a Shopify shop' } : { ok: true, products: parsed.products };
-    }
-    if (/json/.test(type)) {
-      const parsed = parseShopifyProducts(text, { base: final });
-      return parsed.problem ? { ok: false, error: "That page's data isn't a product list Mugibot can read" } : { ok: true, products: parsed.products };
-    }
-    let host = '';
-    try { host = new URL(final).hostname; } catch { /* no address */ }
-    const parsed = parseGeneric(text, { base: final, storeName: host });
-    if (parsed.problem === 'blocked') return { ok: false, refused: true, error: 'The website showed a bot check instead of the page — it\'s asked again later' };
-    // (A search page with nothing on it is fine: nothing with those words yet.)
-    return { ok: true, products: parsed.products };
+    const text = res.ok ? (await res.text()).slice(0, 3_000_000) : '';
+    return siteAnswer({ way, status: res.status, type, text, url: res.url || url });
   }
 
   /** Read another website for a words watch — and for every other watch with the same site and words. */
@@ -578,28 +564,113 @@ export class Drops {
       error = r.error;
       if (r.refused) break;
     }
+    if (got) {
+      // (The website answers the server again: it's the server's to read, not a browser's.)
+      for (const x of peers) { this.browserOkAt.delete(x.id); this.browserNext.delete(x.id); this.browserFails.delete(x.id); }
+      await this.settle(peers, got);
+      return { ok: true, how: got.how, products: got.products.length };
+    }
     const now = this.now();
     for (const x of peers) {
-      if (!got) {
-        const fails = x.fails + 1;
-        this.db.run('UPDATE drop_watches SET last_at = :now, fails = :f, error = :e, next_at = :n WHERE id = :id',
-          { now, f: fails, e: String(error).slice(0, 200), n: now + Math.min(MAX_BACKOFF_MS, this.siteMs * 2 ** Math.min(fails, 4)), id: x.id });
+      // (An admin's browser reads it while the website refuses the server: the server asks again, less often, and says nothing.)
+      if (this.viaBrowser(x)) {
+        this.db.run('UPDATE drop_watches SET last_at = :now, next_at = :n WHERE id = :id', { now, n: now + Math.min(MAX_BACKOFF_MS, this.siteMs * 4), id: x.id });
         continue;
       }
+      const fails = x.fails + 1;
+      this.db.run('UPDATE drop_watches SET last_at = :now, fails = :f, error = :e, next_at = :n WHERE id = :id',
+        { now, f: fails, e: String(error).slice(0, 200), n: now + Math.min(MAX_BACKOFF_MS, this.siteMs * 2 ** Math.min(fails, 4)), id: x.id });
+    }
+    this.changed();
+    for (const x of peers) this.hub.publish(x.userId, 'drop', { id: x.id });
+    return { ok: false, error };
+  }
+
+  /**
+   * What a read of another website found, for each watch with its site and words: their finds, and their
+   * first look done. browser: read from a browser — the server's own next ask (backing off) is kept.
+   */
+  async settle(peers, got, { browser = false } = {}) {
+    const now = this.now();
+    for (const x of peers) {
       const baseline = !x.baselineAt;
       for (const p of got.products.filter((q) => hasWords(q.title, x.words))) {
         if (x.shared) await this.foundSharedSite(x, p, { baseline });
         else await this.foundOwnSite(x, p, { baseline });
       }
-      this.db.run(`UPDATE drop_watches SET how = :how, last_at = :now, last_ok_at = :now, fails = 0, error = '', seen = :seen, next_at = :n,
-        baseline_at = COALESCE(baseline_at, :now) WHERE id = :id`, { how: got.how, now, seen: got.products.length, n: now + this.siteMs, id: x.id });
+      this.db.run(`UPDATE drop_watches SET how = :how, last_at = :now, last_ok_at = :now, fails = 0, error = '', seen = :seen,
+        next_at = CASE WHEN :browser = 1 THEN MAX(next_at, :later) ELSE :n END, baseline_at = COALESCE(baseline_at, :now) WHERE id = :id`,
+      { how: got.how, now, seen: got.products.length, n: now + this.siteMs, browser: browser ? 1 : 0, later: now + Math.min(MAX_BACKOFF_MS, this.siteMs * 4), id: x.id });
     }
     this.changed();
     for (const x of peers) {
       this.hub.publish(x.userId, 'drop', { id: x.id });
-      if (got && !x.baselineAt) this.firstLook(this.get(x.id));
+      if (!x.baselineAt) this.firstLook(this.get(x.id));
     }
-    return got ? { ok: true, how: got.how, products: got.products.length } : { ok: false, error };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Another website that refuses the server: read from an admin's browser instead (your own watch: yours)
+  // ---------------------------------------------------------------------------
+  /** Has a browser read this watch's website lately (while it refuses the server)? */
+  viaBrowser(w) {
+    return (this.browserOkAt.get(w.id) || 0) > this.now() - 3 * this.siteMs;
+  }
+
+  /** The watches with this one's site and words that this browser reads for (an admin's never reads for a member's own). */
+  peersFor(w, user) {
+    return this.live().filter((x) => x.site === w.site && x.words === w.words && this.readsFor(x, user));
+  }
+
+  /** Whose browser may read for this watch: an admin's for one for everyone, its owner's for their own. */
+  readsFor(w, user) {
+    return !!user && w.store === 'other' && !!w.words && (w.shared ? user.role === 'admin' : w.userId === user.id);
+  }
+
+  /**
+   * The other-website searches this browser should read now (the extension's in-browser checks): each
+   * watch whose website refuses the server (or that a browser reads already), at most every couple of
+   * minutes, where its owner has let the extension read that website (sites: its addresses, '*' for
+   * any) — else the address goes in want, for the extension to offer allowing it.
+   */
+  browserDue(user, { sites = new Set(), want = new Set() } = {}) {
+    if (!this.monitor) return [];
+    const now = this.now();
+    const out = [];
+    for (const w of this.live()) {
+      if (out.length >= 2) break;
+      if (!this.readsFor(w, user) || !(w.fails > 0 || this.viaBrowser(w)) || (this.browserNext.get(w.id) || 0) > now) continue;
+      if (!this.monitor.siteAllowed(w.site, sites, want)) continue;
+      // (One read for every watch with its site and words that this browser reads for.)
+      for (const x of this.peersFor(w, user)) this.browserNext.set(x.id, now + this.siteMs);
+      out.push({ id: `d:${w.id}`, store: 'other', kind: 'site', url: w.site, reads: (w.how ? [w.how] : this.ways(w.site)).map((way) => ({ way, url: siteUrl(w.site, w.words, way) })) });
+    }
+    return out;
+  }
+
+  /** What a browser read at another website for a watch: its finds, as the server's read would have. */
+  async browserResult(user, res) {
+    const w = this.get(String(res.id || '').slice(2));
+    if (!w || !w.active || !this.readsFor(w, user)) return false;
+    const peers = this.peersFor(w, user);
+    if (!res.ok || !Array.isArray(res.products)) {
+      // (Refused there too: the server's own error stays, and the browser asks again later each time.)
+      const fails = (this.browserFails.get(w.id) || 0) + 1;
+      for (const x of peers) {
+        this.browserFails.set(x.id, fails);
+        this.browserNext.set(x.id, this.now() + Math.min(MAX_BACKOFF_MS, this.siteMs * 2 ** Math.min(fails, 4)));
+      }
+      return false;
+    }
+    const how = ['suggest', 'search', 'page'].includes(res.how) ? res.how : '';
+    const link = (v) => (typeof v === 'string' && /^https?:\/\//i.test(v) ? v.slice(0, 2000) : '');
+    const products = res.products.slice(0, 150).filter((p) => p && typeof p.title === 'string' && link(p.url)).map((p) => ({
+      title: p.title.slice(0, 200), url: link(p.url), image: typeof p.image === 'string' && /^https:\/\//.test(p.image) ? p.image.slice(0, 1000) : '',
+      price: typeof p.price === 'number' && Number.isFinite(p.price) && p.price >= 0 && p.price < 100000 ? p.price : null,
+    }));
+    for (const x of peers) { this.browserOkAt.set(x.id, this.now()); this.browserFails.delete(x.id); }
+    await this.settle(peers, { products, how: how || w.how || 'page' }, { browser: true });
+    return true;
   }
 
   /** A product's link from another website's listing: on that website, never a store Mugibot knows. */
@@ -774,6 +845,7 @@ export class Drops {
   remove(id, user) {
     const w = this.get(String(id || ''));
     if (!this.canChange(w, user)) return false;
+    for (const m of [this.browserNext, this.browserOkAt, this.browserFails]) m.delete(w.id);
     this.db.run('DELETE FROM monitors WHERE drop_watch = :id AND note = :note', { id: w.id, note: DROP_NOTE });
     this.db.run('UPDATE monitors SET drop_watch = NULL WHERE drop_watch = :id', { id: w.id });
     const items = this.db.all('SELECT id FROM items WHERE drop_watch = :id', { id: w.id });
@@ -898,19 +970,37 @@ export class Drops {
       category: w.category, aco: mine && w.aco, maxPrice: mine ? w.maxPrice : null, canBuy: this.retailers.canBuy(w.store),
       lastAt: w.lastAt, lastOkAt: w.lastOkAt, fails: w.fails, error: admin ? w.error : publicError(w.error), seen: w.seen,
       looked: !!w.baselineAt, nextAt: w.store === 'other' ? w.nextAt : null, createdAt: w.createdAt,
+      // (Read from a browser while the website refuses the server: an admin's, or your own for your own watch.)
+      via: (admin || mine) && w.store === 'other' && w.words && this.viaBrowser(w) ? 'browser' : '',
+      allow: w.fails > 0 && /refused|bot check/i.test(w.error) && !this.viaBrowser(w) && this.readsFor(w, viewer) ? this.allowFor(viewer, w.site) : '',
       canChange: this.canChange(w, viewer),
       // (Where it posts, for an admin's watch for everyone: admins only.)
       ...(admin && w.shared ? { channelId: w.channelId, roleId: w.roleId } : {}),
-      found: w.found.map((f) => this.foundView(w, f, mine)).filter(Boolean),
+      found: w.found.map((f) => this.foundView(w, f, mine, viewer)).filter(Boolean),
     };
   }
 
-  foundView(w, f, mine) {
+  /**
+   * Another website refusing the server, that this person's browser could read instead: its address
+   * when their extension (one that can be allowed it: 1.26.0 or later) hasn't said it may read it — they
+   * allow it from the extension's menu — else ''.
+   */
+  allowFor(viewer, url) {
+    let host = '';
+    try { const u = new URL(url); host = u.protocol === 'https:' || this.cfg.monitor.allowPrivateHosts ? u.host.toLowerCase() : ''; } catch { return ''; }
+    return host && viewer && this.monitor && this.monitor.siteGranted(viewer.id, url) === false ? host : '';
+  }
+
+  foundView(w, f, mine, viewer = null) {
+    const admin = !!viewer && viewer.role === 'admin';
     if (f.productId) {
       const p = this.catalog.productById(f.productId);
       if (!p) return null;
       return {
         id: p.id, productId: p.id, name: productName(p), url: p.url, image: p.image, status: p.status, price: p.price,
+        // (Admins: its stock read by an admin's browser, the store refusing the server.)
+        ...(admin && p.status_source === 'browser' ? { via: 'browser' } : {}),
+        ...(admin && p.store === 'other' && FAILED.has(p.status) && this.allowFor(viewer, p.url) ? { allow: this.allowFor(viewer, p.url) } : {}),
         store: p.store, sku: p.sku, storeName: this.retailers.siteName(p.store, p.url), canBuy: this.retailers.canBuy(p.store), arm: mine ? f.arm || '' : '',
       };
     }
@@ -920,6 +1010,8 @@ export class Drops {
     return {
       id: it.id, itemId: it.id, name: it.name, url: it.url, image: '', status: it.monitor ? it.status : 'paused', price: it.lastPrice ?? it.price,
       store: it.store, sku: it.sku, storeName: this.retailers.siteName(it.store, it.url), canBuy: this.retailers.canBuy(it.store), aco: it.aco, arm: f.arm || '',
+      ...(it.statusSource === 'browser' ? { via: 'browser' } : {}),
+      ...(it.store === 'other' && it.monitor && FAILED.has(it.status) && this.allowFor(viewer, it.url) ? { allow: this.allowFor(viewer, it.url) } : {}),
     };
   }
 }

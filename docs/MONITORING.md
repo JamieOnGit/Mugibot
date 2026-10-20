@@ -52,7 +52,9 @@ an admin's browser (the extension) only stands in while the server can't:
   server try now.
 
 The same goes for monitored products' page checks: admins' browsers check a
-store's monitors only while the server's being refused there.
+store's monitors while the server's being refused there — and any one monitor
+whose own page refuses the server (a drop watch's find at BIG W, say), while the
+rest of the store answers.
 
 An admin can still pin a store (**Monitor → Settings → Stores**): **Server
 only** (never a browser), **Admin's browser** (never the server) or **Off**.
@@ -425,9 +427,10 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
   SKU (the website and the link's last part, e.g. `microsoft.com/8wg5vqp0x4h3`)
   is only Mugibot's own code for it. Until its page answers, it's called by the
   words in its link ("Xbox Series X25 Limited Edition"), then by its page's
-  own name. The extension's in-browser checks don't cover other websites (it
-  only runs on the stores Mugibot knows): a site that turns Mugibot's server
-  away (Microsoft's, say) shows **Check failed**, and is asked again later.
+  own name. A site that turns Mugibot's server away (Microsoft's, David
+  Jones', say) is checked from a browser instead, once its extension may read
+  that site (see **Refused by the server** below). Until then it shows
+  **Blocked by site** or **Check failed**, and is asked again later.
 - **The words in its name**, and where to look:
   - **A store Mugibot searches** (JB Hi-Fi, Kmart, Target, EB Games…): the
     words are searched at that store as typed (no "tcg" added), in the live
@@ -441,7 +444,7 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
     (`/search?q=…`), then the page itself; it remembers what worked. Give a
     listing page (a "new arrivals" or a search page) and only that page is
     read. A site that turns Mugibot away is asked again later, waiting longer
-    each time.
+    each time, and is read from a browser meanwhile (below).
 
   Anything whose name has **every** word counts, trading cards or not. A short
   word (three letters or fewer) or a number has to be a whole word in the name —
@@ -452,6 +455,27 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
   words (and a VIP watch's) are searched across the whole store.
   Mugibot's first look is the "before" picture: what's there already isn't a
   drop. What shows up after it is.
+
+**Refused by the server: read from a browser instead** (extension 1.26.0). A
+drop watch's page or website that turns Mugibot's server away (HTTP 403, 429 or
+503, a bot check, or failing) is checked from a browser with the extension, as
+a visitor would, about once a minute (a website's search every couple of
+minutes). Mugibot never tries to get past a bot check: a browser turned away too
+just backs off.
+- **Whose browser:** an admin's for an admin's watch for everyone (only the
+  server and admins change what everyone sees), and your own for your own watch.
+  An admin's browser never reads a member's own watch.
+- **At a store Mugibot knows** (BIG W, say): straight away,
+  even while the rest of the store answers the server. Before, admins' browsers
+  only stood in when the server was refused at the store as a whole.
+- **At another website:** once the extension may read it. Its toolbar menu then
+  shows **Websites refusing Mugibot's server** with the website's address:
+  press **Allow checks from this browser** and Chrome asks you for that website
+  only. Until then the drop watch says to (**allow … in the Mugibot extension**).
+  You can take it back in the extension's details in Chrome.
+- The drop watch says so: **🧭 checked from an admin's browser** on a find (admins),
+  **read from an admin's browser** (or **your browser**) on a words watch. The
+  server keeps asking too, less often, and takes over again once it's answered.
 
 **An admin's drop watch is for everyone** (the 📣 box, on unless you untick it):
 - What it finds is a monitored product in everyone's **Tracked products**, in
@@ -720,7 +744,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Clothes or toys in the list | MugiWatch's card words include "pack" and "sleeve", so "3 Pack Socks" looks like cards. Add the word (e.g. "onesie") to **Not trading cards**; products that no longer count leave the list when you save. |
 | A store shows **In queue** on the live monitor | Its virtual queue is up, so the admin's browser isn't searching it until it's through the queue or the queue's down. That's on purpose: a search could cost the admin their place in line. Nothing to do. |
 | `#virtual-queue-detection` got nothing | Press **Set up store channels** again (it makes the channel), and check the bot can post there. EB Games' and Pokémon Center's queues need an admin's browser with the extension (1.16.0 or later) open, or members' browsers landing in the queue. |
-| A drop watch at another website says **refused Mugibot (HTTP 403)** or **a bot check** | That site turns servers away. It's asked again later on its own (waiting longer each time); if it keeps refusing, watch the product's link at a store Mugibot knows instead, if it sells there. |
+| A drop watch at another website says **refused Mugibot (HTTP 403)** or **a bot check**, or a find says **Blocked by site** | That site turns servers away. Open the extension's toolbar menu and press **Allow checks from this browser** under **Websites refusing Mugibot's server**: your browser checks it from then on (an admin's for a watch for everyone, yours for your own). At a store Mugibot knows (BIG W), an admin's browser does it with nothing to allow — keep Chrome open with the extension connected. The server keeps asking too, waiting longer each time. |
 | A drop watch at another website finds **nothing** though the site has it | Mugibot reads product links (`/products/…`, `/product/…`, `/p/…`) and the product data in the page. Give the site's own search page for those words (search there, copy the address), or watch the product's link. |
 | A drop watch's alerts went to `#misc-retailers` | There's no `#non-tcg-alerts` rule yet: press **Make #non-tcg-alerts** on the drop watches tab (or **Set up store channels**). Or pick a channel for the watch (**✎** on it). |
 | **Post its drops and restocks in** is greyed out | The Discord bot isn't set up (Admin → Setup check), or Discord didn't answer: open the tab again in a minute. A channel made since shows up within a minute. |

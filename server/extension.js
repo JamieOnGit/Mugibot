@@ -37,6 +37,8 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // 1.25.0: hot drops — a store's slow page waited for while it's plainly still coming in (its Add button, the
 // add, checkout), its error page looked at again after a wait (never a queue's), a slow add never pressed
 // twice nor left for the bag early, and no second tab for a run; a cart in a pop-up (EB Games') read as the bag.
+// 1.26.0: drop watches at websites refusing the server — read from your browser (an admin's for one for
+// everyone) once you've allowed the extension on that website (its menu: Allow); it says which (sites=…).
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.
