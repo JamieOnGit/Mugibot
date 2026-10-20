@@ -1986,10 +1986,13 @@ test('🤖 Auto-checkout stops short — and buys nothing — when the total is 
 
   // Something else already in the bag: Auto-checkout goes on all the same — it's bought too — and says so
   // (the run's history, your activity), the total checked against your limit an order.
-  store.shop('kmart').cart.push({ sku: '43818556', qty: 1, price: 20, name: 'Knock Out Collection' });
+  // (The stop above left its own item in the bag — as a stop short does: just the other thing in it now.
+  //  With both, a second ETB would go in on top: $230, over the limit an order, and it stops — rightly.)
+  store.shop('kmart').cart = [{ sku: '43818556', qty: 1, price: 20, name: 'Knock Out Collection' }];
   await acoListen();
   await drop('kmart', '43818587');
-  await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 45000, message: 'placed, the other thing in the bag too' });
+  await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 45000, message: 'placed, the other thing in the bag too' })
+    .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps.at(-1))}, the bag ${JSON.stringify(store.shop('kmart').cart)}`); });
   assert.equal(store.shop('kmart').orders.length, 1);
   assert.deepEqual(store.shop('kmart').orders[0].cart.map((c) => c.sku).sort(), ['43818556', '43818587']);
   run = await lastRun();
