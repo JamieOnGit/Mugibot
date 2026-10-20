@@ -452,3 +452,51 @@ test("another website's answer for a drop watch is read the same from the server
   const bot = siteAnswer({ way: 'page', status: 200, type: 'text/html', text: '<html><head><title>Just a moment...</title></head><body>Checking your browser before accessing. Verify you are human.</body></html>' });
   assert.equal(bot.refused, true, 'a bot check instead of the page');
 });
+
+test("Auto-checkout's read of a store's answer to its final button (extension/checks.js): a decline, anything about the payment or a human check, or words it doesn't know — never pressed past; still at it — waited for; a box it says is wrong — filled in again; the store plainly struggling — pressed again, a little later each time, for up to 30 minutes; a card the store has for you, as EB Games shows it (and not a \"Loading...\" next to a year)", () => {
+  const ctx = {};
+  vm.runInNewContext(`${fs.readFileSync(new URL('../extension/checks.js', import.meta.url), 'utf8')}\nthis.MGBChecks = MGBChecks;`, ctx);
+  const C = ctx.MGBChecks;
+  const kinds = {
+    'Your card was declined. Please try another card.': 'declined',
+    'Payment failed. Please use a different payment method.': 'declined',
+    'Insufficient funds': 'declined',
+    // Never pressed past: the payment, the card, your bank, a human check.
+    'Your payment could not be authenticated': 'stop',
+    "We couldn't process your payment": 'stop',
+    'Payment was refused by your bank': 'stop',
+    'Transaction not approved': 'stop',
+    "Your card's security code is incorrect": 'stop',
+    'Please verify you are human': 'stop',
+    'Captcha verification failed. Try again.': 'stop',
+    'Something went wrong with your payment. Please try again.': 'stop',
+    '"Card number" needs attention': 'stop',
+    // Still at it: waited for.
+    'Please wait while we process your payment': 'working',
+    'Processing your order…': 'working',
+    'Processing your order — please do not refresh or try again': 'working',
+    'There was a problem processing your payment': 'stop',
+    // A box it says is wrong: filled in again.
+    'Please enter a valid postcode': 'field',
+    'Phone number is invalid': 'field',
+    'You must accept membership agreement before checking out': 'field',
+    // The store struggling (or sold out just now): pressed again.
+    "We're experiencing high demand right now. Something went wrong — please try again.": 'busy',
+    'Something went wrong on our end. Please try again.': 'busy',
+    'Too many requests': 'busy',
+    'Service unavailable': 'busy',
+    'Error 503': 'busy',
+    'Request timed out': 'busy',
+    'Sorry, this item is out of stock': 'busy',
+    // Anything else: for you.
+    'Your order could not be completed': 'other',
+    '': '',
+  };
+  for (const [text, kind] of Object.entries(kinds)) assert.equal(C.errorKind(text), kind, text);
+  assert.deepEqual([0, 1, 2, 3, 6, 50].map(C.retryWait), [3000, 5000, 8000, 10000, 20000, 20000], '3 s, 5 s, 8 s… then every 20 s');
+  assert.equal(C.RETRY_MS, 30 * 60 * 1000);
+  const doc = (text) => ({ querySelector: () => ({ innerText: text }), body: { innerText: text } });
+  for (const shown of ['...2387 08/27', '...2387\n08/27', '...238708/27', '...2387 08/2027', 'Visa ending in 4242', '•••• 4242', '**** 4242', 'Mastercard …2387']) assert.equal(C.savedCardShown(doc(`Payment ${shown}`), null, false), true, shown);
+  for (const not of ['Order total $109.95 · 2 items · Pickup 2387 Main Rd', 'Loading...\n2026', 'Super-Premium Coll…\n2025', 'Collection... 2025']) assert.equal(C.savedCardShown(doc(not), null, false), false, `no card shown: ${not}`);
+  assert.equal(C.savedCardShown(doc('...2387 08/27'), null, true), false, 'card boxes on the page: they need filling, whatever else shows');
+});

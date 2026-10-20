@@ -206,7 +206,10 @@ Discord and Whop are optional for this. Add them later with the guides.
   servers. For those, each member's own browser, with the extension, re-checks
   **that member's own SKUs** about once a minute, just like refreshing the page.
   The results only ever update that member's own watchlist. Members can switch
-  this off on the Setup page.
+  this off on the Setup page. BIG W, which resets every server's connection, is
+  only ever read by browsers: each product's page opened in the extension's
+  window, at most every 15 minutes, and left alone for 30 minutes after an
+  "Access Denied" (docs/MONITORING.md).
 - **Not listed yet.** A SKU without a product link is looked for on the store's
   search page. When the page goes up, members get a "Listed" ping.
 - **Never evades bot protection.** If a store shows a bot check, Mugibot backs
@@ -258,7 +261,7 @@ the passphrase backup.
 ## Tests
 
 `npm install` fetches Playwright (for the browser tests), then `npm test` runs
-the 399 tests in about seventeen minutes:
+the 411 tests in about twenty minutes:
 
 ```bash
 npm install

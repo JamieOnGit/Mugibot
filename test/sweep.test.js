@@ -764,7 +764,7 @@ test("where each store is searched: server first everywhere (saved modes from be
     assert.equal(eb.url.startsWith(`${store.url}/ebgames/search/query?q=${q}&sort=releasedate&order=desc`), true, eb.url);
     assert.equal(eb.pageUrl, `${store.url}/ebgames/search?q=${q}`);
     assert.equal(t.storeBase, `${store.url}/bigw`);
-    assert.equal(sw.paceFor(R('demo-bigw'), true), 15000, "the set pace (15 s): BIG W's own floor, 10 s, is under it");
+    assert.equal(sw.paceFor(R('demo-bigw'), true), 20000, "the set pace is 15 s, but BIG W's own floor — 20 s, gentle on its bot protection — is over it");
     assert.equal(eb.expect, 'json');
   } finally {
     await boss.put('/api/monitor/sweep', { stores: saved.stores });

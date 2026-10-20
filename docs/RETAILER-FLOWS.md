@@ -133,6 +133,9 @@ export default {
   // platform: 'shopify',             // 'shopify' | 'woocommerce' | 'magento': the store's platform, where Mugibot
   //                                  //   uses something of its own (a cart link, the bag emptied at once)
   monitor: { server: true, browser: true },   // default for server / in-browser checks (admins can switch)
+  //   server: 'never' — a store that refuses every server (BIG W): never asked by it, whatever an admin saved.
+  //   render: true — in-browser checks open the product's page in the extension's window (extension 1.27.0),
+  //   one page a round, each product every browserSeconds at most (BIG W: 900) — never fetched in the background.
   flow: {
     product: {
       add: ADD_WORDS,               // the add button's label(s) — the shared words (server/monitor/words.js), below

@@ -241,6 +241,10 @@ loaders.retailers = async () => {
   body.textContent = '';
   for (const r of retailerList) {
     const toggle = (key) => {
+      // (A store that refuses every server — BIG W — is never checked by it: its switch shows off, and stays so.)
+      if (key === 'serverChecks' && r.monitor && r.monitor.server === 'never') {
+        return h('input', { type: 'checkbox', checked: false, disabled: true, 'aria-label': `${r.name} ${key}`, title: `${r.name} refuses every server: its pages are only read from members' browsers` });
+      }
       const box = h('input', { type: 'checkbox', checked: r[key], 'aria-label': `${r.name} ${key}` });
       box.addEventListener('change', async () => {
         try {

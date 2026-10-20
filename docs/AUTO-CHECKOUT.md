@@ -88,8 +88,29 @@ panel reads the product off the page (its name and code, "not on your watchlist"
 under it) and does exactly what it does for one of yours — adds one, goes
 straight to checkout, fills in your delivery details and card and stops at the
 final button for you. On a page that isn't a product (the store's home page, a
-search) it says so. It never presses the final button for you: that's only for
-armed items.
+search) it says so. With Auto-checkout on and set to **Place the order for me**,
+it places the order too, within your limits (next: ⚡ Buy you press yourself).
+
+### ⚡ Buy you press yourself: placed too
+
+From extension 1.27.0, with Auto-checkout **on** and set to **Place the order for
+me**, a checkout you start yourself places the order the way an armed drop's does:
+the dashboard's ⚡ Buy, a channel alert's ⚡ Buy link opened on this computer, and
+the store panel's **Add to bag → Checkout**.
+
+- **Within your limits**, as a drop's: the item's max price (one of it) plus up to
+  $40 delivery, never over your "most an order may cost". A product not on your
+  watchlist, or with no max price: up to your most an order. A ⚡ Buy that would go
+  over the day's orders or spending fills checkout in and stops at the final
+  button for you, as before.
+- It's a run of its own in the Run history ("⚡ Buy"), with the same DMs, and
+  counts towards the day's limits like any order.
+- **Not** with Auto-checkout off or set to stop at the final button, not at The
+  Games Cube (PayPal only), not while the same item is already checking out, and
+  not in an extension older than 1.27.0. Then ⚡ Buy fills checkout in and stops at
+  the final button, as ever.
+- Armed drops, Trigger ACO and Discord's ⚡ Buy (pressed on your phone) place the
+  order as they already did.
 
 ### Trigger ACO: try it now
 
@@ -198,6 +219,42 @@ then, so a drop that isn't busy goes exactly as fast as before:
   total, the page's errors and its required boxes again just before pressing the
   final button, so a total that grew while the page came in is still checked
   against your limit.
+- **The final button** (extension 1.27.0) is pressed the moment everything's in.
+  There's no wait to "check the details": the checks below are instant reads of the
+  page. A final button the store draws greyed out while it finishes the last boxes
+  is waited for (up to 30 minutes) and pressed the moment it turns on.
+- **Pressed again while the store says it's struggling** (1.27.0). When the store
+  answers "high demand", "please try again", "something went wrong", "too many
+  requests", a 503 or a time-out — or "sold out" just then (under a drop's load,
+  stock comes back) — it's pressed again, a little later each time (3, 5, 8, 10, 15
+  seconds… then every 20), for up to **30 minutes** from the first press. Your
+  details are filled in again and the total read and checked again before each
+  press, and every press is in your activity.
+  - **Your account says yes first.** Before each press after the first, your browser
+    asks your account whether the run's still going. A run it has ended (stopped,
+    timed out) is never pressed again.
+  - **Never on silence.** A store that says nothing after the press may be taking
+    the order, so it's waited for, never pressed again. It's also waited for while
+    it's still working ("Processing…", its button greyed out or busy, a spinner, the
+    page loading). After 30 minutes with no answer: "check your email before buying
+    it again".
+  - **Never past the payment.** Never past a decline, your bank's check, a human
+    check or an order confirmation. Anything about the payment, the card, your bank
+    or a human check ("a problem processing your payment", "verify you're human")
+    stops the run for you. So do words it doesn't know.
+  - **Old messages don't count.** A message that was already up before the press
+    isn't taken for the store's answer.
+  - **Boxes, then you.** A box the store says is wrong (not the card) is filled in
+    again, twice at most, then it's yours.
+  - **Back at checkout after a press.** Only when the page says it's struggling is
+    it pressed again. Anything else is only watched.
+  - **After 30 minutes of "try again"**, it stops: "kept turning it away — nothing
+    more pressed; check your email before buying it again" (most likely sold out).
+    It counts towards the day's limits, in case a press went through.
+  - **Everywhere the same.** Every store Mugibot checks out at, drop watches' finds
+    there, Shop checkout links, and checkouts in a frame. Your account hears from
+    the run every half a minute meanwhile, so a slow checkout is never closed as
+    stale. A press it heard about late still counts as an order.
 - **Your account** waits up to 5 minutes (was 2: as long as the run's code lasts)
   for a store's slow page to take a run up once your browser's opened it — and
   your browser never opens a second tab for a run whose first one is still
@@ -244,12 +301,17 @@ is empty." — rather than a page of its own: that pop-up, a panel over the page
 (not the cart icon in its header), counts as its bag, and its "empty" as empty.
 That's for Clear cart only: ⚡ Buy never takes a pop-up's "empty" as a reason to
 add again. Until extension 1.25.0 an EB Games bag already empty was said as
-"couldn't find your bag".)
+"couldn't find your bag". From 1.27.0 the store saying your bag is empty anywhere
+on the page — a pop-up, or plain words drawn a moment after the page loads — or
+its bag count at 0, is read as empty.)
 
-Auto-checkout only ever buys the one item, so a bag with something else in it
-stops it there ("your bag already had 1 item in it"). The Checkout page's
-**🧹 Your bags at each store** card empties a store's bag in your checkout
-browser — from anywhere, your phone too — so a drop goes through:
+A bag with something else in it doesn't stop Auto-checkout (from extension
+1.27.0): it carries on, and those things are bought too. It says so on the run and
+in your activity ("your bag already had 1 item in it — Auto-checkout carries
+on…"), and checks the total against your most an order instead of the item's max.
+To buy only the one thing, empty your bags first. The Checkout page's **🧹 Your
+bags at each store** card empties a store's bag in your checkout browser — from
+anywhere, your phone too:
 
 - **Clear cart** (one store) or **Clear all** (every store, one at a time). Both
   ask first.
@@ -385,15 +447,23 @@ After **3 failures in a day** it stops trying and disarms until you arm it again
 
 ### What it checks before pressing the final button
 
-- **The bag holds only this item, one of it.** Anything else already in the bag
-  and it stops, so it never buys what you didn't arm.
+- **Other things already in the bag** are bought too (said on the run and in your
+  activity), and the total is checked against your most an order instead of the
+  item's max. (Shop checkout links and Shopify cart links open a checkout of their
+  own: never mixed.) Empty your bags before a drop to buy only the one thing.
 - **The order total.** Delivery included, read from the checkout page. It must
-  be within the item's max price + $40 (for delivery) and your "most an order may
-  cost". If it can't read the total, it stops.
+  be within the item's max price + $40 (for delivery), your "most an order may
+  cost", and what's left of the day's spending. If it can't read the total, it stops.
+- **Agreement boxes ticked.** A box accepting the store's terms or a membership
+  agreement (Shop's "By selecting, you indicate your acceptance of the Membership
+  Agreement") is ticked before pressing, even one the page draws over a hidden box.
+  Some boxes are never ticked: newsletter or marketing boxes, and anything that adds
+  something you'd pay for (a protection plan, a warranty, a subscription, a price in
+  its words), however it says "I agree".
 - **The card went in — every box of it.** It checks the store's card boxes,
   including boxes from a payment provider (one frame per box at Kmart, Shopify
   stores and Target). A card the store or Shop Pay already has for you ("Visa
-  •••• 4242", no card boxes) counts, and so does a card Stripe's **Link** shows
+  •••• 4242", EB Games' "...2387 08/27", no card boxes) counts, and so does a card Stripe's **Link** shows
   in its frame (Games World), once its "Confirm" is pressed.
 - **The store didn't ask for something it couldn't fill in.** An error message,
   a box marked wrong, or a required box (or tick box) still empty: it stops and
@@ -401,7 +471,8 @@ After **3 failures in a day** it stops trying and disarms until you arm it again
 - **The store doesn't only take PayPal.** At The Games Cube (PayPal only) it fills
   everything in and stops at "Checkout with PayPal" for you.
 
-It presses the final button **once** per run, then watches the page:
+It presses the final button, then watches the page (and presses it again while
+the store's struggling, for up to 30 minutes: Hot drops, above):
 
 | The page shows | The run ends as |
 |---|---|
@@ -409,8 +480,10 @@ It presses the final button **once** per run, then watches the page:
 | "Your card was declined" | ❌ **Failed:** the store declined the payment |
 | Your bank's check (3-D Secure, a code, "confirm in your banking app") | ⚠️ **Needs you:** finish it in the tab that's open |
 | A "check you're human" box (CAPTCHA) | ⚠️ **Needs you** |
-| The store refused the press (still saying what's wrong a few seconds on) | ⚠️ **Needs you:** what it said |
-| Nothing either way | ⚠️ **Needs you:** check your email from the store before buying again |
+| A box the store says is wrong, still wrong after it's filled in again twice | ⚠️ **Needs you:** what it said |
+| Anything about the payment, the card, your bank or a human check, or words it doesn't know | ⚠️ **Needs you:** what it said (nothing more pressed) |
+| The store busy, "try again" or sold out, for 30 minutes of presses | ⚠️ **Needs you:** it kept turning it away — check your email before buying again |
+| No answer, or still working on a press, 30 minutes on | ⚠️ **Needs you:** check your email from the store before buying again |
 
 It **never** gets past your bank's check or a store's bot check. It stops and
 tells you.

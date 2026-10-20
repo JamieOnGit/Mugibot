@@ -42,6 +42,9 @@ var MGBBag = (function () {
   var ASKS = /are you sure|sure you want|\bconfirm\b|\b(remove|delete)\b[^?]{0,120}\?/i;
   var POPUP = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], [class*="modal" i], [class*="popup" i], [class*="confirm" i], [class*="dialog" i]';
   var NOT_FOUND = /page not found|\b404\b|can.?t (find|be found) (that|this|the) page|page (doesn.?t|does not) exist/i;
+  // The store saying your bag's empty, anywhere on the page — its bag page, or a pop-up over the page it sent
+  // the tab to instead (EB Games: "Oh no! currently your cart is empty.", over its home page).
+  var EMPTY_SAID = /\b(bag|cart|basket|trolley) is (currently |now )?empty\b|\bno (items|products) in (your )?(shopping )?(bag|cart|basket|trolley)\b|\bnothing in (your )?(shopping )?(bag|cart|basket|trolley)\b|\byour (shopping )?(bag|cart|basket|trolley) (is )?empty\b/i;
 
   function read(id) {
     try { var p = JSON.parse(sessionStorage.getItem(KEY) || 'null'); return p && p.id === id ? p : null; } catch (e) { return null; }
@@ -150,9 +153,25 @@ var MGBBag = (function () {
     return Q.toArray(scopeOf(R).querySelectorAll('a[href]')).filter(function (a) { return Q.isVisible(a) && !aside(R, a) && productLink(R, a); }).length;
   }
 
+  /** The page says the bag's empty, in a line of its own anywhere that shows (not the header's mini-bag while it's hidden). */
+  function emptyShown() {
+    var els = document.querySelectorAll('h1, h2, h3, h4, p, span, div, strong, b, li, section, [role="dialog"], [role="alert"], [role="status"]');
+    for (var i = 0; i < els.length && i < 5000; i++) {
+      var el = els[i];
+      var t = String(el.innerText || el.textContent || '');
+      if (t.length > 240 || !EMPTY_SAID.test(t) || Q.inAnyPanel(el) || !Q.isVisible(el)) continue;
+      // (A button or link's words — "Empty cart", "Empty your bag" — are something to press, not the bag saying so.)
+      if (el.closest('button, a, [role="button"], label, select, option')) continue;
+      // (Its own words — not a whole page that happens to hold them, nor "you may also like".)
+      if (el.closest(RECOMMENDATIONS) || el.closest(OTHER_LIST)) continue;
+      return true;
+    }
+    return false;
+  }
+
   /** Nothing in the bag: the page says so, or its count says 0 — or, with neither, none of the store's products on it. */
   function empty(R) {
-    if (Q.bagLooksEmpty({ drawer: true })) return true;
+    if (Q.bagLooksEmpty({ drawer: true }) || emptyShown()) return true;
     var c = MGBQuick.bagCount();
     if (c === 0) return true;
     if (c > 0) return false;
@@ -196,7 +215,7 @@ var MGBBag = (function () {
   async function settled(R) {
     for (var end = Date.now() + 10000; document.readyState !== 'complete' && Date.now() < end;) await wait(100);
     for (var until = Date.now() + 6000; Date.now() < until;) {
-      if (notFound() || removes(R).length || removeAll(R) || Q.bagLooksEmpty({ drawer: true }) || MGBQuick.bagCount() === 0) return;
+      if (notFound() || removes(R).length || removeAll(R) || Q.bagLooksEmpty({ drawer: true }) || emptyShown() || MGBQuick.bagCount() === 0) return;
       await wait(200);
     }
   }
@@ -278,6 +297,13 @@ var MGBBag = (function () {
       if (took > 0) { p.removed += took; p.stuck = 0; progress(); } else p.stuck += 1;
       p.pending = null;
       save(p);
+    }
+    // Sent somewhere else, saying your bag's empty (EB Games' empty cart is a pop-up over its home page), or
+    // its bag count at 0: it's empty — nothing to press. (A moment for a pop-up drawn by the page's own code.)
+    if (!onBag(R)) {
+      for (var late = Date.now() + 4000; Date.now() < late && !emptyShown() && MGBQuick.bagCount() !== 0;) await wait(250);
+      if (!p.removed && (emptyShown() || MGBQuick.bagCount() === 0)) return finish('empty');
+      if (p.removed && (emptyShown() || MGBQuick.bagCount() === 0)) return finish('cleared');
     }
     // Not the bag (a page not found, or somewhere else): the store's own bag link, once.
     if (!onBag(R)) {

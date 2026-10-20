@@ -126,7 +126,8 @@ test('a drop starts a run: the browser picks it up, checks out and places the or
   assert.match(run.url, /^https:\/\/www\.kmart\.com\.au\/product\/.+#mgb-go=/, "the store's own page, with a one-time ⚡ Buy code");
   assert.equal(run.mode, 'place');
   // What this checkout may do by itself: the item's max plus delivery, never over the member's limit.
-  assert.deepEqual(claim.aco, { runId: run.id, mode: 'place', maxPrice: 380, maxTotal: 400, name: 'Day UPC', sku: item.sku });
+  // (orderLimit: the most with other things already in the bag — the limit an order, within the day's spending.)
+  assert.deepEqual(claim.aco, { runId: run.id, mode: 'place', maxPrice: 380, maxTotal: 400, orderLimit: 400, name: 'Day UPC', sku: item.sku });
   assert.equal(lastRun(item.id).status, 'started');
 
   assert.equal((await report(run.id, { status: 'checkout', message: "At Kmart's checkout" })).status, 200);
@@ -584,4 +585,130 @@ test('the browser doesn\'t wait for its "placing" to be heard (it says "pressed"
   assert.equal(itemRow(d.id).aco, 0, 'pressed: this arming is used up');
   assert.equal((await report(runE.id, { status: 'placed' }, device)).body.run.status, 'placed');
   assert.deepEqual(await today(), { orders: 3, spent: 325 });
+});
+
+test('⚡ Buy you press yourself (the dashboard\'s, a channel link, the store panel\'s "Add to bag → Checkout") with Auto-checkout set to "Place the order for me": a run of its own that places the order within your limits — not with it off or set to stop at the final button, over a limit, with the item already checking out, or in an older extension', async () => {
+  const c = await Client.signup(env.url, 'own-olive');
+  makeMember(env, c);
+  assert.equal((await c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 300, perDay: 3, spendPerDay: 350 })).status, 200);
+  const device = await Device.pair(env.url, c, 'Olive laptop');
+  for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  const item = (await c.post('/api/items', { url: 'https://www.kmart.com.au/product/own-buy-test-43990011/', name: 'Own Buy ETB', maxPrice: 120 })).body;
+  // (price: what the page or the alert said — none known, the most it may cost is your limit an order.)
+  const own = (product, price) => device.call('POST', '/api/ext/aco/own', { product: { ...product, price } });
+  // An older extension (or one that hasn't said its version): left at the final button, as before.
+  assert.equal((await own({ id: item.id }, 100)).body.aco, null, "a browser that hasn't said its version");
+  await device.call('GET', '/api/ext/me?v=1.26.0');
+  assert.equal((await own({ id: item.id }, 100)).body.aco, null, 'an extension older than 1.27.0');
+  await device.call('GET', `/api/ext/me?v=${encodeURIComponent('1.27.0')}`);
+
+  // On your watchlist: the item's max (one of it, plus delivery), within your limit an order and the day's spending.
+  let r = await own({ id: item.id }, 100);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.aco, { runId: r.body.aco.runId, mode: 'place', maxPrice: 120, maxTotal: 160, orderLimit: 300, name: 'Own Buy ETB', sku: item.sku });
+  const row = env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: r.body.aco.runId });
+  assert.equal(row.status, 'started');
+  assert.equal(row.trigger, 'buy');
+  assert.ok(row.device_id, 'taken up by this browser');
+  assert.equal((await c.get('/api/aco')).body.runs[0].trigger, 'buy');
+  // The item already checking out: none for a second ⚡ Buy (it fills checkout in, stopping at the final button).
+  assert.equal((await own({ id: item.id }, 100)).body.aco, null);
+  assert.equal((await report(r.body.aco.runId, { status: 'placing', total: 109.95 }, device)).status, 200);
+  assert.equal((await report(r.body.aco.runId, { status: 'placed', total: 109.95 }, device)).body.run.status, 'placed');
+  assert.equal(itemRow(item.id).aco, 0, 'not armed, and not armed by it');
+  // The day's spending so far counts: the most with other things in the bag is what's left of it.
+  r = await own({ id: item.id }, 100);
+  assert.equal(r.body.aco.orderLimit, 240.05, '$350 a day, $109.95 spent');
+  await report(r.body.aco.runId, { status: 'failed', reason: 'stopped' }, device);
+  // The dashboard's ⚡ Buy (its one-time code, claimed by the browser on the store's page): the same — a run of its own.
+  const go = await c.post(`/api/items/${item.id}/go`, {});
+  assert.equal(go.status, 200, go.text);
+  const claim = await device.call('POST', '/api/ext/claim', { code: codeOf(go.body.url) });
+  assert.equal(claim.status, 200);
+  assert.equal(claim.body.aco.mode, 'place');
+  assert.equal(claim.body.aco.maxPrice, 120);
+  assert.equal(env.app.db.get('SELECT trigger FROM aco_runs WHERE id = :id', { id: claim.body.aco.runId }).trigger, 'buy');
+  await report(claim.body.aco.runId, { status: 'failed', reason: 'stopped' }, device);
+
+  // A product that isn't on your watchlist (the page's own): up to your limit an order.
+  r = await own({ store: 'kmart', sku: '43990099', name: 'A Link From Elsewhere', url: 'https://www.kmart.com.au/product/elsewhere-43990099/' }, 90);
+  assert.equal(r.body.aco.maxPrice, 300);
+  assert.equal(r.body.aco.maxTotal, 240.05, "your limit an order — never over what's left of the day's spending");
+  const elsewhere = env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: r.body.aco.runId });
+  assert.deepEqual([elsewhere.item_id, elsewhere.sku, elsewhere.name], [null, '43990099', 'A Link From Elsewhere']);
+  await report(r.body.aco.runId, { status: 'failed', reason: 'stopped' }, device);
+  // Over its max, or your limit an order: none — filled in, left for you.
+  assert.equal((await own({ id: item.id }, 130)).body.aco, null, "over the item's max");
+  assert.equal((await own({ store: 'kmart', sku: '43990098', name: 'Pricey' }, 320)).body.aco, null, 'over the limit an order');
+  // A store Mugibot can't check out at, or a link of no store at all: none.
+  assert.equal((await own({ store: 'nowhere', sku: '1', name: 'x' }, 10)).body.aco, null);
+  // Set to stop at the final button, or switched off: none.
+  await c.put('/api/aco', { mode: 'fill' });
+  assert.equal((await own({ id: item.id }, 100)).body.aco, null);
+  await c.put('/api/aco', { mode: 'place', enabled: false });
+  assert.equal((await own({ id: item.id }, 100)).body.aco, null);
+  await c.put('/api/aco', { enabled: true });
+  // The day's orders reached (3 a day): the runs that stopped short counted as placed, for the test.
+  env.app.db.run("UPDATE aco_runs SET status = 'placed', total = 10 WHERE user_id = :u AND status != 'placed'", { u: c.user.id });
+  assert.equal((await own({ id: item.id }, 100)).body.aco, null, "the day's 3 orders reached");
+  // …and the dashboard's ⚡ Buy then fills checkout in for you, stopping at the final button.
+  const late = await c.post(`/api/items/${item.id}/go`, {});
+  const lateClaim = await device.call('POST', '/api/ext/claim', { code: codeOf(late.body.url) });
+  assert.equal(lateClaim.status, 200);
+  assert.equal(lateClaim.body.aco, null);
+});
+
+test("a run's notes (other things in the bag, being bought too) go on its history and your activity; a slow checkout saying the same again (its count aside) is one step, not one a press", async () => {
+  const c = await Client.signup(env.url, 'note-nell');
+  makeMember(env, c);
+  await c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 300, perDay: 5, spendPerDay: 900 });
+  const device = await Device.pair(env.url, c);
+  await device.call('GET', '/api/ext/me?v=1.27.0');
+  for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  const item = (await c.post('/api/items', { url: 'https://www.kmart.com.au/product/note-test-43990021/', name: 'Note ETB', maxPrice: 120, aco: true })).body;
+  await env.app.monitor.alertRestock(itemRow(item.id), { status: 'in_stock', price: 100, source: 'sweep' });
+  const { run } = await pickUp(device);
+  await report(run.id, { status: 'note', reason: 'others', message: 'Your Kmart bag already had 1 item in it — Auto-checkout carries on' }, device);
+  let r = (await c.get('/api/aco')).body.runs[0];
+  assert.equal(r.status, 'started', 'a note changes nothing of where it is');
+  assert.ok(r.steps.some((x) => /already had 1 item/.test(x.message)));
+  assert.ok((await events(c)).some((e) => e.level === 'warn' && /Note ETB: Your Kmart bag already had 1 item/.test(e.message)));
+  for (let n = 1; n <= 4; n++) await report(run.id, { status: 'placing', message: n === 1 ? 'Pressing "Checkout securely" — total $110.00' : `Pressing "Checkout securely" again (${n}) — Kmart hasn't taken the order yet` }, device);
+  r = (await c.get('/api/aco')).body.runs[0];
+  assert.equal(r.status, 'placing');
+  assert.equal(r.steps.filter((x) => x.status === 'placing').length, 2, 'the first press, and "again" once (its count aside)');
+  await report(run.id, { status: 'placed', total: 110 }, device);
+  // (A note on a run that's over: nothing.)
+  await report(run.id, { status: 'note', message: 'late' }, device);
+  assert.ok(!(await c.get('/api/aco')).body.runs[0].steps.some((x) => x.message === 'late'));
+});
+
+test('a press the browser made after the run was closed here for want of news (timed out): counted as an order — needs you, disarmed, in the day\'s limits — and never pressed again', async () => {
+  const c = await Client.signup(env.url, 'late-lou');
+  makeMember(env, c);
+  await c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 300, perDay: 5, spendPerDay: 900 });
+  const device = await Device.pair(env.url, c);
+  for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  const item = (await c.post('/api/items', { url: 'https://www.kmart.com.au/product/late-test-43990031/', name: 'Late ETB', maxPrice: 120, aco: true })).body;
+  await env.app.monitor.alertRestock(itemRow(item.id), { status: 'in_stock', price: 100, source: 'sweep' });
+  const { run } = await pickUp(device);
+  await report(run.id, { status: 'checkout' }, device);
+  // Closed here: no news for too long.
+  env.app.db.run("UPDATE aco_runs SET status = 'failed', reason = 'timeout' WHERE id = :id", { id: run.id });
+  // Pressing again, the browser asks first: a closed run says no.
+  let r = (await report(run.id, { status: 'placing', again: true }, device)).body.run;
+  assert.equal(r.status, 'failed');
+  assert.equal(r.active, false);
+  // Its first press, heard late: an order after all — for you to check.
+  r = (await report(run.id, { status: 'placing', total: 110, message: 'Pressing "Checkout securely"' }, device)).body.run;
+  assert.equal(r.status, 'needs_you');
+  assert.equal(r.reason, 'unconfirmed');
+  assert.ok(r.steps.some((x) => x.status === 'placing'));
+  assert.equal(itemRow(item.id).aco, 0, 'the arming used up');
+  assert.deepEqual((await c.get('/api/aco')).body.today, { orders: 1, spent: 110 });
+  // …and never pressed again from here.
+  r = (await report(run.id, { status: 'placing', again: true }, device)).body.run;
+  assert.equal(r.status, 'needs_you');
+  // The order confirmed after all: placed.
+  assert.equal((await report(run.id, { status: 'placed', total: 110 }, device)).body.run.status, 'placed');
 });

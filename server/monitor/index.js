@@ -30,8 +30,11 @@ import { SWEEP_FRESH_MS } from './feed.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
 import { gateOnPage } from './gate.js';
+import { olderVersion } from './sweep.js';
 
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
+// The oldest extension that reads a store's page by opening it in its window (monitor.render: BIG W's).
+export const RENDER_EXTENSION_VERSION = '1.27.0';
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
 const KNOWN = new Set(Object.values(STATUS));
 
@@ -79,6 +82,7 @@ export class Monitor {
   }
 
   start() {
+    this.forgetServerFailures();
     if (this.timer || !this.cfg.monitor.enabled) return;
     this.timer = setInterval(() => { this.tick().catch((e) => this.cfg.log('[monitor]', e.message)); }, this.cfg.monitor.tickMs);
     this.timer.unref?.();
@@ -87,6 +91,20 @@ export class Monitor {
   stop() {
     clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /**
+   * A store the server never asks (monitor.server 'never': BIG W, which resets every server's connection):
+   * what the server's own tries said there — "Error", on every BIG W watchlist item — is forgotten, for
+   * members' browsers (and the live searches) to say instead. "Checking soon" meanwhile.
+   */
+  forgetServerFailures() {
+    const stores = this.retailers.list.filter((r) => r.monitor && r.monitor.server === 'never').map((r) => r.id);
+    if (!stores.length) return;
+    const list = stores.map((_, i) => `:s${i}`).join(', ');
+    const args = Object.fromEntries(stores.map((s, i) => [`s${i}`, s]));
+    this.db.run(`UPDATE items SET status = 'pending', error = '', browser_next_at = 0 WHERE store IN (${list}) AND status IN ('error', 'blocked') AND (status_source IS NULL OR status_source = 'server')`, args);
+    this.db.run(`UPDATE products SET status = 'pending', error = '', fail_count = 0 WHERE store IN (${list}) AND status IN ('error', 'blocked') AND (status_source IS NULL OR status_source = '' OR status_source = 'server')`, args);
   }
 
   get interval() {
@@ -471,16 +489,31 @@ export class Monitor {
    * Which of this member's SKUs their browser should check now (and lease them so two browsers don't both do it).
    * through: stores whose virtual queue this browser has got through. A store whose queue is up is left alone
    * otherwise: a request there could cost the member their place in line (monitor/gates.js).
+   * version: the extension's (a store read by opening its page — BIG W's — only by one that does: 1.27.0).
    */
-  browserDue(user, { through = new Set(), sites = new Set(), want = new Set() } = {}) {
+  browserDue(user, { through = new Set(), sites = new Set(), want = new Set(), version = null } = {}) {
     const held = (store) => !!this.gates && this.gates.queueUp(store) && !through.has(store);
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(user.id, 'alerts', {}) || {}) };
     if (!settings.browserChecks) return [];
     const now = this.now();
+    // (A store whose pages are opened in the browser's window to be read — BIG W's: one at a time, at its pace —
+    //  and only by an extension that does: 1.27.0; an older one would ask for the page in the background, what
+    //  got browsers turned away there. A browser that hasn't said its version is taken for an older one, and
+    //  that store's items left out of its list altogether, for a browser that can.)
+    const pace = (r) => (r && r.monitor && r.monitor.browserSeconds ? r.monitor.browserSeconds * 1000 : this.browserInterval);
+    const render = (r) => !!(r && r.monitor && r.monitor.render);
+    const cantRender = !version || olderVersion(version, RENDER_EXTENSION_VERSION);
+    const unopened = cantRender ? this.retailers.list.filter(render).map((r) => r.id) : [];
+    const notThese = unopened.length ? `AND i.store NOT IN (${unopened.map((_, n) => `:r${n}`).join(', ')})` : '';
     const rows = this.db.all(`SELECT i.*, c.status AS page_status, c.fail_count AS page_fails, c.checked_at AS page_checked, c.error AS page_error
       FROM items i LEFT JOIN page_checks c ON c.url = i.url AND i.url != ''
-      WHERE i.user_id = :u AND i.monitor = 1 AND i.browser_next_at <= :now ORDER BY i.browser_next_at, i.position LIMIT 40`, { u: user.id, now });
+      WHERE i.user_id = :u AND i.monitor = 1 AND i.browser_next_at <= :now ${notThese} ORDER BY i.browser_next_at, i.position LIMIT 40`,
+    { u: user.id, now, ...Object.fromEntries(unopened.map((id, n) => [`r${n}`, id])) });
     const out = [];
+    const rendering = new Set();
+    // (Left for later this round — BIG W's one page a round: its turn pushed back a little, so a long BIG W
+    //  list never keeps the other stores' checks out of the round.)
+    const later = (table, id) => this.db.run(`UPDATE ${table} SET browser_next_at = :n WHERE id = :id`, { n: now + this.browserInterval, id });
     for (const it of rows) {
       const r = this.retailers.get(it.store);
       const other = it.store === 'other';
@@ -494,10 +527,20 @@ export class Monitor {
       const searchBlocked = !it.url && this.searchStruggling(it);
       if (!(serverOff || serverStruggling || serverSilent || searchBlocked || it.status_source === 'browser')) continue;
       if (other && !this.siteAllowed(it.url, sites, want)) continue;
+      if (render(r)) {
+        if (cantRender) continue;
+        if (rendering.has(r.id)) { later('items', it.id); continue; }
+        // (Seen by a live search just now: nothing more to open.)
+        if (it.status_source === 'sweep' && it.checked_at && now - it.checked_at < SWEEP_FRESH_MS) {
+          this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
+          continue;
+        }
+        rendering.add(r.id);
+      }
       const url = it.url || this.retailers.searchUrl(r, it.sku);
       if (!url) continue;
-      out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null }));
-      this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + this.browserInterval, id: it.id });
+      out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true } : {}) }));
+      this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
       if (out.length >= 5) break;
     }
     // Admins' browsers also check the shared monitors the server can't: every one at a store that
@@ -514,9 +557,16 @@ export class Monitor {
       for (const url of this.catalog.failingSitePages()) this.siteAllowed(url, sites, want);
       for (const p of [...whole, ...failing].slice(0, 5 - out.length)) {
         const r = this.retailers.get(p.store);
+        if (render(r) && cantRender) continue;
+        if (render(r) && rendering.has(r.id)) { later('products', p.id); continue; }
+        if (render(r) && p.status_source === 'sweep' && p.sweep_seen_at && now - p.sweep_seen_at < SWEEP_FRESH_MS) {
+          this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: p.id });
+          continue;
+        }
+        if (render(r)) rendering.add(r.id);
         const url = p.url || this.retailers.searchUrl(r, p.sku);
-        this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.browserInterval, id: p.id });
-        if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null }));
+        this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: p.id });
+        if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true } : {}) }));
       }
     }
     return out;

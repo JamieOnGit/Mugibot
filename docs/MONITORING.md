@@ -56,6 +56,34 @@ store's monitors while the server's being refused there — and any one monitor
 whose own page refuses the server (a drop watch's find at BIG W, say), while the
 rest of the store answers.
 
+**BIG W's product pages: browsers only** (extension 1.27.0). BIG W's bot
+protection (Akamai) resets every server's connection, so its watchlist items all
+said **Error**. Now the server never asks BIG W for a product page (its
+`monitor.server` is `'never'`: the admin switch can't put it back), and the
+"Error" its old tries left is forgotten when the server starts. Members' browsers
+read their own BIG W items instead, and admins' browsers the shared monitors:
+
+- **Opened, not fetched.** Each product's page is opened in the extension's
+  minimised window, the way you'd open it, and read once its buy box is drawn
+  (up to 10 s), then the tab's left blank. Requests from the extension's
+  background are what got browsers turned away.
+- **Gently.** One BIG W page a round per browser, and each product at most every
+  15 minutes (`browserSeconds: 900`). One a live search saw in the last few
+  minutes isn't opened at all. The live searches (one every 20 s, was 10) see
+  drops sooner.
+- **"Access Denied".** When BIG W turns a browser away — a check, a live search,
+  or a page you open yourself — that browser leaves BIG W alone for 30 minutes (no
+  checks, no searches), the item says why, and the store panel on the page says
+  so too, with what to do: clear BIG W's cookies in that browser, or try another
+  network. Asking more only makes it last.
+- **Older extensions** (before 1.27.0) aren't given BIG W pages: they'd fetch them
+  in the background.
+
+Your checkout opens BIG W in your own browser, as you would. There's no proxy or
+gateway in between, and Mugibot never disguises traffic. If BIG W turns your
+checkout browser away, use a different computer or network for an admin's
+sweeping than for checking out.
+
 An admin can still pin a store (**Monitor → Settings → Stores**): **Server
 only** (never a browser), **Admin's browser** (never the server) or **Off**.
 Settings saved before server first: a store set to the server or a browser is
@@ -87,7 +115,7 @@ BIG W, EB Games, Pokémon Center, Premium Bandai and The Gamesmen have refused
 requests from servers (403 / Cloudflare's, Imperva's or their own bot checks), so
 while they do, the extension in an **admin's** browser searches them instead, every 15
 seconds per store by default (the sweep settings' **…from an admin's browser**, from 2 seconds), each store at its
-own pace — at most BIG W every 10, Amazon every 20, Pokémon Center and Premium
+own pace — at most BIG W every 20 (was 10: see BIG W's product pages, above), Amazon every 20, Pokémon Center and Premium
 Bandai every 30: those stores turn away pages asked for faster (Amazon's 503,
 Pokémon Center's Imperva), and a browser that's turned away finds nothing at all.
 
@@ -256,8 +284,8 @@ isn't searched any less often (at least half a second between two searches):
 - Amazon AU: each keyword every ~60 s (page 1), page 2 now and then.
 - The Games Cube: each keyword every ~10 s (page 1), the later pages now and then.
 - Gamerholic: its newest products every ~15 s.
-- BIG W (admin's browser): one search every 10 s at the quickest, so each
-  keyword every ~20 s with two keywords; EB Games and The Gamesmen: one search
+- BIG W (admin's browser): one search every 20 s at the quickest, so each
+  keyword every ~40 s with two keywords; EB Games and The Gamesmen: one search
   as often as the admin's-browser seconds set (from 2 s); Pokémon Center and
   Premium Bandai: one every 30 s.
 - Pokébox, Good Games, Collectible Madness, Cherry Collectables: each keyword
@@ -744,6 +772,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Clothes or toys in the list | MugiWatch's card words include "pack" and "sleeve", so "3 Pack Socks" looks like cards. Add the word (e.g. "onesie") to **Not trading cards**; products that no longer count leave the list when you save. |
 | A store shows **In queue** on the live monitor | Its virtual queue is up, so the admin's browser isn't searching it until it's through the queue or the queue's down. That's on purpose: a search could cost the admin their place in line. Nothing to do. |
 | `#virtual-queue-detection` got nothing | Press **Set up store channels** again (it makes the channel), and check the bot can post there. EB Games' and Pokémon Center's queues need an admin's browser with the extension (1.16.0 or later) open, or members' browsers landing in the queue. |
+| BIG W items say **The store said "Access Denied" to your browser** | BIG W's bot protection turned that browser away. Mugibot leaves BIG W alone from it for 30 minutes, then reads the pages again. To get back in sooner, clear BIG W's cookies in that browser (the icon left of the address → Cookies and site data), or use another network. Keep sweeping and checking out on different computers or networks if it keeps happening. |
 | A drop watch at another website says **refused Mugibot (HTTP 403)** or **a bot check**, or a find says **Blocked by site** | That site turns servers away. Open the extension's toolbar menu and press **Allow checks from this browser** under **Websites refusing Mugibot's server**: your browser checks it from then on (an admin's for a watch for everyone, yours for your own). At a store Mugibot knows (BIG W), an admin's browser does it with nothing to allow — keep Chrome open with the extension connected. The server keeps asking too, waiting longer each time. |
 | A drop watch at another website finds **nothing** though the site has it | Mugibot reads product links (`/products/…`, `/product/…`, `/p/…`) and the product data in the page. Give the site's own search page for those words (search there, copy the address), or watch the product's link. |
 | A drop watch's alerts went to `#misc-retailers` | There's no `#non-tcg-alerts` rule yet: press **Make #non-tcg-alerts** on the drop watches tab (or **Set up store channels**). Or pick a channel for the watch (**✎** on it). |

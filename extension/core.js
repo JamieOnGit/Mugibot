@@ -528,7 +528,7 @@ var MGBQuick = (function () {
    * page that neither has the store's product address, says it's a product, nor shows a buy button.
    */
   function pageProduct(R) {
-    if (!R || onBagPage(R) || onCheckoutPage(R)) return null;
+    if (!R || onBagPage(R) || onCheckoutPage(R) || deniedPage()) return null;
     var path = MGBFlows.decodedPath(location);
     var m = R.skuFromPath ? path.match(R.skuFromPath) : null;
     var og = document.querySelector('meta[property="og:type"]');
@@ -548,6 +548,15 @@ var MGBQuick = (function () {
     var title = document.querySelector('meta[property="og:title"]');
     var name = ((h1 && h1.innerText) || (title && title.content) || document.title || sku).replace(/\s+/g, ' ').trim().slice(0, 120);
     return { sku: String(sku || name).slice(0, 80), name: name || sku, url: location.href.split('#')[0], store: R.id, fromPage: true };
+  }
+
+  /**
+   * The store's bot protection turning this browser away instead of its page: Akamai's "Access Denied"
+   * (BIG W's — "You don't have permission to access … Reference #…"), Cloudflare's "you have been blocked".
+   */
+  function deniedPage() {
+    var text = String((document.body && document.body.innerText) || '').slice(0, 4000);
+    return text.length < 3000 && (/^\s*access denied\s*$/i.test(document.title) || /you don.?t have permission to access|errors\.edgesuite\.net|sorry, you have been blocked/i.test(text));
   }
 
   /**
@@ -1393,6 +1402,7 @@ var MGBQuick = (function () {
     productForPage: productForPage,
     pageProduct: pageProduct,
     pageBusy: pageBusy,
+    deniedPage: deniedPage,
     bagDrawer: bagDrawer,
     slowReloads: slowReloads,
     dropCartParams: dropCartParams,
