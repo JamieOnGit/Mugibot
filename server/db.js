@@ -487,6 +487,11 @@ const MIGRATIONS = [
   ALTER TABLE items ADD COLUMN price_alert_at INTEGER;
   ALTER TABLE items ADD COLUMN price_alert_price REAL;
   `,
+  // 14 — a Shop checkout link's discount code (yours, typed in beforehand): Auto-checkout types it into
+  //      Shop's checkout and presses Apply before "Pay now" ('' = none: the discount box is left alone).
+  `
+  ALTER TABLE items ADD COLUMN discount TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 export class Db {

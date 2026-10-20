@@ -650,6 +650,30 @@ order).
   open. Still not on sale after that, it stops — nothing bought — and the item is
   **armed again**. If your browser goes quiet after a press, the run ends as
   needs-you (check your email), never armed again.
+- **The store's checkout queue** (Mattel's at a drop: "You're in line to check out
+  … Don't refresh this page", on the store's own site, where Mugibot doesn't run).
+  A link that goes there — on its way to Shop's checkout, or sent back from it at the
+  drop — is waited for there, never refreshed: the run says it's in the queue, keeps
+  going (it isn't taken for "signed out of Shop" while this browser was seen signed
+  in to Shop in the last 12 hours), and once the tab's back on Shop's checkout it
+  carries on — the ⚡ Buy code it opened with, left behind in the queue, replaced by a
+  fresh one — pressing **Pay now** again. (Extension 1.27.1.)
+- **🚦 Wait for queue, then ACO** (a button on each Shop checkout link). It opens the
+  link now and, while the checkout says it isn't on sale yet, **opens it again every
+  15 seconds** — like refreshing — until the store's queue is up. The next opening
+  lands in the queue and stays there (never refreshed). Through it, it presses **Pay
+  now** every 2 seconds until the store takes the order, and never opens the link
+  again in that run. It places a real order within your limits, so Auto-checkout must
+  be on and set to **Place the order for me**. Press it when you'd join the queue
+  yourself (the queue may let early arrivals through before the drop; you can watch
+  its wait time in that tab).
+- **A discount code** (Edit on the link → **Discount code**): typed into the
+  checkout's "Discount code" box and **Apply** pressed before **Pay now**. Taken,
+  it's on the order. Not taken ("Enter a valid discount code", or no answer in 8
+  seconds): the box is cleared and **Pay now** pressed without it. Left empty, the
+  discount box is never touched.
+- **Never ticked** at Mattel: "I agree to sign-up for Mattel Rewards" (no box that
+  signs you up to anything), nor the news-and-offers box (left as the store has it).
 - **A link that already says In stock** (the store's own data says the options
   can be bought, while its checkout still says "not available for purchase" —
   Mattel's before a drop): the drop won't change that "In stock", so an armed

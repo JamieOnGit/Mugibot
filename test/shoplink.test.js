@@ -297,6 +297,38 @@ test('🛍️ a checkout browser with an extension older than 1.27.1 (one that c
   }
 });
 
+test('🛍️🚦🏷️ Wait for queue, then ACO, and a discount code: a run of its own that places the order, its pass saying so (the link to open again) and carrying the code; only while Auto-checkout places the order', async () => {
+  const link = store.cartLink([[PORSCHE, 1]]);
+  const item = (await ash.post('/api/items', { url: link, name: 'RLC Porsche (queue)', maxPrice: 60, discount: ' rlc 10 ' })).body;
+  assert.equal(item.discount, 'rlc10', 'kept without its spaces');
+  assert.equal((await ash.put(`/api/items/${item.id}`, { aco: true })).body.discount, 'rlc10', 'kept when the link is armed');
+  let r = await ash.post(`/api/aco/test/${item.id}`, { queue: true });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.run.trigger, 'queue');
+  const ashId = env.app.repo.userByUsername('ash').id;
+  const pass = env.app.aco.passFor(ashId, env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: r.body.run.id }));
+  assert.equal(pass.queue, true);
+  assert.equal(pass.url, link);
+  assert.equal(pass.discount, 'rlc10');
+  finishRuns();
+  // An ordinary run of it: the code, but no looking for the queue.
+  r = await ash.post(`/api/aco/test/${item.id}`);
+  const plain = env.app.aco.passFor(ashId, env.app.db.get('SELECT * FROM aco_runs WHERE id = :id', { id: r.body.run.id }));
+  assert.equal(plain.queue, undefined);
+  assert.equal(plain.discount, 'rlc10');
+  finishRuns();
+  // The code cleared: none.
+  assert.equal((await ash.put(`/api/items/${item.id}`, { discount: '' })).body.discount, '');
+  // Only while Auto-checkout places the order (it presses "Pay now").
+  await ash.put('/api/aco', { mode: 'fill' });
+  r = await ash.post(`/api/aco/test/${item.id}`, { queue: true });
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /Place the order for me/);
+  await ash.put('/api/aco', { mode: 'place' });
+  finishRuns();
+  await ash.del(`/api/items/${item.id}`);
+});
+
 test("🛍️ a link whose option the store doesn't sell any more: not found (said, never alerted as a restock)", async () => {
   const link = `${store.url}/creations/cart/123456789:1`;
   const item = (await ash.post('/api/items', { url: link, name: 'Gone' })).body;

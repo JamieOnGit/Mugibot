@@ -224,6 +224,13 @@ export function defaultShopApp() {
     // many "not available" answers (0: only when a test says). sameNotice: the notice left up as it is when
     // "Pay now" is turned away again (not drawn anew). payAt: when each press reached the store.
     real: false, liveAfter: 0, sameNotice: false, payAt: [],
+    // The store's checkout queue (Mattel's at a drop, on its own site — "Queue - … - Checkout"): queueMs, a cart
+    // link waits in line this long first (the page moving on by itself, the ⚡ Buy code left behind); bounceMs, the
+    // next "Pay now" is sent back to the queue for this long (the queue reset at the drop). queueViews: its loads.
+    queueMs: 0, bounceMs: 0, queueViews: 0,
+    // Its discount box, drawn as Mattel's real one (name "reductions", "Discount code", Apply off until something's
+    // typed, "Apply Discount Code"): codes it takes (code → $ off), the codes tried, and those applied.
+    discounts: { RLC10: 10 }, discountTries: [],
     shipping: 32,
     checkouts: {}, orders: [], refused: [], shown: 0, guestViews: 0, accountViews: 0,
   };
@@ -2046,7 +2053,19 @@ ${body}
       const token = `hWNI${Object.keys(A.checkouts).length + 1}x`;
       A.checkouts[token] = lines;
       const back = `/creations/checkouts/cn/${token}/en-us?skip_shop_pay=true`;
-      return redirect(`/shopapp/checkout/${SHOP_ID}/cn/${token}/en-us/shoppay?redirect_source=checkout_universal_redirect&ur_back_url=${encodeURIComponent(back)}`);
+      const to = `/shopapp/checkout/${SHOP_ID}/cn/${token}/en-us/shoppay?redirect_source=checkout_universal_redirect&ur_back_url=${encodeURIComponent(back)}`;
+      if (A.queueMs) return redirect(`/creations/queue?until=${Date.now() + A.queueMs}&to=${encodeURIComponent(to)}`);
+      return redirect(to);
+    }
+    if (sub === '/queue') {
+      // In line: the page moves on by itself when it's your turn (never refresh it) — to a new address, so the
+      // code in the old one's left behind.
+      A.queueViews += 1;
+      const until = Number(u.searchParams.get('until')) || 0;
+      const to = String(u.searchParams.get('to') || '');
+      if (!to.startsWith('/shopapp/')) return html(400, shell('Queue', '<h1>Bad queue link</h1>'));
+      return html(200, `<!doctype html><html><head><meta charset="utf-8"><title>Queue - Creations (dummy) - Checkout</title></head><body><div class="dummy">⚠ Dummy store queue for testing Mugibot — nothing here is real.</div><main><h1>Creations (dummy)</h1><p>You’re in line to check out</p><p>Estimated wait time: Less than a minute</p><p>Don’t refresh this page, it will update automatically.</p><p>Items in your cart are not reserved until you complete checkout.</p></main>
+<script>setTimeout(() => location.replace(${JSON.stringify(to)}), Math.max(0, ${until} - Date.now()));</script></body></html>`);
     }
     const g = sub.match(/^\/checkouts\/cn\/(\w+)\/(en-us|thank-you)$/);
     if (g && g[2] === 'thank-you') return html(200, shell('Thank you', `<h1>Thank you for your purchase!</h1><p>Order #M${1000 + A.orders.length} is confirmed.</p>`));
@@ -2073,15 +2092,30 @@ ${body}
     const priced = lines.map((l) => ({ ...l, v: A.variants.find((y) => String(y.id) === l.id) }));
     const subtotal = priced.reduce((n, l) => n + l.v.price * l.qty, 0);
     const total = Math.round((subtotal + A.shipping) * 100) / 100;
+    if (m[3] === 'pay' && req.method === 'POST' && u.searchParams.get('discount') !== null) {
+      // The discount box's Apply: taken (its amount off), or "Enter a valid discount code".
+      const code = String(u.searchParams.get('discount') || '').trim().toUpperCase();
+      A.discountTries.push(code);
+      const off = A.discounts[code];
+      return off ? json(200, { code, off }) : json(422, { error: 'Enter a valid discount code' });
+    }
     if (m[3] === 'pay' && req.method === 'POST') {
       return parseBody(req).then((b) => {
         A.payTries += 1;
         A.payAt.push(Date.now());
         if (A.unavailable && A.liveAfter && A.refused.filter((x) => /not available/.test(x)).length >= A.liveAfter) A.unavailable = false;
+        // (The queue reset at the drop: this press sent back to the store's queue, nothing bought.)
+        if (A.bounceMs) {
+          const ms = A.bounceMs;
+          A.bounceMs = 0;
+          A.refused.push('queue');
+          return json(409, { queue: `/creations/queue?until=${Date.now() + ms}&to=${encodeURIComponent(String(b.back || ''))}` });
+        }
         if (A.agreement && b.agreed && A.payTries <= A.busy) { A.refused.push('busy'); return json(503, { error: 'Something went wrong on our end. Please try again.' }); }
         const why = A.unavailable ? 'This Product is not available for purchase' : A.agreement && !b.agreed ? 'You must accept membership agreement before checking out' : '';
         if (why) { A.refused.push(why); return new Promise((r) => setTimeout(r, A.real ? 300 : 0)).then(() => json(422, { error: why })); }
-        A.orders.push({ token: m[2], lines: lines.map((l) => [l.id, l.qty]), total, agreed: !!b.agreed, marketing: !!b.marketing, at: Date.now() });
+        const off = (b.discount && A.discounts[String(b.discount).toUpperCase()]) || 0;
+        A.orders.push({ token: m[2], lines: lines.map((l) => [l.id, l.qty]), total: Math.round((total - off) * 100) / 100, discount: off ? String(b.discount).toUpperCase() : '', agreed: !!b.agreed, marketing: !!b.marketing, rewards: !!b.rewards, at: Date.now() });
         return json(200, { ok: true, next: `/creations/checkouts/cn/${m[2]}/thank-you` });
       });
     }
@@ -2101,25 +2135,50 @@ ${A.agreement ? banner('You must accept membership agreement before checking out
 <section><h3>Shipping method</h3><p>Standard Courier · ${shopMoney(A.shipping)}</p></section>
 <section><h3>Payment</h3><p>Commonwealth Bank •••• 2387</p></section>
 <section class="lines">${priced.map((l) => `<p class="line">${esc(l.v.name)}${l.qty > 1 ? ` × ${l.qty}` : ''} <span>${shopMoney(l.v.price * l.qty)}</span></p>`).join('')}
-  <p>Subtotal <span>${shopMoney(subtotal)}</span></p><p>Shipping <span>${shopMoney(A.shipping)}</span></p><p class="total"><b>Total</b> AUD <b>${shopMoney(total)}</b></p></section>
+  <form id="discount-form"><div><input name="reductions" id="ReductionsInputPS1-72" placeholder="Discount code" autocomplete="off"></div><button type="submit" id="apply-discount" aria-label="Apply Discount Code" disabled>Apply</button><p id="discount-error" role="alert" hidden></p></form>
+  <p id="discount-line" hidden>Discount <span class="tag" id="discount-tag"></span> <span id="discount-off"></span></p>
+  <p>Subtotal <span>${shopMoney(subtotal)}</span></p><p>Shipping <span>${shopMoney(A.shipping)}</span></p><p class="total"><b>Total</b> AUD <b id="total">${shopMoney(total)}</b></p></section>
 ${A.agreement && A.real ? '<div class="agree"><div class="row"><div class="cb"><input type="checkbox" id="CheckboxPS1-3" name="membership"><div class="mark"><span><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6l3 3 5-6" fill="none" stroke="currentColor"/></svg></span></div></div><label for="CheckboxPS1-3">By selecting, you indicate your acceptance of the</label></div><a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></div>'
     : A.agreement && A.hiddenBox ? '<div class="agree"><input type="checkbox" id="membership" name="membership" required style="display:none"><label for="membership"><span class="tick" aria-hidden="true">☐</span> By selecting, you indicate your acceptance of the <a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></label></div>'
     : A.agreement ? '<label class="agree"><input type="checkbox" id="membership" name="membership" required> By selecting, you indicate your acceptance of the <a href="/creations/pages/membership-agreement" target="_blank">Membership Agreement ↗</a></label>' : ''}
 <label><input type="checkbox" id="marketing" name="marketing"> Email me with news and offers</label>
+${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name="rewards"><span>I agree to sign-up for Mattel Rewards and its <a href="/creations/pages/terms">Terms and Conditions</a>.</span></div>' : ''}
 <p>${A.real ? `<button aria-busy="false" aria-label="Pay now\n${shopMoney(total)}" aria-live="polite" id="checkout-pay-button" class="pay" type="submit"><span><span>Pay now</span> <span>${shopMoney(total)}</span></span></button>` : '<button type="button" id="pay" class="pay">Pay now</button>'}</p>
 <p><a href="${esc(back)}" id="guest">Check out as guest</a></p>
 </main>
 <script>
   const real = ${A.real ? 'true' : 'false'};
   const same = ${A.sameNotice ? 'true' : 'false'};
+  // The discount box: Apply on only with something typed; taken — shown as a tag, the box emptied, the total
+  // down — or "Enter a valid discount code" under it (the box marked wrong).
+  let discount = '';
+  const dbox = document.querySelector('input[name="reductions"]');
+  const dbtn = document.getElementById('apply-discount');
+  const derr = document.getElementById('discount-error');
+  dbox.addEventListener('input', () => { dbtn.disabled = !dbox.value.trim(); derr.hidden = true; dbox.removeAttribute('aria-invalid'); });
+  document.getElementById('discount-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const r = await fetch(location.pathname.replace(/shoppay$/, 'pay') + '?discount=' + encodeURIComponent(dbox.value), { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) { derr.textContent = d.error; derr.hidden = false; dbox.setAttribute('aria-invalid', 'true'); return; }
+    discount = d.code;
+    document.getElementById('discount-tag').textContent = d.code;
+    document.getElementById('discount-off').textContent = '-$' + d.off.toFixed(2);
+    document.getElementById('discount-line').hidden = false;
+    const t = document.getElementById('total');
+    t.textContent = '$' + (Number(t.textContent.replace(/[^0-9.]/g, '')) - d.off).toFixed(2);
+    dbox.value = '';
+    dbtn.disabled = true;
+  });
   const pay = document.querySelector('.pay');
   pay.addEventListener('click', async () => {
     const box = document.querySelector('input[name="membership"]');
     if (!real && box && !box.checked) { document.getElementById('agree-err').hidden = false; return; }
     if (pay.getAttribute('aria-busy') === 'true') return;
     pay.setAttribute('aria-busy', 'true');
-    const r = await fetch(location.pathname.replace(/shoppay$/, 'pay'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agreed: !!(box && box.checked), marketing: document.getElementById('marketing').checked }) });
+    const r = await fetch(location.pathname.replace(/shoppay$/, 'pay'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agreed: !!(box && box.checked), marketing: document.getElementById('marketing').checked, back: location.pathname + location.search, discount, rewards: !!(document.querySelector('input[name="rewards"]') || {}).checked }) });
     const d = await r.json();
+    if (d.queue) { location.href = d.queue; return; }
     if (!r.ok) {
       pay.setAttribute('aria-busy', 'false');
       // (The same words already up, on a checkout that leaves them as they are: not drawn again.)

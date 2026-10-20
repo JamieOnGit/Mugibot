@@ -32,6 +32,8 @@ const toItem = (r) => r && ({
   aco: !!r.aco, acoAt: r.aco_at || null,
   // Put there by one of your drop watches (monitor/drops.js): it goes when the watch does.
   dropWatch: r.drop_watch || null,
+  // A Shop checkout link's discount code, typed in at its checkout before "Pay now" ('' = none).
+  discount: r.discount || '',
 });
 const parseLogins = (v) => { try { const o = JSON.parse(v || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
 const toDevice = (r) => r && ({
@@ -256,9 +258,9 @@ export class Repo {
     const t = this.now();
     const pos = this.db.get('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM items WHERE user_id = :u', { u: userId }).n;
     try {
-      this.db.run(`INSERT INTO items (id, user_id, position, store, sku, name, url, price, max_price, quantity, profile_id, monitor, announce, aco, aco_at, created_at, updated_at)
-        VALUES (:id, :u, :pos, :store, :sku, :name, :url, :price, :max, :qty, :pf, :mon, :ann, :aco, :acoAt, :t, :t)`,
-      { id, u: userId, pos, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, acoAt: it.aco ? t : null, t });
+      this.db.run(`INSERT INTO items (id, user_id, position, store, sku, name, url, price, max_price, quantity, profile_id, monitor, announce, aco, aco_at, discount, created_at, updated_at)
+        VALUES (:id, :u, :pos, :store, :sku, :name, :url, :price, :max, :qty, :pf, :mon, :ann, :aco, :acoAt, :disc, :t, :t)`,
+      { id, u: userId, pos, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, acoAt: it.aco ? t : null, disc: it.discount || '', t });
     } catch (e) {
       if (isUniqueError(e)) throw new HttpError(409, `SKU ${it.sku} is already on your watchlist`);
       throw e;
@@ -274,10 +276,10 @@ export class Repo {
     const moved = before.url !== (it.url || '') || before.store !== it.store || before.sku !== it.sku;
     try {
       this.db.run(`UPDATE items SET store = :store, sku = :sku, name = :name, url = :url, price = :price, max_price = :max, quantity = :qty,
-          profile_id = :pf, monitor = :mon, announce = :ann, aco = :aco, aco_at = CASE WHEN :aco = 1 AND aco = 0 THEN :t WHEN :aco = 0 THEN NULL ELSE aco_at END, updated_at = :t
+          profile_id = :pf, monitor = :mon, announce = :ann, aco = :aco, aco_at = CASE WHEN :aco = 1 AND aco = 0 THEN :t WHEN :aco = 0 THEN NULL ELSE aco_at END, discount = :disc, updated_at = :t
           ${moved ? ", status = 'pending', status_source = NULL, status_at = NULL, checked_at = NULL, error = '', browser_next_at = 0, browser_fails = 0" : ''}
         WHERE user_id = :u AND id = :id`,
-      { id: before.id, u: userId, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, t: this.now() });
+      { id: before.id, u: userId, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, disc: it.discount || '', t: this.now() });
     } catch (e) {
       if (isUniqueError(e)) throw new HttpError(409, `SKU ${it.sku} is already on your watchlist`);
       throw e;

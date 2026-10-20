@@ -447,7 +447,8 @@ var MGBFill = (function () {
   }
 
   // Boxes never ticked for you, whatever the flow says: newsletters, offers, marketing texts.
-  var MARKETING_RE = /newsletter|marketing|subscribe|offers|promotion|news\b|sms|text me|email me|updates|kmail/i;
+  // (Nor signing you up to anything: Mattel's "I agree to sign-up for Mattel Rewards and its Terms and Conditions".)
+  var MARKETING_RE = /newsletter|marketing|subscribe|offers|promotion|news\b|sms|text me|email me|updates|kmail|sign[- ]?(me )?up|\brewards?\b|loyalty/i;
   // At every store: a box saying you accept its terms or agreement ("By selecting, you indicate your
   // acceptance of the Membership Agreement", "I have read and agree to the terms and conditions") — the
   // checkout won't go without it. (Never one to save your details, or a marketing one.)
