@@ -56,6 +56,8 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // as well (later presses ask your account first, so 1.27.1 stops at its next one). Shopify's "Too many checkout
 // attempts": nothing pressed, waited out (3 minutes), the link opened again; "Pay now" every 6 s, the link opened
 // again every 90 s. Listens while a ⏰ 🚦 Wait for queue, then ACO is set for later.
+// 1.28.0: Gameology (www.gameology.com.au) — its pages are new to the extension (retailers/gameology.js: an older
+// copy can't open them, so its acoVersion asks for this one). Nothing else changed in how checkouts go.
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.

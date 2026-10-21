@@ -27,6 +27,12 @@
 //             Global-e-style frame from another address
 //   /pokebox, /goodgames, /collectiblemadness, /cherrycollectables  the same Shopify pages, with
 //             Shopify's address suggestions at checkout, its newest-products list and search suggestions
+//   /gameology  the same Shopify pages, drawn as Gameology's (FoxTheme's "Hyper"): its product form
+//             adding in the background, then its cart drawer — "Checkout" (a submit button posting the
+//             cart form) and "View cart"; its cart icon opens the drawer too (drawerShut: the drawer left
+//             shut after an add). Its product links name a collection on the way. noPermalink: its cart
+//             link (/cart/<variant>:1) not taken (the product page instead). Signed in to its own account
+//             (state.signedIn.gameology 'account'): your saved details at checkout, the card still to type.
 //   /gamesmen  Magento-style (The Gamesmen): "Add to Cart" by AJAX ("You added … to your shopping
 //             cart"), the mini cart, its one-page checkout (shipping address, shipping methods table,
 //             "Credit card" with Braintree-style card fields, the terms box) → "CONFIRM AND PAY"; its
@@ -89,11 +95,12 @@ const SHOPS = {
   cherrycollectables: { name: 'Cherry Collectables (dummy Shopify)', color: '#be123c' },
   gamesmen: { name: 'The Gamesmen (dummy Magento)', color: '#0f4c81' },
   gamesworld: { name: 'Games World (dummy WooCommerce)', color: '#7f1d1d' },
+  gameology: { name: 'Gameology (dummy Shopify)', color: '#0e7490' },
 };
 // The Shopify-style shops: the same product, cart and checkout pages.
-const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic', 'toysrus', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']);
+const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic', 'toysrus', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']);
 // (The card shops added in Oct 2026: Shopify's address suggestions as you type, at their checkout.)
-const SUGGESTS = new Set(['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']);
+const SUGGESTS = new Set(['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']);
 const SHOP_RE = new RegExp(`^/(${Object.keys(SHOPS).join('|')})(/.*|$)`);
 const LD_AVAIL = { in_stock: 'InStock', preorder: 'PreOrder', out_of_stock: 'OutOfStock' };
 // City Beach's marketing pop-up (Emarsys), over the product page a moment after it opens.
@@ -179,6 +186,9 @@ export function defaultShops() {
       // "Deliver to a different address?" comes ticked (shipToDifferent), Stripe's Link connected (link:
       // the saved card, Confirm).
       billingUnticked: false, billingTicked: false, noStandard: false, refuseServers: false, searchProvider: false, shipToDifferent: id === 'gamesworld', link: false,
+      // Gameology: its cart drawer left shut after an add (drawerShut: its cart icon opens it); its cart link
+      // not taken (noPermalink: the product page instead).
+      drawerShut: false, noPermalink: false,
       // (log: every request while it's on — { id, at, path, what } — to show nothing asked again too soon.)
       queue: { on: false, admitAfterMs: 4000, refreshMs: 1500, tooSoonMs: 700, wait: 23, lateMs: 0, places: {}, admittedIds: [], kicks: 0, shown: 0, admitted: 0, cookieless: 0, log: [] },
     };
@@ -252,8 +262,45 @@ button[disabled]{background:#999;cursor:default}label{display:block;margin:8px 0
 .choice[aria-pressed=true]{outline:3px solid #0a0}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style>${head}</head>
 <body><div class="dummy">⚠ Dummy store for testing Mugibot — nothing here is real. <a href="/">Control panel</a></div>
 <header><a href="${base}/">${esc(s.name)}</a> · ${noBag ? '' : bagLink(shop, bagCount)} · <!--mgb-account--></header><main>${body}</main>
-<footer>${esc(s.name)} is a fake store for testing.</footer></body></html>`;
+<footer>${esc(s.name)} is a fake store for testing.</footer>${shop === 'gameology' ? GAMEOLOGY_DRAWER : ''}</body></html>`;
 }
+
+// Gameology's cart drawer (FoxTheme's "Hyper", as its real page has it): shut until its theme slides it open —
+// after an add, or from the cart icon — drawn from the cart (/cart.js) each time it opens: the lines, the
+// subtotal, "Checkout" (a submit button named checkout, in a form posting to /cart) and "View cart".
+// __gmCart(true) opens it, (false) shuts it, ('count') only brings the cart icon's count up to date.
+const GAMEOLOGY_DRAWER = `<style>.hidden{display:none!important}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}</style>
+<cart-drawer id="CartDrawer" class="drawer cart-drawer drawer--right" hidden style="color:#222;z-index:60">
+  <div class="drawer__header"><h3 class="drawer__heading">Your cart</h3><button type="button" class="drawer__close-btn" aria-label="Close" aria-controls="CartDrawer-close" style="background:none;color:#222">✕</button></div>
+  <div id="CartDrawerEmpty" class="cart-drawer__empty"><p>Your cart is empty</p></div>
+  <cart-items><ul role="list" class="cart-product-body-list" id="CartDrawerItems" style="padding:0;list-style:none"></ul></cart-items>
+  <div id="CartDrawerFooter" class="drawer__footer cart-drawer__footer hidden">
+    <p>Subtotal <b id="CartDrawerTotal"></b></p>
+    <form action="/gameology/cart" method="post" id="CartDrawer-Form" novalidate><button class="btn btn--secondary flex-grow" type="submit" name="checkout"><span class="btn__text">Checkout</span></button></form>
+    <p><a href="/gameology/cart" class="view-cart-button" style="color:#0e7490">View cart</a></p>
+  </div>
+</cart-drawer>
+<script>
+  window.__gmCart = async (open) => {
+    const d = document.getElementById('CartDrawer');
+    if (open === false) { d.hidden = true; d.classList.remove('open'); return; }
+    const c = await (await fetch('/gameology/cart.js')).json();
+    document.getElementById('CartDrawerItems').innerHTML = c.items.map((x) => '<li class="cart-item"><span class="cart-item__name">' + x.title.replace(/</g, '&lt;') + '</span> × ' + x.quantity + ' — $' + (x.price / 100).toFixed(2) + '</li>').join('');
+    document.getElementById('CartDrawerEmpty').hidden = c.item_count > 0;
+    document.getElementById('CartDrawerFooter').classList.toggle('hidden', !c.item_count);
+    document.getElementById('CartDrawerTotal').textContent = '$' + (c.total_price / 100).toFixed(2);
+    const n = document.querySelector('#bag-link cart-count');
+    if (n) { n.textContent = String(c.item_count); n.setAttribute('aria-label', c.item_count + ' items'); n.hidden = !c.item_count; }
+    if (open === true) { d.hidden = false; d.classList.add('open'); }
+  };
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[aria-controls="CartDrawer-close"]')) { window.__gmCart(false); return; }
+    // The cart icon: the drawer, not the cart page.
+    if (!e.target.closest('[aria-controls="CartDrawer"]')) return;
+    e.preventDefault();
+    window.__gmCart(true);
+  });
+</script>`;
 
 // Signed in at the shop or not (state.signedIn[shop]), the way each kind of store shows it: Shopify's
 // customer number in __st, CrystalCommerce's "not-logged-in" header, Premium Bandai's USER_DATA,
@@ -280,6 +327,11 @@ function bagLink(shop, count) {
       <div id="minicart" class="block block-minicart" role="dialog"><div class="block-content"><p class="items-total"><span class="count">${count || 0}</span> Item(s) in Cart</p>
         <button type="button" id="top-cart-btn-checkout" class="action primary checkout" onclick="location.href='/gamesmen/checkout/'">Proceed to Checkout</button>
         <a class="action viewcart" href="/gamesmen/checkout/cart/"><span>View and Edit Cart</span></a></div></div></span>`;
+  }
+  // Gameology's cart icon: an icon, the word "Cart" (visually hidden) and its count (shown once there's something
+  // in it) — opening the cart drawer, not the cart page (see GAMEOLOGY_DRAWER).
+  if (shop === 'gameology') {
+    return `<a href="/gameology/cart" id="bag-link" class="cart-drawer-button cart-icon header-link-icons" aria-controls="CartDrawer"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 18a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM5.2 4l.9 2H21l-3.6 7H8.1l-.9 2H19v2H4l2.2-4.3L3 4H1V2h3.2z"/></svg><span class="visually-hidden">Cart</span> <cart-count class="cart-count cart-count--absolute" aria-label="${count || 0} items"${count ? '' : ' hidden'}>${count || 0}</cart-count></a>`;
   }
   // (Target's bag is its basket; Amazon's at /gp/cart/view.html.)
   const at = shop === 'target' ? '/basket' : shop === 'amazon' ? '/gp/cart/view.html' : '/cart';
@@ -387,6 +439,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       thegamescube: {},
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     const orderable = p.status === 'in_stock' || p.status === 'preorder';
+    if (shop === 'gameology') return gameologyProductPage(p);
     if (SHOPIFY.has(shop)) {
       return page(shop, `${p.name} | ${SHOPS[shop].name}`, `${shopOf(shop).banner ? `<div class="site-banner" role="note">${esc(shopOf(shop).banner)}</div>` : ''}<div class="product-detail"><h1>${esc(p.name)}</h1><div class="price">$${p.price.toFixed(2)}</div>
         <form action="/${shop}/cart/add" method="get"><input type="hidden" name="id" value="${p.id}">${qtyControl(p)}
@@ -501,6 +554,44 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       </script>`, { head: ldFor(p, shop), bagCount: shopOf(shop).quiet ? null : bagCount(shop), noBag: shopOf(shop).hideBag });
   }
 
+  // Gameology's product page, as its theme (FoxTheme's "Hyper") draws one: the product form (is="product-form")
+  // with its quantity and "Add to cart" (a submit button named add) — the theme takes the press over, adds it
+  // in the background (Shopify's /cart/add.js) and slides the cart drawer open (drawerShut: it doesn't — only the
+  // cart icon's count goes up). Shopify turning the add away: its words under the button. Sold out: "Out of
+  // stock", the button off.
+  function gameologyProductPage(p) {
+    const orderable = p.status === 'in_stock' || p.status === 'preorder';
+    return page('gameology', `${p.name} – Gameology`, `<div class="product-detail"><h1 class="product__title">${esc(p.name)}</h1><div class="price">$${p.price.toFixed(2)}</div>
+      <form method="post" action="/gameology/cart/add" id="product-form-template--main" accept-charset="UTF-8" class="main-product-form grid gap-4" enctype="multipart/form-data" data-type="add-to-cart-form" is="product-form">
+        <input type="hidden" name="form_type" value="product"><input type="hidden" name="id" value="${p.id}" class="product-variant-id">
+        <label>Quantity <input class="quantity__input" type="number" name="quantity" value="1" min="1" data-cart-quantity="0" style="width:60px"></label>
+        <button id="ProductSubmitButton-template--main" type="submit" name="add" class="product-form__submit btn btn--primary"${orderable ? '' : ' disabled'}><span class="btn__text">${orderable ? (p.status === 'preorder' ? 'Pre-order' : 'Add to cart') : 'Out of stock'}</span></button>
+        <p class="product-form__error-message err" role="alert" hidden></p>
+      </form>
+      <div class="bnpl-options"><span class="bnpl-tooltip__installments">4 payments of $${(p.price / 4).toFixed(2)}</span> with Afterpay, Zip or PayPal</div></div>
+      <script>
+        document.getElementById('product-form-template--main').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const f = e.currentTarget;
+          const b = f.querySelector('[name=add]');
+          if (b.getAttribute('aria-disabled') === 'true') return;
+          b.setAttribute('aria-disabled', 'true');
+          b.classList.add('btn--loading');
+          try {
+            const r = await fetch('/gameology/cart/add.js', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(f)) });
+            const d = await r.json();
+            const err = f.querySelector('.product-form__error-message');
+            if (d.status) { err.textContent = d.description; err.hidden = false; return; }
+            err.hidden = true;
+            await window.__gmCart(${shopOf('gameology').drawerShut ? "'count'" : 'true'});
+          } finally {
+            b.classList.remove('btn--loading');
+            b.removeAttribute('aria-disabled');
+          }
+        });
+      </script>`, { head: ldFor(p, 'gameology'), bagCount: bagCount('gameology') });
+  }
+
   // CrystalCommerce (The Games Cube): each option in stock has its own small cart button — an icon, no words.
   function crystalForm(p) {
     return `<form class="add-to-cart-form" data-vid="${p.id}" data-name="${esc(p.name)}" data-id="${p.sku}" data-price="AUD$ ${p.price.toFixed(2)}" data-category="Cards" data-variant="Sealed">
@@ -601,7 +692,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   //   kmart          a "Remove" button per line; its page's code draws the list again (no new page)
   //   bigw           "Remove" → "Remove … from your cart?" → Remove
   //   ebgames        a bin icon with no words ("Remove item" for screen readers) posting a form: a new page
-  //   jbhifi, gamerholic, pokebox, goodgames, collectiblemadness, cherrycollectables  Shopify's "Remove" link
+  //   jbhifi, gamerholic, pokebox, goodgames, collectiblemadness, cherrycollectables, gameology  Shopify's "Remove" link
   //                  (/cart/change?line=1&quantity=0) — and its cart API (/cart.js, /cart/clear.js)
   //   gamesmen       Magento's "Remove item" (a data-post link: a form posted, a new page) — see magentoCart
   //   gamesworld     WooCommerce's × "Remove … from cart" (a link: a new page, "removed. Undo?") — see wooCart
@@ -626,7 +717,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       case 'kmart': return li(`<button type="button" class="remove-line" data-remove="${sku}" aria-label="Remove ${name} from bag">Remove</button>`);
       case 'bigw': return li(`<button type="button" class="link-btn" data-remove="${sku}" data-name="${name}">Remove</button>`);
       case 'ebgames': return li(`<form method="post" action="/ebgames/cart/remove" class="remove-form"><input type="hidden" name="sku" value="${sku}"><button type="submit" class="remove-item" aria-label="Remove item" title="Remove item" style="background:none;color:#d22;padding:4px"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 5h12M7 5V3h4v2M5 5l1 11h6l1-11" stroke="currentColor" fill="none"/></svg></button></form>`);
-      case 'jbhifi': case 'gamerholic': case 'pokebox': case 'goodgames': case 'collectiblemadness': case 'cherrycollectables': return li(`<a href="/${shop}/cart/change?line=${i + 1}&amp;quantity=0" class="cart__remove">Remove</a>`);
+      case 'jbhifi': case 'gamerholic': case 'pokebox': case 'goodgames': case 'collectiblemadness': case 'cherrycollectables': case 'gameology': return li(`<a href="/${shop}/cart/change?line=${i + 1}&amp;quantity=0" class="cart__remove">Remove</a>`);
       case 'toysrus': return li(`<cart-remove-button id="Remove-${i + 1}" data-index="${i + 1}"><a href="/toysrus/cart/change?id=${vid}&amp;quantity=0" class="button button--tertiary" aria-label="Remove ${name}" style="display:inline-block;padding:4px"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10" stroke="currentColor" fill="none"/></svg></a></cart-remove-button>`);
       case 'trainertown': return li(`<button type="button" class="cart-item__remove" data-variant="${vid}" aria-label="Remove ${name}">✕</button>`);
       case 'thegamescube': return `<tr class="line-item" data-sku="${sku}"><td>${link}</td><td>Qty ${qty}</td><td><a href="/thegamescube/checkout/cart/remove/${vid}" class="remove" data-confirm="Are you sure you want to remove this item from your cart?">Remove</a></td></tr>`;
@@ -1200,10 +1291,13 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   // shipping methods, and the card in Shopify's card fields — one frame per box, from another address
   // (checkout.pci.shopifyinc.com on the real ones), each box only keeping real typing. Toys"R"Us adds
   // "Authority to leave" (ticked), and "Use shipping address as billing address" comes ticked.
-  // Signed in with Shop (state.signedIn[shop] === 'shop'): everything's in, Shop Pay's card shown.
+  // Signed in with Shop (state.signedIn[shop] === 'shop'): everything's in, Shop Pay's card shown. Signed in to
+  // the store's own account ('account'): the details it saved for you in (another address than Mugibot's), the
+  // card still to type.
   function shopifyCheckout(shop) {
     const shopPay = state.signedIn[shop] === 'shop';
-    const P = shopPay ? { email: 'ash.shop@example.com', firstName: 'Ash', lastName: 'Ketchum', address1: '1 Pallet Town Rd', city: 'Sydney', zone: 'NSW', postalCode: '2000', phone: '0412345678' } : {};
+    const P = shopPay ? { email: 'ash.shop@example.com', firstName: 'Ash', lastName: 'Ketchum', address1: '1 Pallet Town Rd', city: 'Sydney', zone: 'NSW', postalCode: '2000', phone: '0412345678' }
+      : state.signedIn[shop] === 'account' ? { email: `ash.${shop}@example.com`, firstName: 'Ash', lastName: 'Ketchum', address1: '7 Viridian St', city: 'Melbourne', zone: 'VIC', postalCode: '3000', phone: '0498765432' } : {};
     const v = (k) => (P[k] ? ` value="${esc(P[k])}"` : '');
     const ship = shopOf(shop).shippingRates || (shop === 'jbhifi' ? 'standard' : 'none');
     const rates = [['standard', shop === 'toysrus' ? 'Standard Shipping - AusPost' : 'Standard Shipping', 10], ['express', shop === 'toysrus' ? 'Express Shipping - AusPost' : 'Express Shipping', 15]];
@@ -1223,7 +1317,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         ${SUGGESTS.has(shop) ? '<ul id="address1-options" role="listbox" class="address-suggestions" hidden style="position:absolute;background:#fff;border:1px solid #ccc;margin:0;padding:0;list-style:none;z-index:5;width:320px"></ul>' : ''}
         <input name="address2" autocomplete="shipping address-line2" placeholder="Apartment, suite, etc. (optional)">
         <input name="city" autocomplete="shipping address-level2" placeholder="Suburb" required${v('city')}>
-        <select name="zone" autocomplete="shipping address-level1" required><option value="" disabled ${P.zone ? '' : 'selected'}>State/territory</option><option value="ACT">Australian Capital Territory</option><option value="NSW" ${P.zone === 'NSW' ? 'selected' : ''}>New South Wales</option><option value="VIC">Victoria</option><option value="QLD">Queensland</option></select>
+        <select name="zone" autocomplete="shipping address-level1" required><option value="" disabled ${P.zone ? '' : 'selected'}>State/territory</option><option value="ACT">Australian Capital Territory</option><option value="NSW" ${P.zone === 'NSW' ? 'selected' : ''}>New South Wales</option><option value="VIC" ${P.zone === 'VIC' ? 'selected' : ''}>Victoria</option><option value="QLD">Queensland</option></select>
         <input name="postalCode" autocomplete="shipping postal-code" placeholder="Postcode" required${v('postalCode')}>
         <input name="phone" autocomplete="shipping tel" placeholder="Phone${shop === 'gamerholic' ? ' (optional)' : ''}" type="tel"${v('phone')}>
         ${shop === 'toysrus' ? '<label><input type="checkbox" name="atl" checked> Authority to leave</label>' : ''}
@@ -2441,7 +2535,8 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
           variants: [{ id: prod.id, title: option.values[0], price: Math.round(prod.price * 100), available: prod.status === 'in_stock' || prod.status === 'preorder' }],
         });
       }
-      sku = (sub.match(/^\/products\/([^/.]+)$/) || [])[1];
+      // (Gameology's links name a collection on the way: /collections/<collection>/products/<handle>.)
+      sku = (sub.match(/^(?:\/collections\/[^/]+)?\/products\/([^/.]+)$/) || [])[1];
     }
     if (sku) {
       const prod = find(shop, sku);
@@ -2702,8 +2797,28 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     const permalink = SHOPIFY.has(shop) && sub.match(/^\/cart\/(\d+):(\d+)$/);
     if (permalink) {
       const prod = S.products.find((x) => String(x.id) === permalink[1]);
+      // (noPermalink: the link not taken — the product's page instead, nothing added.)
+      if (prod && S.noPermalink) return redirect(`/${shop}/products/${prod.sku}`);
       if (prod) addToCart(shop, prod.sku, Number(permalink[2]) || 1);
       return redirect(pastCheckpoint() ? `/${shop}/checkouts/c/abc123` : `/${shop}/checkpoint?return_to=${encodeURIComponent(`/${shop}/checkouts/c/abc123`)}`);
+    }
+    // Shopify's cart form posted with "Checkout" (Gameology's cart drawer, its button named checkout): on to the
+    // cart's checkout (through the checkpoint while it's up); without it, the cart page.
+    if (SHOPIFY.has(shop) && (sub === '/cart' || sub === '/cart/') && req.method === 'POST') {
+      const b = await parseBody(req);
+      if (!('checkout' in b) || !S.cart.length) return redirect(`/${shop}/cart`);
+      S.drawerCheckouts = (S.drawerCheckouts || 0) + 1;
+      return redirect(pastCheckpoint() ? `/${shop}/checkouts/c/abc123` : `/${shop}/checkpoint?return_to=${encodeURIComponent(`/${shop}/checkouts/c/abc123`)}`);
+    }
+    // Shopify's cart API add (what Gameology's theme sends its product form to): the line it added, or Shopify's 422.
+    if (SHOPIFY.has(shop) && sub === '/cart/add.js' && req.method === 'POST') {
+      const b = await parseBody(req);
+      S.addedAt = Date.now();
+      const prod = S.products.find((x) => String(x.id) === String(b.id));
+      const r = prod ? addToCart(shop, prod.sku, Number(b.quantity) || 1) : { ok: false };
+      if (!r.ok) return json(422, { status: 422, message: 'Cart Error', description: prod ? `${prod.name} is sold out.` : 'Cannot find variant' });
+      S.ajaxAdds = (S.ajaxAdds || 0) + 1;
+      return json(200, { id: prod.id, variant_id: prod.id, quantity: Number(b.quantity) || 1, title: prod.name, handle: prod.sku, price: Math.round(prod.price * 100) });
     }
     if (sub === '/cart/add' && SHOPIFY.has(shop)) {
       const prod = S.products.find((x) => String(x.id) === u.searchParams.get('id'));

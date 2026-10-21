@@ -1017,6 +1017,57 @@ for (const [id, handle] of [['goodgames', 'pokemon-tcg-mega-lucario-ex-league-ba
   });
 }
 
+// Gameology (Shopify, FoxTheme's "Hyper" — retailers/gameology.js): its links name a collection on the way, and its
+// product form adds in the background, then slides its cart drawer open ("Checkout" in it).
+const GO_BOX = 'one-piece-card-game-op-15-booster-box';
+const GO_PACK = 'one-piece-card-game-op-15-single-booster-pack';
+test('Gameology (Shopify, as its real store goes) as a guest: ⚡ Buy on a link with its collection on the way (as a member pasted it) → Shopify\'s cart link, straight to checkout → your name, address (Shopify\'s suggestions), suburb, state/territory, postcode, phone → card number, MM/YY, security code, name on card, billing the same as shipping → stops at "Pay now"', async () => {
+  const url = store.productUrl('gameology', GO_BOX);
+  assert.match(url, /\/gameology\/collections\/one-piece-booster-boxs\/products\/one-piece-card-game-op-15-booster-box$/);
+  await useItems([{ url, name: 'GO OP15' }]);
+  const item = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'GO OP15');
+  assert.deepEqual([item.store, item.sku], ['demo-gameology', GO_BOX], 'Gameology, by the handle at the end of the link');
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'GO OP15');
+  await reach(shop, /\/gameology\/checkouts\/c\/abc123$/);
+  await waitReady(shop, 'Pay now');
+  assert.deepEqual(store.shop('gameology').cart.map((c) => [c.sku, c.qty]), [[GO_BOX, 1]], 'one of it, by the cart link');
+  assert.equal(store.shop('gameology').ajaxAdds || 0, 0, 'the cart link — no "Add to cart" needed');
+  assert.deepEqual(await Promise.all(['email', 'firstName', 'lastName', 'address1', 'city', 'postalCode', 'phone'].map((n) => shop.inputValue(`input[name=${n}]`))),
+    [PROFILE_A.email, 'Ash', 'Ketchum', PROFILE_A.address1, 'Sydney', '2000', PROFILE_A.phone]);
+  assert.equal(await shop.inputValue('select[name=zone]'), 'NSW');
+  assert.equal(await shop.isChecked('input[name=billingSame]'), true, '"Use shipping address as billing address": ticked');
+  await waitFor(async () => JSON.stringify(await shopifyCard(shop)) === JSON.stringify(EXPECT_SHOPIFY_CARD), { timeout: 20000, message: 'card number, expiry, security code, name on card' });
+  await shop.waitForTimeout(500);
+  assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('Gameology from its product page, its cart link not taken: "Add to cart" (its theme adds it in the background and slides the cart drawer open) → the drawer\'s "Checkout" → stops at "Pay now"; the drawer left shut after the add, its cart icon opens it — "Add to cart" pressed once either way', async () => {
+  const S = store.shop('gameology');
+  S.noPermalink = true;
+  await useItems([{ url: store.productUrl('gameology', GO_BOX), name: 'GO OP15' }]);
+  for (const shut of [false, true]) {
+    const how = shut ? 'the drawer left shut: its cart icon' : 'the drawer opened by itself';
+    S.cart = [];
+    S.drawerShut = shut;
+    S.ajaxAdds = 0;
+    S.drawerCheckouts = 0;
+    const dash = await ctx.newPage();
+    const shop = await buyFromDashboard(dash, 'GO OP15');
+    await reach(shop, /\/gameology\/checkouts\/c\/abc123$/);
+    await waitReady(shop, 'Pay now');
+    assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [[GO_BOX, 1]], `one of it in the cart (${how})`);
+    assert.equal(S.ajaxAdds, 1, `"Add to cart" once, its form adding in the background (${how})`);
+    assert.equal(S.drawerCheckouts, 1, `through the cart drawer's "Checkout" (${how})`);
+    await waitFor(async () => JSON.stringify(await shopifyCard(shop)) === JSON.stringify(EXPECT_SHOPIFY_CARD), { timeout: 20000, message: `the card in its boxes (${how})` });
+    assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
+    await shop.close();
+    await dash.close();
+  }
+});
+
 const gmCard = (shop) => Promise.all(['cc-number', 'cc-exp', 'cc-cvv'].map((id) => shop.inputValue(`#${id}`)));
 test('The Gamesmen (Magento, as its real checkout goes): "Add to Cart" → "You added … to your shopping cart" → checkout → email, first and last name, street address, suburb, state/territory (full names), postcode, country Australia, mobile → "I have a different billing address" unticked (it came ticked) → "Standard" → "Credit card" → card number, expiry, security code → the terms box ticked → stops at "CONFIRM AND PAY"', async () => {
   const sku = 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box';
@@ -2300,6 +2351,53 @@ test('🤖 Auto-checkout at Pokébox signed in with Shop: Shop Pay has your deta
   await closeStorePages('pokebox');
 });
 
+test('🤖 Auto-checkout at Gameology signed in with Shop: Shop Pay has your details and card → "Pay now" — placed', async () => {
+  store.state.signedIn.gameology = 'shop';
+  await useItems([{ url: store.productUrl('gameology', GO_PACK), name: 'ACO GO pack', maxPrice: 30 }]);
+  await testRun('ACO GO pack');
+  const run = await runOver('the Gameology run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('gameology').orders[0];
+  assert.equal(o.shopPay, true, 'paid with Shop Pay');
+  assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [[GO_PACK, 1]]);
+  assert.equal(o.form.card_number, '', 'no card typed (Shop Pay had it)');
+  assert.equal(o.form.email, 'ash.shop@example.com', 'your Shop details, not overwritten');
+  assert.equal(store.shop('gameology').orders.length, 1, 'once');
+  await closeStorePages('gameology');
+});
+
+test('🤖 Auto-checkout at Gameology signed in to your Gameology account: the details it saved for you left as they are, the card typed into Shopify\'s card fields → "Pay now" — placed', async () => {
+  store.state.signedIn.gameology = 'account';
+  await useItems([{ url: store.productUrl('gameology', GO_PACK), name: 'ACO GO pack', maxPrice: 30 }]);
+  await testRun('ACO GO pack');
+  const run = await runOver('the Gameology run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  const o = store.shop('gameology').orders[0];
+  assert.equal(o.shopPay, false);
+  assert.deepEqual([o.form.email, o.form.address1, o.form.city, o.form.zone, o.form.postalCode, o.form.phone], ['ash.gameology@example.com', '7 Viridian St', 'Melbourne', 'VIC', '3000', '0498765432'], 'your Gameology account\'s details, never overwritten');
+  assert.deepEqual([o.form.card_number, o.form.card_expiry, o.form.card_cvv, o.form.card_name], ['4242 4242 4242 4242', '07 / 29', '123', 'Ash Ketchum']);
+  assert.equal(o.form.billingSame, 'on', 'billing the same as shipping');
+  assert.equal(store.shop('gameology').orders.length, 1, 'once');
+  await closeStorePages('gameology');
+});
+
+test('🤖 Auto-checkout at Gameology as a guest, its cart link not taken: "Add to cart" → its cart drawer\'s "Checkout" → your details → the card → "Pay now" — placed, once', async () => {
+  const S = store.shop('gameology');
+  S.noPermalink = true;
+  await useItems([{ url: store.productUrl('gameology', GO_PACK), name: 'ACO GO pack', maxPrice: 30 }]);
+  await testRun('ACO GO pack');
+  const run = await runOver('the Gameology run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  assert.equal(S.ajaxAdds, 1, '"Add to cart" once');
+  assert.equal(S.drawerCheckouts, 1, 'the cart drawer\'s "Checkout"');
+  assert.equal(S.orders.length, 1, 'once');
+  const o = S.orders[0];
+  assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [[GO_PACK, 1]]);
+  assert.deepEqual([o.form.email, o.form.address1, o.form.postalCode], [PROFILE_A.email, PROFILE_A.address1, '2000']);
+  assert.deepEqual([o.form.card_number, o.form.card_expiry, o.form.card_cvv, o.form.card_name], ['4242 4242 4242 4242', '07 / 29', '123', 'Ash Ketchum']);
+  await closeStorePages('gameology');
+});
+
 // 🛍️ Shop checkout links (server/retailers/shoplink.js): a store's own cart link, opened as it is — on to
 // Shop's checkout (the dummy's Mattel Creations-style store and Shop-style checkout).
 const PORSCHE = 48835830579405;
@@ -3194,6 +3292,7 @@ const BAGS = [
   ['cherrycollectables', ['pokemon-tcg-mega-evolution-phantasmal-flames-booster-pack', 'pokemon-tcg-30th-celebration-elite-trainer-box'], "Shopify's own cart emptied at once"],
   ['gamesmen', ['pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box', 'one-piece-card-game-op-16-the-time-of-battle-booster-box'], 'Magento\'s "Remove item" (a form posted: a new page each time)'],
   ['gamesworld', ['one-piece-carrying-on-his-will-op-13-sealed-booster-box-24', 'pokemon-tcg-mega-evolution-elite-trainer-box'], 'WooCommerce\'s × "Remove … from cart" links ("removed. Undo?" — Undo never pressed)'],
+  ['gameology', ['one-piece-card-game-op-15-booster-box', 'one-piece-card-game-op-15-single-booster-pack'], "Shopify's own cart emptied at once (/cart/clear.js)"],
 ];
 
 for (const [shopId, skus, how, opts = {}] of BAGS) {
@@ -3229,7 +3328,7 @@ for (const [shopId, skus, how, opts = {}] of BAGS) {
     await dash.waitForFunction((id) => /Emptied — 3 items removed/.test(document.querySelector(`#bags li[data-store="demo-${id}"]`)?.textContent || ''), shopId, { timeout: 10000 });
   });
 }
-const SHOPIFY_SHOPS = new Set(['jbhifi', 'gamerholic', 'toysrus', 'trainertown', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']);
+const SHOPIFY_SHOPS = new Set(['jbhifi', 'gamerholic', 'toysrus', 'trainertown', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']);
 
 test('🧹 Clear all: every store\'s bag in turn, in one tab — the ones with things in them emptied, the rest "already empty" — pressed where there\'s no extension (your phone), the checkout browser does it', async (t) => {
   t.after(closeDashboards);

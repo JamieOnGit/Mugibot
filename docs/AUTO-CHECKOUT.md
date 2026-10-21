@@ -319,7 +319,7 @@ anywhere, your phone too:
   own **Remove** (or Delete, or its bin or ×) one at a time, answers the store's
   "Are you sure?" with yes, opens the bag once more to check it's empty, then
   closes the tab. Shopify stores (JB Hi-Fi, Toys"R"Us, Gamerholic, Trainer
-  Town, Pokébox, Good Games, Collectible Madness, Cherry Collectables): the
+  Town, Pokébox, Good Games, Collectible Madness, Cherry Collectables, Gameology): the
   store's own "empty the cart" (`/cart/clear.js`), checked the same way. The
   Gamesmen's "Remove item" (a new page each time) and Games World's × links
   (its "Undo" never pressed) go one at a time like any store's. Each store takes a second or two; Clear all goes through them in one tab.
@@ -589,6 +589,16 @@ the extension **1.19.0** or newer: the six card shops added with it (Pokébox, G
 Games, Collectible Madness, Cherry Collectables, The Gamesmen, Games World) are
 new addresses Chrome only lets a newer copy open. The Checkout page's "Ready to
 check out?" says when yours is older.
+
+At **Gameology** (Shopify, which checks out with Shop) it's the same, and it needs
+extension **1.28.0**: its pages are new to the extension, so an older copy is
+never sent there (the Checkout page says to update). Its cart link is the quick
+way in; from its product page (the cart link not taken), it presses "Add to
+cart" — Gameology's theme adds it without a new page and slides its cart drawer
+open — then the drawer's "Checkout" (the drawer left shut, the cart icon opens
+it). Signed in with Shop, Shop Pay's card is there and only "Pay now" is pressed.
+Signed in to your Gameology account, the details it saved for you are left as
+they are and the card is typed. As a guest, all of it is filled in as at Pokébox.
 
 At **Pokébox, Good Games, Collectible Madness and Cherry Collectables** (Shopify)
 it goes in by the store's cart link. Signed in with Shop, Shop Pay's card is there

@@ -1148,10 +1148,13 @@ test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg
     assert.match(sw.urlFor(R('pokebox'), 'pokemon'), /^https:\/\/www\.pokebox\.com\.au\/search\/suggest\.json\?q=pokemon%20tcg&/);
     assert.equal(sw.urlFor(R('pokebox'), 'one piece', 2), 'https://www.pokebox.com.au/products.json?limit=30', 'page 2: its newest products, whatever the keyword');
     assert.equal(sw.paceFor(R('pokebox')), 10000);
-    for (const id of ['goodgames', 'collectiblemadness', 'cherrycollectables']) {
+    for (const id of ['goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']) {
       assert.equal(R(id).sweep.from, 'server', id);
       assert.equal(sw.urlFor(R(id), 'pokemon', 2), `${R(id).base}/products.json?limit=30`, id);
     }
+    // Gameology (Warhammer, board games and thousands of singles under the same names): "tcg" added, sealed products first.
+    assert.match(sw.urlFor(R('gameology'), 'one piece'), /^https:\/\/www\.gameology\.com\.au\/search\/suggest\.json\?q=one%20piece%20tcg&resources%5Btype%5D=product&/);
+    assert.equal(sw.paceFor(R('gameology')), 10000);
     assert.equal(sw.urlFor(R('demo-pokebox'), 'pokemon', 2), `${store.url}/pokebox/products.json?limit=30`);
     // The first read of each page sets the scene.
     assert.equal((await sweep('demo-pokebox', 'pokemon', 1)).baseline, true);
