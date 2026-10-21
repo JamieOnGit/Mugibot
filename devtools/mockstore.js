@@ -639,12 +639,22 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     return shopOf(shop).products.filter((x) => x.listed && words.some((w) => slugify(x.name).includes(slugify(w)) || x.sku === w));
   };
   // Search results the way stores show them: a tile per product, with its price and an add / sold out button.
-  function searchPage(shop, q) {
-    const hits = searchHits(shop, q);
+  function searchPage(shop, q, pageNo = 1) {
+    const { hits, next } = paged(shop, q, pageNo);
     const button = (x) => (x.status === 'in_stock' ? '<button type="button" class="add-to-cart">Add to cart</button>'
       : x.status === 'preorder' ? '<button type="button" class="add-to-cart">Pre-order</button>'
         : `<button type="button" disabled>${x.status === 'coming_soon' ? 'Coming soon' : 'Out of stock'}</button>`);
-    return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1>${hits.map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}"><img src="${imagePath(shop, x)}" alt="">${esc(x.name)}</a><div class="price">$${x.price.toFixed(2)}</div>${button(x)}</div>`).join('') || '<p>No results</p>'}`);
+    return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1>${hits.map((x) => `<div class="tile product-tile"><a href="${pathFor(shop, x)}"><img src="${imagePath(shop, x)}" alt="">${esc(x.name)}</a><div class="price">$${x.price.toFixed(2)}</div>${button(x)}</div>`).join('') || '<p>No results</p>'}${next}`);
+  }
+  // A shop with pageSize set (BIG W's 48 a page): its results a page at a time, with a "Next" link to the next one.
+  function paged(shop, q, pageNo) {
+    const all = searchHits(shop, q);
+    const size = shopOf(shop).pageSize || 0;
+    if (!size) return { hits: all, next: '' };
+    const n = Math.max(1, Number(pageNo) || 1);
+    const more = all.length > n * size;
+    const href = `/${shop}/search?text=${encodeURIComponent(q)}&page=${n + 1}`;
+    return { hits: all.slice((n - 1) * size, n * size), next: more ? `<nav class="pagination" aria-label="Pagination"><a href="${href}" rel="next">Next</a></nav>` : '' };
   }
 
   // Target's search page: its product data in __NEXT_DATA__, newest first; sold-out products left out (like the real one).
@@ -676,11 +686,12 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   }
 
   // A search page whose products are only filled in by its own code once it's open (BIG W's real one).
-  function clientSearchPage(shop, q) {
-    return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1><div id="results"><p>Loading…</p></div>
+  function clientSearchPage(shop, q, pageNo = 1) {
+    const { next } = paged(shop, q, pageNo);
+    return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1><div id="results"><p>Loading…</p></div>${next}
       <script>
         setTimeout(async () => {
-          const d = await (await fetch('/${shop}/api/search?q=' + encodeURIComponent(${JSON.stringify(q)}))).json();
+          const d = await (await fetch('/${shop}/api/search?q=' + encodeURIComponent(${JSON.stringify(q)}) + '&page=${Math.max(1, Number(pageNo) || 1)}')).json();
           if (${JSON.stringify(shopOf(shop).clientSearch === 'data')}) return; // downloaded, not drawn yet (like a page in a hidden window)
           document.getElementById('results').innerHTML = d.products.map((x) => '<article class="product-card"><a href="' + x.url + '"><img src="' + x.image + '" alt="">' + x.name.replace(/</g, '&lt;') + '</a>'
             + '<div class="price">$' + x.price.toFixed(2) + '</div>' + (x.status === 'in_stock' ? '<button type="button">Add to cart</button>' : '<button type="button" disabled>Out of stock</button>') + '</article>').join('') || '<p>No results</p>';
@@ -2588,11 +2599,11 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     if (sub === '/search' || sub === '/search/') {
       const q = u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('keyword') || '';
       // Like BIG W's real site: the page has no products in it until its own code fetches them.
-      if (S.clientSearch) return html(200, clientSearchPage(shop, q));
-      return html(200, searchPage(shop, q));
+      if (S.clientSearch) return html(200, clientSearchPage(shop, q, u.searchParams.get('page')));
+      return html(200, searchPage(shop, q, u.searchParams.get('page')));
     }
     if (sub === '/api/search') {
-      const tiles = searchHits(shop, u.searchParams.get('q')).map((x) => ({ name: x.name, url: pathFor(shop, x), image: imagePath(shop, x), price: x.price, status: x.status, inStock: x.status === 'in_stock' || x.status === 'preorder' }));
+      const tiles = paged(shop, u.searchParams.get('q'), u.searchParams.get('page')).hits.map((x) => ({ name: x.name, url: pathFor(shop, x), image: imagePath(shop, x), price: x.price, status: x.status, inStock: x.status === 'in_stock' || x.status === 'preorder' }));
       return json(200, { products: tiles });
     }
     // Amazon's search page: a tile per result with its ASIN (what Mugibot's sweeps read, from an admin's

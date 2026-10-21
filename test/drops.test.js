@@ -170,7 +170,7 @@ test('🎯 an admin\'s words at a store: searched as typed in the sweeps\' turn;
   clock.offset += 31 * 1000;
   const turns = Array.from({ length: 9 }, () => sw().nextTerm(jb));
   assert.equal(turns.filter((t) => t.drop).length, 1, 'once its turn has come');
-  assert.ok(turns.filter((t) => !t.drop).every((t) => ['pokemon', 'one piece'].includes(t.keyword)), 'the card keywords keep the rest');
+  assert.ok(turns.filter((t) => !t.drop).every((t) => sw().settings.keywords.includes(t.keyword)), 'the card keywords keep the rest');
   clock.offset += 31 * 1000;
   const more = Array.from({ length: 3 }, () => sw().nextTerm(jb));
   assert.equal(more.filter((t) => t.drop).length, 1);

@@ -58,6 +58,7 @@ export async function createApp(options = {}) {
   const feed = new Feed({ cfg, repo, catalog, retailers, notifier, discord, hub, now });
   const monitor = new Monitor({ cfg, repo, retailers, notifier, hub, catalog, feed, fetchImpl: storeFetchImpl, now });
   const sweeper = new Sweeper({ cfg, repo, catalog, feed, monitor, retailers, hub, fetchImpl: storeFetchImpl, now });
+  monitor.sweeper = sweeper; // (a product the searches found, read off its own page: sweeper.pageRead)
   const limiter = new RateLimiter(now);
   // VIP drops: admins' watches, alerted in #vip-drop and checked fast around their drop time.
   const vip = new Vip({ cfg, db, repo, catalog, retailers, hub, now });

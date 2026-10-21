@@ -58,6 +58,8 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // again every 90 s. Listens while a ⏰ 🚦 Wait for queue, then ACO is set for later.
 // 1.28.0: Gameology (www.gameology.com.au) — its pages are new to the extension (retailers/gameology.js: an older
 // copy can't open them, so its acoVersion asks for this one). Nothing else changed in how checkouts go.
+// BIG W: a search page's own "Next" link is sent back with what it found (its later pages are read where it goes),
+// and the browser checks say this copy's version (an updated copy gets BIG W's pages at once).
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.

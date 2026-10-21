@@ -67,10 +67,11 @@ read their own BIG W items instead, and admins' browsers the shared monitors:
   minimised window, the way you'd open it, and read once its buy box is drawn
   (up to 10 s), then the tab's left blank. Requests from the extension's
   background are what got browsers turned away.
-- **Gently.** One BIG W page a round per browser, and each product at most every
-  15 minutes (`browserSeconds: 900`). One a live search saw in the last few
-  minutes isn't opened at all. The live searches (one every 20 s, was 10) see
-  drops sooner.
+- **Gently.** One BIG W page a round (every 30 s) per browser, and each product
+  at most every **3 minutes** (`browserSeconds: 180`; 15 before October 2026,
+  though a slip read members' items every minute). One a live search saw in
+  the last few minutes isn't opened at all. The live searches run one every
+  20 s (was 10).
 - **"Access Denied".** When BIG W turns a browser away — a check, a live search,
   or a page you open yourself — that browser leaves BIG W alone for 30 minutes (no
   checks, no searches), the item says why, and the store panel on the page says
@@ -78,6 +79,54 @@ read their own BIG W items instead, and admins' browsers the shared monitors:
   network. Asking more only makes it last.
 - **Older extensions** (before 1.27.0) aren't given BIG W pages: they'd fetch them
   in the background.
+
+**BIG W's drops** (October 2026, extension **1.28.0**). A member's Pokémon TCG
+30th Celebration Ultra-Premium Collection went on sale at BIG W at 7 am without
+an alert. BIG W can only be read from browsers, so:
+
+- **On sale after being listed with no buy button.** BIG W lists a drop ahead of
+  time with no buy button in its search tile. Mugibot keeps that as "stock not
+  known" (not sold out), and buyable after that didn't count as a restock. Now a
+  product listed that way for **10 minutes** or more alerts the moment it's
+  buyable: "On sale now at BIG W — listed before without a buy button". A button
+  drawn within minutes of the listing isn't a drop.
+- **The pages of what the searches found.** Admins' browsers also open the page
+  of each BIG W product the live searches found in the last 3 days that nobody
+  monitors: its tile may not say when it's on sale, its page does. The ones that
+  can't be bought yet come first. Each is read at most every 3 minutes, and every
+  30 minutes once it's buyable (to see it sell out, so its next restock alerts).
+  On sale there after sold out, coming soon, or 10 minutes with no buy button on
+  that page: a restock alert (once a day), and everyone watching it is updated,
+  armed Auto-checkouts first. In stock the first time its page is read, when its
+  tile never said either way, has nothing to compare with, so it doesn't alert
+  (after an update, every product in stock would). A product with a monitor
+  alerts by its monitor instead.
+- **Pages 2 and 3.** BIG W's search shows 48 products a page, by relevance, so a
+  new listing can be further down. After each round of keywords one later page
+  is read, opened by the page's own **Next** link (nothing is guessed about BIG
+  W's addresses), and only where it has one. A product first seen on page 3 may
+  only have moved up from page 4, so it's tracked without a new-drop alert; it
+  still alerts the moment it goes on sale.
+- **Back after a long gap.** A search that hasn't come back for 6 hours sets the
+  scene again, so its return isn't a flood of "new" products. Now the first
+  **3** products nobody had seen still alert: what was listed while the browser
+  was turned away.
+- **"BIG W isn't being watched".** When no BIG W search has found a product for
+  **20 minutes**, every admin gets a DM (and an email, where they have one). That
+  happens when no admin's browser is searching (Chrome closed, the computer
+  asleep, the extension signed out) or BIG W is turning it away. The DM says why
+  and what to do, and another follows when it's back. The same goes for any store
+  searched only from admins' browsers.
+- **Riftbound and Gundam** (`riftbound`, `gundam card game`) are searched for by
+  default with Pokémon and One Piece, and are added to a keyword list saved
+  before them. Take them off in the settings, and they stay off.
+- **The extension says its version** with its checks, so an updated copy gets
+  BIG W's pages straight away. Before, a copy updated since it last opened its
+  menu was taken for the old one.
+
+BIG W is watched only while an admin's computer is on with Chrome open and the
+extension connected. Two admins' browsers in different places read its product
+pages twice as often, and keep it watched if one is turned away.
 
 Your checkout opens BIG W in your own browser, as you would. There's no proxy or
 gateway in between, and Mugibot never disguises traffic. If BIG W turns your
@@ -286,7 +335,7 @@ isn't searched any less often (at least half a second between two searches):
 - The Games Cube: each keyword every ~10 s (page 1), the later pages now and then.
 - Gamerholic: its newest products every ~15 s.
 - BIG W (admin's browser): one search every 20 s at the quickest, so each
-  keyword every ~40 s with two keywords; EB Games and The Gamesmen: one search
+  keyword every ~100 s with four keywords and a later page; EB Games and The Gamesmen: one search
   as often as the admin's-browser seconds set (from 2 s); Pokémon Center and
   Premium Bandai: one every 30 s.
 - Pokébox, Good Games, Collectible Madness, Cherry Collectables, Gameology: each

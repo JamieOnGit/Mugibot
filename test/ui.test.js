@@ -406,7 +406,7 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await page.click('#pt-tracked');
   // The live page: each store with its state and what it's doing; a click shows the details.
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"]');
-  assert.match(await page.textContent('#mon-sub'), /Searching \d+ stores every few seconds for pokemon and one piece/);
+  assert.match(await page.textContent('#mon-sub'), /Searching \d+ stores every few seconds for pokemon, one piece, riftbound and gundam card game/);
   const targetRow = page.locator('#sn-channels .sn-chan[data-store="target"]');
   assert.match(await targetRow.locator('.hd').textContent(), /Target\s*Searching/);
   assert.match(await targetRow.locator('.st-sub').textContent(), /Answered in 400 ms/);
@@ -511,14 +511,16 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await page.click('#ms-table tr[data-store="target"] button');
   await waitFor(() => sw.stat('target').resetAt > 0, { message: 'Target reset from Settings' });
 
-  // Keywords.
+  // Keywords (Riftbound and Gundam on the list by default, since Oct 2026 — each can go, like any).
   await page.fill('#sn-kw-input', 'Lorcana');
   await page.click('#sn-kw-form button[type=submit]');
   await page.waitForFunction(() => /lorcana/.test(document.querySelector('#sn-chips').textContent));
-  assert.deepEqual(sw.settings.keywords, ['pokemon', 'one piece', 'lorcana']);
-  await page.click('#sn-chips button[aria-label="Stop searching for lorcana"]');
-  await page.waitForFunction(() => !/lorcana/.test(document.querySelector('#sn-chips').textContent));
-  assert.deepEqual(sw.settings.keywords, ['pokemon', 'one piece']);
+  assert.deepEqual(sw.settings.keywords, ['pokemon', 'one piece', 'riftbound', 'gundam card game', 'lorcana']);
+  for (const k of ['lorcana', 'riftbound', 'gundam card game']) {
+    await page.click(`#sn-chips button[aria-label="Stop searching for ${k}"]`);
+    await page.waitForFunction((w) => !document.querySelector('#sn-chips').textContent.includes(w), k);
+  }
+  assert.deepEqual(sw.settings.keywords, ['pokemon', 'one piece'], 'gone, and they stay gone');
   // The last keyword can't go while sweeps are on.
   await page.click('#sn-chips button[aria-label="Stop searching for one piece"]');
   await page.waitForFunction(() => !/one piece/.test(document.querySelector('#sn-chips').textContent));

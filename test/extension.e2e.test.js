@@ -64,6 +64,9 @@ before(async () => {
   discord = await startFakeDiscord();
   keys = interactionKeys();
   env = await startApp({ demoStoreUrl: store.url, allowPrivateHosts: true, hostGapSeconds: 0, ...discordOpts(discord), discordPublicKey: keys.publicKey });
+  // (The two keywords the dummy stores' products are named for: each store's searches come round to them
+  //  sooner. Riftbound and Gundam, searched for by default too, are in test/sweep.test.js.)
+  env.app.sweeper.save({ keywords: ['pokemon', 'one piece'] }, null);
   extDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-ext-'));
   profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mgb-chrome-'));
   dirs = [extDir, profileDir];
@@ -1403,7 +1406,7 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
     const asked = bigwPages().slice(before);
     assert.equal(asked.length, 2);
     assert.ok(asked.every((x) => x.mode === 'navigate' && /Chrome|Mozilla/.test(x.ua)), `each page opened, as you'd open it: ${JSON.stringify(asked)}`);
-    // Each at most every 15 minutes (the live searches see drops sooner): nothing due straight after.
+    // Each at most every 3 minutes: nothing due straight after.
     r = await sw.evaluate(() => globalThis.mugibotRunChecks());
     assert.equal(r.checked, 0);
 
@@ -1780,6 +1783,38 @@ test("BIG W: products the page downloaded but hasn't drawn (a page in a hidden w
     env.app.repo.updateUser(userId, { role: 'user' });
     store.shop('bigw').clientSearch = false;
     sweeper.save({ stores: off }, null);
+  }
+});
+
+test("BIG W's later pages (48 a page, by relevance): the admin's browser follows its search page's own \"Next\" link — a new listing only on page 2 is found there, and the last page ends it", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  const keywords = sweeper.settings.keywords;
+  sweeper.save({ browserEverySeconds: 5, keywords: ['pokemon'], stores: { ...off, 'demo-bigw': 'browser' } }, null);
+  const S = store.shop('bigw');
+  // (Its first page as full as the search's results are now: the one listed next is on page 2.)
+  const now = (await (await fetch(`${store.url}/bigw/api/search?q=${encodeURIComponent('pokemon tcg')}`)).json()).products.length;
+  Object.assign(S, { clientSearch: true, pageSize: now });
+  S.products.push({ sku: '6012388', name: 'Pokémon TCG: Further Down Premium Collection', price: 89, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'select', lateMs: 0, id: 4412388 });
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  const st = sweeper.stat('demo-bigw');
+  st.nextPages.clear();
+  try {
+    await browserSweepsUntil(() => st.nextPages.get('pokemon\n1'), "page 1's own Next link");
+    assert.match(st.nextPages.get('pokemon\n1'), /\/bigw\/search\?text=pokemon%20tcg&page=2$/);
+    assert.ok(!env.app.catalog.productFor('demo-bigw', '6012388'), 'not on page 1');
+    await browserSweepsUntil(() => env.app.catalog.productFor('demo-bigw', '6012388'), 'the product on page 2');
+    const p = env.app.catalog.productFor('demo-bigw', '6012388');
+    assert.equal(p.status, 'in_stock');
+    assert.match(p.url, /\/bigw\/product\/.+\/p\/6012388$/);
+    assert.ok(!st.nextPages.has('pokemon\n2'), 'its last page: no Next, nothing further read');
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    Object.assign(S, { clientSearch: false, pageSize: 0 });
+    S.products = S.products.filter((x) => x.sku !== '6012388');
+    st.nextPages.clear();
+    sweeper.save({ keywords, stores: off }, null);
   }
 });
 

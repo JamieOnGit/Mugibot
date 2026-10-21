@@ -313,6 +313,21 @@ export class Catalog {
   }
 
   /**
+   * Products the live searches found lately (days) at a store read by opening its pages (BIG W's) that nobody
+   * monitors: for admins' browsers to read off their own pages — its search tiles don't say when one goes on
+   * sale, its page does. The ones that can't be bought yet first (what drops), then the longest unread.
+   */
+  sweptTargets(stores, now, limit = 5, days = 3) {
+    if (!stores.length) return [];
+    return this.db.all(`SELECT p.* FROM products p LEFT JOIN monitors m ON m.product_id = p.id
+      WHERE m.id IS NULL AND p.url != '' AND p.browser_next_at <= :now AND p.sweep_seen_at >= :since
+        AND p.store IN (${stores.map((_, i) => `:s${i}`).join(', ')})
+      ORDER BY CASE WHEN p.status IN ('in_stock', 'preorder', 'in_store') THEN 1 ELSE 0 END, p.browser_next_at LIMIT :limit`,
+    { now, limit, since: now - days * 86400000, ...Object.fromEntries(stores.map((s, i) => [`s${i}`, s])) })
+      .filter((p) => !this.isBlocked(p.store, p.sku));
+  }
+
+  /**
    * Active monitors whose own page refuses the server or fails there (or that an admin's browser
    * checks already, the server being refused): for admins' browsers to check, at any store.
    */

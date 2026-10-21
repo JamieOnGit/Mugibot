@@ -555,7 +555,14 @@ export class Monitor {
       const checks = this.retailers.list.filter((r) => r.id !== 'other' && !r.cartLinks && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks && !held(r.id)).map((r) => r.id);
       const failing = this.catalog.browserFailing({ stores: checks, sites: this.sitePatterns(sites) }, now, 5).filter((p) => !whole.some((x) => x.id === p.id));
       for (const url of this.catalog.failingSitePages()) this.siteAllowed(url, sites, want);
-      for (const p of [...whole, ...failing].slice(0, 5 - out.length)) {
+      // …and at a store read by opening its pages (BIG W's), what its live searches found that nobody monitors:
+      // its search tiles don't say when one goes on sale (a drop listed ahead of time shows no buy button), its
+      // own page does. (Its one page a round, if the round has room for it.)
+      const opened = this.retailers.list.filter((r) => render(r) && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
+        && !this.retailers.settings(r).serverChecks && !held(r.id)).map((r) => r.id);
+      const swept = cantRender ? [] : this.catalog.sweptTargets(opened, now, 5).filter((p) => !whole.some((x) => x.id === p.id) && !failing.some((x) => x.id === p.id));
+      for (const p of [...whole, ...failing, ...swept].slice(0, 15)) {
+        if (out.length >= 5) break;
         const r = this.retailers.get(p.store);
         if (render(r) && cantRender) continue;
         if (render(r) && rendering.has(r.id)) { later('products', p.id); continue; }
@@ -565,11 +572,23 @@ export class Monitor {
         }
         if (render(r)) rendering.add(r.id);
         const url = p.url || this.retailers.searchUrl(r, p.sku);
-        this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: p.id });
+        this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.productPace(p), id: p.id });
         if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true } : {}) }));
       }
     }
     return out;
+  }
+
+  /**
+   * How soon a product's page is read again in an admin's browser: a store read by opening its pages (BIG W's) at
+   * its pace (retailer monitor.browserSeconds) — one its searches found that nobody monitors at that pace while it
+   * can't be bought (it's what drops), every half hour once it can (to see it sell out, so its next restock alerts).
+   */
+  productPace(product) {
+    const r = this.retailers.get(product.store);
+    const pace = r && r.monitor && r.monitor.browserSeconds ? r.monitor.browserSeconds * 1000 : this.browserInterval;
+    if (r && r.monitor && r.monitor.render && isOrderable(product.status) && !this.catalog.monitorForProduct(product.id)) return Math.max(pace, 30 * 60 * 1000);
+    return pace;
   }
 
   /** The pages of the other websites a browser may read, as LIKE patterns ('*': any https page). */
@@ -648,8 +667,10 @@ export class Monitor {
     this.browserFails ||= new Map();
     const fails = failed ? (this.browserFails.get(product.id) || 0) + 1 : 0;
     if (fails) this.browserFails.set(product.id, fails); else this.browserFails.delete(product.id);
+    // (Read fine: again at its own pace — BIG W's pages every few minutes, not every round: what its bot
+    //  protection turns a browser away for.)
     this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id',
-      { n: now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails + 1, 5)) : this.browserInterval), id: product.id });
+      { n: now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails + 1, 5)) : this.productPace({ ...product, status })), id: product.id });
     const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';
     if (!product.url && found) {
       let ok = false;
@@ -667,10 +688,12 @@ export class Monitor {
     if (!product.url && status !== STATUS.NOT_LISTED && !failed) return false;
     const price = typeof res.price === 'number' && Number.isFinite(res.price) && res.price >= 0 && res.price < 100000 ? res.price : null;
     const image = typeof res.image === 'string' && /^https:\/\//.test(res.image) ? res.image.slice(0, 1000) : null;
-    await this.feed.applyCheck(product, {
+    const fresh = await this.feed.applyCheck(product, {
       status, price, image, title: typeof res.title === 'string' ? res.title.slice(0, 200) : null,
       error: failed ? (typeof res.error === 'string' && res.error ? res.error.slice(0, 200) : "The admin's browser couldn't read the page") : '',
     }, { source: 'browser', url: product.url || '' });
+    // A product the searches found that nobody monitors, on sale on its own page now: alerted by the searches' rules.
+    if (this.sweeper && fresh && !failed) await this.sweeper.pageRead(product, fresh).catch((e) => this.cfg.log('[sweep]', e.message));
     return true;
   }
 
@@ -696,7 +719,10 @@ export class Monitor {
       const status = KNOWN.has(res.status) ? res.status : STATUS.ERROR;
       const failed = FAILED.has(status);
       const fails = failed ? row.browser_fails + 1 : 0;
-      const next = now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails, 5)) : this.browserInterval);
+      // (Read fine: again at its store's pace — BIG W's every few minutes, not every round.)
+      const storeOf = this.retailers.get(row.store);
+      const pace = storeOf && storeOf.monitor && storeOf.monitor.browserSeconds ? storeOf.monitor.browserSeconds * 1000 : this.browserInterval;
+      const next = now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails, 5)) : pace);
       this.db.run('UPDATE items SET browser_checked_at = :now, browser_fails = :f, browser_next_at = :n WHERE id = :id', { now, f: fails, n: next, id: row.id });
       const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';
       if (!row.url && found) {
