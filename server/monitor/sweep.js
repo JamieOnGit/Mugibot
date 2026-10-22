@@ -98,9 +98,13 @@ export const NOT_CARD_TERMS = [
 ];
 const CARD_SURE_RE = /\b(tcg|trading cards?|card game)\b/i;
 
+// Searched for since Oct 2026 (a member's list: Pokémon, One Piece, Riftbound, Gundam): added to a list saved
+// before then too (keywordsVersion 2) — and, dropped from it later, left out. ("gundam card game": its cards
+// are named "Gundam Card Game …", and a keyword with "card" in it isn't given "tcg" on top.)
+const ADDED_KEYWORDS = ['riftbound', 'gundam card game'];
 export const SWEEP_DEFAULTS = Object.freeze({
   enabled: true,
-  keywords: ['pokemon', 'one piece'],
+  keywords: ['pokemon', 'one piece', ...ADDED_KEYWORDS],
   everySeconds: 5, // between two searches at one store, from the server
   browserEverySeconds: 15, // …from an admin's browser
   stores: {}, // store id → 'auto' (server first) | 'server' | 'browser' | 'off' (unset: the store's own default)
@@ -126,6 +130,7 @@ const SERVER_TRIES = 3; // (1 at a store known to turn servers away: sweep.from 
 const SERVER_RETRY_MS = 5 * 60 * 1000;
 const SERVER_RETRY_MAX_MS = 30 * 60 * 1000;
 const minutes = (ms) => `${Math.max(1, Math.round(ms / 60000))} min`;
+const andList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0] || '');
 
 /** " (it was “Search results for: 'pokemon'”, 312 KB, 0 product links)" — what a page Mugibot couldn't read was. */
 function seenText(seen) {
@@ -142,6 +147,19 @@ export function defaultModeOf(r) {
   return !r.sweep || r.demo || r.sweep.from === 'off' ? 'off' : 'auto';
 }
 const REBASELINE_MS = 6 * 3600 * 1000;
+// A search read again after a long gap (REBASELINE_MS) sets the scene anew — but the first few products in it
+// nobody had seen still alert: what was listed while it was down (a store's drop overnight, its admins' browser
+// turned away meanwhile). Never more than this many a read.
+const GAP_NEW_ALERTS = 3;
+// A product listed without a buy button in its search tile ("unknown": BIG W lists its drops ahead of time that
+// way) and buyable there now is on sale now — once it's been listed without one this long (a tile whose button
+// is drawn a moment late isn't a drop).
+const UNKNOWN_SETTLE_MS = 10 * 60 * 1000;
+// A store searched from admins' browsers none of whose searches has found any products this long (no browser
+// searching it — Chrome closed, the computer asleep — or it turned them away: BIG W's "Access Denied"): its
+// drops can't be seen, so its admins are told, once, and again when it's back.
+const BLIND_MS = 20 * 60 * 1000;
+const sydneyTime = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit', weekday: 'short' });
 const MAX_BACKOFF_MS = 15 * 60 * 1000;
 // After a store refuses a search, it's searched at a third of the pace for a while, even once it answers again.
 const SLOW_MS = 10 * 60 * 1000;
@@ -198,6 +216,7 @@ export function sweepSettings(input, current, retailers) {
   return {
     enabled,
     keywords,
+    keywordsVersion: 2, // (ADDED_KEYWORDS offered: what's saved now is the admin's choice)
     modesVersion: 3, // stores: only the modes that differ from each store's default (server first, since 3)
     everySeconds: num(src.everySeconds, { min: 3, max: 600, int: true, def: SWEEP_DEFAULTS.everySeconds }),
     // (From 2 s: an admin's browser searches each store on its own — side by side — so its set pace is what each gets.)
@@ -268,6 +287,8 @@ export class Sweeper {
     const out = { ...SWEEP_DEFAULTS, ...saved, stores: saved.modesVersion >= 3 ? { ...(saved.stores || {}) } : this.ownModes(saved.stores) };
     // (Before priceAlerts existed, a price drop % of 0 meant no price drop alerts.)
     if (saved.priceDropPercent === 0 && saved.priceAlerts === undefined) Object.assign(out, { priceAlerts: false, priceDropPercent: SWEEP_DEFAULTS.priceDropPercent });
+    // (Saved before Riftbound and Gundam were searched for: they're on the list too.)
+    if (!(saved.keywordsVersion >= 2) && Array.isArray(saved.keywords)) out.keywords = [...new Set([...saved.keywords, ...ADDED_KEYWORDS])].slice(0, 12);
     return out;
   }
 
@@ -346,7 +367,8 @@ export class Sweeper {
     let s = this.state.get(id);
     if (!s) {
       // backup: server first, an admin's browser standing in ({ since, retryAt, tries, why, waitUntil }).
-      s = { turn: 0, deep: 0, fails: 0, log: [], lastAt: null, lastOkAt: null, lastError: '', browserNext: 0, nextAt: null, slowUntil: 0, firstOkAt: null, backup: null, serverMisses: 0, browserAt: 0, askedAt: 0 };
+      // nextPages: '<keyword>\n<page>' → the link on that page to the next one (sweep.followNext: BIG W's).
+      s = { turn: 0, deep: 0, fails: 0, log: [], lastAt: null, lastOkAt: null, lastError: '', browserNext: 0, nextAt: null, slowUntil: 0, firstOkAt: null, backup: null, serverMisses: 0, browserAt: 0, askedAt: 0, nextPages: new Map() };
       this.state.set(id, s);
     }
     return s;
@@ -409,6 +431,11 @@ export class Sweeper {
       const p = `${r.sweep.allPath}${page > 1 && r.sweep.pagePath ? r.sweep.pagePath.replace('{page}', String(page)) : ''}`;
       return `${r.sweep.apiBase || r.base}${p}`;
     }
+    // A later page at a store whose page links to its next one (sweep.followNext: BIG W's): where that link goes.
+    if (page > 1 && r.sweep.followNext && !vip) {
+      const known = this.stat(r.id).nextPages.get(`${keyword}\n${page - 1}`);
+      if (known) return known;
+    }
     const collection = !vip && this.collectionFor(r, keyword);
     if (collection) return `${r.base}${r.sweep.collectionPath.replace('{collection}', encodeURIComponent(collection))}`;
     // A keyword's second page at a store that has one list of its newest products (sweep.feedPath:
@@ -469,7 +496,11 @@ export class Sweeper {
       // Only the pages that have results (the first page says how many there are).
       const first = pages > 1 ? this.db.get('SELECT total, found FROM sweep_terms WHERE store = :s AND keyword = :k AND page = 1', { s: r.id, k: keyword }) : null;
       const has = first && first.total && first.found ? Math.ceil(first.total / first.found) : pages;
-      for (let page = 2; page <= Math.min(pages, has); page++) deep.push({ keyword, page });
+      for (let page = 2; page <= Math.min(pages, has); page++) {
+        // (A store whose page links to its next one: only the pages it linked to.)
+        if (r.sweep.followNext && !st.nextPages.has(`${keyword}\n${page - 1}`)) break;
+        deep.push({ keyword, page });
+      }
     }
     const round = kws.length + (deep.length ? 1 : 0);
     const slot = st.turn++ % round;
@@ -594,6 +625,12 @@ export class Sweeper {
     }
     // (Read somewhere else than before, e.g. a collection instead of the search: what's there already was.)
     const baseline = !row || !row.baseline_at || !row.last_ok_at || now - row.last_ok_at > REBASELINE_MS || (!!row.url && row.url !== url);
+    // (Read again after a long gap, not for the first time: the first few new products in it still alert.)
+    const gapNew = baseline && !!row && !!row.baseline_at && !!row.last_ok_at && now - row.last_ok_at > REBASELINE_MS && !(row.url && row.url !== url) ? { left: GAP_NEW_ALERTS } : null;
+    // (The last later page read at a store whose results are by relevance — BIG W's page 3: a product new to it may
+    //  only have moved up from the page after, so it's tracked, not alerted as a drop. One listed ahead of time
+    //  still alerts the moment it's on sale.)
+    const edge = !!r.sweep.followNext && term.page > 1 && term.page >= Math.min(10, r.sweep.pages || 1);
     const counts_ = this.filters(s);
     const counts = { found: parsed.products.length, kept: 0, new: 0, restock: 0, price: 0 };
     // The whole range in one list: each product counts for the first keyword in its name.
@@ -641,7 +678,7 @@ export class Sweeper {
         const dropOnly = !!drop && !cards && !watch;
         // (Found by its words alone in the whole-range list: those words, as their own search would say.)
         const found = keyword || (watch && watch.words) || (drop && drop.words) || ALL_LABEL;
-        const ev = await this.track(r, p, { status, keyword: found, baseline: dropOnly ? dropBaseline : baseline, now, vip: !!watch, drop: dropOnly, category: drop && !cards ? drop.category : null, dropWatch: drop ? drop.id : null, posting });
+        const ev = await this.track(r, p, { status, keyword: found, baseline: dropOnly ? dropBaseline : baseline || edge, gapNew: dropOnly || edge ? null : gapNew, now, vip: !!watch, drop: dropOnly, category: drop && !cards ? drop.category : null, dropWatch: drop ? drop.id : null, posting });
         for (const k of ev) counts[k] += 1;
         const product = () => [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
         // (Found in the watch's first search: listed already, so armed only if it isn't on sale yet.)
@@ -695,7 +732,7 @@ export class Sweeper {
    * drop: counted only for an admin's drop watch (monitor/drops.js), whose category it gets (Non-TCG).
    * dropWatch: the admin's drop watch that found it (its alerts go where the watch's do).
    */
-  async track(r, p, { status, keyword, baseline, now, vip = false, drop = false, category = null, dropWatch = null, posting = null }) {
+  async track(r, p, { status, keyword, baseline, gapNew = null, now, vip = false, drop = false, category = null, dropWatch = null, posting = null }) {
     const s = this.settings;
     const found = [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
     const before = found ? { ...found } : null;
@@ -751,25 +788,37 @@ export class Sweeper {
     // Back in stock: online (after selling out, coming soon, or being in stores only), or in stores only
     // (after selling out) — the online one is the one that counts, so a day's in-store alert never holds
     // it back (its day is marked apart).
+    // Buyable for the first time after being listed a while without a buy button: on sale now. (BIG W lists a
+    // drop ahead of time with none in its search tile — "unknown", not sold out — until the moment it's on sale:
+    // a member's Pokémon TCG 30th Celebration UPC there, Oct 2026, went by without an alert that way.)
+    const firstBuyable = isOrderable(fresh.status) && !!before && before.status === STATUS.UNKNOWN
+      && now - (before.status_at || now) >= UNKNOWN_SETTLE_MS && now - (before.sweep_first_at || now) >= UNKNOWN_SETTLE_MS;
     const restocked = (isOrderable(fresh.status) && (ORDERABLE_FROM.has(before && before.status) || (before && before.status === STATUS.IN_STORE)))
-      || (inStore && ORDERABLE_FROM.has(before && before.status));
+      || (inStore && ORDERABLE_FROM.has(before && before.status)) || firstBuyable;
     // New: never seen before, or a SKU confirmed as not listed yet (a monitor added before it's checked isn't new).
     const isNew = !before || (before.status === STATUS.NOT_LISTED && !!before.last_ok_at);
+    // (A search back after a long gap: the first few new to it alert all the same — what was listed meanwhile.)
+    const late = isNew && baseline && !!gapNew && gapNew.left > 0;
     // About to alert a product whose seller isn't known yet (JB Hi-Fi): ask first. A marketplace
     // seller's product leaves the list without an alert. (If the store doesn't answer, it alerts.)
-    const mayAlert = isNew ? !baseline && s.newAlerts
+    const mayAlert = isNew ? (!baseline || late) && s.newAlerts
       : (s.restockAlerts && restocked) || (s.priceAlerts && priceMoved && price < prevPrice);
     if (mayAlert && s.skipMarketplace && r.sweep.sellers && (fresh.seller === null || fresh.seller === undefined) && !monitor) {
       if (await this.sellerOf(r, fresh)) return sent;
     }
     if (isNew) {
-      if (!baseline && (s.newAlerts || vip || drop) && await alert(fresh, 'listed', { note: [`New in "${keyword}" at ${r.name}.`, where].filter(Boolean).join(' ') })) sent.push('new');
+      const note = [`New in "${keyword}" at ${r.name}.`, late ? `(Found as ${r.name}'s search came back after a while without one.)` : '', where].filter(Boolean).join(' ');
+      if ((!baseline || late) && (s.newAlerts || vip || drop) && await alert(fresh, 'listed', { note })) {
+        sent.push('new');
+        if (late) gapNew.left -= 1;
+      }
     } else {
       if (s.restockAlerts && restocked && before.confirmed) {
         const today = sydneyDay.format(now);
         const day = inStore ? `${today} in store` : today;
         if (!s.restockOncePerDay || (fresh.restock_day !== today && fresh.restock_day !== day)) {
-          if (await alert(fresh, 'restock', { note: where })) {
+          const onSale = firstBuyable ? `On sale now at ${r.name} — listed before without a buy button.` : '';
+          if (await alert(fresh, 'restock', { note: [onSale, where].filter(Boolean).join(' ') })) {
             this.catalog.updateProduct(product.id, { restock_day: day });
             sent.push('restock');
           }
@@ -821,6 +870,85 @@ export class Sweeper {
   }
 
   /**
+   * A store searched from admins' browsers whose searches haven't found a single product for BLIND_MS: nothing
+   * it drops can be seen meanwhile — so its admins are told, once (a DM, and an email where they have one), with
+   * why and what to do, and told again when it's back. The stores that go (or come back) at once are in one
+   * message: Chrome closed takes them all. (Never in the first BLIND_MS after a start.)
+   */
+  async watchBlind() {
+    const s = this.settings;
+    const now = this.now();
+    if (!this.running || !s.enabled || now - (this.startedAt || now) < BLIND_MS) return [];
+    const told = [];
+    const went = [];
+    const back = [];
+    for (const { retailer: r, mode } of this.stores()) {
+      if (mode === 'off' || !(mode === 'browser' || r.sweep.from === 'browser')) continue;
+      const st = this.stat(r.id);
+      if (!st.lastFoundAt) {
+        const row = this.db.get('SELECT MAX(last_ok_at) AS at FROM sweep_terms WHERE store = :s AND found > 0', { s: r.id });
+        st.lastFoundAt = (row && row.at) || this.startedAt;
+      }
+      const blind = now - st.lastFoundAt > BLIND_MS;
+      if (blind === !!st.blindSince) continue;
+      st.blindSince = blind ? now : 0;
+      if (blind) {
+        const why = this.statusOf(mode, st, now, r) === 'waiting'
+          ? "no admin's browser is searching it (Chrome closed, the computer asleep, or the extension signed out)"
+          : st.lastError ? `its last search said "${str(st.lastError, 160)}"` : 'its searches come back with no products on the page';
+        went.push({ r, line: `${r.name}: no search has found a product since ${sydneyTime.format(st.lastFoundAt)} (${minutes(now - st.lastFoundAt)}) — ${why}.` });
+      } else back.push({ r });
+      told.push({ store: r.id, blind });
+    }
+    const names = (list) => andList(list.map((x) => x.r.name));
+    const evs = [];
+    if (went.length) {
+      evs.push({ level: 'urgent', stores: went, title: `${names(went)} ${went.length === 1 ? "isn't" : "aren't"} being watched`,
+        message: `Nothing ${went.length === 1 ? 'it drops' : 'they drop'} can be seen until ${went.length === 1 ? "it's" : "they're"} searched again.\n${went.map((x) => x.line).join('\n')}\nKeep Chrome open with the Mugibot extension connected to an admin account (Setup → Extension), and the computer awake. If a store says "Access Denied" there, clear that store's cookies in that browser, or use another one.` });
+    }
+    if (back.length) evs.push({ level: 'success', stores: back, title: `${names(back)} ${back.length === 1 ? 'is' : 'are'} being watched again`, message: `${back.length === 1 ? 'Its search' : 'Their searches'} found products again at ${sydneyTime.format(now)}.` });
+    if (!evs.length) return told;
+    const admins = this.db.all("SELECT id FROM users WHERE role = 'admin' AND disabled = 0");
+    for (const { stores, ...ev } of evs) {
+      for (const x of stores) this.sys(`${ev.title} — ${x.line || ev.message}`, { store: x.r.id, level: ev.level === 'urgent' ? 'warn' : 'info' });
+      for (const a of admins) await this.feed.notifier.notify(a.id, { type: 'monitor', channel: 'account', ...ev }).catch((e) => this.cfg.log('[sweep]', e.message));
+    }
+    return told;
+  }
+
+  /**
+   * A product the searches found, read off its own page in an admin's browser (a store whose search doesn't say
+   * its stock, or says it late — BIG W's): buyable there now after being sold out or coming soon is back in stock,
+   * by the searches' own rules (restock alerts on, once a day) — and so is buyable after being listed a while
+   * with no buy button (unknown: firstBuyable in track) — its channel alert, and everyone watching it (armed
+   * ones' Auto-checkout runs first). A product with a monitor alerts by its monitor's (feed.transitions).
+   * before / fresh: the product before and after the read.
+   */
+  async pageRead(before, fresh) {
+    const s = this.settings;
+    const r = fresh && this.retailers.get(fresh.store);
+    if (!s.enabled || !r || !before || this.catalog.monitorForProduct(fresh.id)) return null;
+    const now = this.now();
+    const prev = [STATUS.BLOCKED, STATUS.ERROR].includes(before.status) ? this.catalog.lastReadStatus(before.id) : before.status;
+    // (No buy button on its own page last time too, a while: not just its tile's — a product's first page read has
+    //  nothing to compare with, so an update never turns every product in stock into an alert.)
+    const settled = prev === STATUS.UNKNOWN && before.status_source === 'browser'
+      && now - (before.status_at || now) >= UNKNOWN_SETTLE_MS && now - (before.sweep_first_at || now) >= UNKNOWN_SETTLE_MS;
+    if (!isOrderable(fresh.status) || !(ORDERABLE_FROM.has(prev) || settled)) return null;
+    const later = [];
+    await this.members(r, { sku: fresh.sku, aliases: [], title: fresh.name, url: fresh.url, price: fresh.price }, fresh.status, later);
+    let a = null;
+    const today = sydneyDay.format(now);
+    if (s.restockAlerts && !(s.restockOncePerDay && fresh.restock_day === today)) {
+      const note = settled ? `On sale now at ${r.name} — seen on its own page, listed before without a buy button.` : `Seen on its own page at ${r.name}.`;
+      a = this.noteAlert(await this.feed.alert(fresh, 'restock', { sweep: true, detectedAt: now, note }));
+      if (a) this.catalog.updateProduct(fresh.id, { restock_day: today });
+    }
+    await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
+    return a;
+  }
+
+  /**
    * Members watching this SKU: their own watchlist, straight away — armed ones' Auto-checkout runs made
    * now, their alerts on later (the search's list: sent once its channel alerts are out), or now without one.
    */
@@ -858,6 +986,7 @@ export class Sweeper {
     if (info.ok) {
       st.fails = 0;
       st.lastOkAt = now;
+      if (info.found > 0) st.lastFoundAt = now;
       if (!st.firstOkAt) st.firstOkAt = now;
       st.lastError = info.error || '';
       this.totals.streak += 1;
@@ -983,10 +1112,14 @@ export class Sweeper {
       ? `Live sweeps started — ${[from('auto') && `${from('auto')} from Mugibot's server first`, from('server') && `${from('server')} from Mugibot's server only`, from('browser') && `${from('browser')} from admins' browsers`].filter(Boolean).join(' · ')} · keywords: ${s.keywords.join(', ')}`
       : 'Live sweeps are switched off');
     this.restart();
+    this.blindTimer = setInterval(() => { this.watchBlind().catch((e) => this.cfg.log('[sweep]', e.message)); }, 60 * 1000);
+    this.blindTimer.unref?.();
   }
 
   stop() {
     this.running = false;
+    if (this.blindTimer) clearInterval(this.blindTimer);
+    this.blindTimer = null;
     for (const wake of this.wakers.values()) wake();
   }
 
@@ -1245,9 +1378,30 @@ export class Sweeper {
       const problem = ['blocked', 'layout', 'empty'].includes(res.problem) ? res.problem : null;
       // (Extension 1.19.1: what the page it couldn't read was.)
       const seen = res.seen && typeof res.seen === 'object' ? { title: res.seen.title, bytes: res.seen.bytes, links: res.seen.links } : null;
+      if (r.sweep.followNext && !term.vip && !term.drop && !problem && products.length) this.noteNext(r, term, res.next);
       out.push(await this.ingest(r, term, { products, total: null, problem }, { source: 'browser', url, ms, seen }));
     }
     return out;
+  }
+
+  /**
+   * A search page's own link to its next page of results (sweep.followNext: BIG W's, whose search shows 48 by
+   * relevance — a new listing can be further down): kept as where that keyword's next page is read, up to
+   * sweep.pages. Only a link to the same search at the same store; none (the last page) forgets it.
+   */
+  noteNext(r, term, next) {
+    const st = this.stat(r.id);
+    const key = `${term.keyword}\n${term.page}`;
+    let u = null;
+    try {
+      u = new URL(str(next, 2000));
+      const first = new URL(this.urlFor(r, term.keyword, 1));
+      const owner = this.retailers.forUrl(u);
+      const same = owner && owner.id === r.id && u.origin === first.origin && u.pathname === first.pathname
+        && [...first.searchParams].every(([k, v]) => u.searchParams.get(k) === v);
+      if (!same || u.href === first.href || term.page >= Math.min(10, r.sweep.pages || 1)) u = null;
+    } catch { u = null; }
+    if (u) st.nextPages.set(key, u.href); else st.nextPages.delete(key);
   }
 
   /**

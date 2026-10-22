@@ -287,7 +287,8 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   assert.equal((await ash.get('/api/monitor/sweep')).status, 404, 'members can\'t see the sweep settings');
   let r = await boss.get('/api/monitor/sweep');
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.settings.keywords, ['pokemon', 'one piece']);
+  // (Riftbound and Gundam too, since Oct 2026: a member's list.)
+  assert.deepEqual(r.body.settings.keywords, ['pokemon', 'one piece', 'riftbound', 'gundam card game']);
   const mode = (id) => r.body.stores.find((s) => s.store === id).mode;
   // Server first, every store: Mugibot's server searches it, and an admin's browser stands in only
   // while the store refuses the server (Amazon, BIG W, Pokémon Center and Premium Bandai often do).
@@ -1148,10 +1149,13 @@ test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg
     assert.match(sw.urlFor(R('pokebox'), 'pokemon'), /^https:\/\/www\.pokebox\.com\.au\/search\/suggest\.json\?q=pokemon%20tcg&/);
     assert.equal(sw.urlFor(R('pokebox'), 'one piece', 2), 'https://www.pokebox.com.au/products.json?limit=30', 'page 2: its newest products, whatever the keyword');
     assert.equal(sw.paceFor(R('pokebox')), 10000);
-    for (const id of ['goodgames', 'collectiblemadness', 'cherrycollectables']) {
+    for (const id of ['goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']) {
       assert.equal(R(id).sweep.from, 'server', id);
       assert.equal(sw.urlFor(R(id), 'pokemon', 2), `${R(id).base}/products.json?limit=30`, id);
     }
+    // Gameology (Warhammer, board games and thousands of singles under the same names): "tcg" added, sealed products first.
+    assert.match(sw.urlFor(R('gameology'), 'one piece'), /^https:\/\/www\.gameology\.com\.au\/search\/suggest\.json\?q=one%20piece%20tcg&resources%5Btype%5D=product&/);
+    assert.equal(sw.paceFor(R('gameology')), 10000);
     assert.equal(sw.urlFor(R('demo-pokebox'), 'pokemon', 2), `${store.url}/pokebox/products.json?limit=30`);
     // The first read of each page sets the scene.
     assert.equal((await sweep('demo-pokebox', 'pokemon', 1)).baseline, true);
@@ -1489,4 +1493,268 @@ test('⚡ searches come on the set pace from the start of the last one: a store 
   assert.equal(sw.waitFor({ ...st, slowUntil: sw.now() + 60000 }, 5000, { spent: 1000 }), 14000, 'after a refusal: a third of the pace');
   assert.ok(sw.waitFor({ ...st, retryAt: sw.now() + 30000 }, 5000, { spent: 1000 }) >= 29000, 'never before the store said');
   assert.equal(sw.waitFor({ ...st, fails: 2 }, 5000, { spent: 4000 }), 20000, 'failing: backing off from its end');
+});
+
+// --- BIG W (Oct 2026: a member's Pokémon TCG 30th Celebration UPC went on sale there at 7 am without an alert) ------
+const bigwTile = (sku, title, inStock = null, price = 179) => ({ sku, title, price, inStock, url: `${store.url}/bigw/product/${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}/p/${sku}` });
+async function bigwSearch(admin, products, { keyword = 'pokemon', page = 1, next } = {}) {
+  const r = await admin.call('POST', '/api/ext/sweeps', { results: [{ store: 'demo-bigw', keyword, page, ok: true, status: 200, ms: 4000, products, ...(next === undefined ? {} : { next }) }] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return r.body.results[0];
+}
+const ofSku = (kind, sku) => alerts(kind).filter((a) => a.sku === sku);
+// (A Sydney day with room to spare, for "once a day".)
+function clearOfMidnight(hours) {
+  const sydney = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', hour: '2-digit', hourCycle: 'h23' });
+  if (Number(sydney.format(Date.now() + clock.offset)) >= 24 - hours) clock.offset += (hours + 1) * 3600 * 1000;
+}
+async function asBigwBrowser(fn) {
+  const before = sw.settings;
+  sw.save({ stores: { ...before.stores, 'demo-bigw': 'browser' }, keywords: ['pokemon', 'one piece'], newAlerts: true, restockAlerts: true, restockOncePerDay: true }, null);
+  env.app.db.run("DELETE FROM sweep_terms WHERE store = 'demo-bigw'");
+  try {
+    return await fn(await Device.pair(env.url, boss, 'Boss Chrome (BIG W)'));
+  } finally {
+    sw.save({ ...before }, null);
+  }
+}
+
+test("🟢 BIG W lists a drop ahead of time with no buy button in its search tile: the moment the tile has one, it alerts as on sale now — once it's been listed without one a while (a button drawn late isn't a drop)", async () => {
+  clearOfMidnight(2);
+  await asBigwBrowser(async (admin) => {
+    const known = bigwTile('6099001', 'Pokemon TCG: Scarlet & Violet Booster Bundle', true, 45);
+    assert.equal((await bigwSearch(admin, [known])).baseline, true, 'the first search sets the scene');
+    // Listed ahead of time, no buy button in its tile: new (listed), its stock not known.
+    const day = bigwTile('6099101', 'Pokemon TCG: 30th Celebration Ultra-Premium Collection - Day');
+    let r = await bigwSearch(admin, [known, day]);
+    assert.equal(r.new, 1);
+    assert.equal(product('demo-bigw', '6099101').status, 'unknown');
+    assert.equal(ofSku('listed', '6099101').length, 1, 'its listing alerts');
+    // Another listed a moment later, its button drawn a minute after that: a tile late to draw, not a drop.
+    clock.offset += 2 * 60 * 1000;
+    const night = bigwTile('6099102', 'Pokemon TCG: 30th Celebration Ultra-Premium Collection - Night');
+    await bigwSearch(admin, [known, day, night]);
+    clock.offset += 60 * 1000;
+    r = await bigwSearch(admin, [known, day, { ...night, inStock: true }]);
+    assert.equal(r.restock, 0);
+    assert.equal(ofSku('restock', '6099102').length, 0, 'buyable within minutes of being listed: no on-sale alert');
+    assert.equal(product('demo-bigw', '6099102').status, 'in_stock');
+    // 7 am: the Day UPC's tile has its button — on sale now.
+    clock.offset += 9 * 60 * 1000;
+    const posts = channel().length;
+    r = await bigwSearch(admin, [known, { ...day, inStock: true }, { ...night, inStock: true }]);
+    assert.equal(r.restock, 1);
+    const [a] = ofSku('restock', '6099101');
+    assert.ok(a, 'alerted');
+    assert.match(a.note, /On sale now at BIG W \(dummy store\) — listed before without a buy button/);
+    assert.ok(channel().length > posts, 'posted in the channel');
+    assert.equal((await bigwSearch(admin, [known, { ...day, inStock: true }, { ...night, inStock: true }])).restock, 0, 'once');
+  });
+});
+
+test("🆕 a search back after a long gap (an admin's browser turned away overnight): it sets the scene again, but the first few products nobody had seen still alert — what was listed meanwhile", async () => {
+  clearOfMidnight(2);
+  await asBigwBrowser(async (admin) => {
+    const known = bigwTile('6099201', 'Pokemon TCG: Paldean Fates Tin', false, 30);
+    await bigwSearch(admin, [known]);
+    assert.equal((await bigwSearch(admin, [known])).baseline, false);
+    // Seven hours without a search that came back (more than the six after which a search sets the scene again).
+    clock.offset += 7 * 3600 * 1000;
+    const fresh = [1, 2, 3, 4, 5].map((n) => bigwTile(`609921${n}`, `Pokemon TCG: Overnight Drop ${n} Elite Trainer Box`, true, 90));
+    const r = await bigwSearch(admin, [known, ...fresh]);
+    assert.equal(r.baseline, true);
+    assert.equal(r.new, 3, 'at most three of them alert');
+    const listed = fresh.filter((p) => ofSku('listed', p.sku).length);
+    assert.equal(listed.length, 3);
+    assert.match(ofSku('listed', listed[0].sku)[0].note, /came back after a while without one/);
+    for (const p of fresh) assert.ok(product('demo-bigw', p.sku), 'every one tracked');
+    // The scene set: the next search goes on as usual.
+    const after = await bigwSearch(admin, [known, ...fresh, bigwTile('6099299', 'Pokemon TCG: Morning Booster Box', true, 200)]);
+    assert.equal(after.baseline, false);
+    assert.equal(after.new, 1);
+  });
+});
+
+test("📄 BIG W's later pages (48 a page, by relevance: a new listing can be further down): opened by the page's own \"Next\" link — only where it has one, only to the same search, and not past page 3", async () => {
+  await asBigwBrowser(async (admin) => {
+    const st = sw.stat('demo-bigw');
+    st.nextPages.clear();
+    const first = sw.urlFor(R('demo-bigw'), 'pokemon', 1);
+    assert.match(first, /\/bigw\/search\?text=pokemon%20tcg$/);
+    const page2 = `${store.url}/bigw/search?text=pokemon%20tcg&page=2`;
+    // No link on the page (an older extension, or the last page): only first pages.
+    await bigwSearch(admin, [bigwTile('6099301', 'Pokemon TCG: Page One Tin', true, 25)]);
+    const terms = () => { const out = []; for (let i = 0; i < 6; i++) out.push(sw.nextTerm(R('demo-bigw'), { all: false })); return out; };
+    assert.ok(terms().every((t) => t.page === 1), 'no later pages without a link to them');
+    // A link elsewhere, or to another search: not followed.
+    for (const bad of [`${store.url}/bigw/search?text=lego&page=2`, `${store.url}/bigw/c/toys?page=2`, 'https://evil.example/bigw/search?text=pokemon%20tcg&page=2', first]) {
+      await bigwSearch(admin, [bigwTile('6099301', 'Pokemon TCG: Page One Tin', true, 25)], { next: bad });
+      assert.equal(st.nextPages.size, 0, bad);
+    }
+    // Its own "Next": page 2 of that keyword is read where it goes, after each round of first pages.
+    await bigwSearch(admin, [bigwTile('6099301', 'Pokemon TCG: Page One Tin', true, 25)], { next: page2 });
+    assert.equal(sw.urlFor(R('demo-bigw'), 'pokemon', 2), page2);
+    const round = terms();
+    assert.ok(round.some((t) => t.keyword === 'pokemon' && t.page === 2), JSON.stringify(round));
+    assert.ok(!round.some((t) => t.page === 3), 'page 3 only once page 2 links to it');
+    // Handed to the admin's browser with that address; what it finds there is tracked (its first read sets that page's scene).
+    st.browserNext = 0;
+    st.turn = 2; // (the deep page's turn)
+    const due = (await admin.call('GET', '/api/ext/sweeps?v=1.28.0')).body.terms.find((t) => t.store === 'demo-bigw');
+    assert.deepEqual([due.keyword, due.page, due.url, due.render], ['pokemon', 2, page2, true]);
+    let r = await bigwSearch(admin, [bigwTile('6099302', 'Pokemon TCG: Page Two Collection', null, 60)], { page: 2, next: `${store.url}/bigw/search?text=pokemon%20tcg&page=3` });
+    assert.equal(r.baseline, true);
+    assert.ok(product('demo-bigw', '6099302'));
+    assert.equal(sw.urlFor(R('demo-bigw'), 'pokemon', 3), `${store.url}/bigw/search?text=pokemon%20tcg&page=3`);
+    // A new listing on page 2 alerts like one on page 1.
+    r = await bigwSearch(admin, [bigwTile('6099302', 'Pokemon TCG: Page Two Collection', null, 60), bigwTile('6099303', 'Pokemon TCG: Further Down Booster Box', null, 250)], { page: 2 });
+    assert.equal(r.new, 1);
+    assert.equal(ofSku('listed', '6099303').length, 1);
+    // Page 3 links on: not kept (Mugibot reads three pages).
+    await bigwSearch(admin, [bigwTile('6099304', 'Pokemon TCG: Page Three Tin', null, 20)], { page: 3, next: `${store.url}/bigw/search?text=pokemon%20tcg&page=4` });
+    assert.ok(!st.nextPages.has('pokemon\n3'));
+    // One new to page 3, the last read: maybe only moved up from page 4 (by relevance) — tracked, not alerted as a drop.
+    r = await bigwSearch(admin, [bigwTile('6099304', 'Pokemon TCG: Page Three Tin', null, 20), bigwTile('6099305', 'Pokemon TCG: From Page Four Tin', null, 20)], { page: 3 });
+    assert.equal(r.new, 0);
+    assert.ok(product('demo-bigw', '6099305'), 'tracked');
+    assert.equal(ofSku('listed', '6099305').length, 0);
+    // The last page says no "Next": page 3 isn't read after that.
+    await bigwSearch(admin, [bigwTile('6099302', 'Pokemon TCG: Page Two Collection', null, 60)], { page: 2, next: '' });
+    assert.ok(!st.nextPages.has('pokemon\n2'));
+    st.nextPages.clear();
+  });
+});
+
+test("📵 BIG W not watched (no admin's browser searching it — Chrome closed, the computer asleep — or it turned them away): after 20 minutes without a product found there, admins are DM'd once, with why and what to do, and again when it's back", async () => {
+  env.app.repo.updateUser(boss.user.id, { discord_id: 'd-boss' });
+  await asBigwBrowser(async (admin) => {
+    const dms = () => discord.dmsTo('d-boss').map((m) => JSON.stringify(m.body));
+    await bigwSearch(admin, [bigwTile('6099401', 'Pokemon TCG: Watched Tin', true, 25)]);
+    // (As on Mugibot's server: the live sweeps running, started a while ago.)
+    Object.assign(sw, { running: true, startedAt: sw.now() - 30 * 60 * 1000 });
+    const told = async () => (await sw.watchBlind()).filter((t) => t.store === 'demo-bigw');
+    assert.deepEqual(await told(), [], 'searched just now');
+    const before = dms().length;
+    clock.offset += 21 * 60 * 1000;
+    assert.deepEqual(await told(), [{ store: 'demo-bigw', blind: true }]);
+    // (EB Games' dummy copy is searched from the admin's browser here too: both in one DM, as Chrome closed takes them all.)
+    const fresh = dms().slice(before);
+    assert.equal(fresh.length, 1, `one DM: ${fresh.join('\n')}`);
+    const dm = fresh[0];
+    assert.match(dm, /BIG W \(dummy store\)( and |, )[^"]*aren't being watched|BIG W \(dummy store\) isn't being watched/);
+    assert.match(dm, /BIG W \(dummy store\): no search has found a product since/);
+    assert.match(dm, /can be seen until/);
+    assert.match(dm, /Keep Chrome open with the Mugibot extension connected to an admin account/);
+    assert.match(dm, /Access Denied/);
+    assert.ok(env.app.repo.listEvents(boss.user.id, { limit: 20 }).some((e) => /being watched/.test(e.message)), 'on the dashboard too');
+    assert.deepEqual(await told(), [], 'once');
+    // A search that comes back with no products doesn't count as watching it.
+    await bigwSearch(admin, []);
+    assert.deepEqual(await told(), []);
+    // Back: said so.
+    await bigwSearch(admin, [bigwTile('6099401', 'Pokemon TCG: Watched Tin', true, 25)]);
+    assert.deepEqual(await told(), [{ store: 'demo-bigw', blind: false }]);
+    assert.ok(dms().some((m) => /BIG W \(dummy store\) is being watched again/.test(m)));
+  }).finally(() => { sw.running = false; });
+  env.app.repo.updateUser(boss.user.id, { discord_id: null });
+});
+
+test('the keywords: Pokémon, One Piece, Riftbound and Gundam by default — added to a list saved before them, and left off once an admin takes them off', async () => {
+  const saved = env.app.repo.getSetting('sweep');
+  try {
+    env.app.repo.setSetting('sweep', { ...saved, keywords: ['pokemon', 'lorcana'], keywordsVersion: undefined });
+    assert.deepEqual(sw.settings.keywords, ['pokemon', 'lorcana', 'riftbound', 'gundam card game']);
+    assert.equal(sw.query(R('demo-bigw'), 'riftbound'), 'riftbound tcg');
+    assert.equal(sw.query(R('demo-bigw'), 'gundam card game'), 'gundam card game', '"card" in it already: no "tcg" on top');
+    sw.save({ keywords: ['pokemon', 'lorcana'] }, null);
+    assert.deepEqual(sw.settings.keywords, ['pokemon', 'lorcana'], "the admin's list from then on");
+  } finally {
+    env.app.repo.setSetting('sweep', saved);
+  }
+});
+
+test("🔎 a product BIG W's searches found that nobody monitors is read off its own page in an admin's browser (its tile may not say it's on sale): on sale there after sold out or coming soon, or after being listed a while with no buy button, it alerts and updates everyone watching it — each page every 3 minutes at most, every half hour once it's buyable", async () => {
+  clearOfMidnight(2);
+  env.app.repo.setSetting('retailer:demo-bigw', { serverChecks: false });
+  const watcher = await ash.post('/api/items', { url: bigwTile('6099501', 'Pokemon TCG: 30th Celebration Ultra-Premium Collection - Day').url, name: 'Day UPC' });
+  assert.equal(watcher.status, 200, watcher.text);
+  try {
+    await asBigwBrowser(async (admin) => {
+      const day = bigwTile('6099501', 'Pokemon TCG: 30th Celebration Ultra-Premium Collection - Day');
+      const night = bigwTile('6099502', 'Pokemon TCG: 30th Celebration Ultra-Premium Collection - Night');
+      // (What the other tests' searches found there waits its turn: these two are the ones looked at here.)
+      env.app.db.run("UPDATE products SET browser_next_at = :far WHERE store = 'demo-bigw'", { far: env.app.repo.now() + 86400000 });
+      await bigwSearch(admin, [bigwTile('6099500', 'Pokemon TCG: Baseline Tin', true, 20)]);
+      await bigwSearch(admin, [day, night]);
+      const P = (sku) => product('demo-bigw', sku);
+      assert.equal(P('6099501').status, 'unknown');
+      // Only for an extension that opens BIG W's pages (1.27.0 and later) — the version it says now.
+      const ours = async (v) => (await admin.call('GET', `/api/ext/checks?v=${v}`)).body.checks.filter((c) => c.store === 'demo-bigw' && /^p:/.test(c.id));
+      for (const sku of ['6099501', '6099502']) env.app.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: P(sku).id });
+      assert.deepEqual(await ours('1.26.0'), [], 'an older extension: not asked');
+      const version = () => env.app.repo.listDevices(boss.user.id).find((d) => d.name === 'Boss Chrome (BIG W)').version;
+      assert.equal(version(), '1.26.0', 'the version it says is kept as its own');
+      let due = await ours('1.28.0');
+      assert.equal(due.length, 1, 'one BIG W page a round');
+      assert.equal(due[0].render, true);
+      assert.equal(due[0].kind, 'product');
+      const read = async (id, status) => {
+        const r = await admin.call('POST', '/api/ext/checks', { results: [{ id, status, price: 179, title: 'Pokemon TCG: 30th Celebration Ultra-Premium Collection' }] });
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+      };
+      // Their pages: the Day one coming soon, the Night one with no buy button either way. Nothing to say yet;
+      // each read again in 3 minutes, not every round.
+      const dayId = `p:${P('6099501').id}`;
+      const nightId = `p:${P('6099502').id}`;
+      const pageSays = (id) => (id === dayId ? 'coming_soon' : 'unknown');
+      const [aId, bId] = due[0].id === dayId ? [dayId, nightId] : [nightId, dayId];
+      await read(aId, pageSays(aId));
+      const a0 = env.app.catalog.productById(aId.slice(2));
+      assert.equal(a0.status, pageSays(aId));
+      assert.ok(a0.browser_next_at - env.app.repo.now() > 170 * 1000, 'its next read in about 3 minutes');
+      // (The other one's turn pushed back a little — so a long BIG W list never keeps other stores out: the next round.)
+      clock.offset += 61 * 1000;
+      due = await ours('1.28.0');
+      assert.deepEqual(due.map((c) => c.id), [bId], "the other one's turn, the next round");
+      await read(bId, pageSays(bId));
+      assert.equal((await ours('1.28.0')).length, 0, 'nothing more this round');
+      assert.equal(ofSku('restock', '6099501').length + ofSku('restock', '6099502').length, 0);
+      // 7 am: on sale on its page — alerted (with ⚡ Buy, as the searches' alerts are), and the member watching it told.
+      clock.offset += 121 * 1000;
+      const dmsBefore = discord.dmsTo('d-ash').length;
+      const posts = channel().length;
+      await read(dayId, 'in_stock');
+      const [a] = ofSku('restock', '6099501');
+      assert.ok(a, 'alerted');
+      assert.match(a.note, /Seen on its own page at BIG W \(dummy store\)/);
+      assert.ok(channel().length > posts, 'posted in the channel');
+      const item = (await ash.get('/api/items')).body.items.find((i) => i.sku === '6099501');
+      assert.equal(item.status, 'in_stock', "the member's watchlist item: on sale");
+      await waitFor(() => discord.dmsTo('d-ash').length > dmsBefore, { message: "the member's DM" });
+      // Buyable now: its page read every half hour (to see it sell out — so its next restock alerts), not every few minutes.
+      assert.ok(P('6099501').browser_next_at - env.app.repo.now() >= 29 * 60 * 1000);
+      // Once a day.
+      await read(dayId, 'out_of_stock');
+      await read(dayId, 'in_stock');
+      assert.equal(ofSku('restock', '6099501').length, 1, 'once a day');
+      // The Night one: listed a while with no buy button anywhere — its page says on sale now.
+      clock.offset += 11 * 60 * 1000;
+      await read(nightId, 'in_stock');
+      const [b] = ofSku('restock', '6099502');
+      assert.ok(b, 'alerted');
+      assert.match(b.note, /On sale now at BIG W \(dummy store\)/);
+      // Listed a long while with no button in its tile, its page read for the first time — in stock: nothing to
+      // compare with, so no alert (an update never turns every product in stock into one).
+      const tin = bigwTile('6099503', 'Pokemon TCG: Long Listed Tin', null, 25);
+      await bigwSearch(admin, [day, night, tin]);
+      clock.offset += 30 * 60 * 1000;
+      await read(`p:${P('6099503').id}`, 'in_stock');
+      assert.equal(P('6099503').status, 'in_stock');
+      assert.equal(ofSku('restock', '6099503').length, 0, 'its first page read: no alert');
+      assert.equal(version(), '1.28.0');
+    });
+  } finally {
+    env.app.repo.setSetting('retailer:demo-bigw', {});
+    for (const it of (await ash.get('/api/items')).body.items) await ash.del(`/api/items/${it.id}`);
+  }
 });

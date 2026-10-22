@@ -69,7 +69,7 @@ test('connection codes are easy to type', () => {
 
 test('retailers: each store has its own flow; product codes from links; demo copies on the dummy store', () => {
   assert.deepEqual(RETAILER_DEFS.map((r) => r.id), ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown', 'amazon', 'thegamescube', 'gamerholic', 'pokemoncenter', 'pbandai', 'citybeach',
-    'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gamesmen', 'gamesworld', 'shoplink']);
+    'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gamesmen', 'gamesworld', 'gameology', 'shoplink']);
   for (const r of RETAILER_DEFS) {
     // (A Shop checkout link has no product page to add from: the link is the order, straight to Shop's checkout.)
     assert.ok(r.flow && (r.flow.product || r.cartLinks) && r.flow.checkout, `${r.id} has a flow`);
@@ -112,16 +112,25 @@ test('retailers: each store has its own flow; product codes from links; demo cop
     ['collectiblemadness', 'https://collectiblemadness.com.au/products/pokemon-tcg-delta-reign-booster-box', 'pokemon-tcg-delta-reign-booster-box'],
     ['cherrycollectables', 'https://www.cherrycollectables.com.au/products/pokemon-tcg-30th-celebration-elite-trainer-box', 'pokemon-tcg-30th-celebration-elite-trainer-box'],
     ['gamesmen', 'https://www.gamesmen.com.au/pokemon-tcg-mega-evolution-pitch-black-elite-trainer-box', 'pokemon-tcg-mega-evolution-pitch-black-elite-trainer-box'],
-    ['gamesworld', 'https://www.gamesworld.com.au/product/one-piece-starter-deck-sabo-st35/', 'one-piece-starter-deck-sabo-st35']]) {
+    ['gamesworld', 'https://www.gamesworld.com.au/product/one-piece-starter-deck-sabo-st35/', 'one-piece-starter-deck-sabo-st35'],
+    // Gameology (1.28.0): its links as its collection pages give them (a member's), and as Shopify's own.
+    ['gameology', 'https://www.gameology.com.au/collections/one-piece-booster-boxs/products/one-piece-card-game-op-15-booster-box', 'one-piece-card-game-op-15-booster-box'],
+    ['gameology', 'https://gameology.com.au/products/one-piece-card-game-op-15-booster-box?variant=43938378907763', 'one-piece-card-game-op-15-booster-box']]) {
     assert.equal(retailers.forUrl(url).id, id, url);
     assert.equal(sku(url), code, url);
   }
-  for (const id of ['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']) {
+  for (const id of ['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']) {
     const r = retailers.get(id);
     assert.equal(r.platform, 'shopify', id);
     assert.equal(r.flow, retailers.get('jbhifi').flow, `${id}: the Shopify flow`);
     assert.equal(retailers.cartUrl(id, { variantId: '123' }), `${r.base}/cart/123:1`);
   }
+  // Gameology: a product page with a collection on the way or without; a collection page isn't one. Its pages
+  // are new to the extension in 1.28.0, so an older copy is never sent there.
+  for (const path of ['/collections/one-piece-booster-boxs/products/one-piece-card-game-op-15-booster-box', '/products/one-piece-card-game-op-15-booster-box']) assert.ok(retailers.get('gameology').productPath.test(path), path);
+  assert.equal(retailers.get('gameology').productPath.test('/collections/one-piece-booster-boxs'), false);
+  assert.equal(retailers.get('gameology').acoVersion, '1.28.0');
+  assert.equal(retailers.productUrlFromSku(retailers.get('gameology'), 'one-piece-card-game-op-15-booster-box'), 'https://www.gameology.com.au/products/one-piece-card-game-op-15-booster-box');
   assert.ok(retailers.get('gamesmen').productPath.test('/pokemon-tcg-scarlet-violet-151-elite-trainer-box'));
   assert.ok(!retailers.get('gamesmen').productPath.test('/checkout/cart/') && !retailers.get('gamesmen').productPath.test('/pokemon'), "Magento's other pages aren't products");
   assert.equal(retailers.productUrlFromSku(retailers.get('gamesmen'), 'pokemon-tcg-etb-box'), 'https://www.gamesmen.com.au/pokemon-tcg-etb-box');
@@ -337,7 +346,7 @@ test("store login monitor: each store's page says whether you're signed in (Shop
   // As the extension gets them: through JSON, the RegExps as { re, f }.
   const check = (id) => JSON.parse(JSON.stringify(serialize(RETAILER_DEFS.find((r) => r.id === id).account.check)));
   const shopify = (cid) => `<script>var __st={"a":1,"offset":36000,"u":"x","p":"home"${cid ? ',"cid":12345' : ''}};</script>`;
-  for (const id of ['jbhifi', 'trainertown', 'gamerholic', 'toysrus', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables']) {
+  for (const id of ['jbhifi', 'trainertown', 'gamerholic', 'toysrus', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']) {
     assert.equal(fromHtml(shopify(true), 'https://x/', check(id)), 'in', id);
     assert.equal(fromHtml(shopify(false), 'https://x/', check(id)), 'out', id);
   }

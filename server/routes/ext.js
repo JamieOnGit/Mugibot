@@ -207,7 +207,10 @@ export function register(router, ctx) {
     const want = new Set();
     // (Only an extension that can be allowed other websites says which it may read: 1.26.0 or later.)
     if (req.query.has('sites')) ctx.monitor.noteSites(req.user.id, req.device.id, sites);
-    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want, version: req.device.version });
+    // (Which copy this is: it says, from 1.28.0 — before, the version it last told /api/ext/me or the searches.)
+    const version = str(req.query.get('v'), 20) || req.device.version;
+    if (version !== req.device.version) seen(req, version);
+    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want, version });
     if (ctx.drops && ctx.monitor.browserChecksOn(req.user)) checks.push(...ctx.drops.browserDue(req.user, { sites, want }));
     return { checks, intervalSeconds: cfg.monitor.browserIntervalSeconds, sites: [...want].slice(0, 20) };
   }, { auth: 'device', entitled: true });
@@ -326,6 +329,9 @@ export function register(router, ctx) {
     if (!limiter.hit(`sweeps:${req.device.id}`, 600, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     // Which version this copy of the extension is (it says, since 1.8.1; before that, the one it connected with).
     const version = str(req.query.get('v'), 20) || req.device.version || '';
+    // (Kept as this browser's version: its in-browser checks go by it too — an extension updated since it last
+    //  opened its menu was taken for the old one, and left out of BIG W's checks.)
+    if (version && version !== req.device.version) seen(req, version);
     // (busy: the stores this browser is still searching — the same list as `through`.)
     return ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through: throughFrom(req.query.get('through')), busy: throughFrom(req.query.get('busy')) });
   }, { auth: 'device' });

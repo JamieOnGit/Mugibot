@@ -96,6 +96,12 @@ export const DUMMY_PRODUCTS = {
     { sku: 'pokemon-tcg-mega-evolution-phantasmal-flames-booster-pack', name: 'Pokemon TCG ME02 Mega Evolution - Phantasmal Flames Booster Pack', price: 17.99, status: 'in_stock' },
     { sku: 'pokemon-tcg-30th-celebration-elite-trainer-box', name: 'Pokemon TCG 30th Celebration Elite Trainer Box', price: 299.99, status: 'out_of_stock' },
   ],
+  // Gameology (Shopify, FoxTheme's "Hyper"): named as its real products are; its links name a collection on the way.
+  gameology: [
+    { sku: 'one-piece-card-game-op-15-booster-box', name: "One Piece Card Game OP-15 Adventure on Kami's Island Booster Box", price: 519.95, status: 'in_stock' },
+    { sku: 'pokemon-tcg-mega-evolution-perfect-order-booster-box', name: 'Pokemon TCG Mega Evolution Perfect Order Booster Box', price: 289.95, status: 'out_of_stock' },
+    { sku: 'one-piece-card-game-op-15-single-booster-pack', name: "One Piece Card Game OP-15 Adventure on Kami's Island Single Booster Pack", price: 22.95, status: 'in_stock' },
+  ],
   // The Gamesmen (Magento): its links are the product's name; its item codes are numbers.
   gamesmen: [
     { sku: 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box', code: '258811', name: 'Pokemon TCG: Mega Evolution Perfect Order Elite Trainer Box', price: 119.95, status: 'in_stock' },
@@ -130,6 +136,7 @@ export function dummyProductPath(store, p) {
     case 'pokebox': case 'goodgames': case 'collectiblemadness': case 'cherrycollectables': return `/${store}/products/${p.sku}`;
     case 'gamesmen': return `/gamesmen/${p.sku}`;
     case 'gamesworld': return `/gamesworld/product/${p.sku}/`;
+    case 'gameology': return `/gameology/collections/${/one-piece/.test(p.sku) ? 'one-piece-booster-boxs' : 'pokemon-booster-boxes'}/products/${p.sku}`;
     default: return null;
   }
 }

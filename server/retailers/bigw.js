@@ -30,15 +30,21 @@ export default {
   // At most one search every 20 s (Oct 2026: every 10 s — and with watchlist checks fetched in the background
   // besides, BIG W's bot protection took a member's browser for a bot and turned it away, "Access Denied", on
   // their own visits too). The page takes ~5 s to build.
-  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20 },
+  // Its search shows 48 products a page, by relevance (as its own search box gives it): a new listing can be further down
+  // than the first page. So after each round of keywords, one later page (2 or 3) — opened by the page's own link
+  // to it (followNext: its "Next", rel="next"; nothing guessed about BIG W's addresses), only where it has one.
+  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20, pages: 3, followNext: true },
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
   account: { signIn: '' },
   // Its product pages: BIG W's bot protection (Akamai) resets every server's connection, so the server never
-  // asks (server: 'never'). Members' browsers do, each product every 15 minutes at most (browserSeconds) — the
-  // live searches see drops sooner — by opening its page in the extension's window the way you'd open it
-  // (render): background requests are what got a member's browser turned away.
-  monitor: { server: 'never', browser: true, render: true, browserSeconds: 900 },
+  // asks (server: 'never'). Browsers do, by opening its page in the extension's window the way you'd open it
+  // (render): background requests are what got a member's browser turned away. One BIG W page a round (30 s)
+  // per browser at most, and each product every 3 minutes at most (browserSeconds; 15 before Oct 2026 — though
+  // a slip read them every minute). Members' browsers read their own watchlist's; admins' browsers also read
+  // every product its live searches found that nobody monitors — its search tiles show no buy button on a drop
+  // it lists ahead of time, its page says the moment it's on sale (a member's 30th Celebration UPC, Oct 2026).
+  monitor: { server: 'never', browser: true, render: true, browserSeconds: 180 },
   flow: {
     product: {
       add: ADD_WORDS,

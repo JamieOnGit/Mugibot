@@ -230,7 +230,7 @@ test('an admin switches a store\'s server checks off: no server requests, browse
   assert.ok(env.app.repo.listAudit().some((a) => a.action === 'retailer'));
 });
 
-test("BIG W (its bot protection resets every server's connection): the server never asks it, whatever an admin saved; the \"Error\" its old tries left is forgotten; members' browsers read each product by opening its page — one BIG W page a round, each at most every 15 minutes — and only an extension that does (1.27.0) is asked", async () => {
+test("BIG W (its bot protection resets every server's connection): the server never asks it, whatever an admin saved; the \"Error\" its old tries left is forgotten; members' browsers read each product by opening its page — one BIG W page a round, each at most every 3 minutes — and only an extension that does (1.27.0) is asked", async () => {
   const real = env.app.retailers.get('bigw');
   assert.equal(real.monitor.server, 'never');
   assert.equal(real.monitor.render, true);
@@ -272,9 +272,9 @@ test("BIG W (its bot protection resets every server's connection): the server ne
     const second = await round();
     assert.equal(second.length, 1);
     assert.deepEqual([first[0].id, second[0].id].sort(), [a.id, b.id].sort());
-    assert.equal((await round()).length, 0, 'each at most every 15 minutes');
-    clock.offset += 901 * 1000;
-    assert.equal((await round()).length, 1, 'due again after 15 minutes');
+    assert.equal((await round()).length, 0, 'each at most every 3 minutes');
+    clock.offset += 181 * 1000;
+    assert.equal((await round()).length, 1, 'due again after 3 minutes');
     // Seen by a live search just now: nothing more to open — its turn pushed back.
     env.app.db.run("UPDATE items SET status_source = 'sweep', checked_at = :t, browser_next_at = 0 WHERE user_id = :u", { t: env.app.repo.now(), u: c.user.id });
     assert.equal((await round()).length, 0, 'a fresh live-search reading: no page opened');

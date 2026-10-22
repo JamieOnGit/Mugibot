@@ -72,7 +72,7 @@ community. Built on TCGCopBot's working Kmart flow.
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games,
   JB Hi-Fi, Target, Toys"R"Us, Amazon, The Games Cube, Gamerholic, Premium
   Bandai (Australia), and the card shops Pokébox, Good Games, Collectible
-  Madness, Cherry Collectables (Shopify), The Gamesmen (Magento) and Games World
+  Madness, Cherry Collectables, Gameology (Shopify), The Gamesmen (Magento) and Games World
   (WooCommerce) are beta (built from walk-throughs of their real checkouts
   and tested on dummy copies of those stores). Zing, Trainer Town, City Beach and Pokémon
   Center (Australia) are drafts. Amazon sells signed in only; The Games Cube
@@ -379,7 +379,10 @@ npm test
   Global-e-style frame: +61 phone, state and card-expiry drop-downs, the
   purchase agreement), Pokébox, Good Games, Collectible Madness and Cherry
   Collectables (Shop Pay, and as a guest with Shopify's address suggestions and
-  "use shipping address as billing" ticked), The Gamesmen (as a guest and signed
+  "use shipping address as billing" ticked), Gameology (its cart link from a link
+  with its collection on the way; from its product page, "Add to cart" → its
+  cart drawer's "Checkout", the drawer opened from the cart icon when it stays
+  shut), The Gamesmen (as a guest and signed
   in with a saved address; "Standard" shipping or the first one offered; the
   billing box left unticked; "Credit card"; the terms box) and Games World (its
   add-to-cart link, selectWoo's state drop-down, "Deliver to a different
@@ -408,7 +411,8 @@ npm test
   - orders placed at the dummy EB Games (guest and signed in), JB Hi-Fi,
     Toys"R"Us (Shop Pay), Amazon (its checkout page and its quick checkout),
     Premium Bandai (inside Global-e's frame), Pokébox (Shop Pay), Collectible
-    Madness (as a guest), The Gamesmen (as a guest and signed in) and Games
+    Madness (as a guest), Gameology (Shop Pay, signed in to its own account
+    with its saved details kept, and as a guest through its cart drawer), The Gamesmen (as a guest and signed in) and Games
     World (as a guest, and with Stripe's Link), and The Games Cube stopping
     at PayPal for you;
   - an add the store didn't take (the empty bag noticed, Add pressed once more,

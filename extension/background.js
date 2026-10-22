@@ -745,7 +745,8 @@ async function runChecks() {
   try {
     // (Stores whose queue this browser got through: it may check them; the others' queues are left alone.)
     const sites = await otherSites();
-    const due = await api('GET', `/api/ext/checks?through=${encodeURIComponent((await throughStores()).join(','))}&sites=${encodeURIComponent(sites.join(','))}`);
+    // (v: this copy's version — BIG W's pages go only to one that opens them, 1.27.0 and later.)
+    const due = await api('GET', `/api/ext/checks?through=${encodeURIComponent((await throughStores()).join(','))}&sites=${encodeURIComponent(sites.join(','))}&v=${encodeURIComponent(VERSION)}`);
     if (due.status !== 200 || !due.body) return { status: due.status };
     // (Websites refusing the server that this browser could read, once allowed: offered in the menu.)
     await chrome.storage.local.set({ needSites: Array.isArray(due.body.sites) ? due.body.sites.slice(0, 20) : [] });
@@ -908,7 +909,11 @@ function readSweepPage(path) {
   // (Its "Access Denied": the store's bot protection turning this browser away — not a page to wait on.)
   const text = String((document.body && document.body.innerText) || '').slice(0, 4000);
   const denied = (/^\s*access denied\s*$/i.test(document.title) || /you don.?t have permission to access|errors\.edgesuite\.net|sorry, you have been blocked/i.test(text)) && text.length < 3000;
-  return { products, data, challenge, denied, url: location.href, title: document.title, html: document.documentElement.outerHTML };
+  // (Its own link to its next page of results — rel="next", or a link saying "Next": where its later pages are.)
+  const nextLink = document.querySelector('link[rel~="next"][href], a[rel~="next"][href]')
+    || [...document.querySelectorAll('a[href]')].find((a) => /^\s*next(\s+page)?\s*[›»>→]?\s*$/i.test(a.textContent || '') || /^\s*next(\s+page)?\s*$/i.test(a.getAttribute('aria-label') || ''));
+  const next = nextLink ? String(nextLink.href || '') : '';
+  return { products, data, challenge, denied, next, url: location.href, title: document.title, html: document.documentElement.outerHTML };
 }
 
 /** Runs in the store's page: asks the store for something, the way the page itself does (with the headers its own code adds). */
@@ -1052,7 +1057,8 @@ async function sweepOne(t) {
     const problem = page.challenge ? 'blocked' : parsed.problem;
     // (A page it couldn't read: what it was, for the live monitor — its title, size and product links.)
     const seen = problem === 'layout' ? { title: String(page.title || '').slice(0, 200), bytes: page.html.length, links: page.products } : undefined;
-    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, products: parsed.products.slice(0, 300) };
+    // (next: the page's own link to its next page of results — BIG W's later pages are read where it goes.)
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, next: String(page.next || '').slice(0, 2000), products: parsed.products.slice(0, 300) };
   }
   if (t.inPage) {
     let res;
