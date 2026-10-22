@@ -620,7 +620,7 @@ function hasSku(url, sku) {
 async function renderCheck(c, gate) {
   let tab;
   try {
-    tab = await sweepTab(`check:${c.store}`);
+    tab = await sweepTab(`check:${c.store}`, { privateWindow: !!c.privateWindow });
     await openIn(tab.id, c.url, gate || null);
   } catch (e) {
     if (e instanceof GateHeld) return { id: c.id, gate: e.gate };
@@ -815,7 +815,7 @@ async function markDenied(store) {
 
 async function sweepWindow() {
   const { [SWEEP_WINDOW]: saved } = await chrome.storage.session.get(SWEEP_WINDOW);
-  return saved && saved.tabs ? saved : { windowId: null, tabs: {} };
+  return saved && saved.tabs ? { privateWindowId: null, ...saved } : { windowId: null, privateWindowId: null, tabs: {} };
 }
 
 async function isSweepTab(tabId) {
@@ -823,36 +823,76 @@ async function isSweepTab(tabId) {
 }
 
 let sweepTabLock = Promise.resolve();
-/** The store's tab in the sweep window (opened if needed) — one at a time: searches at several stores start side by side. */
-function sweepTab(store) {
-  const next = sweepTabLock.then(() => openSweepTab(store));
+/**
+ * The store's tab in the sweep window (opened if needed) — one at a time: searches at several stores start side by side.
+ * privateWindow (BIG W's): in a minimised private (Incognito) window of its own instead — see privateAllowed().
+ */
+function sweepTab(store, { privateWindow = false } = {}) {
+  const next = sweepTabLock.then(() => openSweepTab(store, privateWindow));
   sweepTabLock = next.catch(() => null);
   return next;
 }
 
-async function openSweepTab(store) {
+// A store read from a private (Incognito) window of its own (BIG W's: sweep.privateWindow): its searches and page
+// reads keep their own cookies, apart from your own visits to it — so its bot protection taking Mugibot's reading for
+// a bot never turns you away there, nor your checkouts. Only where you've allowed Mugibot in Incognito
+// (chrome://extensions → Mugibot → Details → Allow in Incognito); otherwise the ordinary sweep window, as before.
+// (Its "Access Denied" is waited out the same either way — half an hour, the private window kept as it is: never
+// a fresh private window to get round it.)
+let privateOff = 0; // (Chrome wouldn't open one — Incognito switched off on this computer: tried again in an hour)
+async function privateAllowed() {
+  if (Date.now() < privateOff) return false;
+  return !!(await chrome.extension.isAllowedIncognitoAccess().catch(() => false));
+}
+
+async function openSweepTab(store, privateWindow = false) {
   const saved = await sweepWindow();
+  const priv = privateWindow && (await privateAllowed());
   if (saved.tabs[store] !== undefined) {
     try {
       const tab = await chrome.tabs.get(saved.tabs[store]);
-      if (tab.autoDiscardable !== false) await keepTab(tab.id);
-      return tab;
+      // (In the window it should be in: a store moved to its private window gets a new tab there.)
+      if (!!tab.incognito === priv) {
+        if (tab.autoDiscardable !== false) await keepTab(tab.id);
+        return tab;
+      }
+      await chrome.tabs.remove(tab.id).catch(() => null);
     } catch { /* closed */ }
   }
   let tab = null;
-  if (saved.windowId !== null) {
+  if (priv) tab = await privateTab(saved);
+  if (!tab && saved.windowId !== null) {
     try { tab = await chrome.tabs.create({ windowId: saved.windowId, url: 'about:blank', active: false }); } catch { /* the window was closed */ }
   }
   if (!tab) {
     const win = await chrome.windows.create({ url: 'about:blank', focused: false, state: 'minimized' });
     saved.windowId = win.id;
-    saved.tabs = {};
+    for (const [k, id] of Object.entries(saved.tabs)) if (!(await chrome.tabs.get(id).then((t) => t.incognito, () => false))) delete saved.tabs[k];
     tab = win.tabs[0];
   }
   saved.tabs[store] = tab.id;
   await chrome.storage.session.set({ [SWEEP_WINDOW]: saved });
   await keepTab(tab.id);
   return tab;
+}
+
+/**
+ * A tab in the private sweep window (opened, minimised, if needed: its first tab left blank, so closing a store's tab
+ * never closes the window — and its cookies stay as they are). null if Chrome won't open one.
+ */
+async function privateTab(saved) {
+  if (saved.privateWindowId !== null) {
+    try { return await chrome.tabs.create({ windowId: saved.privateWindowId, url: 'about:blank', active: false }); } catch { /* the window was closed */ }
+  }
+  try {
+    const win = await chrome.windows.create({ incognito: true, url: 'about:blank', focused: false, state: 'minimized' });
+    saved.privateWindowId = win.id;
+    for (const [k, id] of Object.entries(saved.tabs)) if (await chrome.tabs.get(id).then((t) => t.incognito, () => true)) delete saved.tabs[k];
+    return await chrome.tabs.create({ windowId: win.id, url: 'about:blank', active: false });
+  } catch {
+    privateOff = Date.now() + 60 * 60 * 1000;
+    return null;
+  }
 }
 
 /** A sweep tab Chrome never throws out to save memory (its Memory Saver): a store searched from here all day long. */
@@ -959,7 +999,7 @@ const inPage = (tabId, func, args) => chrome.scripting.executeScript({ target: {
   .then(([res]) => res && res.result);
 
 async function renderedPage(t) {
-  const { id: tabId } = await sweepTab(t.store);
+  const { id: tabId, incognito } = await sweepTab(t.store, { privateWindow: !!t.privateWindow });
   await openIn(tabId, t.url, t.gate);
   const path = t.productPath ? [t.productPath.re, t.productPath.f || ''] : null;
   // (Longer than the page needs: a store's bot check may hold it up for a few seconds first.)
@@ -994,12 +1034,13 @@ async function renderedPage(t) {
     const json = got.filter((g) => g.status === 200 && /^\s*[[{]/.test(g.text || ''));
     page.html += json.map((g) => `<script type="application/json" data-mugibot-sweep>${g.text.replace(/<\//g, '<\\/')}</script>`).join('');
   }
+  page.incognito = !!incognito;
   return page;
 }
 
 /** The store's own search JSON, asked for from inside a page of the store (opened first when needed). */
 async function askFromStorePage(t) {
-  const tab = await sweepTab(t.store);
+  const tab = await sweepTab(t.store, { privateWindow: !!t.privateWindow });
   const origin = new URL(t.url).origin;
   const onStore = () => chrome.tabs.get(tab.id).then((x) => String(x.url || '').startsWith(origin)).catch(() => false);
   if (!(await onStore())) await openIn(tab.id, t.pageUrl || origin, t.gate);
@@ -1039,7 +1080,7 @@ async function freshStart(t) {
   await forget;
   if (!t.frontUrl) return;
   if (t.render || t.inPage) {
-    const tab = await sweepTab(t.store);
+    const tab = await sweepTab(t.store, { privateWindow: !!t.privateWindow });
     await openIn(tab.id, t.frontUrl);
   } else {
     await fetch(t.frontUrl, { credentials: 'include', cache: 'no-store' }).catch(() => null);
@@ -1083,7 +1124,8 @@ async function sweepOne(t) {
     // (A page it couldn't read: what it was, for the live monitor — its title, size and product links.)
     const seen = problem === 'layout' ? { title: String(page.title || '').slice(0, 200), bytes: page.html.length, links: page.products } : undefined;
     // (next: the page's own link to its next page of results — BIG W's later pages are read where it goes.)
-    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, next: String(page.next || '').slice(0, 2000), products: parsed.products.slice(0, 300) };
+    // (privateWindow: whether it was read in its private window — Mugibot allowed in Incognito here — or the ordinary one.)
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, next: String(page.next || '').slice(0, 2000), products: parsed.products.slice(0, 300), ...(t.privateWindow ? { privateWindow: page.incognito } : {}) };
   }
   if (t.inPage) {
     let res;
@@ -1169,7 +1211,7 @@ let lastSweepLock = Promise.resolve();
 function noteLastSweep(t, result) {
   lastSweepLock = lastSweepLock.then(async () => {
     const { lastSweeps } = await chrome.storage.local.get('lastSweeps');
-    await chrome.storage.local.set({ lastSweeps: { ...(lastSweeps || {}), [t.store]: { at: Date.now(), name: t.storeName, ok: result.ok, found: (result.products || []).length, status: result.status || 0 } } });
+    await chrome.storage.local.set({ lastSweeps: { ...(lastSweeps || {}), [t.store]: { at: Date.now(), name: t.storeName, ok: result.ok, found: (result.products || []).length, status: result.status || 0, privateWanted: !!t.privateWindow, private: result.privateWindow === true } } });
   }).catch(() => null);
   return lastSweepLock;
 }
@@ -1335,7 +1377,8 @@ async function acoLoop() {
 async function openStoreTab(url, { active = true } = {}) {
   let tab = null;
   const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
-  if (win && win.id !== undefined && !(await isSweepWindow(win.id))) {
+  // (Never into a private window — yours or the sweep's: a checkout needs your own sign-ins and cookies.)
+  if (win && win.id !== undefined && !win.incognito && !(await isSweepWindow(win.id))) {
     tab = await chrome.tabs.create({ windowId: win.id, url, active }).catch(() => null);
     if (tab && active) await chrome.windows.update(win.id, { focused: true, state: win.state === 'minimized' ? 'normal' : undefined }).catch(() => null);
   }
@@ -1531,7 +1574,8 @@ async function stopRuns(ids) {
 }
 
 async function isSweepWindow(windowId) {
-  return (await sweepWindow()).windowId === windowId;
+  const saved = await sweepWindow();
+  return saved.windowId === windowId || saved.privateWindowId === windowId;
 }
 
 // --- several checkouts at once: one at a time at each store -----------------------------------

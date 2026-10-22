@@ -33,7 +33,9 @@ export default {
   // Its search shows 48 products a page, by relevance (as its own search box gives it): a new listing can be further down
   // than the first page. So after each round of keywords, one later page (2 or 3) — opened by the page's own link
   // to it (followNext: its "Next", rel="next"; nothing guessed about BIG W's addresses), only where it has one.
-  sweep: { from: 'browser', parser: 'generic', render: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20, pages: 3, followNext: true },
+  // (privateWindow: read in a private window of its own in Mugibot's browsers — apart from your own BIG W visits and
+  //  checkouts, so its Akamai taking Mugibot's reading for a bot never turns you away. extension 1.30.0.)
+  sweep: { from: 'browser', parser: 'generic', render: true, privateWindow: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20, pages: 3, followNext: true },
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
   account: { signIn: '' },
@@ -44,7 +46,7 @@ export default {
   // a slip read them every minute). Members' browsers read their own watchlist's; admins' browsers also read
   // every product its live searches found that nobody monitors — its search tiles show no buy button on a drop
   // it lists ahead of time, its page says the moment it's on sale (a member's 30th Celebration UPC, Oct 2026).
-  monitor: { server: 'never', browser: true, render: true, browserSeconds: 180 },
+  monitor: { server: 'never', browser: true, render: true, privateWindow: true, browserSeconds: 180 },
   flow: {
     product: {
       add: ADD_WORDS,

@@ -757,6 +757,7 @@ test("where each store is searched: server first everywhere (saved modes from be
     const due = sw.browserDue(env.app.repo.userByUsername('boss'));
     const t = due.terms.find((x) => x.store === 'demo-bigw');
     assert.equal(t.render, true);
+    assert.equal(t.privateWindow, true, 'in a private window of its own, where the browser allows it');
     // EB Games: its search JSON, asked for from inside one of its pages.
     const eb = due.terms.find((x) => x.store === 'demo-ebgames');
     assert.equal(eb.inPage, true);
@@ -832,6 +833,7 @@ test("an admin's browser with an extension too old for a store isn't given its s
     assert.equal(pb.pageUrl, `${store.url}/pbandai`);
     const pc = due.terms.find((t) => t.store === 'demo-pokemoncenter');
     assert.equal(pc.render, true);
+    assert.equal(pc.privateWindow, false, 'only BIG W in a private window');
     assert.equal(pc.headers, null);
     // While it's searching, a second admin's browser with an old extension doesn't take it over or change its card.
     await sw.browserResults(admin, [{ store: 'demo-pbandai', keyword: pb.keyword, page: 1, ok: true, status: 200, ms: 300, products: [] }]);

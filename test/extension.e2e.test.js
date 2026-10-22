@@ -4426,3 +4426,130 @@ test('Chrome Web Store copy: downloaded copies are asked to move to it, and with
     for (const d of [dlDir, storeDir, profile]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+// --- 🔒 BIG W in a private window of its own (retailers/bigw.js sweep.privateWindow) -------------------------
+/** This browser connected to an account again (signed in to the dashboard as them, "Connect this browser"). */
+async function connectAs(username) {
+  const page = await ctx.newPage();
+  await browserApi('POST', '/api/auth/logout');
+  await page.goto(`${env.url}/login`);
+  await page.fill('#li-username', username);
+  await page.fill('#li-password', PASSWORD);
+  await page.click('#login button[type=submit]');
+  await page.waitForURL(/\/app/);
+  await page.goto(`${env.url}/app#extension`);
+  await page.waitForFunction(() => /not connected|another account|Extension connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 15000 });
+  if (!/Extension connected/.test(await page.textContent('#ext-status-2'))) {
+    if (await page.isVisible('#pair-now')) await page.click('#pair-now');
+    else await page.locator('#ext-status-2 button').click();
+    await page.waitForFunction(() => /Extension connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 15000 });
+  }
+  await page.close();
+}
+
+/** chrome://extensions → Mugibot → Details → "Allow in Incognito", as a person switches it on. The extension reloads. */
+async function allowIncognito() {
+  const page = await ctx.newPage();
+  await page.goto('chrome://extensions/');
+  await page.waitForTimeout(800);
+  if ((await page.locator('#devMode').getAttribute('aria-pressed')) !== 'true') await page.locator('#devMode').click();
+  await page.goto(`chrome://extensions/?id=${extId}`);
+  await page.waitForTimeout(800);
+  const ours = (w) => w.url().startsWith(`chrome-extension://${extId}/`);
+  const next = ctx.waitForEvent('serviceworker', { predicate: ours, timeout: 30000 });
+  await page.locator('#allow-incognito').click();
+  sw = await next;
+  await waitFor(async () => (await sw.evaluate(() => chrome.extension.isAllowedIncognitoAccess()).catch(() => false)) === true, { message: 'Mugibot allowed in Incognito', timeout: 15000 });
+  await page.close();
+}
+
+test("🔒 BIG W in a private window of its own: allowed in Incognito, an admin's browser searches BIG W and reads its product pages in a minimised private window — its own cookies, never the ones from your own BIG W visits — and what's new there is found as ever; not allowed, the ordinary sweep window as before, and the live monitor says how to allow it; \"Access Denied\" there is waited out (30 minutes), the private window kept as it is — never a fresh one to get round it", async () => {
+  // (The tests before it signed this browser out — connected again as Ash, the admin here.)
+  await connectAs('ash');
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-bigw': 'browser' } }, null);
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  const S = store.shop('bigw');
+  const st = () => sweeper.stat('demo-bigw');
+  const searched = async (t0, message) => {
+    Object.assign(st(), { fails: 0, slowUntil: 0, browserNext: 0, retryAt: 0 });
+    await browserSweepsUntil(() => (st().lastOkAt || 0) > t0, message);
+  };
+  const sweepTabOf = (key) => sw.evaluate(async (k) => {
+    const s = (await chrome.storage.session.get('sweepWindow')).sweepWindow;
+    const id = s && s.tabs ? s.tabs[k] : undefined;
+    const tab = id === undefined ? null : await chrome.tabs.get(id).catch(() => null);
+    return tab && { id: tab.id, incognito: tab.incognito, windowId: tab.windowId, privateWindowId: s.privateWindowId ?? null };
+  }, key);
+  const asked = (since, re) => store.state.requests.slice(since).filter((x) => re.test(x.path));
+  // Your own BIG W visits' cookie, in this browser's own cookies (not a private window's).
+  await ctx.addCookies([{ name: 'bigw_mine', value: 'yes', url: store.url }]);
+  const prev = env.app.repo.getSetting('retailer:demo-bigw');
+  try {
+    // Not allowed in Incognito (as Chrome has it until you allow it): the ordinary sweep window, as before — and the
+    // live monitor says how to allow it.
+    let since = store.state.requests.length;
+    await searched(Date.now(), 'BIG W searched in the ordinary sweep window');
+    let tab = await sweepTabOf('demo-bigw');
+    assert.equal(tab.incognito, false);
+    assert.ok(asked(since, /^\/bigw\/search$/).some((x) => /bigw_mine=yes/.test(x.cookie)), 'the ordinary window: your own cookies go with it');
+    await waitFor(() => sweeper.events.some((e) => e.type === 'sys' && /searches it in an ordinary window — allow Mugibot in Incognito there \(chrome:\/\/extensions → Mugibot → Details → Allow in Incognito\)/.test(e.message)), { message: 'the live monitor says how to allow it' });
+    assert.equal(st().privateWindow, false);
+
+    // Allowed: BIG W in a minimised private window of its own, with none of your cookies.
+    await allowIncognito();
+    store.addProduct('bigw', { sku: '6099201', name: 'Pokemon TCG Private Window Booster Box', price: 199, status: 'in_stock' });
+    since = store.state.requests.length;
+    await searched(Date.now(), 'BIG W searched in its private window');
+    tab = await sweepTabOf('demo-bigw');
+    assert.equal(tab.incognito, true, 'a private (Incognito) tab');
+    assert.equal(tab.windowId, tab.privateWindowId, "in the sweeps' own private window");
+    const priv = asked(since, /^\/bigw\/search$/);
+    assert.ok(priv.length >= 1);
+    assert.ok(priv.every((x) => !/bigw_mine/.test(x.cookie)), `none of your own cookies: ${JSON.stringify(priv.map((x) => x.cookie))}`);
+    assert.equal(st().privateWindow, true);
+    await waitFor(() => env.app.catalog.productFor('demo-bigw', '6099201'), { timeout: 30000, message: 'a new listing found from the private window' });
+    // (A private window: asked for minimised — a browser without a screen, as here, can't minimise one.)
+    assert.equal(await sw.evaluate((id) => chrome.windows.get(id).then((w) => w.incognito), tab.privateWindowId), true);
+
+    // Your BIG W items' pages, read by this browser: in the private window too.
+    env.app.repo.setSetting('retailer:demo-bigw', { ...(prev || {}), serverChecks: false });
+    await useItems([{ url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle' }]);
+    env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
+    since = store.state.requests.length;
+    const r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.equal(r.checked, 1);
+    const pages = asked(since, /^\/bigw\/product\//);
+    assert.ok(pages.length >= 1 && pages.every((x) => !/bigw_mine/.test(x.cookie)), `its page read without your cookies: ${JSON.stringify(pages.map((x) => x.cookie))}`);
+    assert.equal((await sweepTabOf('check:demo-bigw')).incognito, true);
+    assert.equal(env.app.repo.listItems(userId).find((i) => i.name === 'BIG W Bundle').statusSource, 'browser');
+
+    // "Access Denied" in the private window: waited out — nothing more asked of BIG W from here — and the private
+    // window left exactly as it is (never closed for a fresh one).
+    const before = await sweepTabOf('demo-bigw');
+    S.denied = true;
+    const served = S.deniedServed;
+    Object.assign(st(), { fails: 0, slowUntil: 0, browserNext: 0, retryAt: 0 });
+    await browserSweepsUntil(() => S.deniedServed > served, 'told "Access Denied"');
+    await waitFor(async () => (await sw.evaluate(async () => Object.keys((await chrome.storage.session.get('deniedStores')).deniedStores || {}))).includes('demo-bigw'), { message: 'BIG W left alone from this browser' });
+    const n = S.deniedServed;
+    Object.assign(st(), { fails: 0, slowUntil: 0, browserNext: 0, retryAt: 0 });
+    sweeper.sweepNow();
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await new Promise((res) => setTimeout(res, 4000));
+    assert.equal(S.deniedServed, n, 'nothing more asked of BIG W meanwhile');
+    const after = await sweepTabOf('demo-bigw');
+    assert.deepEqual([after.id, after.privateWindowId], [before.id, before.privateWindowId], 'the same private window and tab — its cookies kept');
+    assert.ok(await sw.evaluate((id) => chrome.windows.get(id).then(() => true, () => false), before.privateWindowId), 'still open');
+  } finally {
+    S.denied = false;
+    await sw.evaluate(() => chrome.storage.session.remove('deniedStores')).catch(() => null);
+    env.app.repo.setSetting('retailer:demo-bigw', prev || {});
+    await useItems([]);
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: off }, null);
+    Object.assign(st(), { slowUntil: 0, fails: 0, browserNext: 0 });
+  }
+});

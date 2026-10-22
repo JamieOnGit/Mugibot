@@ -502,6 +502,8 @@ export class Monitor {
     //  that store's items left out of its list altogether, for a browser that can.)
     const pace = (r) => (r && r.monitor && r.monitor.browserSeconds ? r.monitor.browserSeconds * 1000 : this.browserInterval);
     const render = (r) => !!(r && r.monitor && r.monitor.render);
+    // (…in a private window of its own, where the browser allows it: BIG W's — apart from your own visits there.)
+    const privateOf = (r) => (r && r.monitor && r.monitor.privateWindow ? { privateWindow: true } : {});
     const cantRender = !version || olderVersion(version, RENDER_EXTENSION_VERSION);
     const unopened = cantRender ? this.retailers.list.filter(render).map((r) => r.id) : [];
     const notThese = unopened.length ? `AND i.store NOT IN (${unopened.map((_, n) => `:r${n}`).join(', ')})` : '';
@@ -539,7 +541,7 @@ export class Monitor {
       }
       const url = it.url || this.retailers.searchUrl(r, it.sku);
       if (!url) continue;
-      out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true } : {}) }));
+      out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}) }));
       this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
       if (out.length >= 5) break;
     }
@@ -573,7 +575,7 @@ export class Monitor {
         if (render(r)) rendering.add(r.id);
         const url = p.url || this.retailers.searchUrl(r, p.sku);
         this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.productPace(p), id: p.id });
-        if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true } : {}) }));
+        if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}) }));
       }
     }
     return out;

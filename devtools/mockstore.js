@@ -2394,7 +2394,8 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     const u = new URL(req.url, 'http://x');
     const p = u.pathname;
     // (mode: how the browser asked — 'navigate' for a page opened, 'cors' / 'no-cors' / 'same-origin' for a request from code.)
-    state.requests.push({ method: req.method, path: p, ua: req.headers['user-agent'] || '', mode: req.headers['sec-fetch-mode'] || '' });
+    // (cookie: what the browser sent — a private window's requests carry none of your own.)
+    state.requests.push({ method: req.method, path: p, ua: req.headers['user-agent'] || '', mode: req.headers['sec-fetch-mode'] || '', cookie: req.headers.cookie || '' });
     if (state.requests.length > 4000) state.requests.splice(0, 2000);
     const html = (status, body) => {
       const sm = p.match(SHOP_RE);

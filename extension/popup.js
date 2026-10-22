@@ -85,7 +85,9 @@ async function render() {
   for (const x of sweeps) {
     const li = document.createElement('li');
     const secs = Math.round((Date.now() - x.at) / 1000);
-    li.textContent = `${x.name}: ${x.ok ? `${x.found} products` : `refused${x.status ? ` (HTTP ${x.status})` : ''}, backing off`} · ${secs < 60 ? `${secs}s` : `${Math.round(secs / 60)} min`} ago`;
+    // (A store read from a private window of its own — BIG W's: whether it was, or Mugibot isn't allowed in Incognito here.)
+    const where = x.private ? ' · 🔒 private window' : x.privateWanted ? ' · ⚠️ ordinary window: allow Mugibot in Incognito (chrome://extensions → Mugibot → Details)' : '';
+    li.textContent = `${x.name}: ${x.ok ? `${x.found} products` : `refused${x.status ? ` (HTTP ${x.status})` : ''}, backing off`} · ${secs < 60 ? `${secs}s` : `${Math.round(secs / 60)} min`} ago${where}`;
     li.className = x.ok ? '' : 'muted';
     $('sweeps-list').appendChild(li);
   }

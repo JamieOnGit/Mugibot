@@ -139,8 +139,19 @@ browsers, so the extension keeps it going for as long as the browser is open:
   every 30 seconds. Not running: it's started. Running, but nothing has happened
   in it for **3 minutes**: it's started again, and the old one stops at its next
   step.
+- **A private window of its own** (extension **1.30.0**). Allow Mugibot in
+  Incognito (chrome://extensions → Mugibot → **Details** → **Allow in
+  Incognito**) and BIG W's searches and page reads happen in a minimised private
+  window of their own, with their own cookies. That keeps them apart from your
+  own BIG W visits and checkouts in that browser: if BIG W's bot protection
+  takes Mugibot's reading for a bot, it's the private window it turns away, not
+  you. Not allowed, they use the ordinary sweep window as before, and the live
+  monitor (and the extension's menu) says how to allow it. Checkouts never open
+  in a private window: they need your own sign-ins.
 - **"Access Denied"** still means BIG W is left alone from that browser for 30
-  minutes, then searched again by itself. After 20 minutes with no BIG W finds,
+  minutes, then searched again by itself. In the private window too: it's kept
+  as it is, with its cookies — Mugibot never opens a fresh private window to get
+  round a refusal. After 20 minutes with no BIG W finds,
   every admin gets the "BIG W isn't being watched" DM, as above.
 
 BIG W is watched only while an admin's computer is on with Chrome open and the

@@ -60,6 +60,8 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // copy can't open them, so its acoVersion asks for this one). Nothing else changed in how checkouts go.
 // BIG W: a search page's own "Next" link is sent back with what it found (its later pages are read where it goes),
 // and the browser checks say this copy's version (an updated copy gets BIG W's pages at once).
+// 1.30.0: BIG W read in a private (Incognito) window of its own, where Mugibot's allowed in Incognito — its searches
+// and page reads apart from your own BIG W visits and checkouts; an ordinary window otherwise, as before.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):
