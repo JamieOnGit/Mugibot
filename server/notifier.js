@@ -29,11 +29,12 @@ export class Notifier {
     this.alertBuyKey = purposeKey(cfg.dataKey, 'alert-buy-link');
   }
 
-  /** A ⚡ Buy link for a member's own item: opens the product with the extension ready to go. */
+  /** A ⚡ Buy link for a member's own item: opens the product with the extension ready to go — as many as it says. */
   buyLink(userId, item) {
     const exp = this.now() + BUY_LINK_TTL;
-    const t = signParts(this.buyKey, [userId, item.id, '1'], exp);
-    return `${this.cfg.baseUrl}/buy/${encodeURIComponent(item.id)}?qty=1&t=${t}`;
+    const qty = String(Math.max(1, Math.min(10, Number(item.quantity) || 1)));
+    const t = signParts(this.buyKey, [userId, item.id, qty], exp);
+    return `${this.cfg.baseUrl}/buy/${encodeURIComponent(item.id)}?qty=${qty}&t=${t}`;
   }
 
   /**
@@ -159,7 +160,9 @@ export class Notifier {
     // (A Shop checkout link: what's in it, by the store's own names — its code is the link.)
     const r = this.retailers.get(item.store);
     const what = r && r.cartLinks ? item.title || '' : buyable ? `SKU ${item.sku}` : '';
-    const meta = [storeName, what, money(price)].filter(Boolean).join(' · ');
+    // (More than one: ⚡ Buy puts that many in the bag. A Shop checkout link's are in its own words.)
+    const qty = Math.max(1, Math.min(10, Number(item.quantity) || 1));
+    const meta = [storeName, what, money(price), buyable && qty > 1 && !(r && r.cartLinks) ? `Quantity ${qty}` : ''].filter(Boolean).join(' · ');
     const buttons = [];
     // ⚡ Buy where Mugibot checks out; at another website, the product page is the way in.
     if (item.url && buyable) buttons.push({ label: '⚡ Buy', url: this.buyLink(userId, item), action: buyAction('i', item.id) });

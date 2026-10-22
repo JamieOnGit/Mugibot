@@ -414,13 +414,19 @@ export class Sweeper {
     }
   }
 
-  /** The store's own collection for a keyword: the biggest one named after it (that one read holds whole). */
+  /**
+   * The store's own collection for a keyword: the biggest one named after it (that one read holds whole) — one
+   * its sweep prefers first (collectionPrefer: From The Deep Games' "Sealed" ones), never one it skips
+   * (collectionSkip: its 30,000 singles).
+   */
   collectionFor(r, keyword) {
     const c = r.sweep.collectionPath && this.collections.get(r.id);
     if (!c) return null;
     const max = r.sweep.collectionMax || 250;
-    const named = c.list.filter((x) => x.count > 0 && (mentions(x.title, keyword) || mentions(x.handle.replace(/-/g, ' '), keyword)))
-      .sort((a, b) => b.count - a.count);
+    const skip = (x) => !!r.sweep.collectionSkip && r.sweep.collectionSkip.test(`${x.title} ${x.handle}`);
+    const prefer = (x) => (r.sweep.collectionPrefer && r.sweep.collectionPrefer.test(`${x.title} ${x.handle}`) ? 1 : 0);
+    const named = c.list.filter((x) => x.count > 0 && !skip(x) && (mentions(x.title, keyword) || mentions(x.handle.replace(/-/g, ' '), keyword)))
+      .sort((a, b) => prefer(b) - prefer(a) || b.count - a.count);
     return named.length && named[0].count <= max ? named[0].handle : null;
   }
 
@@ -436,11 +442,12 @@ export class Sweeper {
       const known = this.stat(r.id).nextPages.get(`${keyword}\n${page - 1}`);
       if (known) return known;
     }
+    // A keyword's second page at a store that has one list of its newest products (sweep.feedPath:
+    // Pokébox's): that list, whatever the keyword — it's read for the keyword's products in it. (Its first
+    // page a whole collection or a search.)
+    if (page > 1 && r.sweep.feedPath && !vip) return `${r.base}${r.sweep.feedPath}`;
     const collection = !vip && this.collectionFor(r, keyword);
     if (collection) return `${r.base}${r.sweep.collectionPath.replace('{collection}', encodeURIComponent(collection))}`;
-    // A keyword's second page at a store that has one list of its newest products (sweep.feedPath:
-    // Pokébox's): that list, whatever the keyword — it's read for the keyword's products in it.
-    if (page > 1 && r.sweep.feedPath) return `${r.base}${r.sweep.feedPath}`;
     // (A VIP or drop watch's words are searched as they are — at a store whose search is kept to its
     // trading cards for the card keywords (Kmart's), across the whole store: sweep.wordsPath.)
     let p = (vip && r.sweep.wordsPath ? r.sweep.wordsPath : r.sweep.path).replace('{q}', encodeURIComponent(vip ? keyword : this.query(r, keyword)));
@@ -495,7 +502,8 @@ export class Sweeper {
     for (const keyword of kws) {
       // Only the pages that have results (the first page says how many there are).
       const first = pages > 1 ? this.db.get('SELECT total, found FROM sweep_terms WHERE store = :s AND keyword = :k AND page = 1', { s: r.id, k: keyword }) : null;
-      const has = first && first.total && first.found ? Math.ceil(first.total / first.found) : pages;
+      // (A store whose second page is its newest-products list: that's always there.)
+      const has = r.sweep.feedPath ? pages : first && first.total && first.found ? Math.ceil(first.total / first.found) : pages;
       for (let page = 2; page <= Math.min(pages, has); page++) {
         // (A store whose page links to its next one: only the pages it linked to.)
         if (r.sweep.followNext && !st.nextPages.has(`${keyword}\n${page - 1}`)) break;

@@ -4,6 +4,7 @@
 
 import { ALERT_KINDS, CATEGORIES, DEFAULT_KINDS, toMonitor, toProduct } from '../catalog.js';
 import { HttpError, bad, bool, item as checkItem, num, str } from '../schema.js';
+import { OWN_CHANNEL_STORES } from './feed.js';
 import { GATE_CHANNEL, GATE_TOPIC } from './gates.js';
 
 const SNOWFLAKE = /^\d{5,25}$/;
@@ -206,6 +207,54 @@ export class MonitorAdmin {
   }
 
   /**
+   * A store channel the set-up has gained since it was made (Oct 2026: #amazon — Amazon's alerts out of
+   * misc-retailers, into a channel of their own): found by name, or made by the bot under "Mugibot alerts", with
+   * its rule, pinging the role misc-retailers pings. Only where the store channels are set up (misc-retailers has
+   * its rule), for a store with no channel of its own yet: run at start and every few hours (app.js), so it's
+   * there without anyone pressing "Set up store channels" again. The channels made or found.
+   */
+  async ensureOwnChannels() {
+    const { discord, cfg } = this.ctx;
+    if (!discord.botReady || !cfg.discord.guildId) return [];
+    const routes = this.catalog.listRoutes();
+    const misc = routes.find((r) => r.fallback && !r.vip && r.enabled);
+    if (!misc) return [];
+    const own = (store) => routes.some((r) => !r.vip && !r.fallback && !r.categories.length && r.stores.length === 1 && r.stores[0] === store);
+    const wanted = channelPlan().filter((w) => w.stores.length === 1 && OWN_CHANNEL_STORES.has(w.stores[0]) && !own(w.stores[0]));
+    if (!wanted.length) return [];
+    const list = await discord.guildChannels();
+    if (list.status !== 200 || !Array.isArray(list.body)) return [];
+    const channels = list.body;
+    let parent = channels.find((c) => c && c.type === 4 && /^mugibot alerts$/i.test(c.name || ''));
+    const out = [];
+    for (const w of wanted) {
+      let ch = channels.find((c) => c && (c.type === 0 || c.type === 5) && w.names.includes(String(c.name || '').toLowerCase()));
+      let made = false;
+      if (!ch) {
+        if (!parent) {
+          const p = await discord.createChannel({ name: 'Mugibot alerts', type: 4 });
+          if (p.status !== 200 && p.status !== 201) break;
+          parent = p.body;
+          channels.push(parent);
+        }
+        const r = await discord.createChannel({ name: w.names[0], type: 0, parent_id: parent.id, topic: w.topic });
+        if (r.status !== 200 && r.status !== 201) break; // (no Manage Channels: "Set up store channels" says what to do)
+        ch = r.body;
+        channels.push(ch);
+        made = true;
+      }
+      if (this.catalog.listRoutes().length >= MAX_ROUTES) break;
+      this.catalog.saveRoute(null, this.route({
+        name: `#${ch.name}`, channelId: String(ch.id), roleId: misc.roleId || '', categories: [], stores: w.stores,
+        kinds: misc.kinds && misc.kinds.length ? misc.kinds : ['restock', 'listed'], keywords: '', enabled: true, fallback: false,
+      }));
+      this.ctx.repo.audit(null, null, 'alert-channel-added', `#${ch.name}${made ? ' (made)' : ''}: ${w.stores.join(', ')} on its own`);
+      out.push({ name: ch.name, id: String(ch.id), made });
+    }
+    return out;
+  }
+
+  /**
    * "Make the #vip-drop channel": the VIP section of the Discord server — a "VIP" category with
    * #vip-drop in it (found by name, or made by the bot) — and its rule, which takes VIP drops only.
    * opts.roleId: a role it pings (e.g. @VIP).
@@ -295,6 +344,8 @@ export function channelPlan() {
   }
   plan.push({ names: ['premium-bandai'], stores: ['pbandai'], categories: [], fallback: false, topic: 'Drops and restocks at Premium Bandai, from Mugibot.' });
   plan.push({ names: ['pokemon-center'], stores: ['pokemoncenter'], categories: [], fallback: false, topic: 'Drops and restocks at Pokémon Center, from Mugibot.' });
+  // Amazon on its own (from Oct 2026): it pings often — everything it alerts goes here, nowhere else (feed.js OWN_CHANNEL_STORES).
+  plan.push({ names: ['amazon', 'amazon-au'], stores: ['amazon'], categories: [], fallback: false, topic: 'Every drop and restock at Amazon AU (trading cards and the rest), from Mugibot.' });
   plan.push(NON_TCG_PLAN);
   plan.push({ names: ['misc-retailers', 'misc-retailer'], stores: [], categories: [], fallback: true, topic: 'Every other store and game, from Mugibot.' });
   return plan;

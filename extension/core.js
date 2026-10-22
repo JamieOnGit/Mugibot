@@ -789,6 +789,168 @@ var MGBQuick = (function () {
   }
 
   // --------------------------------------------------------------------------
+  // How many: the product page's quantity (its drop-down, box, or − / + buttons) before Add — else the bag's
+  // --------------------------------------------------------------------------
+  var QTY_RE = /qty|quantit|\bunits?\b/i;
+  var QTY_UP_RE = /^\s*\+\s*$|increase|increment|add one|one more|^\s*more\s*$/i;
+  var QTY_DOWN_RE = /^\s*[−–-]\s*$|decrease|decrement|remove one|one less|^\s*less\s*$/i;
+
+  /** How many to put in the bag: the run's (its ⚡ Buy code), else the watchlist item's — 1 unless set. */
+  function wantedQty(n) {
+    var q = Number(n);
+    return q >= 1 && Math.floor(q) === q ? Math.min(10, q) : 1;
+  }
+
+  /** What an element says it's for: its name, id, class, label and the like. */
+  function qtyWords(el) {
+    var lab = el.labels && el.labels.length ? toArray(el.labels).map(function (l) { return l.textContent; }).join(' ') : '';
+    var wrap = el.closest('label');
+    return [el.getAttribute('name'), el.id, typeof el.className === 'string' ? el.className : '', el.getAttribute('aria-label'), el.getAttribute('title'),
+      el.getAttribute('placeholder'), el.getAttribute('data-qa'), el.getAttribute('data-testid'), lab, wrap ? wrap.textContent : ''].filter(Boolean).join(' ');
+  }
+
+  /** A box or drop-down for how many (never a cart line's in a drawer, another product's, or Mugibot's own). */
+  function qtyField(scope, hidden) {
+    var els = toArray(scope.querySelectorAll('select, input'));
+    return els.find(function (el) {
+      var type = (el.getAttribute('type') || 'text').toLowerCase();
+      if (el.tagName === 'INPUT' && !['text', 'number', 'tel', ''].concat(hidden ? ['hidden'] : []).includes(type)) return false;
+      if (inAnyPanel(el) || el.disabled || /^updates\[/.test(el.getAttribute('name') || '')) return false;
+      if (type !== 'hidden' && !isVisible(el)) return false;
+      if (el.closest(DRAWER) && !(scope !== document && scope.closest && scope.closest(DRAWER))) return false;
+      // (Looking across the whole page: never another product's, in a "you may also like" row.)
+      if (scope === document && el.closest(RECOMMENDATIONS)) return false;
+      if (!QTY_RE.test(qtyWords(el))) return false;
+      return el.tagName !== 'SELECT' || toArray(el.options).some(function (o) { return /^\d+$/.test(String(o.value || o.text).trim()); });
+    }) || null;
+  }
+
+  /** A − / + pair for how many, and where its number shows (a box, or an element with only a number in it). */
+  function qtyStepper(scope) {
+    var cls = function (el) { return typeof el.className === 'string' ? el.className : ''; };
+    var said = function (el) { return el.getAttribute('aria-label') || el.getAttribute('title') || ''; };
+    var isUp = function (el) { return QTY_UP_RE.test(said(el)) || /^\s*\+\s*$/.test(el.textContent || '') || /(^|[\s_-])(qty-?)?(plus|inc|increase|increment)($|[\s_-])|qtyplus/i.test(cls(el)); };
+    var isDown = function (el) { return QTY_DOWN_RE.test(said(el)) || /^\s*[−–-]\s*$/.test(el.textContent || '') || /(^|[\s_-])(qty-?)?(minus|dec|decrease|decrement)($|[\s_-])|qtyminus/i.test(cls(el)); };
+    var ups = toArray(scope.querySelectorAll('button, [role="button"], a, div, span'))
+      .filter(function (el) { return el.children.length === 0 || el.tagName === 'BUTTON'; })
+      .filter(function (el) { return !inAnyPanel(el) && !el.closest(DRAWER) && isVisible(el) && isUp(el); });
+    for (var i = 0; i < ups.length; i++) {
+      // (Its box says it's for how many — "Qty", a quantity class — or holds the quantity box itself.)
+      for (var box = ups[i].parentElement, k = 0; box && k < 2 && box !== document.body; box = box.parentElement, k++) {
+        var field = qtyField(box, true);
+        var about = QTY_RE.test(cls(box) + ' ' + (box.id || '') + ' ' + String(box.textContent || '').slice(0, 60)) || !!field;
+        if (!about) continue;
+        var up = ups[i];
+        var down = toArray(box.querySelectorAll('button, [role="button"], a, div, span')).find(function (el) { return el !== up && (el.children.length === 0 || el.tagName === 'BUTTON') && isDown(el); }) || null;
+        var shows = field || toArray(box.querySelectorAll('span, div, output, b, strong, p')).find(function (el) { return el !== up && el !== down && !el.children.length && /^\s*\d{1,3}\s*$/.test(el.textContent || ''); }) || null;
+        if (!shows) continue;
+        return { up: up, down: down, read: function () { return Number(String(shows.tagName === 'INPUT' || shows.tagName === 'SELECT' ? shows.value : shows.textContent).trim()) || 0; } };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The product's own quantity control: the one a person would use — in its Add button's form, else near it, else
+   * the page's (outside any drawer). Only with none showing anywhere, a hidden one in its form (a page that sends
+   * its quantity from a hidden box: Amazon's "Buy Now" form copies the drop-down's into its own as it's sent).
+   */
+  function qtyControl(add) {
+    var scopes = [];
+    var form = add && (add.form || add.closest('form'));
+    if (form) scopes.push(form);
+    for (var el = add && add.parentElement, i = 0; el && i < 7 && el !== document.body; el = el.parentElement, i++) if (scopes.indexOf(el) === -1) scopes.push(el);
+    scopes.push(document);
+    for (var j = 0; j < scopes.length; j++) {
+      var f = qtyField(scopes[j], false);
+      if (f) return { field: f };
+      var s = qtyStepper(scopes[j]);
+      if (s) return { stepper: s };
+    }
+    for (var k = 0; k < scopes.length - 1; k++) {
+      var h = qtyField(scopes[k], true);
+      if (h) return { field: h };
+    }
+    return null;
+  }
+
+  /** Set a box or drop-down to n (the way typing or choosing would: the page's own code hears it). The number it says now. */
+  function setField(el, n) {
+    if (el.tagName === 'SELECT') {
+      var opts = toArray(el.options).map(function (o) { return { o: o, n: Number(String(o.value || o.text).trim()) }; }).filter(function (x) { return x.n >= 1; });
+      var pick = opts.find(function (x) { return x.n === n; }) || opts.filter(function (x) { return x.n <= n; }).sort(function (a, b) { return b.n - a.n; })[0];
+      if (!pick) return Number(el.value) || 1;
+      el.value = pick.o.value;
+      pick.o.selected = true;
+    } else {
+      var max = Number(el.getAttribute('max'));
+      var v = max >= 1 && n > max ? max : n;
+      var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      el.focus && el.getAttribute('type') !== 'hidden' && el.focus();
+      setter.call(el, String(v));
+    }
+    ['input', 'change'].forEach(function (t) { el.dispatchEvent(new Event(t, { bubbles: true })); });
+    if (el.getAttribute('type') !== 'hidden') el.dispatchEvent(new Event('blur', { bubbles: false }));
+    return Number(el.value) || 1;
+  }
+
+  /** Press + (or −) until the stepper says n — or it stops going up (the store's most). The number it says now. */
+  async function setStepper(s, n) {
+    for (var i = 0; i < 25; i++) {
+      var now = s.read();
+      if (now === n) return now;
+      var press = now < n ? s.up : s.down;
+      if (!press) return now;
+      press.click();
+      var until = Date.now() + 600;
+      while (s.read() === now && Date.now() < until) await wait(40);
+      if (s.read() === now) return now; // (no further: its most, or least)
+    }
+    return s.read();
+  }
+
+  /**
+   * How many to put in the bag, on the product page (before Add is pressed): its quantity set to n. Returns
+   * { want, set, how } — set: what it says now (null: no quantity control on the page — the bag's is set instead).
+   */
+  async function setQuantity(add, n) {
+    var want = wantedQty(n);
+    var c = qtyControl(add);
+    if (!c) return { want: want, set: null, how: 'none' };
+    if (c.field) return { want: want, set: setField(c.field, want), how: c.field.tagName === 'SELECT' ? 'select' : 'box' };
+    return { want: want, set: await setStepper(c.stepper, want), how: 'stepper' };
+  }
+
+  /**
+   * On the bag page: this product's line set to n, where the product page had no quantity control. Its line is
+   * the one naming the product (its link, code or name); its box or drop-down set, then the bag's "Update" pressed
+   * if it has one. Returns what it says now, or null (no line or control Mugibot knows).
+   */
+  async function setBagQuantity(product, n) {
+    var want = wantedQty(n);
+    var sku = String((product && product.sku) || '').toLowerCase();
+    var name = String((product && product.name) || '').toLowerCase().slice(0, 40);
+    var fields = toArray(document.querySelectorAll('select, input')).filter(function (el) {
+      var type = (el.getAttribute('type') || 'text').toLowerCase();
+      return !inAnyPanel(el) && isVisible(el) && (el.tagName === 'SELECT' || ['text', 'number', 'tel'].includes(type)) && (QTY_RE.test(qtyWords(el)) || /^updates\[/.test(el.getAttribute('name') || '') || el.hasAttribute('data-qty'));
+    });
+    var line = function (el) {
+      for (var p = el.parentElement, i = 0; p && i < 6; p = p.parentElement, i++) {
+        var t = (p.textContent || '').toLowerCase();
+        var links = toArray(p.querySelectorAll('a[href]')).map(function (a) { return (a.getAttribute('href') || '').toLowerCase(); });
+        if ((sku && (t.indexOf(sku) !== -1 || links.some(function (h) { return h.indexOf(sku) !== -1; }))) || (name && t.indexOf(name) !== -1)) return true;
+      }
+      return false;
+    };
+    var el = fields.find(line) || (fields.length === 1 ? fields[0] : null);
+    if (!el) return null;
+    var set = setField(el, want);
+    var update = controls().find(function (b) { return /^update( (cart|bag|basket|quantity|quantities))?$/i.test(textOf(b)); });
+    if (update) update.click();
+    return set;
+  }
+
+  // --------------------------------------------------------------------------
   // The flow
   // --------------------------------------------------------------------------
   /**
@@ -835,6 +997,9 @@ var MGBQuick = (function () {
     var C = part(R, 'checkout');
     var why = opts.why || function () {};
     var closed = 0;
+    // How many: this run's (its ⚡ Buy code), else the item's — 1 unless set — kept with the flow for its later pages.
+    var prior = store.read();
+    var qtyWant = wantedQty((!opts.fresh && prior && prior.qty) || opts.quantity || (product && product.quantity) || 1);
     // On its way to another page already (a link the store's code followed): nothing sent anywhere else meanwhile.
     var leaving = false;
     addEventListener('beforeunload', function () { leaving = true; }, { once: true });
@@ -846,6 +1011,50 @@ var MGBQuick = (function () {
       setStatus('Closed "' + title + '" — not adding anything else');
       report('step', 'Closed the "' + title + '" pop-up', product);
       return true;
+    }
+
+    /**
+     * More than one: the product page's quantity set to it before Add is pressed (one is left as the page has it).
+     * What it says now — null: the page has no quantity control (the bag's is set instead, once it's open).
+     */
+    async function quantityFirst(add) {
+      if (qtyWant <= 1) return null;
+      var q = await setQuantity(add, qtyWant);
+      if (q.set === null) {
+        report('step', 'No quantity on the product page — ' + qtyWant + ' set in the bag instead', product);
+        return null;
+      }
+      if (q.set !== qtyWant) {
+        setStatus('The page only takes ' + q.set + ' — adding ' + q.set + '…');
+        report('error', 'The product page only takes ' + q.set + ' (you asked for ' + qtyWant + ') — adding ' + q.set, product);
+      } else report('step', 'Quantity set to ' + q.set, product);
+      return q.set;
+    }
+
+    /** The product page had no quantity control: this product's line in the bag set to how many — once, before Checkout. */
+    async function bagQuantity(flow) {
+      if (!flow || !(flow.qty > 1) || flow.qtySet !== null || flow.qtyBag) return flow;
+      var set = await setBagQuantity(product, flow.qty);
+      flow = Object.assign({}, flow, { qtyBag: true, qtySet: set });
+      store.save(flow);
+      if (set === null) {
+        setStatus('Couldn\'t set the quantity to ' + flow.qty + ' — it\'s 1 in your bag. Change it there if you want more.');
+        report('error', 'No quantity Mugibot knows on the product page or in the bag — 1 in the bag, not ' + flow.qty, product);
+      } else {
+        setStatus('Set ' + set + ' in your bag — going to checkout…');
+        report('step', 'Set ' + set + ' in the bag', product);
+        await wait(1500); // (the bag's own code updating it)
+      }
+      return flow;
+    }
+
+    /** Added, and how many is set in the bag (the product page had nowhere to say): to the bag page. */
+    function toBagForQty(flow) {
+      store.save(Object.assign({}, flow, { stage: 'bag-clicked', added: true, bagAt: Date.now(), bagUrlTried: true }));
+      setStatus('Added — opening your bag to make it ' + flow.qty + '…');
+      report('basket', 'Opening the bag to set the quantity to ' + flow.qty, product);
+      location.assign(bagUrl(R));
+      return 'navigating';
     }
 
     function goCheckout(el) {
@@ -925,9 +1134,9 @@ var MGBQuick = (function () {
         setStatus('Opening checkout with it in your cart…');
         var variant = R.platform === 'woocommerce' ? wooVariant() : await shopifyVariant(R);
         if (variant) {
-          store.save({ stage: 'cart-link', startedAt: Date.now(), sku: product.sku, name: product.name });
-          report('add', 'Opened the store\'s cart link — straight to checkout', product);
-          location.assign(storePath(R, R.cartPath.replace('{variant}', variant).replace('{qty}', '1')));
+          store.save({ stage: 'cart-link', startedAt: Date.now(), sku: product.sku, name: product.name, qty: qtyWant, qtySet: qtyWant });
+          report('add', 'Opened the store\'s cart link' + (qtyWant > 1 ? ' with ' + qtyWant : '') + ' — straight to checkout', product);
+          location.assign(storePath(R, R.cartPath.replace('{variant}', variant).replace('{qty}', String(qtyWant))));
           return 'navigating';
         }
       }
@@ -938,8 +1147,9 @@ var MGBQuick = (function () {
         var buy = await waitForEl(function () { skipUpsell(); return findBuyNow(R); }, Math.min(waitMs, 6000));
         if (buy) {
           buy = await whenReady(R, buy, opts.probe, setStatus);
+          var qtyBuy = await quantityFirst(buy);
           buy = findBuyNow(R) || buy;
-          store.save({ stage: 'buy-now', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, productUrl: location.href.split('#')[0] });
+          store.save({ stage: 'buy-now', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, productUrl: location.href.split('#')[0], qty: qtyWant, qtySet: qtyBuy });
           var said = (labelParts(buy).find(function (t) { return any(part(R, 'product').buyNow, t); }) || 'Buy Now').slice(0, 40);
           setStatus('Pressing "' + said + '" — straight to checkout…');
           report('add', 'Clicked "' + said + '"', product);
@@ -959,9 +1169,11 @@ var MGBQuick = (function () {
         return 'error';
       }
       add = await whenReady(R, add, opts.probe, setStatus);
+      var qtySet = await quantityFirst(add);
+      if (qtySet !== null) add = findAddToBag(R) || add; // (a page that drew its button again for the new number)
       // Save before clicking in case the site changes page straight away.
-      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, countBefore: bagCount(), productUrl: location.href.split('#')[0] });
-      setStatus('Adding to your bag…');
+      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, countBefore: bagCount(), productUrl: location.href.split('#')[0], qty: qtyWant, qtySet: qtySet });
+      setStatus(qtySet > 1 ? 'Adding ' + qtySet + ' to your bag…' : 'Adding to your bag…');
       pressAdd(page, add);
       report('add', 'Clicked "' + textOf(add).slice(0, 40) + '"', product);
     }
@@ -1013,6 +1225,7 @@ var MGBQuick = (function () {
         // (Somewhere else — a sign-in page on the way, say: checkout's own steps take it from here, as before.)
         if (!onBagPage(R)) { store.clear(); return 'checkout'; }
         if (onBagPage(R)) {
+          flow = await bagQuantity(flow);
           var fromBag = findCheckout(R, true) || findCheckout(R, false);
           if (fromBag) return goCheckout(fromBag);
           if (Date.now() - arrived > 4000) {
@@ -1036,7 +1249,9 @@ var MGBQuick = (function () {
           return 'error';
         }
         again2 = await whenReady(R, again2, opts.probe, setStatus);
-        store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), added: false, said: '' }));
+        var qtyAgain = await quantityFirst(again2);
+        if (qtyAgain !== null) again2 = findAddToBag(R) || again2;
+        store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), added: false, said: '', qty: qtyWant, qtySet: qtyAgain }));
         setStatus('Adding to your bag again…');
         pressAdd(page, again2);
         report('add', 'Pressed "' + textOf(again2).slice(0, 40) + '" again', product);
@@ -1054,15 +1269,20 @@ var MGBQuick = (function () {
             return 'error';
           }
           add2 = await whenReady(R, add2, opts.probe, setStatus);
-          store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), productUrl: location.href.split('#')[0] }));
+          var qty2 = await quantityFirst(add2);
+          if (qty2 !== null) add2 = findAddToBag(R) || add2;
+          store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), productUrl: location.href.split('#')[0], qty: qtyWant, qtySet: qty2 }));
           setStatus('Adding to your bag…');
           pressAdd(page, add2);
           report('add', 'The cart link didn\'t open checkout — pressed "' + textOf(add2).slice(0, 40) + '"', product);
         }
       } else if (flow.stage === 'add-clicked') {
         var since = Date.now() - (flow.clickedAt || flow.startedAt);
+        // (More than one, and no quantity control on the product page: its bag first, where the number's set.)
+        var viaBag = flow.qty > 1 && flow.qtySet === null && !flow.qtyBag;
         // The store's "added" popup, with its own Checkout button (one that wasn't there before the press).
         var popup = since > 200 ? findCheckout(R, true, page.before) : null;
+        if (popup && viaBag) return toBagForQty(flow);
         if (popup) return openCheckout(popup, flow);
         if (onBagPage(R)) {
           // The store opened its bag by itself after adding.
@@ -1122,6 +1342,7 @@ var MGBQuick = (function () {
           continue;
         }
         if (flow.added || (!working && !ignored && !unmoved && since > CONFIRM_MS)) {
+          if (viaBag) return toBagForQty(flow);
           if (C.url) return openCheckout(null, flow);
           // No checkout page to go to: the "added" popup's Checkout button (a moment for it to show), else the bag.
           var waited = flow.addedAt ? Date.now() - flow.addedAt : since;
@@ -1151,6 +1372,7 @@ var MGBQuick = (function () {
       } else if (flow.stage === 'bag-clicked') {
         // A bag drawer the general rules don't recognise: after a moment, any Checkout button will do.
         var late = Date.now() - (flow.bagAt || 0) > 1500;
+        if (onBagPage(R)) flow = await bagQuantity(flow);
         var checkout = findCheckout(R, true) || (onBagPage(R) || late ? findCheckout(R, false) : null);
         if (checkout) return goCheckout(checkout);
         // The bag page, empty: the add didn't go through.

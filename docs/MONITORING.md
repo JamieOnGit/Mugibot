@@ -124,6 +124,25 @@ an alert. BIG W can only be read from browsers, so:
   BIG W's pages straight away. Before, a copy updated since it last opened its
   menu was taken for the old one.
 
+**BIG W all day** (extension **1.29.0**). BIG W is searched only from admins'
+browsers, so the extension keeps it going for as long as the browser is open:
+
+- **Its tab is never thrown out.** Chrome's Memory Saver discards tabs that
+  haven't been looked at for a while. The sweep window's tabs are marked as ones
+  Chrome must keep, so BIG W's search page is never discarded overnight.
+- **A search that never ends is given up.** One store's search that takes over
+  **90 seconds** (a page that never answered) is said as a failed one. Its tab is
+  closed and opened afresh for the next search, never in a store's queue. Before,
+  one hung page could stop that store being searched from that browser until
+  Chrome was restarted.
+- **A loop gone quiet is started again.** Chrome's alarm looks at the sweep loop
+  every 30 seconds. Not running: it's started. Running, but nothing has happened
+  in it for **3 minutes**: it's started again, and the old one stops at its next
+  step.
+- **"Access Denied"** still means BIG W is left alone from that browser for 30
+  minutes, then searched again by itself. After 20 minutes with no BIG W finds,
+  every admin gets the "BIG W isn't being watched" DM, as above.
+
 BIG W is watched only while an admin's computer is on with Chrome open and the
 extension connected. Two admins' browsers in different places read its product
 pages twice as often, and keep it watched if one is turned away.
@@ -158,6 +177,7 @@ stick.
 | Pokébox | Server first | Each keyword's search (Shopify's search suggestions, 10 a search with stock), "tcg" added ("pokemon tcg": its sealed products first — Pokébox names its hundreds of singles after the card), and as every keyword's **second page** the store's **newest 30 products** (Shopify's product list, most recently changed first, `sweep.feedPath`): a new drop shows up there the moment it's listed. At most one read every 10 seconds |
 | Good Games, Collectible Madness, Cherry Collectables | Server first | The same as Pokébox (Shopify card shops) |
 | Gameology | Server first | The same as Pokébox (Shopify): "tcg" added to each keyword, since it sells Warhammer, board games and figures under the same names, and thousands of singles (its sealed products come first). Its own collections are too big to read whole (its "Pokemon Trading Card" one is over 600 products), so they aren't swept |
+| From The Deep Games | Server first | Each game's **whole sealed collection**, read in one go (Shopify's product list for it: every product, its stock and its option): "Pokemon TCG Sealed", "One Piece Card Game", "Riftbound", "Gundam Card Game". Where a game has more than one, the sealed one comes first (`collectionPrefer`), and its singles' collections are never read (`collectionSkip`: "Pokemon Singles (All)" alone is 30,000 products). Every keyword's **second page** is its **Preorders** collection (every game's pre-orders: where a drop is listed first). Its newest-products list isn't read: it's hundreds of Magic singles a day. At most one read every 10 seconds |
 | The Gamesmen | Server first: **an admin's browser** (the extension, **1.19.1** or later) stands in at the first refusal | Its search page **newest first** ("Recently Listed": a new listing is on page 1 the moment it's up), opened in the extension's window and read once its results are drawn, 2 pages: its own tiles (its Hyvä theme, read from a copy of its real page — from 1.20: the name, the price shown with GST, a struck-through old price, "Add to Cart" or "Pre-Order", the product's id), or Magento's usual ones, or — drawn some other way — any product on the page with its link and a price. Its menu's links look like product links (its products are `/<name>`), so 1.19.1 doesn't count the site's menus as the results (1.19.0 read the page before they were drawn). Its Cloudflare turns servers away ("Sorry, you have been blocked") |
 | Games World | Server first | WooCommerce's own product API (`/wp-json/wc/store/v1/products?search=…`, newest first, 30 a search): stock, price, pre-orders (backorders) and the product's id for its add-to-cart link — only the fields Mugibot reads (about 100 KB a search). At most one search every 15 seconds |
 
@@ -340,6 +360,8 @@ isn't searched any less often (at least half a second between two searches):
   Premium Bandai: one every 30 s.
 - Pokébox, Good Games, Collectible Madness, Cherry Collectables, Gameology: each
   keyword every ~20–30 s, and their newest products as often.
+- From The Deep Games: each game's collection every ~20–30 s, and its Preorders
+  as often.
 - Games World: each keyword every ~30 s.
 - The Gamesmen (admin's browser): as often as the admin's-browser seconds set.
 

@@ -713,3 +713,81 @@ test('a press the browser made after the run was closed here for want of news (t
   // The order confirmed after all: placed.
   assert.equal((await report(run.id, { status: 'placed', total: 110 }, device)).body.run.status, 'placed');
 });
+
+test('how many: an item of 3 buys 3 — its max price is for one, the run\'s limit for all 3 (over the max, the limit an order or the day\'s spending: skipped); the browser is told 3; an extension older than 1.29.0 (one at a time) is never sent a run of more than one; a Shop checkout link\'s price and max are already the whole link\'s', async () => {
+  const c = await Client.signup(env.url, 'qty-quinn');
+  makeMember(env, c);
+  await c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 300, perDay: 5, spendPerDay: 1000 });
+  const device = await Device.pair(env.url, c);
+  for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  const item = (await c.post('/api/items', { url: 'https://www.kmart.com.au/product/qty-test-43990041/', name: 'Three ETBs', maxPrice: 90, quantity: 3, aco: true })).body;
+  assert.equal(item.quantity, 3);
+  const dropAt = (price) => env.app.monitor.alertRestock(itemRow(item.id), { status: 'in_stock', price, source: 'sweep' });
+
+  // An extension that doesn't say its version, or an older one: one at a time — not sent a run of 3.
+  await dropAt(80);
+  let r = lastRun(item.id);
+  assert.deepEqual([r.status, r.reason], ['skipped', 'old_extension']);
+  assert.match(r.message, /buys one at a time — update it to 1\.29\.0 to buy 3/);
+  await device.call('GET', '/api/ext/me?v=1.28.0');
+  await dropAt(80);
+  assert.equal(lastRun(item.id).reason, 'old_extension', '1.28.0: still one at a time');
+  await device.call('GET', '/api/ext/me?v=1.29.0');
+
+  // Its max is for one: $95 each is over the $90 max.
+  await dropAt(95);
+  assert.equal(lastRun(item.id).reason, 'over_max');
+  // 3 × $110 = $330 is over the $300 an order — each one under its max wouldn't be.
+  await c.put(`/api/items/${item.id}`, { maxPrice: 120 });
+  await dropAt(110);
+  r = lastRun(item.id);
+  assert.equal(r.reason, 'over_limit');
+  assert.match(r.message, /3 × \$110\.00 = \$330\.00 is over your limit of \$300\.00 an order/);
+  // The day's spending counts all 3: $1,000 a day with $750 spent → 3 × $90 = $270 is over.
+  await c.put(`/api/items/${item.id}`, { maxPrice: 90 });
+  env.app.db.run("INSERT INTO aco_runs (id, user_id, item_id, store, sku, name, status, mode, price, total, created_at, updated_at) VALUES ('run_qty_spent', :u, NULL, 'kmart', 'x', 'Earlier', 'placed', 'place', 750, 750, :t, :t)", { u: c.user.id, t: Date.now() });
+  await dropAt(90);
+  assert.equal(lastRun(item.id).reason, 'daily_spend');
+  env.app.db.run("DELETE FROM aco_runs WHERE id = 'run_qty_spent'");
+
+  // Within every limit: the run is for 3 — its most for all 3 together, the browser told 3.
+  await dropAt(85);
+  r = lastRun(item.id);
+  assert.equal(r.status, 'queued', JSON.stringify(r));
+  assert.equal(r.quantity, 3);
+  assert.equal(r.maxPrice, 270, '3 × the $90 max');
+  const { run, claim } = await pickUp(device);
+  assert.equal(claim.quantity, 3, 'the ⚡ Buy code says 3');
+  assert.equal(claim.aco.maxPrice, 270);
+  assert.equal(claim.aco.maxTotal, 300, '$270 + delivery, never over the $300 an order');
+  await report(run.id, { status: 'placing', total: 265 }, device);
+  await report(run.id, { status: 'placed', total: 265 }, device);
+  assert.deepEqual((await c.get('/api/aco')).body.today, { orders: 1, spent: 265 });
+
+  // Trigger ACO and Discord's ⚡ Buy: the same — 3, the limit for all 3.
+  await c.put(`/api/items/${item.id}`, { aco: true, price: 85 });
+  const test3 = await c.post(`/api/aco/test/${item.id}`);
+  assert.equal(test3.status, 200, test3.text);
+  assert.equal(test3.body.run.quantity, 3);
+  env.app.db.run("UPDATE aco_runs SET status = 'failed', reason = 'stopped' WHERE item_id = :i AND status IN ('queued', 'sent', 'started')", { i: item.id });
+  const remote = await env.app.aco.remote(c.user.id, item.id, { price: 85 });
+  assert.equal(remote.mode, 'place', remote.why);
+  assert.equal(remote.run.quantity, 3);
+  assert.equal(remote.run.maxPrice, 270);
+  env.app.db.run("UPDATE aco_runs SET status = 'failed', reason = 'stopped' WHERE item_id = :i AND status IN ('queued', 'sent', 'started')", { i: item.id });
+  // (Back on 1.28.0: Discord's ⚡ Buy says why it can't buy 3 there.)
+  await device.call('GET', '/api/ext/me?v=1.28.0');
+  assert.match((await env.app.aco.remote(c.user.id, item.id, { price: 85 })).error, /buys one at a time — update it to 1\.29\.0 to buy 3/);
+  await device.call('GET', '/api/ext/me?v=1.29.0');
+
+  // A Shop checkout link of 2 (…:2): its price is the link's ($50 for both), its max the link's — never times 2.
+  const link = (await c.post('/api/items', { url: 'https://creations.mattel.com/cart/48835830579405:2', name: 'Two figures', maxPrice: 60, aco: true })).body;
+  assert.equal(link.quantity, 2, 'the link\'s own 2');
+  await device.call('GET', '/api/ext/me?v=1.29.0');
+  await env.app.monitor.alertRestock(itemRow(link.id), { status: 'in_stock', price: 50, source: 'monitor' });
+  r = lastRun(link.id);
+  assert.equal(r.status, 'queued', JSON.stringify(r));
+  assert.deepEqual([r.quantity, r.maxPrice], [1, 60], 'the link is the order: its max as it is');
+  const shop = await pickUp(device);
+  assert.match(shop.run.url, /\/cart\/48835830579405:2#mgb-go=/, 'the link as it is — 2 in it');
+});

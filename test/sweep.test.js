@@ -1174,6 +1174,52 @@ test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg
   }
 });
 
+test("🃏 From The Deep Games: each game's whole sealed collection read in one go (never its singles' — 30,000 of them; the sealed one first where a game has more), and every keyword's second page its Preorders collection — a new pre-order alerts from there, with Shopify's add-to-cart link", async () => {
+  const saved = sw.settings.stores;
+  sw.save({ stores: { ...saved, 'demo-fromthedeep': 'server' } }, null);
+  const ftd = R('demo-fromthedeep');
+  const row = (k, page = 1) => env.app.db.get('SELECT * FROM sweep_terms WHERE store = :s AND keyword = :k AND page = :p', { s: 'demo-fromthedeep', k, p: page });
+  try {
+    assert.equal(R('fromthedeep').sweep.from, 'server');
+    assert.equal(sw.paceFor(R('fromthedeep')), 10000);
+    assert.equal(sw.urlFor(R('fromthedeep'), 'one piece', 2), 'https://fromthedeepgames.com.au/collections/preorders/products.json?limit=250', 'page 2: its Preorders, whatever the keyword');
+    // The first read: the store's collections, then the game's whole sealed collection (it sets the scene).
+    let r = await sweep('demo-fromthedeep', 'pokemon', 1);
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.baseline, true);
+    assert.match(row('pokemon').url, /\/fromthedeep\/collections\/pokemon-tcg\/products\.json\?limit=250$/, '"Pokemon TCG Sealed" — not its singles\' nor its pre-orders\'');
+    assert.equal(sw.collectionFor(ftd, 'pokemon'), 'pokemon-tcg');
+    assert.equal(sw.collectionFor(ftd, 'riftbound'), 'riftbound');
+    assert.equal(sw.collectionFor(ftd, 'gundam card game'), 'gundam-card-game');
+    assert.equal(sw.collectionFor(ftd, 'one piece'), null, 'an empty collection: its search instead');
+    assert.ok(sw.events.some((e) => e.type === 'sys' && /From The Deep Games \(dummy store\): reading each game's whole collection — "pokemon" → pokemon-tcg/.test(e.message)));
+    const box = product('demo-fromthedeep', 'pokemon-tcg-pitch-black-booster-box-in-store-only-preorder');
+    assert.deepEqual([box.status, box.price], ['in_stock', 324]);
+    assert.match(box.url, /\/fromthedeep\/products\/pokemon-tcg-pitch-black-booster-box-in-store-only-preorder$/);
+    assert.ok(box.variant_id, 'the option to buy, for the cart link');
+    // Its Preorders collection, as page 2: the pre-orders of every game (sets the scene too).
+    r = await sweep('demo-fromthedeep', 'riftbound', 2);
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.baseline, true);
+    assert.match(row('riftbound', 2).url, /\/fromthedeep\/collections\/preorders\/products\.json\?limit=250$/);
+    assert.equal(product('demo-fromthedeep', 'riftbound-league-of-legends-tcg-vendetta-booster-box-preorder').status, 'preorder');
+    assert.equal((await sweep('demo-fromthedeep', 'pokemon', 2)).baseline, true);
+    // 🆕 A pre-order the store lists: alerted from its Preorders, with Shopify's cart link.
+    store.shop('fromthedeep').products.push({ sku: 'pokemon-tcg-ascended-heroes-booster-bundle-preorder', name: 'Pokemon TCG Ascended Heroes Booster Bundle (Purchase Limit of 4)', price: 69.95, status: 'preorder', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499980 });
+    r = await sweep('demo-fromthedeep', 'pokemon', 2);
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.new, 1);
+    const a = alerts('listed').find((x) => x.sku === 'pokemon-tcg-ascended-heroes-booster-bundle-preorder');
+    assert.ok(a, 'the new pre-order alerted');
+    assert.equal(a.status, 'preorder');
+    assert.equal(env.app.retailers.cartUrl('demo-fromthedeep', { variantId: '4499980', qty: 2 }), `${store.url}/fromthedeep/cart/4499980:2`);
+    // Its singles' collection is never read.
+    assert.ok(!store.state.requests.some((x) => x.path.includes('/collections/pokemon-singles-all')), 'never its 30,000 singles');
+  } finally {
+    sw.save({ stores: saved }, null);
+  }
+});
+
 test("Games World (WooCommerce): its product API — names with HTML entities read right, stock, pre-orders, and the product's id for its add-to-cart link (straight to checkout); a restock alerts", async () => {
   const saved = sw.settings.stores;
   sw.save({ stores: { ...saved, 'demo-gamesworld': 'server' } }, null);

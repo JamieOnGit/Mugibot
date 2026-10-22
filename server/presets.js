@@ -102,6 +102,12 @@ export const DUMMY_PRODUCTS = {
     { sku: 'pokemon-tcg-mega-evolution-perfect-order-booster-box', name: 'Pokemon TCG Mega Evolution Perfect Order Booster Box', price: 289.95, status: 'out_of_stock' },
     { sku: 'one-piece-card-game-op-15-single-booster-pack', name: "One Piece Card Game OP-15 Adventure on Kami's Island Single Booster Pack", price: 22.95, status: 'in_stock' },
   ],
+  // From The Deep Games (Shopify, BinderPOS's "Standard"): named as its real products are ("Purchase Limit of 6…").
+  fromthedeep: [
+    { sku: 'pokemon-tcg-pitch-black-booster-box-in-store-only-preorder', name: 'Pokemon TCG Pitch Black Booster Box (Purchase Limit of 6 Booster Boxes Per Customer)', price: 324, status: 'in_stock', maxQty: 6 },
+    { sku: 'riftbound-league-of-legends-tcg-vendetta-booster-box-preorder', name: 'Riftbound League of Legends TCG Vendetta Booster Box (Purchase Limit of 6 Booster Boxes Per Customer)', price: 240, status: 'preorder' },
+    { sku: 'gundam-card-game-gundam-assemble-premium-collection-iron-blooded-orphans-pc01a', name: 'Gundam Card Game Gundam Assemble – Premium Collection Iron Blooded Orphans PC01A', price: 75, status: 'out_of_stock' },
+  ],
   // The Gamesmen (Magento): its links are the product's name; its item codes are numbers.
   gamesmen: [
     { sku: 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box', code: '258811', name: 'Pokemon TCG: Mega Evolution Perfect Order Elite Trainer Box', price: 119.95, status: 'in_stock' },
@@ -137,6 +143,7 @@ export function dummyProductPath(store, p) {
     case 'gamesmen': return `/gamesmen/${p.sku}`;
     case 'gamesworld': return `/gamesworld/product/${p.sku}/`;
     case 'gameology': return `/gameology/collections/${/one-piece/.test(p.sku) ? 'one-piece-booster-boxs' : 'pokemon-booster-boxes'}/products/${p.sku}`;
+    case 'fromthedeep': return `/fromthedeep/products/${p.sku}`;
     default: return null;
   }
 }

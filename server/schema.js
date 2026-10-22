@@ -1,7 +1,7 @@
 // Input checks. Everything a user sends goes through one of these first.
 
 import crypto from 'node:crypto';
-import { cartLines } from './retailers/shoplink.js';
+import { CART_LINK, cartLines } from './retailers/shoplink.js';
 
 export class HttpError extends Error {
   constructor(status, message, extra = {}) {
@@ -93,10 +93,20 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
   }
   if (!sku) throw bad("Couldn't find the product code in that link — enter the SKU / keycode");
   const r = retailers.get(store);
+  // How many to buy: 1 unless you say. (A Shop checkout link with one product in it: the link's own number,
+  // unless you say otherwise — then the link is changed to it. With several, each as the link has it.)
+  let quantity = num(src.quantity, { min: 1, max: 10, def: 1, int: true });
   // A Shop checkout link (retailers/shoplink.js): the store's whole cart link is the item — nothing else to go by.
   if (r && r.cartLinks) {
     if (!url) throw bad("Paste the store's checkout link (…/cart/<number>:<quantity>) — it's the order itself");
-    if (!cartLines(new URL(url).pathname)) throw bad("That's a Shop page, not a store's checkout link: paste the store's own link (…/cart/<number>:<quantity>)");
+    const u = new URL(url);
+    const lines = cartLines(u.pathname);
+    if (!lines) throw bad("That's a Shop page, not a store's checkout link: paste the store's own link (…/cart/<number>:<quantity>)");
+    if (lines.length === 1) {
+      quantity = input && input.quantity !== undefined && input.quantity !== '' && input.quantity !== null ? quantity : lines[0].qty;
+      u.pathname = u.pathname.replace(CART_LINK, (all, before) => `${before}/cart/${lines[0].id}:${quantity}`);
+      url = u.href;
+    } else quantity = 1;
     sku = retailers.skuFromUrl(url);
   }
   const changingStore = !existing || existing.store !== store;
@@ -108,7 +118,7 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
     name: str(src.name, 120) || (r && r.cartLinks ? `Checkout link at ${new URL(url).host.replace(/^www\./, '')}` : sku),
     price: num(src.price, { min: 0, max: 100000, def: null }),
     maxPrice: num(src.maxPrice ?? src.max_price, { min: 0, max: 100000, def: null }),
-    quantity: num(src.quantity, { min: 1, max: 10, def: 1, int: true }),
+    quantity,
     profileId: str(src.profileId ?? src.profile_id, 40) || null,
     monitor: bool(src.monitor, true),
     announce: isAdmin ? bool(src.announce, false) : !!(existing && existing.announce),

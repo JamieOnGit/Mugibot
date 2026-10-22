@@ -496,6 +496,10 @@ const MIGRATIONS = [
   `
   ALTER TABLE items ADD COLUMN queue_at INTEGER;
   `,
+  // 16 — how many an Auto-checkout run puts in the bag (its item's quantity when it started; 1 before quantities).
+  `
+  ALTER TABLE aco_runs ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1;
+  `,
 ];
 
 export class Db {

@@ -60,7 +60,14 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // copy can't open them, so its acoVersion asks for this one). Nothing else changed in how checkouts go.
 // BIG W: a search page's own "Next" link is sent back with what it found (its later pages are read where it goes),
 // and the browser checks say this copy's version (an updated copy gets BIG W's pages at once).
+// 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
+// drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
+// Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):
+// its sweep tabs never discarded by Chrome, a search that never ends given up (its tab opened afresh), a sweep
+// loop gone quiet started again by the alarm.
 export const ACO_EXTENSION_VERSION = '1.19.0';
+// The oldest that puts more than one in the bag (an older copy adds one, whatever the item says).
+export const QTY_EXTENSION_VERSION = '1.29.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this
 // browser): a new copy of the extension, connected from the dashboard, has your card back — no passphrase.
 export const RESTORE_EXTENSION_VERSION = '1.20.0';

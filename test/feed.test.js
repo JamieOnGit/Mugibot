@@ -8,6 +8,7 @@
 
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { MonitorAdmin } from '../server/monitor/manage.js';
 import { Client, Device, discordOpts, interactionKeys, makeMember, startApp, startFakeDiscord } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
 
@@ -390,27 +391,29 @@ test('🗂 store channels: the bot makes kmart-pokemon … misc-retailers (using
   assert.equal(r.status, 200, r.text);
   const names = r.body.channels.map((c) => c.name);
   assert.deepEqual(names.slice(0, 4), ['kmart-pokemon', 'kmart-one-piece', 'bigw-pokemon', 'bigw-one-piece']);
-  for (const n of ['target-pokemon', 'jbhifi-one-piece', 'ebgames-pokemon', 'zing-one-piece', 'toysrus-pokemon', 'premium-bandai', 'pokemon-center', 'non-tcg-alerts', 'misc-retailers']) assert.ok(names.includes(n), n);
+  for (const n of ['target-pokemon', 'jbhifi-one-piece', 'ebgames-pokemon', 'zing-one-piece', 'toysrus-pokemon', 'premium-bandai', 'pokemon-center', 'amazon', 'non-tcg-alerts', 'misc-retailers']) assert.ok(names.includes(n), n);
   // …and #virtual-queue-detection, for the stores' checkpoints and queues (no alert rule: no products go there).
   assert.equal(names.at(-1), 'virtual-queue-detection');
-  assert.equal(names.length, 19);
-  assert.equal(r.body.made, 18, 'kmart-pokemon was there already');
+  assert.equal(names.length, 20);
+  assert.equal(r.body.made, 19, 'kmart-pokemon was there already');
   assert.equal(r.body.channels[0].id, '700000000000000900');
   const category = discord.state.channels.find((c) => c.type === 4);
   assert.equal(category.name, 'Mugibot alerts');
-  assert.equal(discord.state.channels.filter((c) => c.parent_id === category.id).length, 18);
-  assert.equal(r.body.routes.length, 18, 'the earlier rules were replaced');
+  assert.equal(discord.state.channels.filter((c) => c.parent_id === category.id).length, 19);
+  assert.equal(r.body.routes.length, 19, 'the earlier rules were replaced');
   assert.equal(env.app.repo.getSetting('gateChannel').channelId, r.body.channels.at(-1).id);
   const chan = (n) => r.body.channels.find((c) => c.name === n).id;
   const rule = (n) => r.body.routes.find((x) => x.channelId === chan(n));
   assert.deepEqual([rule('bigw-one-piece').stores, rule('bigw-one-piece').categories, rule('bigw-one-piece').name], [['bigw'], ['onepiece'], '#bigw-one-piece']);
   assert.equal(rule('misc-retailers').fallback, true);
   assert.equal(rule('premium-bandai').fallback, false);
+  // #amazon: Amazon on its own, every category.
+  assert.deepEqual([rule('amazon').stores, rule('amazon').categories, rule('amazon').fallback], [['amazon'], [], false]);
   // #non-tcg-alerts: what isn't trading cards (the drop watches': monitor/drops.js), from every store.
   assert.deepEqual([rule('non-tcg-alerts').stores, rule('non-tcg-alerts').categories], [[], ['nontcg']]);
   // Again: nothing new made, nothing doubled.
   const again = await boss.post('/api/monitor/routes/setup', {});
-  assert.deepEqual([again.body.made, again.body.added, again.body.routes.length], [0, 0, 18]);
+  assert.deepEqual([again.body.made, again.body.added, again.body.routes.length], [0, 0, 19]);
 
   // Each alert goes to its own channel only; anything else to misc-retailers.
   const to = (a) => env.app.feed.routesFor({ kind: 'restock', ...a }).map((x) => x.channelId);
@@ -419,11 +422,65 @@ test('🗂 store channels: the bot makes kmart-pokemon … misc-retailers (using
   assert.deepEqual(to({ store: 'pbandai', category: 'onepiece', name: 'ONE PIECE CARD GAME Premium Card Collection' }), [chan('premium-bandai')]);
   assert.deepEqual(to({ store: 'pokemoncenter', category: 'pokemon', name: 'Pokémon Center Elite Trainer Box' }), [chan('pokemon-center')]);
   assert.deepEqual(to({ store: 'kmart', category: 'other', name: 'Gundam Card Game Booster Box' }), [chan('misc-retailers')], 'another game: misc-retailers');
-  assert.deepEqual(to({ store: 'amazon', category: 'pokemon', name: 'Pokémon booster bundle' }), [chan('misc-retailers')], 'another store: misc-retailers');
+  assert.deepEqual(to({ store: 'zing', category: 'other', name: 'Gundam Card Game Booster Box' }), [chan('misc-retailers')], 'another game at a split store: misc-retailers');
+  // Amazon: everything it alerts in #amazon, and only there — its trading cards, other games, what isn't cards.
+  for (const category of ['pokemon', 'onepiece', 'other', 'nontcg']) {
+    assert.deepEqual(to({ store: 'amazon', category, name: 'Pokémon booster bundle' }), [chan('amazon')], `Amazon, ${category}: #amazon only`);
+    assert.deepEqual(to({ store: 'demo-amazon', category, name: 'Pokémon booster bundle' }), [chan('amazon')], 'the dummy Amazon too');
+  }
+  assert.deepEqual(to({ kind: 'listed', store: 'amazon', category: 'pokemon', name: 'x' }), [chan('amazon')], 'its new listings too');
   assert.deepEqual(to({ store: 'pokemoncenter', category: 'nontcg', name: 'Pikachu Plush' }), [chan('non-tcg-alerts')], 'not trading cards: #non-tcg-alerts only');
   // End to end: a real alert posts in its channel.
   const n = posts(chan('ebgames-one-piece')).length;
   await env.app.feed.post({ kind: 'restock', store: 'demo-ebgames', sku: '312345', name: 'One Piece Card Game OP-18 Booster Box', category: 'onepiece', status: 'in_stock', price: 159, url: '', image: '' }, {});
   assert.equal(posts(chan('ebgames-one-piece')).length, n + 1);
   assert.match(posts(chan('ebgames-one-piece')).at(-1).body.embeds[0].title, /OP-18 Booster Box/);
+});
+
+test('🗂 #amazon on a server whose store channels were set up before it (Amazon in misc-retailers): made by itself, its rule pinging misc-retailers\' role — once; VIP drops and a drop watch\'s own channel still go where they did', async () => {
+  const routes = () => env.app.catalog.listRoutes();
+  const amazonRule = () => routes().find((r) => r.stores.length === 1 && r.stores[0] === 'amazon' && !r.categories.length);
+  // As it was before: no #amazon (its channel and rule gone), misc-retailers pinging a role.
+  const old = amazonRule();
+  assert.ok(old, 'set up by the test before');
+  env.app.catalog.deleteRoute(old.id);
+  discord.state.channels = discord.state.channels.filter((c) => c.id !== old.channelId);
+  const misc = routes().find((r) => r.fallback);
+  env.app.catalog.saveRoute(misc.id, { ...misc, roleId: '800000000000000123' });
+  const to = (a) => env.app.feed.routesFor({ kind: 'restock', ...a }).map((x) => x.channelId);
+  assert.deepEqual(to({ store: 'amazon', category: 'pokemon', name: 'x' }), [misc.channelId], 'before: misc-retailers');
+  const manage = new MonitorAdmin(env.app.ctx);
+  const made = await manage.ensureOwnChannels();
+  assert.deepEqual(made.map((c) => [c.name, c.made]), [['amazon', true]]);
+  const ch = discord.state.channels.find((c) => c.name === 'amazon');
+  assert.equal(ch.parent_id, discord.state.channels.find((c) => c.type === 4 && c.name === 'Mugibot alerts').id, 'under "Mugibot alerts"');
+  assert.match(ch.topic, /Amazon AU/);
+  const rule = amazonRule();
+  assert.deepEqual([rule.channelId, rule.roleId, rule.enabled, rule.fallback, rule.name], [ch.id, '800000000000000123', true, false, '#amazon'], "misc-retailers' role");
+  assert.deepEqual(to({ store: 'amazon', category: 'nontcg', name: 'x' }), [ch.id], 'after: #amazon');
+  // Once: nothing more made, nothing doubled.
+  assert.deepEqual(await manage.ensureOwnChannels(), []);
+  assert.equal(discord.state.channels.filter((c) => c.name === 'amazon').length, 1);
+  assert.equal(routes().filter((r) => r.stores.includes('amazon')).length, 1);
+  // A channel called #amazon already there (made by an admin): used, not made again.
+  env.app.catalog.deleteRoute(amazonRule().id);
+  const found = await manage.ensureOwnChannels();
+  assert.deepEqual(found.map((c) => [c.name, c.made, c.id]), [['amazon', false, ch.id]]);
+  // VIP drops and a drop watch's chosen channel: as before.
+  const vip = env.app.catalog.saveRoute(null, { name: '#vip-drop', channelId: '700000000000000990', roleId: '', categories: [], stores: [], kinds: ['restock', 'listed'], keywords: '', enabled: true, fallback: false, vip: true });
+  try {
+    assert.deepEqual(env.app.feed.routesFor({ kind: 'restock', store: 'amazon', category: 'pokemon', name: 'x', vip: true }).map((x) => x.channelId), ['700000000000000990']);
+  } finally {
+    env.app.catalog.deleteRoute(vip.id);
+  }
+  assert.deepEqual(env.app.feed.routesFor({ kind: 'restock', store: 'amazon', category: 'nontcg', name: 'x' }, { drop: { channelId: '700000000000000991', kinds: ['restock'] } }).map((x) => x.channelId), ['700000000000000991']);
+  env.app.catalog.saveRoute(misc.id, misc); // (its role as it was)
+  // Not set up at all (no misc-retailers rule): nothing made.
+  const all = routes();
+  for (const r of all) env.app.catalog.deleteRoute(r.id);
+  try {
+    assert.deepEqual(await new MonitorAdmin(env.app.ctx).ensureOwnChannels(), []);
+  } finally {
+    for (const r of all) env.app.catalog.saveRoute(null, r);
+  }
 });

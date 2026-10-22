@@ -109,7 +109,7 @@ const ordersPlaced = () => Object.values(store.state.shops).reduce((n, s) => n +
 async function buyFromDashboard(page, name) {
   await page.goto(`${env.url}/app#watch`);
   const row = page.locator('#w-list li', { hasText: name });
-  assert.equal(await row.locator('input.qty').count(), 0, 'no quantity box (one of each for now)');
+  assert.equal(await row.locator('input.qty').count(), 0, 'no quantity box by ⚡ Buy (how many is the item\'s)');
   const [shop] = await Promise.all([ctx.waitForEvent('page'), row.getByRole('button', { name: '⚡ Buy' }).click()]);
   return shop;
 }
@@ -1071,6 +1071,148 @@ test('Gameology from its product page, its cart link not taken: "Add to cart" (i
   }
 });
 
+// 🔢 How many (1 unless set): ⚡ Buy puts the item's quantity in the bag at every store — set on its product page
+// the way that page takes it (a box, a drop-down, − and +), or Shopify's and WooCommerce's cart link saying it, or
+// (a page with nowhere to say) the bag's own line — then on to checkout as ever, stopping at the final button.
+const QTY_SHOPS = [
+  ['kmart', '43899101', 'Checkout securely'], ['bigw', '6099101', 'Place order'], ['ebgames', '312396', 'CONFIRM & PAY'],
+  ['jbhifi', 'pokemon-tcg-qty-two-booster-box', 'Pay now'], ['trainertown', 'pokemon-tcg-qty-two-booster-box', 'Pay now'],
+  ['gamerholic', 'pokemon-tcg-qty-two-booster-box', 'Pay now'], ['toysrus', 'pokemon-tcg-qty-two-booster-box', 'Pay now'],
+  ['thegamescube', '729301', 'Checkout with PayPal'], ['pokemoncenter', '10-10999-201', 'Place Order'], ['target', '71299101', 'Place order'],
+  ['citybeach', '20499997-01', 'Confirm & pay'], ['pbandai', 'N2999999101', 'Pay and Place Order'], ['amazon', 'B0MGBQTY01', 'Place your order'],
+  ['pokebox', 'pokemon-tcg-qty-two-booster-box', 'Pay now'], ['goodgames', 'pokemon-tcg-qty-two-booster-box', 'Pay now'],
+  ['collectiblemadness', 'pokemon-tcg-qty-two-booster-box', 'Pay now'], ['cherrycollectables', 'pokemon-tcg-qty-two-booster-box', 'Pay now'],
+  ['gameology', 'pokemon-tcg-qty-two-booster-box', 'Pay now'], ['fromthedeep', 'pokemon-tcg-qty-two-booster-box', 'Pay now'],
+  ['gamesmen', 'pokemon-tcg-qty-two-booster-box', 'CONFIRM AND PAY'], ['gamesworld', 'pokemon-tcg-qty-two-booster-box', 'Place order'],
+];
+const SHOPIFY_QTY = new Set(['jbhifi', 'trainertown', 'gamerholic', 'toysrus', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology', 'fromthedeep']);
+
+/** ⚡ Buy an item of `qty` at a store (a product added there for it), to its final button: the store's cart then. */
+async function buyMany(shopId, p, qty, label, name = `Qty ${shopId}`) {
+  // (A tab of an earlier checkout at the store closed, its bag empty: one bag a browser at some stores.)
+  await closeStorePages(shopId);
+  store.shop(shopId).cart = [];
+  const url = store.addProduct(shopId, { status: 'in_stock', price: 50, name: `Pokemon TCG Qty Booster Box ${shopId}`, ...p });
+  await useItems([{ url, sku: p.sku, name, quantity: qty }]);
+  const item = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === name);
+  assert.equal(item.quantity, qty, `${shopId}: the item says ${qty}`);
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, name);
+  try {
+    await waitReady(shop, label);
+  } catch (e) {
+    await shop.close();
+    await dash.close();
+    throw new Error(`${shopId}: ${e.message}`);
+  }
+  return { shop, dash, events: () => env.app.repo.listEvents(env.app.repo.userByUsername('ash').id).map((e) => e.message) };
+}
+
+test('🔢 an item of 2 at every store: ⚡ Buy puts 2 in the bag — the product page\'s box or drop-down set to 2 before its buy button (Amazon\'s "Buy Now" too), Shopify\'s and WooCommerce\'s cart links saying 2 — then on to checkout, stopping at the final button', async () => {
+  for (const [shopId, sku, label] of QTY_SHOPS) {
+    store.reset();
+    store.state.account = KMART_ACCOUNT;
+    store.state.signedIn.amazon = true; // (Amazon only sells signed in.)
+    const { shop, dash, events } = await buyMany(shopId, { sku, ...(shopId === 'pbandai' ? { status: 'preorder' } : {}) }, 2, label);
+    assert.deepEqual(store.shop(shopId).cart.map((c) => [c.sku, c.qty]), [[sku, 2]], `${shopId}: 2 of it in the cart`);
+    if (SHOPIFY_QTY.has(shopId)) assert.ok(store.state.requests.some((r) => new RegExp(`^/${shopId}/cart/\\d+:2$`).test(r.path)), `${shopId}: Shopify's cart link, :2`);
+    else if (shopId === 'gamesworld') assert.equal(store.shop('gamesworld').cartLinks, 1, 'its add-to-cart link (…&quantity=2), once');
+    else assert.ok(events().some((m) => /Quantity set to 2/.test(m)), `${shopId}: its quantity set to 2 on the product page`);
+    assert.equal(store.shop(shopId).orders.length, 0, `${shopId}: "${label}" was NOT pressed`);
+    await shop.close();
+    await dash.close();
+  }
+});
+
+test('🔢 how many, however the page takes it: − and + pressed until it says 3 (Kmart); no quantity on the product page — added, then 2 set on its line in the bag before Checkout (EB Games); the store\'s own most (1 a customer) — 1, and it says so', async () => {
+  // − and +: pressed until it says 3.
+  let r = await buyMany('kmart', { sku: '43899102', qtyStyle: 'stepper', maxQty: 5 }, 3, 'Checkout securely', 'Qty stepper');
+  assert.deepEqual(store.shop('kmart').cart.map((c) => [c.sku, c.qty]), [['43899102', 3]], '+ pressed twice: 3 in the cart');
+  assert.ok(r.events().some((m) => /Quantity set to 3/.test(m)));
+  await r.shop.close();
+  await r.dash.close();
+
+  // No quantity on the product page: added, then its line in the bag set to 2, then Checkout.
+  r = await buyMany('ebgames', { sku: '312395', qtyStyle: 'none' }, 2, 'CONFIRM & PAY', 'Qty in the bag');
+  assert.deepEqual(store.shop('ebgames').cart.map((c) => [c.sku, c.qty]), [['312395', 2]], '2 in the cart, set in the bag');
+  assert.ok(r.events().some((m) => /No quantity on the product page — 2 set in the bag instead/.test(m)));
+  assert.ok(r.events().some((m) => /Set 2 in the bag/.test(m)));
+  await r.shop.close();
+  await r.dash.close();
+
+  // The store's own most (its box goes up to 1): 1 — and it says so, not pretending.
+  r = await buyMany('kmart', { sku: '43899103', maxQty: 1 }, 2, 'Checkout securely', 'Qty limit');
+  assert.deepEqual(store.shop('kmart').cart.map((c) => [c.sku, c.qty]), [['43899103', 1]], 'the store\'s most: 1');
+  assert.ok(r.events().some((m) => /The product page only takes 1 \(you asked for 2\) — adding 1/.test(m)));
+  await r.shop.close();
+  await r.dash.close();
+});
+
+test('🔢 signed in or a guest, the same: 2 in the bag — Kmart as a guest, EB Games signed in (straight to "CONFIRM & PAY"), Toys"R"Us signed in with Shop, Gameology signed in to its own account', async () => {
+  for (const [shopId, sku, signedIn, label] of [['kmart', '43899104', null, 'Checkout securely'], ['ebgames', '312394', true, 'CONFIRM & PAY'], ['toysrus', 'pokemon-tcg-qty-shop-booster-box', 'shop', 'Pay now'], ['gameology', 'pokemon-tcg-qty-account-booster-box', 'account', 'Pay now']]) {
+    store.reset();
+    store.state.account = shopId === 'kmart' ? null : KMART_ACCOUNT; // (Kmart: not signed in — its details step empty)
+    if (signedIn) store.state.signedIn[shopId] = signedIn;
+    const { shop, dash } = await buyMany(shopId, { sku }, 2, label, `Qty ${shopId} ${signedIn || 'guest'}`);
+    assert.deepEqual(store.shop(shopId).cart.map((c) => [c.sku, c.qty]), [[sku, 2]], `${shopId} (${signedIn || 'guest'}): 2 in the cart`);
+    assert.equal(store.shop(shopId).orders.length, 0);
+    await shop.close();
+    await dash.close();
+  }
+});
+
+// From The Deep Games (Shopify, BinderPOS's "Standard" — retailers/fromthedeep.js): its quantity ("Units": a box
+// between − and +), "Add To Cart" adding in the background (a toast, the header cart's count), and the header's
+// cart — not a button, a drop-down with "Checkout" and "Your Cart".
+const FTD_BOX = 'pokemon-tcg-pitch-black-booster-box-in-store-only-preorder';
+const FTD_PRE = 'riftbound-league-of-legends-tcg-vendetta-booster-box-preorder';
+test('From The Deep Games (Shopify, as its real store goes) as a guest: ⚡ Buy on a link with its collection on the way → Shopify\'s cart link with 2 in it, straight to checkout → your name, address (Shopify\'s suggestions), suburb, state/territory, postcode, phone → the card, billing the same as shipping → stops at "Pay now"', async () => {
+  const url = `${store.url}/fromthedeep/collections/pokemon-tcg/products/${FTD_BOX}`;
+  await useItems([{ url, name: 'FTD Pitch Black', quantity: 2 }]);
+  const item = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'FTD Pitch Black');
+  assert.deepEqual([item.store, item.sku, item.quantity], ['demo-fromthedeep', FTD_BOX, 2], 'From The Deep Games, by the handle at the end of the link');
+  const dash = await ctx.newPage();
+  const shop = await buyFromDashboard(dash, 'FTD Pitch Black');
+  await reach(shop, /\/fromthedeep\/checkouts\/c\/abc123$/);
+  await waitReady(shop, 'Pay now');
+  const S = store.shop('fromthedeep');
+  assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [[FTD_BOX, 2]], '2 of it, by the cart link');
+  assert.ok(store.state.requests.some((r) => /^\/fromthedeep\/cart\/\d+:2$/.test(r.path)), "Shopify's cart link, :2");
+  assert.equal(S.ajaxAdds || 0, 0, 'no "Add To Cart" needed');
+  assert.deepEqual(await Promise.all(['email', 'firstName', 'lastName', 'address1', 'city', 'postalCode', 'phone'].map((n) => shop.inputValue(`input[name=${n}]`))),
+    [PROFILE_A.email, 'Ash', 'Ketchum', PROFILE_A.address1, 'Sydney', '2000', PROFILE_A.phone]);
+  assert.equal(await shop.inputValue('select[name=zone]'), 'NSW');
+  assert.equal(await shop.isChecked('input[name=billingSame]'), true, '"Use shipping address as billing address": ticked');
+  await waitFor(async () => JSON.stringify(await shopifyCard(shop)) === JSON.stringify(EXPECT_SHOPIFY_CARD), { timeout: 20000, message: 'card number, expiry, security code, name on card' });
+  await shop.waitForTimeout(500);
+  assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
+  await shop.close();
+  await dash.close();
+});
+
+test('From The Deep Games from its product page, its cart link not taken: "Units" set to 3, "Add To Cart" (in the background: a toast and the header cart\'s count) → its cart → "Checkout" → stops at "Pay now"; its header cart\'s drop-down opened after the add — "Your Cart" there; and an item of 1 left at 1 — "Add To Cart" pressed once each time', async () => {
+  const S = store.shop('fromthedeep');
+  S.noPermalink = true;
+  for (const [opens, qty] of [[false, 3], [true, 3], [false, 1]]) {
+    const how = `${opens ? 'the drop-down opened' : 'the drop-down shut'}, ${qty}`;
+    S.cart = [];
+    S.cartOpens = opens;
+    S.ajaxAdds = 0;
+    await useItems([{ url: store.productUrl('fromthedeep', FTD_BOX), name: 'FTD Pitch Black', quantity: qty }]);
+    const dash = await ctx.newPage();
+    const shop = await buyFromDashboard(dash, 'FTD Pitch Black');
+    await reach(shop, /\/fromthedeep\/checkouts\/c\/abc123$/);
+    await waitReady(shop, 'Pay now');
+    assert.deepEqual(S.cart.map((c) => [c.sku, c.qty]), [[FTD_BOX, qty]], `${qty} of it in the cart (${how})`);
+    assert.equal(S.ajaxAdds, 1, `"Add To Cart" once, adding in the background (${how})`);
+    assert.ok(S.bagViews.length >= 1, `through its cart page (${how})`);
+    await waitFor(async () => JSON.stringify(await shopifyCard(shop)) === JSON.stringify(EXPECT_SHOPIFY_CARD), { timeout: 20000, message: `the card in its boxes (${how})` });
+    assert.equal(ordersPlaced(), 0, '"Pay now" was NOT pressed');
+    await shop.close();
+    await dash.close();
+  }
+});
+
 const gmCard = (shop) => Promise.all(['cc-number', 'cc-exp', 'cc-cvv'].map((id) => shop.inputValue(`#${id}`)));
 test('The Gamesmen (Magento, as its real checkout goes): "Add to Cart" → "You added … to your shopping cart" → checkout → email, first and last name, street address, suburb, state/territory (full names), postcode, country Australia, mobile → "I have a different billing address" unticked (it came ticked) → "Standard" → "Credit card" → card number, expiry, security code → the terms box ticked → stops at "CONFIRM AND PAY"', async () => {
   const sku = 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box';
@@ -1639,6 +1781,73 @@ test("BIG W's search page builds its products once it's open: an admin's browser
     store.shop('bigw').clientSearch = false;
     sweeper.save({ stores: off }, null);
     Object.assign(sweeper.stat('demo-bigw'), { slowUntil: 0 });
+  }
+});
+
+test("🧭 BIG W watched all day from an admin's browser: its sweep tab is one Chrome never throws out to save memory; a search that never ends is given up (said as a failed one), its tab opened afresh, and BIG W searched again; a sweep loop gone quiet is started again by the alarm — and searching goes on", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-bigw': 'browser' } }, null);
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  const st = () => sweeper.stat('demo-bigw');
+  const bigwTab = () => sw.evaluate(async () => {
+    const s = (await chrome.storage.session.get('sweepWindow')).sweepWindow;
+    const id = s && s.tabs ? s.tabs['demo-bigw'] : undefined;
+    if (id === undefined) return null;
+    const tab = await chrome.tabs.get(id).catch(() => null);
+    return tab && { id: tab.id, autoDiscardable: tab.autoDiscardable };
+  });
+  const searchedSince = async (t0, message) => {
+    Object.assign(st(), { fails: 0, slowUntil: 0, browserNext: 0, retryAt: 0 });
+    await browserSweepsUntil(() => (st().lastOkAt || 0) > t0, message);
+  };
+  try {
+    await searchedSince(Date.now(), 'BIG W searched from this browser');
+    // Its tab: never thrown out by Chrome to save memory (a store searched all day).
+    const first = await bigwTab();
+    assert.ok(first, 'BIG W has its tab in the sweep window');
+    assert.equal(first.autoDiscardable, false, 'never thrown out by Memory Saver');
+
+    // A search that never ends (here: one taking over the limit): given up and said as a failed one — its tab
+    // opened afresh for the next search.
+    await sw.evaluate(() => { globalThis.mugibotSweepLimits.jobMs = 1; return true; });
+    const failsBefore = st().fails;
+    Object.assign(st(), { slowUntil: 0, browserNext: 0, retryAt: 0 });
+    await browserSweepsUntil(() => st().fails > failsBefore && /took over 0 s — given up, and the store's tab opened afresh/.test(st().lastError || ''), 'the search given up, said so');
+    await sw.evaluate(() => { globalThis.mugibotSweepLimits.jobMs = 90000; return true; });
+    await waitFor(async () => { const t = await bigwTab(); return !t || t.id !== first.id; }, { timeout: 20000, message: 'the old tab closed' });
+    const t1 = Date.now();
+    await searchedSince(t1, 'BIG W searched again, in a fresh tab');
+    const fresh = await bigwTab();
+    assert.ok(fresh && fresh.id !== first.id, 'a new tab');
+    assert.equal(fresh.autoDiscardable, false);
+
+    // The sweep loop gone quiet (as if something in it never answered): the alarm's look starts it again —
+    // a new turn of it — and BIG W is searched as before.
+    const before = await sw.evaluate(() => globalThis.mugibotSweepState());
+    assert.equal(before.sweeping, true, 'the loop is running');
+    const after = await sw.evaluate(async () => {
+      globalThis.mugibotSweepLimits.stuckMs = 1;
+      await new Promise((r) => setTimeout(r, 20));
+      globalThis.mugibotSweepWatch();
+      await new Promise((r) => setTimeout(r, 50));
+      globalThis.mugibotSweepLimits.stuckMs = 3 * 60 * 1000;
+      return globalThis.mugibotSweepState();
+    });
+    assert.ok(after.gen > before.gen, 'started again');
+    assert.equal(after.sweeping, true);
+    const t2 = Date.now();
+    await searchedSince(t2, 'BIG W searched after the restart');
+    // One loop: one search at a time at BIG W (none twice at once).
+    const state = await sw.evaluate(() => globalThis.mugibotSweepState());
+    assert.ok(state.going.filter((x) => x === 'demo-bigw').length <= 1);
+    assert.equal(ctx.pages().filter((pg) => pg.url().includes('/bigw/')).length, 1, 'still one tab for BIG W');
+  } finally {
+    await sw.evaluate(() => { Object.assign(globalThis.mugibotSweepLimits, { jobMs: 90000, stuckMs: 3 * 60 * 1000 }); return true; });
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: off }, null);
+    Object.assign(st(), { slowUntil: 0, fails: 0, browserNext: 0 });
   }
 });
 
@@ -2433,6 +2642,59 @@ test('🤖 Auto-checkout at Gameology as a guest, its cart link not taken: "Add 
   await closeStorePages('gameology');
 });
 
+test('🤖🔢 Auto-checkout of an item of 2 at Kmart: 2 in the bag, the order placed — its max price for each, the total for both checked against your limits', async () => {
+  await closeStorePages('kmart');
+  const url = store.addProduct('kmart', { sku: '43899105', name: 'Pokemon TCG Qty ETB', price: 40, status: 'in_stock' });
+  await useItems([{ url, name: 'ACO two ETBs', maxPrice: 50, quantity: 2 }]);
+  await browserApi('PUT', '/api/aco', { mode: 'place', maxOrder: 200, spendPerDay: 900 });
+  await testRun('ACO two ETBs');
+  const run = await runOver('the Kmart run of 2 over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  assert.equal(run.quantity, 2);
+  assert.equal(run.maxPrice, 100, '2 × the $50 max');
+  const o = store.shop('kmart').orders[0];
+  assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [['43899105', 2]], '2 of it');
+  assert.equal(run.total, 90, '2 × $40 + $10 delivery');
+  await closeStorePages('kmart');
+});
+
+test('🤖 Auto-checkout at From The Deep Games signed in with Shop, an item of 2: Shopify\'s cart link with 2 → Shop Pay has your details and card → "Pay now" — placed', async () => {
+  store.state.signedIn.fromthedeep = 'shop';
+  await useItems([{ url: store.productUrl('fromthedeep', FTD_PRE), name: 'ACO FTD Vendetta', maxPrice: 250, quantity: 2 }]);
+  await browserApi('PUT', '/api/aco', { maxOrder: 600, spendPerDay: 2000 });
+  try {
+    await testRun('ACO FTD Vendetta');
+    const run = await runOver('the From The Deep Games run over');
+    assert.equal(run.status, 'placed', JSON.stringify(run));
+    const o = store.shop('fromthedeep').orders[0];
+    assert.equal(o.shopPay, true, 'paid with Shop Pay');
+    assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [[FTD_PRE, 2]], '2 of it');
+    assert.equal(o.form.card_number, '', 'no card typed (Shop Pay had it)');
+    assert.equal(o.form.email, 'ash.shop@example.com', 'your Shop details, not overwritten');
+    assert.equal(store.shop('fromthedeep').orders.length, 1, 'once');
+  } finally {
+    await browserApi('PUT', '/api/aco', { maxOrder: 200, spendPerDay: 900 });
+    await closeStorePages('fromthedeep');
+  }
+});
+
+test('🤖 Auto-checkout at From The Deep Games as a guest, its cart link not taken: "Units" 1, "Add To Cart" → its cart → "Checkout" → your details → the card → "Pay now" — placed, once', async () => {
+  const S = store.shop('fromthedeep');
+  S.noPermalink = true;
+  store.set('fromthedeep', FTD_BOX, { price: 120 });
+  await useItems([{ url: store.productUrl('fromthedeep', FTD_BOX), name: 'ACO FTD box', maxPrice: 130 }]);
+  await testRun('ACO FTD box');
+  const run = await runOver('the From The Deep Games run over');
+  assert.equal(run.status, 'placed', JSON.stringify(run));
+  assert.equal(S.ajaxAdds, 1, '"Add To Cart" once');
+  assert.equal(S.orders.length, 1, 'once');
+  const o = S.orders[0];
+  assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [[FTD_BOX, 1]], 'one of it (1 unless set)');
+  assert.deepEqual([o.form.email, o.form.address1, o.form.postalCode], [PROFILE_A.email, PROFILE_A.address1, '2000']);
+  assert.deepEqual([o.form.card_number, o.form.card_expiry, o.form.card_cvv, o.form.card_name], ['4242 4242 4242 4242', '07 / 29', '123', 'Ash Ketchum']);
+  await closeStorePages('fromthedeep');
+});
+
 // 🛍️ Shop checkout links (server/retailers/shoplink.js): a store's own cart link, opened as it is — on to
 // Shop's checkout (the dummy's Mattel Creations-style store and Shop-style checkout).
 const PORSCHE = 48835830579405;
@@ -2487,6 +2749,25 @@ test("🛍️ Auto-checkout of a Shop checkout link (Mattel Creations-style, two
     assert.equal(store.state.shopapp.accountViews, 0, "Shop's account page never read");
   } finally {
     store.state.shopapp.notice = false;
+    await putBack();
+    await closeShopPages();
+  }
+});
+
+test("🛍️🔢 a Shop checkout link of one product, its quantity changed to 3 on Mugibot (the link said 1): the link opened with 3 in it — Shop's checkout for 3 → \"Pay now\" — placed", async () => {
+  const putBack = await roomForALink();
+  try {
+    shopSignedIn(true);
+    const link = store.cartLink([[PORSCHE, 1]]);
+    await useItems([{ url: link, name: 'ACO 3 Porsches', maxPrice: 130, quantity: 3, aco: true }]);
+    const item = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO 3 Porsches');
+    assert.match(item.url, new RegExp(`/cart/${PORSCHE}:3$`), 'the link now says 3');
+    await acoListen();
+    await dropLink(item.url);
+    await waitFor(() => store.state.shopapp.orders.length === 1, { timeout: 45000, message: 'the order placed at the dummy Shop' });
+    assert.deepEqual(store.state.shopapp.orders[0].lines, [[String(PORSCHE), 3]], '3 of it, as the link says');
+    await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 20000, message: 'the run says placed' });
+  } finally {
     await putBack();
     await closeShopPages();
   }
@@ -3328,6 +3609,7 @@ const BAGS = [
   ['gamesmen', ['pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box', 'one-piece-card-game-op-16-the-time-of-battle-booster-box'], 'Magento\'s "Remove item" (a form posted: a new page each time)'],
   ['gamesworld', ['one-piece-carrying-on-his-will-op-13-sealed-booster-box-24', 'pokemon-tcg-mega-evolution-elite-trainer-box'], 'WooCommerce\'s × "Remove … from cart" links ("removed. Undo?" — Undo never pressed)'],
   ['gameology', ['one-piece-card-game-op-15-booster-box', 'one-piece-card-game-op-15-single-booster-pack'], "Shopify's own cart emptied at once (/cart/clear.js)"],
+  ['fromthedeep', [FTD_BOX, FTD_PRE], "Shopify's own cart emptied at once (/cart/clear.js)"],
 ];
 
 for (const [shopId, skus, how, opts = {}] of BAGS) {
@@ -3363,7 +3645,7 @@ for (const [shopId, skus, how, opts = {}] of BAGS) {
     await dash.waitForFunction((id) => /Emptied — 3 items removed/.test(document.querySelector(`#bags li[data-store="demo-${id}"]`)?.textContent || ''), shopId, { timeout: 10000 });
   });
 }
-const SHOPIFY_SHOPS = new Set(['jbhifi', 'gamerholic', 'toysrus', 'trainertown', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']);
+const SHOPIFY_SHOPS = new Set(['jbhifi', 'gamerholic', 'toysrus', 'trainertown', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology', 'fromthedeep']);
 
 test('🧹 Clear all: every store\'s bag in turn, in one tab — the ones with things in them emptied, the rest "already empty" — pressed where there\'s no extension (your phone), the checkout browser does it', async (t) => {
   t.after(closeDashboards);

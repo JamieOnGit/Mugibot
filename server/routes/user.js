@@ -9,6 +9,7 @@ import { ACO_EXTENSION_VERSION, EXTENSION_VERSION, REMOTE_EXTENSION_VERSION, RES
 import { DUMMY_PRODUCTS, STARTER_ITEMS, dummyProductPath } from '../presets.js';
 import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, bool, cardBackupInfo, cardRestoreInfo, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
 import { latestLogin } from '../retailers/index.js';
+import { cartLines } from '../retailers/shoplink.js';
 import { publicUser } from './auth.js';
 
 const notFound = (what) => new HttpError(404, `${what} not found`);
@@ -25,9 +26,12 @@ export function register(router, ctx) {
     const places = !!(C && (!C.inFrame || (C.frames && C.frames.length)) && C.payment !== 'paypal');
     const acoStops = !C || places ? null : C.payment === 'paypal' ? 'paypal' : 'frame';
     // shopLink: a Shop checkout link (its own section; Shop has the address and card). acoVersion: the extension it needs.
+    // (A Shop checkout link with one product: its quantity is the link's — one saved before quantities included.)
+    const lines = r && r.cartLinks && it.url ? cartLines(new URL(it.url).pathname) : null;
     return {
       ...it, storeName: r ? retailers.siteName(it.store, it.url) : it.store, flowStatus: r ? r.flowStatus : 'none', acoCan: !!(r && r.flow), acoPlaces: places, acoStops,
       shopLink: !!(r && r.cartLinks), acoVersion: (r && r.acoVersion) || null,
+      ...(lines && lines.length === 1 ? { quantity: lines[0].qty } : {}),
     };
   };
   const isAdmin = (req) => req.user.role === 'admin';
@@ -344,28 +348,36 @@ export function register(router, ctx) {
 }
 
 /**
- * Make a ⚡ Buy code for one of this user's items (one of it — no quantities for now). The link
- * opens the store and the extension takes over. Shopify stores whose product option Mugibot
- * knows: the store's own cart link, which opens checkout with the product already in the cart.
+ * Make a ⚡ Buy code for one of this user's items — as many of it as the item says (1 unless set; quantity:
+ * an Auto-checkout run's own). The link opens the store and the extension takes over, putting that many in
+ * the bag. Shopify stores whose product option Mugibot knows: the store's own cart link, which opens checkout
+ * with them already in the cart.
  */
-export function startBuy(ctx, user, it, { runId = null, variantId = null } = {}) {
+export function startBuy(ctx, user, it, { runId = null, variantId = null, quantity = null } = {}) {
   if (!it.url) throw new HttpError(409, `The product page for SKU ${it.sku} hasn't been found yet — paste its link into the item, or wait for it to be listed`);
   const profile = ctx.repo.profileFor(user.id, it.profileId);
+  const qty = quantityOf(quantity ?? it.quantity);
   // runId: an Auto-checkout run (server/aco.js) — the code says so when the extension claims it.
-  const code = ctx.repo.createGoCode(user.id, it, 1, profile ? profile.id : null, runId);
-  return { url: `${productLink(ctx, it, variantId)}#mgb-go=${code}`, item: it };
+  const code = ctx.repo.createGoCode(user.id, it, qty, profile ? profile.id : null, runId);
+  return { url: `${productLink(ctx, it, variantId, qty)}#mgb-go=${code}`, item: it, quantity: qty };
+}
+
+/** How many to put in the bag: a whole number from 1 to 10 (anything else: 1). */
+export function quantityOf(v) {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1 ? Math.min(10, n) : 1;
 }
 
 /**
  * The store's page for a product: its cart link with the product in it where the store has one and
- * the option is known (Shopify's /cart/<variant>:1), else the product page. (variantId: an Auto-checkout
+ * the option is known (Shopify's /cart/<variant>:<qty>), else the product page. (variantId: an Auto-checkout
  * run's, from the search that saw it drop — the catalogue's, when it has one.) Also for the phone that
- * finishes a checkout itself (server/aco.js toPhone()).
+ * finishes a checkout itself (server/aco.js toPhone()). (A Shop checkout link is its own: its quantities are in it.)
  */
-export function productLink(ctx, it, variantId = null) {
+export function productLink(ctx, it, variantId = null, qty = it.quantity) {
   const r = ctx.retailers.get(it.store);
   const carts = !!(r && r.cartPath && r.cartPath.includes('{variant}'));
   const known = carts && ctx.catalog ? ctx.catalog.productFor(it.store, it.sku) : null;
   const variant = (known && known.variant_id) || (carts && variantId) || null;
-  return (variant && ctx.retailers.cartUrl(it.store, { sku: it.sku, variantId: variant, qty: 1 })) || it.url;
+  return (variant && ctx.retailers.cartUrl(it.store, { sku: it.sku, variantId: variant, qty: quantityOf(qty) })) || it.url;
 }

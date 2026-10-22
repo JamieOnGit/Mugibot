@@ -33,6 +33,12 @@
 //             shut after an add). Its product links name a collection on the way. noPermalink: its cart
 //             link (/cart/<variant>:1) not taken (the product page instead). Signed in to its own account
 //             (state.signedIn.gameology 'account'): your saved details at checkout, the card still to type.
+//   /fromthedeep  the same Shopify pages, drawn as From The Deep Games' (BinderPOS's "Standard" theme): its
+//             quantity ("Units", a box between − and + that aren't buttons), "Add To Cart" (a plain button its
+//             theme fills in and takes over: Shopify's /cart/add.js in the background, a toast and the header
+//             cart's count after), and the header's cart (not a button: a drop-down with "Checkout" and "Your
+//             Cart", shut until it's clicked — cartOpens: open after an add). Each game's collection (its
+//             singles' too, never read) and its Preorders.
 //   /gamesmen  Magento-style (The Gamesmen): "Add to Cart" by AJAX ("You added … to your shopping
 //             cart"), the mini cart, its one-page checkout (shipping address, shipping methods table,
 //             "Credit card" with Braintree-style card fields, the terms box) → "CONFIRM AND PAY"; its
@@ -96,11 +102,12 @@ const SHOPS = {
   gamesmen: { name: 'The Gamesmen (dummy Magento)', color: '#0f4c81' },
   gamesworld: { name: 'Games World (dummy WooCommerce)', color: '#7f1d1d' },
   gameology: { name: 'Gameology (dummy Shopify)', color: '#0e7490' },
+  fromthedeep: { name: 'From The Deep Games (dummy Shopify)', color: '#1e3a8a' },
 };
 // The Shopify-style shops: the same product, cart and checkout pages.
-const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic', 'toysrus', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']);
+const SHOPIFY = new Set(['jbhifi', 'trainertown', 'gamerholic', 'toysrus', 'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology', 'fromthedeep']);
 // (The card shops added in Oct 2026: Shopify's address suggestions as you type, at their checkout.)
-const SUGGESTS = new Set(['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']);
+const SUGGESTS = new Set(['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology', 'fromthedeep']);
 const SHOP_RE = new RegExp(`^/(${Object.keys(SHOPS).join('|')})(/.*|$)`);
 const LD_AVAIL = { in_stock: 'InStock', preorder: 'PreOrder', out_of_stock: 'OutOfStock' };
 // City Beach's marketing pop-up (Emarsys), over the product page a moment after it opens.
@@ -114,7 +121,8 @@ export function defaultShops() {
   const out = {};
   for (const [id, list] of Object.entries(DUMMY_PRODUCTS)) {
     out[id] = {
-      products: list.map((p, i) => ({ ...p, listed: p.listed !== false, maxQty: 0, qtyStyle: id === 'bigw' ? 'select' : 'input', lateMs: 0, id: 4400000 + i })),
+      // (A quantity drop-down at BIG W and Amazon, as theirs; a box elsewhere.)
+      products: list.map((p, i) => ({ ...p, listed: p.listed !== false, maxQty: 0, qtyStyle: id === 'bigw' || id === 'amazon' ? 'select' : 'input', lateMs: 0, id: 4400000 + i })),
       cart: [], orders: [], steps: [], data: {},
       // Like a real store on a fresh page: "Add" does nothing until the page's code has
       // started (hydrateMs after load), and the add itself can be slow (addDelayMs).
@@ -189,6 +197,8 @@ export function defaultShops() {
       // Gameology: its cart drawer left shut after an add (drawerShut: its cart icon opens it); its cart link
       // not taken (noPermalink: the product page instead).
       drawerShut: false, noPermalink: false,
+      // From The Deep Games: its header cart's drop-down open after an add (cartOpens), as well as from the cart.
+      cartOpens: false,
       // (log: every request while it's on — { id, at, path, what } — to show nothing asked again too soon.)
       queue: { on: false, admitAfterMs: 4000, refreshMs: 1500, tooSoonMs: 700, wait: 23, lateMs: 0, places: {}, admittedIds: [], kicks: 0, shown: 0, admitted: 0, cookieless: 0, log: [] },
     };
@@ -262,7 +272,7 @@ button[disabled]{background:#999;cursor:default}label{display:block;margin:8px 0
 .choice[aria-pressed=true]{outline:3px solid #0a0}.dummy{background:#fff3cd;padding:6px 20px;font-size:13px}</style>${head}</head>
 <body><div class="dummy">⚠ Dummy store for testing Mugibot — nothing here is real. <a href="/">Control panel</a></div>
 <header><a href="${base}/">${esc(s.name)}</a> · ${noBag ? '' : bagLink(shop, bagCount)} · <!--mgb-account--></header><main>${body}</main>
-<footer>${esc(s.name)} is a fake store for testing.</footer>${shop === 'gameology' ? GAMEOLOGY_DRAWER : ''}</body></html>`;
+<footer>${esc(s.name)} is a fake store for testing.</footer>${shop === 'gameology' ? GAMEOLOGY_DRAWER : ''}${shop === 'fromthedeep' ? FTD_CART : ''}</body></html>`;
 }
 
 // Gameology's cart drawer (FoxTheme's "Hyper", as its real page has it): shut until its theme slides it open —
@@ -302,6 +312,26 @@ const GAMEOLOGY_DRAWER = `<style>.hidden{display:none!important}.visually-hidden
   });
 </script>`;
 
+// From The Deep Games' header cart (BinderPOS's "Standard"): not a button but a div that toggles its drop-down
+// (aria-role, not role; "collapse" until it's clicked), the count beside it, and in the drop-down the lines,
+// "Checkout" (/checkout) and "Your Cart" (/cart). __ftdCart(true) opens it, ('count') only updates it.
+const FTD_CART = `<style>.cart-container{display:none}.cart-container.in{display:block}.toastify{position:fixed;left:15px;bottom:15px;background:#eb7c00;color:#fff;padding:12px 20px;border-radius:2px}</style>
+<script>
+  window.__ftdCart = async (open) => {
+    const c = await (await fetch('/fromthedeep/cart.js')).json();
+    document.querySelector('.cart-products-count').textContent = String(c.item_count);
+    document.querySelector('.cart-container .cart-items').innerHTML = c.items.map((x) => '<li>' + x.title.replace(/</g, '&lt;') + ' × ' + x.quantity + '</li>').join('');
+    document.querySelector('.cart-container .cart-links').hidden = !c.item_count;
+    document.querySelector('.cart-container .cart__empty').hidden = !!c.item_count;
+    if (open === true) { document.querySelector('.cart-container').classList.add('in'); document.querySelector('.cart-title').classList.remove('collapsed'); }
+  };
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.cart-title')) return;
+    document.querySelector('.cart-container').classList.toggle('in');
+    document.querySelector('.cart-title').classList.toggle('collapsed');
+  });
+</script>`;
+
 // Signed in at the shop or not (state.signedIn[shop]), the way each kind of store shows it: Shopify's
 // customer number in __st, CrystalCommerce's "not-logged-in" header, Premium Bandai's USER_DATA,
 // and otherwise the header's "Sign in" link or "Hi, Ash" / "Sign out" (the store login monitor reads these).
@@ -332,6 +362,13 @@ function bagLink(shop, count) {
   // in it) — opening the cart drawer, not the cart page (see GAMEOLOGY_DRAWER).
   if (shop === 'gameology') {
     return `<a href="/gameology/cart" id="bag-link" class="cart-drawer-button cart-icon header-link-icons" aria-controls="CartDrawer"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 18a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM5.2 4l.9 2H21l-3.6 7H8.1l-.9 2H19v2H4l2.2-4.3L3 4H1V2h3.2z"/></svg><span class="visually-hidden">Cart</span> <cart-count class="cart-count cart-count--absolute" aria-label="${count || 0} items"${count ? '' : ' hidden'}>${count || 0}</cart-count></a>`;
+  }
+  // From The Deep Games' header cart (see FTD_CART): no link to it — a div with its count, and a drop-down.
+  if (shop === 'fromthedeep') {
+    return `<span class="cart-display" style="position:relative"><span class="cart-title clearfix collapsed" data-target=".cart-container" data-toggle="collapse" aria-label="Cart" aria-role="button" tabindex="0" style="cursor:pointer">🛒 <span class="cart-products-count">${count || 0}</span></span>
+      <span class="cart-container collapse" style="position:absolute;right:0;top:28px;background:#fff;color:#222;padding:14px;box-shadow:0 2px 10px rgba(0,0,0,.3);z-index:50;min-width:240px"><ul class="cart-items"></ul>
+      <span class="cart-links"${count ? '' : ' hidden'}><a class="btn checkout-btn" href="/fromthedeep/checkout">Checkout</a> <a class="view-cart btn" href="/fromthedeep/cart">Your Cart</a></span>
+      <span class="cart__empty"${count ? ' hidden' : ''}><span class="cart--empty-message">Your cart is currently empty.</span></span></span></span>`;
   }
   // (Target's bag is its basket; Amazon's at /gp/cart/view.html.)
   const at = shop === 'target' ? '/basket' : shop === 'amazon' ? '/gp/cart/view.html' : '/cart';
@@ -440,6 +477,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     }[SHOPIFY.has(shop) ? 'jbhifi' : shop];
     const orderable = p.status === 'in_stock' || p.status === 'preorder';
     if (shop === 'gameology') return gameologyProductPage(p);
+    if (shop === 'fromthedeep') return fromthedeepProductPage(p);
     if (SHOPIFY.has(shop)) {
       return page(shop, `${p.name} | ${SHOPS[shop].name}`, `${shopOf(shop).banner ? `<div class="site-banner" role="note">${esc(shopOf(shop).banner)}</div>` : ''}<div class="product-detail"><h1>${esc(p.name)}</h1><div class="price">$${p.price.toFixed(2)}</div>
         <form action="/${shop}/cart/add" method="get"><input type="hidden" name="id" value="${p.id}">${qtyControl(p)}
@@ -480,15 +518,17 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <div class="qty-spinner" style="width:60px;height:20px">−1+</div><div aria-busy="true" hidden>reviews</div>
         <p class="note">Due to high demand, limit 1 per customer. Was $502.99 — 500 sold this week.</p>` : ''}
         <div id="buybox">${p.lateMs ? '<p>Loading…</p>' : button}</div>
-        ${shop === 'amazon' && orderable ? `<form id="buy-now-form" method="post" action="/amazon/checkout/entry/buynow"><input type="hidden" name="asin" value="${esc(p.sku)}">
+        ${shop === 'amazon' && orderable ? `<form id="buy-now-form" method="post" action="/amazon/checkout/entry/buynow"><input type="hidden" name="asin" value="${esc(p.sku)}"><input type="hidden" name="quantity" id="buy-now-qty" value="1">
           <span class="a-button a-button-oneclick"><input id="buy-now-button" name="submit.buy-now" type="submit" class="a-button-input" aria-labelledby="submit.buy-now-announce" style="width:120px;height:30px"><span id="submit.buy-now-announce" class="a-button-text" aria-hidden="true">Buy Now</span></span></form>
           ${shopOf(shop).turbo ? `<div id="turbo-checkout-panel-container" class="a-popover" role="dialog" hidden><iframe id="turbo-checkout-iframe" width="420" height="320" title="Buy now" style="border:1px solid #ccc"></iframe></div>
           <script>document.getElementById('buy-now-form').addEventListener('submit', (e) => {
             e.preventDefault(); // Amazon's quick checkout: a window over the page instead of a new page
             const box = document.getElementById('turbo-checkout-panel-container');
-            box.querySelector('iframe').src = '/amazon/checkout/turbo?asin=${encodeURIComponent(p.sku)}';
+            const q = document.querySelector('select[name=quantity], input[name=quantity]:not([type=hidden])');
+            box.querySelector('iframe').src = '/amazon/checkout/turbo?asin=${encodeURIComponent(p.sku)}&quantity=' + encodeURIComponent(q ? q.value : 1);
             box.hidden = false;
-          });</script>` : ''}` : ''}
+          });</script>` : ''}
+          <script>document.getElementById('buy-now-form').addEventListener('submit', () => { const q = document.querySelector('select[name=quantity], input[name=quantity]:not([type=hidden])'); document.getElementById('buy-now-qty').value = q ? q.value : 1; }, true);</script>` : ''}
         ${shopOf(shop).slowLoadMs ? `<img src="/slow.gif?ms=${Number(shopOf(shop).slowLoadMs)}" alt="" width="1" height="1">` : ''}
       </div>
       <section class="recommendations"><h3>You may also like</h3>
@@ -552,6 +592,53 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     : "showBag(); setTimeout(() => { document.getElementById('drawer-msg').textContent = d.count + ' item(s) in your " + (shop === 'kmart' ? 'bag' : 'cart') + "'; document.getElementById('drawer').classList.add('open'); }, 150);"}
         });
       </script>`, { head: ldFor(p, shop), bagCount: shopOf(shop).quiet ? null : bagCount(shop), noBag: shopOf(shop).hideBag });
+  }
+
+  // From The Deep Games' product page, as its theme (BinderPOS's "Standard") draws one: its quantity ("Units": a
+  // box between − and + that are divs, not buttons), the product's one option, and "Add To Cart" — a plain button
+  // whose words the theme fills in a moment after the page, and whose press it takes over: Shopify's /cart/add.js
+  // in the background with that many, a toast (Toastify's: no role), the header cart's count up (its drop-down
+  // opened too, with cartOpens). Shopify turning the add away: the toast says so. Sold out: "SOLD OUT", off.
+  function fromthedeepProductPage(p) {
+    const orderable = p.status === 'in_stock' || p.status === 'preorder';
+    const words = orderable ? (p.status === 'preorder' ? 'Pre-Order' : 'Add To Cart') : 'SOLD OUT';
+    return page('fromthedeep', `${p.name} – From The Deep Games`, `<div class="product-single"><h1 class="product-single__title">${esc(p.name)}</h1>
+      <div class="product-price"><span class="product-price__price">$${p.price.toFixed(2)}</span></div>
+      <form method="post" action="/fromthedeep/cart/add" id="product_form_${p.id}" accept-charset="UTF-8" class="product-form cart-product-page product-form-product-template" enctype="multipart/form-data" novalidate data-product-form="">
+        <input type="hidden" name="form_type" value="product">
+        <div class="quantity-cart">
+          <div class="product-form__item product-form__item--quantity selector-wrapper"><label>Units</label>
+            <div class="dec button qtyminus" style="display:inline-block;padding:4px 10px;background:#ddd;color:#222;cursor:pointer">-</div><input name="quantity" value="1" class="quantity" style="width:50px"><div class="inc button qtyplus" style="display:inline-block;padding:4px 10px;background:#ddd;color:#222;cursor:pointer">+</div></div>
+          <select name="id" class="product-form__variants no-js" style="display:none"><option selected="selected" value="${p.id}" data-stock="${orderable ? 14 : 0}">Default Title</option></select>
+          <div class="product-info"><div class="item_info"><div class="product-form__item product-form__item--submit">
+            <button type="button" id="AddToCart-template" class="product-addToCart addToCart${orderable ? ' enable' : ''} btn"${orderable ? '' : ' disabled'}><span id="AddToCartText-template"></span></button></div>
+            <div id="inventory" class="available-stock">${orderable ? '<span class="instock">In Stock</span>' : '<span class="outstock">SOLD OUT</span>'}</div></div></div>
+        </div>
+        <input type="hidden" name="return_to" value="back">
+      </form>
+      <div class="shopify-payment-button"><button type="button" class="shopify-payment-button__button" disabled>Buy with Shop Pay</button></div></div>
+      <script>
+        // (Its words come from the theme's code, a moment after the page.)
+        setTimeout(() => { document.getElementById('AddToCartText-template').textContent = ${JSON.stringify(words)}; }, 150);
+        const toast = (t) => { const d = document.createElement('div'); d.className = 'toastify on toastify-left toastify-bottom'; d.textContent = t; document.body.append(d); setTimeout(() => d.remove(), 3000); };
+        document.addEventListener('click', (e) => {
+          const step = e.target.closest('.qtyplus, .qtyminus');
+          if (!step) return;
+          const q = step.parentNode.querySelector('input.quantity');
+          q.value = String(Math.max(1, Number(q.value || 1) + (step.classList.contains('qtyplus') ? 1 : -1)));
+        });
+        document.getElementById('AddToCart-template').addEventListener('click', async (e) => {
+          const b = e.currentTarget;
+          if (b.disabled || !b.classList.contains('enable')) return;
+          b.classList.add('adding');
+          const r = await fetch('/fromthedeep/cart/add.js', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(document.getElementById('product_form_${p.id}'))) });
+          const d = await r.json();
+          b.classList.remove('adding');
+          if (d.status) { toast(d.description); return; }
+          await window.__ftdCart(${shopOf('fromthedeep').cartOpens ? 'true' : "'count'"});
+          toast('Added to cart');
+        });
+      </script>`, { head: ldFor(p, 'fromthedeep'), bagCount: bagCount('fromthedeep') });
   }
 
   // Gameology's product page, as its theme (FoxTheme's "Hyper") draws one: the product form (is="product-form")
@@ -2676,6 +2763,32 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
         },
       });
     }
+    // From The Deep Games' collections (what Mugibot's live sweeps read there): each game's — its sealed products,
+    // its pre-orders — its singles' (30,000 of them: never read, so none listed here), and every game's Preorders.
+    if (shop === 'fromthedeep' && (sub === '/collections.json' || /^\/collections\/[^/]+\/products\.json$/.test(sub))) {
+      const listed = shopOf(shop).products.filter((x) => x.listed);
+      const has = (word) => (x) => slugify(x.name).includes(word);
+      const pre = (x) => x.status === 'preorder';
+      const cols = [
+        ['pokemon-singles-all', 'Pokemon Singles (All)', () => false, 30328],
+        ['pokemon-tcg', 'Pokemon TCG Sealed', (x) => has('pokemon')(x) && !pre(x)],
+        ['pokemon-tcg-preorders', 'Pokemon TCG Preorders', (x) => has('pokemon')(x) && pre(x)],
+        ['one-piece-card-game', 'One Piece Card Game', has('one-piece')],
+        ['riftbound', 'Riftbound', has('riftbound')],
+        ['gundam-card-game', 'Gundam Card Game', has('gundam')],
+        ['preorders', 'Preorders', pre],
+      ];
+      if (sub === '/collections.json') return json(200, { collections: cols.map(([handle, title, f, n]) => ({ id: handle.length, handle, title, products_count: n ?? listed.filter(f).length })) });
+      const col = cols.find(([handle]) => sub === `/collections/${handle}/products.json`);
+      if (!col) return json(404, { errors: 'Not Found' });
+      return json(200, {
+        products: listed.filter(col[2]).map((x) => ({
+          id: x.id, title: x.name, handle: x.sku, body_html: '<p>Dummy</p>', product_type: 'Pokemon Sealed', tags: pre(x) ? ['Preorder'] : [],
+          variants: [{ id: x.id, title: 'Default Title', price: x.price.toFixed(2), compare_at_price: null, available: x.status === 'in_stock' || x.status === 'preorder' }],
+          images: [{ src: `http://${req.headers.host}${imagePath(shop, x)}` }],
+        })),
+      });
+    }
     // Shopify's collections and each one's product list (what Mugibot's live sweeps read at Trainer Town):
     // a collection per game, of the products whose name says it.
     if (shop === 'trainertown' && (sub === '/collections.json' || /^\/collections\/[^/]+\/products\.json$/.test(sub))) {
@@ -2813,6 +2926,13 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
       if (prod) addToCart(shop, prod.sku, Number(permalink[2]) || 1);
       return redirect(pastCheckpoint() ? `/${shop}/checkouts/c/abc123` : `/${shop}/checkpoint?return_to=${encodeURIComponent(`/${shop}/checkouts/c/abc123`)}`);
     }
+    // Shopify's /checkout (From The Deep Games' header cart links it): the cart's checkout — through the checkpoint
+    // while it's up — or, with nothing in the cart, the cart page.
+    if (SHOPIFY.has(shop) && (sub === '/checkout' || sub === '/checkout/') && req.method === 'GET') {
+      if (!S.cart.length) return redirect(`/${shop}/cart`);
+      S.checkoutLinks = (S.checkoutLinks || 0) + 1;
+      return redirect(pastCheckpoint() ? `/${shop}/checkouts/c/abc123` : `/${shop}/checkpoint?return_to=${encodeURIComponent(`/${shop}/checkouts/c/abc123`)}`);
+    }
     // Shopify's cart form posted with "Checkout" (Gameology's cart drawer, its button named checkout): on to the
     // cart's checkout (through the checkpoint while it's up); without it, the cart page.
     if (SHOPIFY.has(shop) && (sub === '/cart' || sub === '/cart/') && req.method === 'POST') {
@@ -2880,7 +3000,7 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
         const b = await parseBody(req);
         if (!signedIn) return redirect('/amazon/ap/signin?openid.return_to=checkout');
         const prod = find(shop, b.asin);
-        S.cart = prod ? [{ sku: prod.sku, qty: 1, price: prod.price, name: prod.name }] : [];
+        S.cart = prod ? [{ sku: prod.sku, qty: Math.max(1, Math.min(Number(prod.maxQty) || 10, Number(b.quantity) || 1)), price: prod.price, name: prod.name }] : [];
         S.steps.push({ step: 'buynow' });
         return redirect(S.primeOffer && !S.primeDeclined ? '/amazon/gp/buy/primeinterstitial/handlers/display.html' : '/amazon/checkout/p/p-123/spc');
       }
@@ -2897,7 +3017,7 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
       if (sub === '/checkout/p/p-123/spc') return a('Checkout', `<h1>Review your order</h1>${summary('/amazon/checkout/spc/place-order')}`);
       if (sub === '/checkout/turbo') {
         const prod = find(shop, u.searchParams.get('asin'));
-        S.cart = prod ? [{ sku: prod.sku, qty: 1, price: prod.price, name: prod.name }] : [];
+        S.cart = prod ? [{ sku: prod.sku, qty: Math.max(1, Math.min(Number(prod.maxQty) || 10, Number(u.searchParams.get('quantity')) || 1)), price: prod.price, name: prod.name }] : [];
         S.steps.push({ step: 'turbo' });
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         return res.end(`<!doctype html><html><body style="font:14px system-ui;margin:8px"><h3>Buy now</h3>${summary('/amazon/checkout/turbo/place')}</body></html>`);

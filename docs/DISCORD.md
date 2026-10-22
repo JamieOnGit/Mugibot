@@ -257,8 +257,9 @@ channels** → **Set up store channels** makes them in one go:
 | `bigw-…`, `target-…`, `jbhifi-…`, `ebgames-…`, `zing-…`, `toysrus-…` | The same for BIG W, Target, JB Hi-Fi, EB Games, Zing and Toys"R"Us |
 | `premium-bandai` | Everything from Premium Bandai |
 | `pokemon-center` | Everything from Pokémon Center |
+| `amazon` | **Everything from Amazon AU**: its trading cards, other games and what isn't cards — only there (Amazon pings often). Not VIP drops, nor a drop watch whose admin picked its channel |
 | `non-tcg-alerts` | What isn't trading cards, from every store and website: the admins' 🎯 drop watches (an Xbox at JB Hi-Fi, a figure at any shop — docs/MONITORING.md → Drop watches). Only there, not in the store's own channel |
-| `misc-retailers` | Everything no other channel takes: other stores (Trainer Town, Amazon AU, The Games Cube, Gamerholic…) and other games (Gundam, Dragon Ball, Riftbound…) at the split stores |
+| `misc-retailers` | Everything no other channel takes: other stores (Trainer Town, The Games Cube, Gamerholic, From The Deep Games…) and other games (Gundam, Dragon Ball, Riftbound…) at the split stores |
 | `virtual-queue-detection` | JB Hi-Fi's hCaptcha checkpoint and EB Games' and Pokémon Center's virtual queues going up and coming down (docs/MONITORING.md → Checkpoints and virtual queues), with **📥 Join the queue on my computer** on a queue's post |
 
 - The bot uses channels with those names that are **already there** (it also
@@ -283,6 +284,12 @@ channels** → **Set up store channels** makes them in one go:
   and **Ping**, or **✎** on it): those go only there, instead of
   `non-tcg-alerts`. A member's own drop watch is never posted anywhere: they get
   a DM.
+- `amazon` (Oct 2026): on a server whose store channels were set up before it,
+  the bot makes it by itself — under **Mugibot alerts**, or using a channel called
+  `amazon` that's already there — with its rule pinging the role `misc-retailers`
+  pings. It looks at start and every 6 hours, so nobody needs to press anything.
+  (Without the Manage Channels permission, make `amazon` yourself: it's found by
+  name.)
 - `virtual-queue-detection` has no rule: no product alerts go there, only the
   checkpoints and queues. It pings the same role. Made before this channel
   existed? Press **Set up store channels** again. Until then, the bot finds a

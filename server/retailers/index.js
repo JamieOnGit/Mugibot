@@ -17,6 +17,7 @@ import cherrycollectables from './cherrycollectables.js';
 import citybeach from './citybeach.js';
 import collectiblemadness from './collectiblemadness.js';
 import ebgames from './ebgames.js';
+import fromthedeep from './fromthedeep.js';
 import gameology from './gameology.js';
 import gamerholic from './gamerholic.js';
 import gamesmen from './gamesmen.js';
@@ -35,7 +36,7 @@ import trainertown from './trainertown.js';
 import zing from './zing.js';
 
 export const RETAILER_DEFS = [kmart, bigw, target, ebgames, zing, jbhifi, toysrus, trainertown, amazon, thegamescube, gamerholic, pokemoncenter, pbandai, citybeach,
-  pokebox, goodgames, collectiblemadness, cherrycollectables, gamesmen, gamesworld, gameology, shoplink];
+  pokebox, goodgames, collectiblemadness, cherrycollectables, gamesmen, gamesworld, gameology, fromthedeep, shoplink];
 
 // Card boxes are often in a frame hosted by the store's payment provider.
 export const PAYMENT_HOSTS = [

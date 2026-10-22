@@ -6,18 +6,19 @@ and which button is the **final one**. ⚡ Buy never presses the final button;
 only Auto-checkout does, for members who switched it on and armed the item
 ([AUTO-CHECKOUT.md](AUTO-CHECKOUT.md)).
 
-⚡ Buy buys **one** of each product (quantities are off for now) and gets to
-checkout as fast as the store allows:
+⚡ Buy buys **as many as the item says** (its **Quantity** on the watchlist: 1
+unless you set it, up to 10) and gets to checkout as fast as the store allows.
+How many is said the way each store takes it (see **Quantities** below).
 
 - **Shopify stores** (JB Hi-Fi, Trainer Town, Gamerholic, Toys"R"Us, Pokébox, Good Games,
-  Collectible Madness, Cherry Collectables, Gameology): the store's own cart
-  link, `/cart/<variant>:1`, which opens checkout with the product in the cart.
+  Collectible Madness, Cherry Collectables, Gameology, From The Deep Games): the store's own cart
+  link, `/cart/<variant>:<quantity>`, which opens checkout with the product in the cart.
   When the monitor has seen the product, the dashboard's ⚡ Buy opens that link
   straight away — no product page at all. Otherwise the product page opens, the
   extension looks up the product's option (`/products/<handle>.js`) and opens
   the cart link from there.
 - **WooCommerce stores** (Games World): the same idea with WooCommerce's own
-  add-to-cart link, `/checkout/?add-to-cart=<id>&quantity=1` — checkout, with the
+  add-to-cart link, `/checkout/?add-to-cart=<id>&quantity=<quantity>` — checkout, with the
   product in the cart. The id is a simple product's (read from its product page,
   or from the monitor's search); a product with options goes through its Add button.
   The link's `add-to-cart` is taken off the address once checkout's open, so a
@@ -37,7 +38,7 @@ checkout as fast as the store allows:
 | Kmart | `kmart.js` | ✅ **verified** | Tested end to end on kmart.com.au signed in. Signed out, the same flow: Kmart's cart can turn the first add away while its page starts up — Mugibot sees it refused, waits for the page to load and presses Add once more. Card boxes: Adyen's, one frame per box. Stops at "Checkout securely". |
 | BIG W | `bigw.js` | 🟦 beta | Tested on the BIG W-style dummy store only. **Waiting for the real flow.** |
 | EB Games | `ebgames.js` | 🟦 beta | From a member's walk-through (Oct 2026): "Home Delivery" (EB picks Click & Collect for you) → Australia → the address from EB's suggestions → its shipping method → Pay Now: "Credit / Debit card" → card number, MM/YY, CVV, name on card → "Done" → "CONFIRM & PAY". Signed in: only "CONFIRM & PAY". |
-| JB Hi-Fi | `jbhifi.js` | 🟦 beta | Shopify, its cart link (`/cart/<variant>:1`). The card goes into Shopify's card fields (a frame per box, from `checkout.pci.shopifyinc.com`). Stops at "Pay now". |
+| JB Hi-Fi | `jbhifi.js` | 🟦 beta | Shopify, its cart link (`/cart/<variant>:<quantity>`). The card goes into Shopify's card fields (a frame per box, from `checkout.pci.shopifyinc.com`). Stops at "Pay now". |
 | Target | `target.js` | 🟦 beta | From a member's walk-through: "Home Delivery" (a tile) → your details → the address from Target's suggestions → "Credit Card" (a tile) → card in Paydock's form (`*.paydock.com`) → "Place order". |
 | Zing | `zing.js` | 🟨 draft | Uses the EB Games flow (same platform). Off: zingpopculture.com.au sends you to EB Games. |
 | Toys"R"Us | `toysrus.js` | 🟦 beta | Shopify, at **toysrus.com.au** (www. sends you there). Shop Pay (signed in to Shop) or your details and card; "Standard Shipping - AusPost"; Authority to leave and "use shipping address as billing" left ticked; "Pay now". |
@@ -53,6 +54,7 @@ checkout as fast as the store allows:
 | Collectible Madness | `collectiblemadness.js` | 🟦 beta | The same as Pokébox (Shopify), at **collectiblemadness.com.au** (www. sends you there). |
 | Cherry Collectables | `cherrycollectables.js` | 🟦 beta | The same as Pokébox (Shopify). |
 | Gameology | `gameology.js` | 🟦 beta | The same as Pokébox (Shopify, FoxTheme's "Hyper" theme; it checks out with Shop). Its links can name a collection on the way (`/collections/<collection>/products/<handle>`: `productPath`), the same product by the handle at the end. Its cart link goes straight to checkout. From its product page, "Add to cart" is taken over by its theme, which adds it in the background (`/cart/add.js`) and slides its cart drawer open (`<cart-drawer>`): the drawer's "Checkout" (a submit button named checkout, posting the cart form) is pressed as the "added" pop-up's; the drawer left shut, its cart icon (the word "Cart", hidden, with its count) opens it. Signed in to your Gameology account, its saved details are left as they are. Extension 1.28.0 (`acoVersion`: its pages are new to the extension). Probed on the real site (Oct 2026: its product page, product JSON, search and cart drawer; nothing added or bought), tested on the Gameology-style dummy store (`/gameology`). |
+| From The Deep Games | `fromthedeep.js` | 🟦 beta | The same as Pokébox (Shopify, BinderPOS's "Standard" theme; it checks out with Shop). Its links can name a collection on the way, the same product by the handle at the end. Its cart link goes straight to checkout with as many as you asked for. From its product page (the cart link not taken): its quantity ("Units": a box between − and +) set first, then "Add To Cart" — its theme adds it in the background (`/cart/add.js`), with a toast and the header cart's count going up — then its cart page's "Checkout". Its header cart isn't a button (a drop-down with "Checkout" and "Your Cart"): "Your Cart" there when it's open, else the cart page by its address. Extension 1.29.0 (`acoVersion`: its pages are new to the extension). Probed on the real site (Oct 2026: its product pages, collections, product JSON, search and empty cart; nothing added or bought), tested on the From The Deep Games-style dummy store (`/fromthedeep`). |
 | The Gamesmen | `gamesmen.js` | 🟦 beta | Magento (its Hyvä theme: its search tiles are `div[data-ga-type="product-list-item"]`, read by `gamesmenTiles` in `listing.js` from a copy of its real page; searched newest first). From a member's walk-through (Oct 2026): "Add to Cart" / "Pre-order" → "You added … to your shopping cart" → straight to checkout → Shipping Address (email, first and last name, street address, suburb, state/territory, postcode, country Australia, mobile / phone) → "I have a different billing address" left unticked (`untick`) → Shipping Methods: "Standard", else the first one offered (`shippingFallback: 'first'`) → "Credit card" → card number, expiry, security code → the terms box ticked → "CONFIRM AND PAY". Signed in with your address saved: the same without the address. Its card form's provider wasn't visible from outside: the general card rules cover the usual ones. |
 | Shop checkout links | `shoplink.js` | 🟦 beta | Not one store: **any store's own cart link** (`…/cart/<variant>:<qty>,<variant>:<qty>`, e.g. Mattel Creations') at a store that checks out with Shop. A cart link at a store Mugibot doesn't know is one of these (`cartLinks`); the link opens Shop's checkout (`shop.app/checkout/…/shoppay`, where the extension runs) with your Shop address, delivery and card in. Nothing of yours is typed (`ownDetails`); the store's boxes are ticked — its membership agreement (`tick`) and any box marked required (`tickRequired`), never newsletters — "Check out as guest" is never pressed (`notFinal`), its "You must accept membership agreement" notice isn't a reason to stop (`ignoreErrors`), and nor is "not available for purchase": answered that when "Pay now" is pressed, nothing's bought and it's pressed again every 6 s on the same checkout — never while the store's at a press — until the store takes the order (`waitLive`: `everyMs` 6000, `forMs` 8 hours, the checkout reloaded every `reloadMs` 10 minutes or after `quietMs` 20 s of presses with no answer, the link opened again every `seekMs` 90 s for 🚦 Wait for queue, then ACO; the run stays `waiting`/`not_live`, each press a `placing` report with `live`). The store's checkout queue (its own site, no Mugibot there) is waited in, never refreshed (background.js `heldUp`), and a link's discount code is typed in and applied before "Pay now" (cleared if not taken). → "Pay now" (Mattel's real button: "Pay now $47.99", the total in it — `final` allows it; its membership box's words are beside its label: read from the box's row). Shop then goes on to the store's own order page, another address (`leaves`): that's the order placed. **Signed in to Shop only**: signed out, the link goes to the store's guest checkout, where Mugibot doesn't run. Sign-in is read off Shop's checkout screen (`account.check.onScreen`: your email, "Check out as guest") — never fetched, never from a page's source — and a "signed out" reading never holds a run back (`startsSignedOut`). Checked every 5 s (`monitor.intervalSeconds`, `floorSeconds`). Extension 1.27.1 (`acoVersion`). Tested on a Shop-style dummy checkout (`/creations` + `/shopapp`). |
 | Games World | `gamesworld.js` | 🟦 beta | WooCommerce. Its add-to-cart link (`/checkout/?add-to-cart=<id>&quantity=1`, a simple product's id) → checkout: email, first and last name, Country/Region, street address, suburb, state (selectWoo's drop-down over the real one), postcode, phone → "Deliver to a different address?" unticked (it can come ticked) → Standard Shipping → Stripe's card form (card number, MM/YY, security code), or with Stripe's Link connected its card and "Confirm" (`frameConfirm`) → "Place order". Signed in, your saved details are left as they are. |
@@ -313,3 +315,32 @@ and that store's dummy copy, so the test keeps proving the flow.
 4. Bump `version` in `extension/manifest.json`, deploy, and tell members to
    update the extension (the dashboard tells them too).
 5. Admin → Setup check → **Register slash commands**, so `/watch` lists the new store.
+
+---
+
+## Quantities
+
+Each watchlist item has a **Quantity** (1 unless you set it, up to 10). ⚡ Buy and
+Auto-checkout put that many in the bag (extension **1.29.0**; an older copy buys
+one at a time, so it's never sent an Auto-checkout run of more than one). One is
+left as the page has it: nothing changes for items of 1.
+
+- **Cart links** say it: Shopify's `/cart/<variant>:<quantity>`, WooCommerce's
+  `&quantity=<quantity>`. No product page at all.
+- **On the product page**, before its buy button is pressed: its quantity box or
+  drop-down set to it (the way typing or choosing would, so the page's own code
+  hears it), or its − and + pressed until it says it. Amazon's "Buy Now" sends the
+  drop-down's number with it. The page's own control is used: never a cart line's,
+  nor another product's in a "you may also like" row.
+- **A product page with nowhere to say it**: added once, then its line in the bag
+  set to it (and the bag's "Update" pressed if it has one), then Checkout.
+- **The store's own most** (a box that goes up to 2, a drop-down that stops at 1):
+  that many — and it says so ("The product page only takes 1 (you asked for 2)").
+- **Shop checkout links** are the order, quantities included (`…/cart/<variant>:2`):
+  a link of one product takes the quantity you set on Mugibot (the link is changed
+  to it), and the link's own number when you don't. A link with several products
+  goes by its own numbers. Its quantity box isn't shown.
+- **Signed in or a guest**, the same: how many is set before checkout.
+
+Tested on every dummy store with an item of 2 (`test/extension.e2e.test.js` 🔢),
+and with − and +, no quantity on the page, a store's most, signed in and as a guest.

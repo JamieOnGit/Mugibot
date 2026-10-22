@@ -133,7 +133,7 @@ export function register(router, ctx) {
     return {
       items: repo.listItems(req.user.id).map((it) => ({
         id: it.id, store: it.store, storeName: retailers.name(it.store), sku: it.sku, name: it.name, url: it.url, price: it.price, profileId: it.profileId, status: it.status,
-        aco: it.aco, maxPrice: it.maxPrice,
+        aco: it.aco, maxPrice: it.maxPrice, quantity: it.quantity || 1,
       })),
       flows: retailers.forExtension(),
       active: entitlement(req.user, repo.now()).active,
@@ -169,7 +169,8 @@ export function register(router, ctx) {
     const item = row.item_id ? repo.getItem(req.user.id, row.item_id) : null;
     // (A Shop checkout link's code is only taken up on Shop's checkout: it opened signed in for that link.)
     if (item) ctx.aco.noteShopSeen(req.user.id, item, 'in', aco ? 'run' : 'buy');
-    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, aco };
+    // (quantity: how many to put in the bag — the item's, or its Auto-checkout run's.)
+    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, quantity: row.quantity || 1, aco };
   }, { auth: 'device', entitled: true });
 
   // Delivery details for checkout autofill (the chosen set, else the default).
@@ -278,7 +279,8 @@ export function register(router, ctx) {
     const p = req.body.product && typeof req.body.product === 'object' ? req.body.product : {};
     const product = { id: str(p.id, 40) || null, store: str(p.store, 40), sku: str(p.sku, 80), name: str(p.name, 200), url: str(p.url, 2000) };
     if (product.url && !/^https?:\/\//i.test(product.url)) product.url = '';
-    return { aco: ctx.aco.own(req.user, req.device, product, { price: num(p.price, { min: 0, max: 100000, def: null }) }) };
+    // (How many: the watchlist item's own — or what the page put in the bag, 1 for a product not on it.)
+    return { aco: ctx.aco.own(req.user, req.device, product, { price: num(p.price, { min: 0, max: 100000, def: null }), qty: product.id ? null : num(p.quantity, { min: 1, max: 10, int: true, def: 1 }) }) };
   }, { auth: 'device', entitled: true });
 
   // A run this browser held while it waited in a store's queue, through now: a fresh link to open the store with.

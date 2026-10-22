@@ -31,11 +31,11 @@
 
 import { entitlement } from './entitlement.js';
 import { newId, purposeKey, signParts, verifyParts } from './crypto.js';
-import { PHONE_EXTENSION_VERSION } from './extension.js';
+import { PHONE_EXTENSION_VERSION, QTY_EXTENSION_VERSION } from './extension.js';
 import { olderVersion } from './monitor/sweep.js';
 import { buyAction } from './notifier.js';
 import { DEFAULT_ACO } from './schema.js';
-import { productLink, startBuy } from './routes/user.js';
+import { productLink, quantityOf, startBuy } from './routes/user.js';
 
 // Still on its way: waiting for a browser, opening the store, at checkout, pressing the final button.
 const ACTIVE = ['queued', 'sent', 'started', 'waiting', 'checkout', 'placing'];
@@ -143,6 +143,7 @@ export function linkRows(buttons) {
 export function toRun(r) {
   return r && {
     id: r.id, itemId: r.item_id, store: r.store, sku: r.sku, name: r.name, url: r.url, price: r.price, total: r.total, maxPrice: r.max_price,
+    quantity: r.quantity || 1,
     // (Drop to order, for a placed run: how fast it was.)
     tookMs: r.status === 'placed' ? tookMs(parseSteps(r.steps)) : null,
     mode: r.mode, trigger: r.trigger, status: r.status, reason: r.reason || '',
@@ -329,9 +330,10 @@ export class Aco {
 
   /** Orders and spending in the last 24 hours (a pressed final button counts, confirmed or not). */
   today(userId) {
-    const rows = this.db.all(`SELECT price, total FROM aco_runs WHERE user_id = :u AND created_at > :since
+    const rows = this.db.all(`SELECT price, total, quantity FROM aco_runs WHERE user_id = :u AND created_at > :since
       AND (status IN ('placing', 'placed') OR (status = 'needs_you' AND steps LIKE '%"placing"%'))`, { u: userId, since: this.now() - DAY });
-    return { orders: rows.length, spent: rows.reduce((s, r) => s + (r.total ?? r.price ?? 0), 0) };
+    // (The order's total, read at checkout — else what the monitor saw, times how many.)
+    return { orders: rows.length, spent: rows.reduce((s, r) => s + (r.total ?? (r.price ?? 0) * (r.quantity || 1)), 0) };
   }
 
   /**
@@ -340,9 +342,10 @@ export class Aco {
    */
   todayWithRunning(userId) {
     const day = this.today(userId);
-    const going = this.db.all(`SELECT price, max_price FROM aco_runs WHERE user_id = :u AND mode = 'place'
+    const going = this.db.all(`SELECT price, max_price, quantity FROM aco_runs WHERE user_id = :u AND mode = 'place'
       AND status IN ('queued', 'sent', 'started', 'waiting', 'checkout')`, { u: userId });
-    return { orders: day.orders + going.length, spent: day.spent + going.reduce((s, r) => s + (r.price ?? r.max_price ?? 0), 0) };
+    // (max_price: the run's whole order already — its item's max times how many.)
+    return { orders: day.orders + going.length, spent: day.spent + going.reduce((s, r) => s + (r.price !== null && r.price !== undefined ? r.price * (r.quantity || 1) : r.max_price ?? 0), 0) };
   }
 
   // ---------------------------------------------------------------------------
@@ -365,7 +368,12 @@ export class Aco {
     const running = this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id });
     if (running) return null;
     const price = typeof info.price === 'number' ? info.price : null;
-    const base = { userId, item, price, mode: s.mode, trigger: info.queue ? 'queue' : info.test ? 'test' : info.manual ? 'manual' : info.source || '' };
+    // How many it buys: the item's (1 unless set). Its max price is for one; the run's limit is for them all.
+    // (A Shop checkout link's price and max are the whole link's, its quantities in it already.)
+    const linked = this.retailers.get(item.store);
+    const qty = linked && linked.cartLinks ? 1 : quantityOf(item.quantity);
+    const cap = item.maxPrice === null || item.maxPrice === undefined ? null : Math.round(item.maxPrice * qty * 100) / 100;
+    const base = { userId, item, price, quantity: qty, ...(cap !== null ? { maxPrice: cap } : {}), mode: s.mode, trigger: info.queue ? 'queue' : info.test ? 'test' : info.manual ? 'manual' : info.source || '' };
     // (info.later: the monitor's list of alerts to send once every member's run is made — monitor/index.js applyAll.)
     const later = Array.isArray(info.later) ? info.later : null;
     const skip = (reason, message) => this.skip(base, reason, message, later);
@@ -378,7 +386,7 @@ export class Aco {
     if (!item.url) return skip('no_page');
     if (item.maxPrice === null || item.maxPrice === undefined) return skip('no_max');
     if (price !== null && price > item.maxPrice) return skip('over_max', `${money(price)} is over your max of ${money(item.maxPrice)}.`);
-    if (price !== null && price > s.maxOrder) return skip('over_limit', `${money(price)} is over your limit of ${money(s.maxOrder)} an order.`);
+    if (price !== null && price * qty > s.maxOrder) return skip('over_limit', `${qty > 1 ? `${qty} × ${money(price)} = ${money(price * qty)}` : money(price)} is over your limit of ${money(s.maxOrder)} an order.`);
     // (A drop's failures count — not Trigger ACO's, nor a ⚡ Buy pressed in Discord or by you.)
     const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND reason <> 'stopped' AND trigger NOT IN ('test', 'remote', 'buy', 'queue') AND created_at > :since", { i: item.id, since: now - DAY }).n;
     if (fails >= MAX_FAILS && !info.test) {
@@ -391,7 +399,7 @@ export class Aco {
     const busy = day.orders - this.today(userId).orders;
     const going = busy ? ` (${busy} checking out now)` : '';
     if (s.mode === 'place' && day.orders >= s.perDay) return skip('daily_orders', `${day.orders} of ${s.perDay} today${going}.`);
-    if (s.mode === 'place' && day.spent + (price ?? item.maxPrice) > s.spendPerDay) return skip('daily_spend', `${money(day.spent)} of ${money(s.spendPerDay)} spent today${going}.`);
+    if (s.mode === 'place' && day.spent + (price !== null ? price * qty : cap) > s.spendPerDay) return skip('daily_spend', `${money(day.spent)} of ${money(s.spendPerDay)} spent today${going}.`);
     // (Whether you're signed in at the store never holds a run back: each store's checkout goes either way —
     //  as a guest, or with your saved details — and a reading of it can be old or wrong (a member signed in at
     //  BIG W was taken for signed out). A store that only sells signed in says so on its own page, and the
@@ -400,6 +408,8 @@ export class Aco {
     // A store the extension only checks out at from a version on (Shop checkout links: 1.22.0, on Shop's checkout).
     const device = this.checkoutDevice(userId);
     if (r.acoVersion && device && olderVersion(device.version, r.acoVersion)) return skip('old_extension', `${device.name} has ${device.version || 'an older version'} — update it to ${r.acoVersion} (Setup → Extension).`);
+    // (More than one: an older copy would put just one in the bag.)
+    if (qty > 1 && device && olderVersion(device.version, QTY_EXTENSION_VERSION)) return skip('old_extension', `${device.name} has ${device.version || 'an older version'}, which buys one at a time — update it to ${QTY_EXTENSION_VERSION} to buy ${qty} (Setup → Extension).`);
 
     const run = this.create(base, 'queued', '', info.queue ? `Wait for queue, then ACO — waiting for your browser to open ${r.name}.` : `Dropped at ${r.name}${price !== null ? ` for ${money(price)}` : ''} — waiting for your browser to check out.`);
     // (Wait for queue, then ACO: the tab's pass says so — its checkout looks again until the store's queue is up.)
@@ -471,11 +481,15 @@ export class Aco {
     if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension, and ⚡ Buy runs there from anywhere.` };
     if (this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return { error: `It's already checking out in ${device.name}.` };
     if (r.acoVersion && olderVersion(device.version, r.acoVersion)) return { error: `${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}) — update it to ${r.acoVersion} to buy from ${r.name} (${this.cfg.baseUrl}/app#update).` };
+    if (!r.cartLinks && quantityOf(item.quantity) > 1 && olderVersion(device.version, QTY_EXTENSION_VERSION)) return { error: `${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}), which buys one at a time — update it to ${QTY_EXTENSION_VERSION} to buy ${quantityOf(item.quantity)} (${this.cfg.baseUrl}/app#update).` };
 
     // Place the order, or fill checkout in and stop at the final button (and why).
     const known = [price, item.lastPrice, item.price].find((p) => typeof p === 'number' && p > 0);
     const shown = known === undefined ? null : known;
-    const cap = item.maxPrice ?? shown;
+    // (Its max is for one: the order's limit, that times how many. A Shop checkout link's: the whole link's.)
+    const qty = r.cartLinks ? 1 : quantityOf(item.quantity);
+    const one = item.maxPrice ?? shown;
+    const cap = one === null ? null : Math.round(one * qty * 100) / 100;
     const day = this.todayWithRunning(userId);
     const why = !s.enabled ? 'Auto-checkout is off, so it stops at the final button for you'
       : s.mode !== 'place' ? 'Auto-checkout is set to stop at the final button'
@@ -486,7 +500,7 @@ export class Aco {
                 : day.spent + cap > s.spendPerDay ? `that would go over your ${money(s.spendPerDay)} a day, so it stops at the final button`
                   : '';
     const mode = why ? 'fill' : 'place';
-    const run = this.create({ userId, item, price: shown, maxPrice: mode === 'place' ? cap : (item.maxPrice ?? null), mode, trigger: 'remote' }, 'queued', '',
+    const run = this.create({ userId, item, price: shown, quantity: qty, maxPrice: mode === 'place' ? cap : (item.maxPrice ?? null), mode, trigger: 'remote' }, 'queued', '',
       `⚡ Buy pressed in Discord — waiting for ${device.name} to check out.`);
     this.wake(userId);
     await this.notifier.notify(userId, {
@@ -507,7 +521,7 @@ export class Aco {
    * of this item already going. product: a watchlist item's id ({ id }), or the page's own product ({ store,
    * sku, name, url }). price: what the page or alert said, if anything.
    */
-  own(user, device, product, { price = null, qty = 1 } = {}) {
+  own(user, device, product, { price = null, qty = null } = {}) {
     if (!user || user.disabled || !device || !entitlement(user, this.now()).active) return null;
     const s = this.settings(user.id);
     if (!s.enabled || s.mode !== 'place') return null;
@@ -518,8 +532,9 @@ export class Aco {
     if (olderVersion(device.version, OWN_EXTENSION_VERSION) || (r.acoVersion && olderVersion(device.version, r.acoVersion))) return null;
     if (item && this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return null;
     const known = [price, item && item.lastPrice, item && item.price].find((p) => typeof p === 'number' && Number.isFinite(p) && p > 0) ?? null;
-    // (Its max is for one: two of it, twice that — never over the limit an order.)
-    const n = Math.max(1, Math.min(10, Number(qty) || 1));
+    // (Its max is for one: two of it, twice that — never over the limit an order. A Shop checkout link's price
+    //  and max are the whole link's already.)
+    const n = r.cartLinks ? 1 : quantityOf(qty ?? (item ? item.quantity : 1));
     const cap = item && item.maxPrice !== null && item.maxPrice !== undefined ? Math.min(item.maxPrice * n, s.maxOrder) : s.maxOrder;
     if (known !== null && known * n > cap) return null;
     const day = this.todayWithRunning(user.id);
@@ -527,7 +542,7 @@ export class Aco {
     const sku = item ? item.sku : String(product.sku || '').slice(0, 80);
     if (!sku) return null;
     const what = item || { id: null, store, sku, name: String(product.name || sku).slice(0, 200), url: String(product.url || '').slice(0, 2000) };
-    const row = this.create({ userId: user.id, item: what, price: known, maxPrice: cap, mode: 'place', trigger: 'buy' }, 'started', '',
+    const row = this.create({ userId: user.id, item: what, price: known, maxPrice: cap, quantity: n, mode: 'place', trigger: 'buy' }, 'started', '',
       `⚡ Buy pressed in ${device.name} — Auto-checkout places the order within your limits`);
     this.db.run('UPDATE aco_runs SET device_id = :d WHERE id = :id', { d: device.id, id: row.id });
     return this.passFor(user.id, row);
@@ -570,9 +585,12 @@ export class Aco {
     const now = this.now();
     const id = newId('acr');
     const { item } = base;
-    this.db.run(`INSERT INTO aco_runs (id, user_id, item_id, store, sku, name, url, price, max_price, mode, trigger, status, reason, message, steps, created_at, updated_at)
-      VALUES (:id, :u, :i, :store, :sku, :name, :url, :price, :max, :mode, :trig, :st, :reason, :msg, :steps, :t, :t)`, {
-      id, u: base.userId, i: item.id, store: item.store, sku: item.sku, name: item.name, url: item.url || '', price: base.price, max: base.maxPrice !== undefined ? base.maxPrice : (item.maxPrice ?? null),
+    // (quantity: how many it puts in the bag — the item's, unless the run says: a ⚡ Buy code's.)
+    const qty = quantityOf(base.quantity ?? item.quantity);
+    this.db.run(`INSERT INTO aco_runs (id, user_id, item_id, store, sku, name, url, price, max_price, quantity, mode, trigger, status, reason, message, steps, created_at, updated_at)
+      VALUES (:id, :u, :i, :store, :sku, :name, :url, :price, :max, :qty, :mode, :trig, :st, :reason, :msg, :steps, :t, :t)`, {
+      id, u: base.userId, i: item.id, store: item.store, sku: item.sku, name: item.name, url: item.url || '', price: base.price, qty,
+      max: base.maxPrice !== undefined ? base.maxPrice : (item.maxPrice ?? null),
       mode: base.mode, trig: base.trigger, st: status, reason: reason || '', msg: message || '', steps: JSON.stringify([{ at: now, status, message: message || REASONS[reason] || '' }]), t: now,
     });
     const run = this.db.get('SELECT * FROM aco_runs WHERE id = :id', { id });
@@ -691,7 +709,7 @@ export class Aco {
       const claimed = this.db.run("UPDATE aco_runs SET status = 'sent', device_id = :d, updated_at = :t WHERE id = :id AND status = 'queued'", { d: device.id, t: now, id: row.id }).changes;
       if (!claimed) continue;
       this.step(row.id, 'sent', `Opening ${this.retailers.name(row.store)} in ${device.name}`);
-      const go = startBuy(this.ctx, user, { ...item, quantity: 1 }, { runId: row.id, variantId: this.variants.get(row.id) || null });
+      const go = startBuy(this.ctx, user, item, { runId: row.id, variantId: this.variants.get(row.id) || null, quantity: row.quantity || 1 });
       out.push({ id: row.id, url: go.url, store: row.store, storeName: this.retailers.name(row.store), name: row.name, sku: row.sku, mode: row.mode });
     }
     return out;
@@ -851,7 +869,7 @@ export class Aco {
     if (!row || !['waiting', 'sent'].includes(row.status)) return null;
     const item = row.item_id ? this.repo.getItem(user.id, row.item_id) : null;
     if (!item || !item.url) return null;
-    return startBuy(this.ctx, user, { ...item, quantity: 1 }, { runId: row.id, variantId: this.variants.get(row.id) || null }).url;
+    return startBuy(this.ctx, user, item, { runId: row.id, variantId: this.variants.get(row.id) || null, quantity: row.quantity || 1 }).url;
   }
 
   // ---------------------------------------------------------------------------
@@ -939,7 +957,7 @@ export class Aco {
   /** The store's page for the phone: its cart link with the product where it has one (Shopify's), else the product. */
   storeLink(row) {
     const item = row.item_id ? this.repo.getItem(row.user_id, row.item_id) : null;
-    return productLink(this.ctx, { store: row.store, sku: row.sku, url: (item && item.url) || row.url }, this.variants.get(row.id) || null);
+    return productLink(this.ctx, { store: row.store, sku: row.sku, url: (item && item.url) || row.url }, this.variants.get(row.id) || null, row.quantity || 1);
   }
 
   /** Under a checkpoint's message (the ⚡ Buy reply, the DM): finish on the phone, or solve it on the computer from there. */

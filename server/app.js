@@ -15,6 +15,7 @@ import { Hub } from './hub.js';
 import { Router, RateLimiter, clientIp, parseCookies, parseJson, readBody, securityHeaders, sendJson } from './http.js';
 import { Mailer } from './mailer.js';
 import { Feed } from './monitor/feed.js';
+import { MonitorAdmin } from './monitor/manage.js';
 import { Gates } from './monitor/gates.js';
 import { storeFetch } from './monitor/http.js';
 import { Monitor } from './monitor/index.js';
@@ -224,6 +225,15 @@ export async function createApp(options = {}) {
     };
     every(10 * 60 * 1000, () => discord.sweep());
     every(60 * 60 * 1000, () => whop.reconcile());
+    // A store channel the set-up has gained since it was made (#amazon): there by itself, its rule with it.
+    const ownChannels = async () => {
+      const made = await new MonitorAdmin(ctx).ensureOwnChannels();
+      if (made.length) cfg.log('[discord]', `store channels added: ${made.map((c) => `#${c.name}${c.made ? ' (made)' : ''}`).join(', ')}`);
+    };
+    const first = setTimeout(() => { ownChannels().catch((e) => cfg.log('[jobs]', e.message)); }, 20000);
+    first.unref?.();
+    timers.push(first);
+    every(6 * 60 * 60 * 1000, ownChannels);
   }
 
   const app = {

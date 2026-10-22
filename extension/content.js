@@ -982,7 +982,7 @@
           : `Your checkout of ${turn.name || 'another item'} at ${retailer.name} is going — ${retailer.name} keeps one bag for this browser. Press this again once it's done.`);
         return;
       }
-      const ok = await ask({ type: 'startFill', product: item ? { id: item.fromPage ? null : item.id || null, store: retailer.id, sku: item.sku, name: item.name, url: item.url || location.href.split('#')[0] } : null });
+      const ok = await ask({ type: 'startFill', product: item ? { id: item.fromPage ? null : item.id || null, store: retailer.id, sku: item.sku, name: item.name, url: item.url || location.href.split('#')[0], quantity: item.quantity || 1 } : null });
       if (ok) assistFlag.on(item && item.profileId);
       if (ok && ok.aco) {
         // (Auto-checkout set to "Place the order for me": this checkout places the order, within your limits.)
@@ -1197,7 +1197,8 @@
     if (!held && claim && claim.ok) MGBQuick.slowReloads(0);
     if (claim && claim.ok) {
       const listed = items.find((p) => p.id === claim.itemId) || items.find((p) => p.sku === claim.sku);
-      const product = { ...(listed || {}), sku: claim.sku, name: claim.name || (listed && listed.name) || claim.sku, url: claim.url || (listed && listed.url) || null, store: retailer.id };
+      // (quantity: how many to put in the bag — the ⚡ Buy code's: the item's, or its Auto-checkout run's.)
+      const product = { ...(listed || {}), sku: claim.sku, name: claim.name || (listed && listed.name) || claim.sku, url: claim.url || (listed && listed.url) || null, store: retailer.id, quantity: claim.quantity || (listed && listed.quantity) || 1 };
       aco = claim.aco || null;
       if (denied) {
         panel.setStatus(DENIED_TEXT);
@@ -1241,7 +1242,7 @@
       waitAtGate(gate);
       return;
     }
-    const product = held.product || { sku: held.claim.sku, name: held.claim.name };
+    const product = held.product || { sku: held.claim.sku, name: held.claim.name, quantity: held.claim.quantity || 1 };
     // Through, but somewhere other than the product (the store's front page): to the product, once.
     const elsewhere = product.url && !MGBQuick.productForPage([product], retailer) && !MGBQuick.onCheckoutPage(retailer) && !MGBQuick.onBagPage(retailer);
     if (elsewhere && !held.through) {

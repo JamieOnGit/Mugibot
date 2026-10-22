@@ -83,7 +83,7 @@ test('sign up with a username and land on the Monitor page, with your watchlist 
   if (shots) await page.screenshot({ path: path.join(shots, 'dashboard.png'), fullPage: true });
 });
 
-test('Watchlist: add by link, add by store + SKU, edit, reorder, pause, announce, delete — and no quantity boxes', async () => {
+test('Watchlist: add by link, add by store + SKU, how many (1 unless set), edit, reorder, pause, announce, delete', async () => {
   await page.click('#w-add-toggle');
   await page.fill('#w-url', 'https://www.ebgames.com.au/product/toys-and-collectibles/312345-one-piece-card-game-op-18-booster-box');
   await page.fill('#w-name', 'OP-18 Box');
@@ -97,12 +97,14 @@ test('Watchlist: add by link, add by store + SKU, edit, reorder, pause, announce
   await page.waitForFunction(() => /\/p\//.test(document.querySelector('#w-store-note').textContent));
   await page.fill('#w-sku', '6012345');
   await page.fill('#w-name', 'BIG W UPC');
-  assert.equal(await page.locator('#w-qty').count(), 0, 'no quantity in the form (one of each for now)');
+  assert.equal(await page.inputValue('#w-qty'), '1', 'one unless you say');
+  await page.fill('#w-qty', '3');
   await page.fill('#w-max', '380');
   await page.click('#w-save');
   await page.waitForFunction(() => document.querySelectorAll('#w-list li[data-id]').length === 9);
   const bigw = page.locator('#w-list li', { hasText: 'BIG W UPC' });
-  assert.match(await bigw.textContent(), /BIG W · SKU 6012345 · ping at ≤ \$380\.00/);
+  assert.match(await bigw.textContent(), /BIG W · SKU 6012345 · × 3 · ping at ≤ \$380\.00 each/, 'three of it, the max for each');
+  assert.equal(await bigw.getByRole('button', { name: '⚡ Buy ×3' }).count(), 1, '⚡ Buy says how many');
   assert.match(await bigw.textContent(), /Waiting for the product page to be listed/);
   assert.equal(await bigw.getByRole('button', { name: '⚡ Buy' }).isDisabled(), true, 'no ⚡ Buy until the page is found');
 
@@ -110,8 +112,11 @@ test('Watchlist: add by link, add by store + SKU, edit, reorder, pause, announce
   await last.getByRole('button', { name: 'Move up' }).click();
   await page.waitForFunction(() => /OP-18 Box/.test(document.querySelector('#w-list li:nth-child(7)').textContent));
   const row = page.locator('#w-list li', { hasText: 'OP-18 Box' });
-  assert.equal(await row.locator('input.qty').count(), 0, 'no quantity box next to ⚡ Buy');
+  assert.equal(await row.locator('input.qty').count(), 0, 'no quantity box next to ⚡ Buy (it\'s the item\'s)');
+  assert.equal(await row.getByRole('button', { name: '⚡ Buy', exact: true }).count(), 1, 'one of it: ⚡ Buy as ever');
   await row.getByRole('button', { name: 'Edit' }).click();
+  await page.waitForFunction(() => document.querySelector('#w-form-title').textContent === 'Edit OP-18 Box');
+  assert.equal(await page.inputValue('#w-qty'), '1', 'its own 1');
   await page.fill('#w-name', 'OP-18 Booster Box');
   await page.click('#w-save');
   await page.waitForSelector('#w-list li:has-text("OP-18 Booster Box")');
@@ -137,6 +142,7 @@ test("🛍️ Shop checkout links: a section of their own under My watchlist —
   assert.equal(await page.textContent('#w-form-title'), 'Add a Shop checkout link');
   assert.equal(await page.isVisible('#w-store'), false, 'no store or SKU to enter: the link is all');
   assert.equal(await page.locator('#w-store option[value="shoplink"]').count(), 0, 'not in the store picker');
+  assert.equal(await page.isVisible('#w-qty'), false, 'no quantity box: the link has its own (…:2)');
   await page.fill('#w-url', 'https://creations.mattel.com/cart/48835830579405:2,40653613531341:1');
   await page.fill('#w-max', '120');
   await page.click('#w-save');

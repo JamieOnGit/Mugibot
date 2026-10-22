@@ -116,8 +116,15 @@ test('⚡ Buy codes only work for the account that made them, once, for 2 minute
   const claim = await ashDevice.call('POST', '/api/ext/claim', { code });
   assert.equal(claim.status, 200);
   assert.deepEqual({ sku: claim.body.sku, host: claim.body.host, profileId: claim.body.profileId }, { sku: '312345', host: 'www.ebgames.com.au', profileId: work.id });
-  assert.equal(claim.body.quantity, undefined, 'one of it — no quantities for now');
+  assert.equal(claim.body.quantity, 1, 'one of it, unless the item says');
   assert.equal((await ashDevice.call('POST', '/api/ext/claim', { code })).status, 404, 'single use');
+  // How many: the item's — the code says it, and the extension puts that many in the bag.
+  await ash.put(`/api/items/${p.id}`, { quantity: 3 });
+  const go3 = await ash.post(`/api/items/${p.id}/go`, {});
+  assert.equal(go3.body.quantity, 3);
+  const claim3 = await ashDevice.call('POST', '/api/ext/claim', { code: new URL(go3.body.url).hash.split('=')[1] });
+  assert.equal(claim3.body.quantity, 3, 'three of it, as the item says');
+  await ash.put(`/api/items/${p.id}`, { quantity: 1 });
   const go2 = await ash.post(`/api/items/${p.id}/go`, {});
   const code2 = new URL(go2.body.url).hash.split('=')[1];
   env.app.db.run('UPDATE go_codes SET expires_at = 0');

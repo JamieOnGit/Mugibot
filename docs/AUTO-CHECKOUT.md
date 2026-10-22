@@ -600,6 +600,22 @@ it). Signed in with Shop, Shop Pay's card is there and only "Pay now" is pressed
 Signed in to your Gameology account, the details it saved for you are left as
 they are and the card is typed. As a guest, all of it is filled in as at Pokébox.
 
+At **From The Deep Games** (Shopify, which checks out with Shop) it's the same as
+at Pokébox, and it needs extension **1.29.0** (its pages are new to the
+extension). Its cart link is the quick way in; from its product page, its quantity
+("Units") is set, "Add To Cart" pressed (its theme adds it in the background),
+then its cart's "Checkout". Signed in with Shop, only "Pay now"; as a guest, all
+of it filled in as at Pokébox.
+
+**How many** (extension **1.29.0**). An item's **Quantity** (1 unless set, up to
+10) is how many a run puts in the bag. Its **max price is for one**: a drop over it
+is skipped. The run's own limit is for them all: 3 at $90 each may cost up to
+$270 (plus delivery), never over your limit an order or your spending for the day
+— checked against the price times how many when it drops, and against the total
+at checkout. A run of more than one is never sent to an extension older than
+1.29.0 (it would buy one): it's skipped, and says to update. A Shop checkout
+link's price and max are already the whole link's (its quantities are in it).
+
 At **Pokébox, Good Games, Collectible Madness and Cherry Collectables** (Shopify)
 it goes in by the store's cart link. Signed in with Shop, Shop Pay's card is there
 and only "Pay now" is pressed; as a guest, your details, the address from
@@ -900,4 +916,5 @@ Tests:
 - It never solves CAPTCHAs, skips queues or gets past bot protection or a bank's
   check. At a store's checkpoint it waits for you to solve it. In a virtual
   queue it waits its turn and never refreshes the queue page.
-- Store purchase limits are respected. It buys one of each item.
+- Store purchase limits are respected. It buys as many as the item says (1 unless
+  you set it, up to 10) — fewer if the store's own most is lower, and it says so.

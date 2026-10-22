@@ -42,8 +42,8 @@ export async function handleWebRoute(ctx, req, res, url) {
 
   // --- ⚡ Buy links -----------------------------------------------------------------------
   // One click: every ⚡ Buy goes straight to the store, with the product on its way into your bag.
-  //   /buy/<item>?qty=1&t=<signed>: from your own DM (the qty is only part of what was signed, so
-  //     links from before quantities were dropped still work).
+  //   /buy/<item>?qty=<n>&t=<signed>: from your own DM — that many (the item's quantity when the DM went out;
+  //     the qty is part of what was signed, and a link from before quantities says 1).
   //   /buy?store=…&sku=…&url=…&name=…&t=<signed>: a Monitor alert in a Discord channel — the same
   //     link for everyone, each with their own checkout; not on your watchlist yet, it's added.
   //   The same without a signature, pressed on Mugibot's own pages (the Monitor tab's ⚡ Buy).
@@ -69,7 +69,7 @@ export async function handleWebRoute(ctx, req, res, url) {
     const t = url.searchParams.get('t');
     const signed = t && verifyParts(purposeKey(cfg.dataKey, 'buy-link'), [req.user.id, it ? it.id : '', String(qty)], t, repo.now());
     if (it && it.url && (signed || fromHere) && entitlement(req.user, repo.now()).active && ctx.limiter.hit(`go:${req.user.id}`, 60, 60 * 1000)) {
-      const { url: go } = startBuy(ctx, req.user, it);
+      const { url: go } = startBuy(ctx, req.user, it, { quantity: qty });
       return redirect(res, go);
     }
     return false; // the buy page (pages.js) shows the item and a ⚡ Buy button

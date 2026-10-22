@@ -20,6 +20,9 @@ import { publicEvent, publicProduct } from './public.js';
 import { STATUS, STATUS_LABEL, isOrderable } from './status.js';
 
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
+// Stores whose alerts all go to a channel of their own (#amazon: Amazon pings often), wherever else they'd go —
+// a game's channel, #non-tcg-alerts, misc-retailers. (Not VIP drops, nor a drop watch's own chosen channel.)
+export const OWN_CHANNEL_STORES = new Set(['amazon']);
 // A sweep that saw the product this recently outranks a page check.
 export const SWEEP_FRESH_MS = 3 * 60 * 1000;
 const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '—');
@@ -196,17 +199,24 @@ export class Feed {
     if (alert.vip && vip.length) return vip.filter((r) => r.kinds.includes(alert.kind));
     if (drop && drop.channelId && drop.kinds.includes(alert.kind)) return [drop];
     let routes = enabled.filter((r) => !r.vip);
+    const name = String(alert.name || '').toLowerCase();
+    const store = String(alert.store || '');
+    const bare = store.replace(/^demo-/, '');
+    const wants = (r) => (!r.categories.length || r.categories.includes(alert.category))
+      && (!r.stores.length || r.stores.includes(store) || r.stores.includes(bare))
+      && r.kinds.includes(alert.kind)
+      && (!r.keywords.trim() || r.keywords.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean).some((k) => name.includes(k)));
+    // A store with a channel of its own for everything (#amazon): there, and only there — its trading cards and
+    // what isn't alike.
+    if (OWN_CHANNEL_STORES.has(bare)) {
+      const own = routes.filter((r) => !r.fallback && !r.categories.length && r.stores.length && r.stores.every((s) => s === bare) && wants(r));
+      if (own.length) return own;
+    }
     const named = routes.filter((r) => r.categories.includes('nontcg'));
     if (alert.category === 'nontcg' && named.length) routes = named;
     if (!routes.length && this.cfg.discord.restockChannelId) {
       routes = [{ id: 'default', name: 'Restock channel', channelId: this.cfg.discord.restockChannelId, roleId: this.cfg.discord.restockRoleId || '', categories: [], stores: [], kinds: ['restock', 'listed'], keywords: '' }];
     }
-    const name = String(alert.name || '').toLowerCase();
-    const store = String(alert.store || '');
-    const wants = (r) => (!r.categories.length || r.categories.includes(alert.category))
-      && (!r.stores.length || r.stores.includes(store) || r.stores.includes(store.replace(/^demo-/, '')))
-      && r.kinds.includes(alert.kind)
-      && (!r.keywords.trim() || r.keywords.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean).some((k) => name.includes(k)));
     const taken = routes.filter((r) => !r.fallback && wants(r));
     return taken.length ? taken : routes.filter((r) => r.fallback && wants(r));
   }

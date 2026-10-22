@@ -158,6 +158,19 @@ test('restock DMs carry a signed ⚡ Buy button that goes straight to the store;
   const t = await erika.get(tampered.pathname + tampered.search);
   assert.equal(t.status, 200);
   assert.match(t.text, /id="b-go"/);
+  // How many: the item's, in the link (signed with it) and the DM — and the ⚡ Buy code it makes says the same.
+  env.app.db.run('UPDATE items SET quantity = 3 WHERE id = :id', { id: it.id });
+  const three = new URL(env.app.notifier.buyLink(erika.user.id, { ...it, quantity: 3 }));
+  assert.equal(three.searchParams.get('qty'), '3');
+  const go3 = await erika.get(three.pathname + three.search);
+  assert.equal(go3.status, 302);
+  assert.match(go3.headers.get('location'), /#mgb-go=[\w-]{20,}$/);
+  assert.equal(env.app.db.get('SELECT quantity FROM go_codes WHERE user_id = :u ORDER BY expires_at DESC LIMIT 1', { u: erika.user.id }).quantity, 3, '3 in the code');
+  const before3 = discord.dmsTo('d-erika').length;
+  await env.app.notifier.itemAlert(erika.user.id, { ...it, quantity: 3 }, 'restock', { status: 'in_stock', price: 360, source: 'server' });
+  await waitFor(() => discord.dmsTo('d-erika').length > before3, { message: 'the DM of 3' });
+  assert.match(discord.dmsTo('d-erika').at(-1).body.embeds[0].description, /Kmart · SKU 43818648 · \$360\.00 · Quantity 3/);
+  env.app.db.run('UPDATE items SET quantity = 1 WHERE id = :id', { id: it.id });
   // Someone else opening Erika's link gets nothing of hers.
   const other = await Client.signup(env.url, 'eavesdropper');
   makeMember(env, other);
@@ -166,9 +179,10 @@ test('restock DMs carry a signed ⚡ Buy button that goes straight to the store;
   assert.equal(env.app.db.get('SELECT COUNT(*) AS n FROM go_codes WHERE user_id = :u', { u: other.user.id }).n, 0);
 
   // Erika turns DMs off: the next restock only lands in the feed.
+  const beforeOff = discord.dmsTo('d-erika').length;
   await erika.put('/api/alerts', { discordDm: false });
   await env.app.monitor.applyResult({ ...row, status: 'out_of_stock' }, { status: 'preorder' }, 'server');
-  assert.equal(discord.dmsTo('d-erika').length, before + 1);
+  assert.equal(discord.dmsTo('d-erika').length, beforeOff);
   assert.ok((await erika.get('/api/events')).body.events.some((e) => /Pre-order open: Day UPC/.test(e.message) || /Pre-order/.test(e.message)));
 });
 

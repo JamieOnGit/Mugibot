@@ -491,7 +491,9 @@ function statusOf(it) {
 function itemRow(it, i, list = state.items) {
   const st = statusOf(it);
   // (Another website: no ⚡ Buy — Mugibot checks out at the stores it knows. Its page is the way in.)
-  const buy = it.acoCan ? h('button', { class: 'btn primary small', type: 'button', disabled: !it.url, title: it.url ? '' : 'The product page hasn\'t been found yet' }, '⚡ Buy') : null;
+  // (×2: ⚡ Buy puts that many in the bag.)
+  const many = it.quantity > 1 && !(it.shopLink && it.sku.includes(',')) ? ` ×${it.quantity}` : '';
+  const buy = it.acoCan ? h('button', { class: 'btn primary small', type: 'button', disabled: !it.url, title: it.url ? (many ? `Puts ${it.quantity} in your bag` : '') : 'The product page hasn\'t been found yet' }, `⚡ Buy${many}`) : null;
   // The one-time ⚡ Buy code is asked for as the button goes down, so the store opens the moment it's clicked.
   buy?.addEventListener('pointerdown', () => primeBuy(it));
   buy?.addEventListener('click', () => goBuy(it));
@@ -523,7 +525,7 @@ function itemRow(it, i, list = state.items) {
   // (Another website's product goes by its address: its made-up code isn't one anyone uses.)
   // (A Shop checkout link: what's in it, as the store names its options — its code is the link.)
   const what = it.shopLink ? (it.title || `${it.sku.split(',').length} option${it.sku.includes(',') ? 's' : ''} in the link`) : it.acoCan ? `SKU ${it.sku}` : '';
-  const meta = [it.storeName, what, money(price), it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}` : '', it.discount ? `🏷️ code ${it.discount}` : '', it.queueAt ? `⏰ 🚦 starts ${whenAt(it.queueAt)}` : '', checked].filter(Boolean).join(' · ');
+  const meta = [it.storeName, what, money(price), it.quantity > 1 && !(it.shopLink && it.sku.includes(',')) ? `× ${it.quantity}` : '', it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}${it.quantity > 1 && !it.shopLink ? ' each' : ''}` : '', it.discount ? `🏷️ code ${it.discount}` : '', it.queueAt ? `⏰ 🚦 starts ${whenAt(it.queueAt)}` : '', checked].filter(Boolean).join(' · ');
   const isAdmin = state.me.user.role === 'admin';
   return h('li', { class: it.monitor ? '' : 'off', dataset: { id: it.id } },
     h('div', { class: 'info' },
@@ -755,6 +757,10 @@ async function editItem(it, { shop = false } = {}) {
   $('#w-name').value = it ? it.name : '';
   $('#w-price').value = it && typeof it.price === 'number' ? it.price : '';
   $('#w-max').value = it && typeof it.maxPrice === 'number' ? it.maxPrice : '';
+  // (How many: 1 unless set. A Shop checkout link goes by the link's own numbers: …/cart/<number>:<quantity>.)
+  $('#w-qty').value = it && it.quantity ? it.quantity : 1;
+  $('#w-qty').disabled = !!link;
+  $('#w-qty').parentElement.hidden = !!link;
   $('#w-announce').checked = !!(it && it.announce);
   $('#w-aco').checked = !!(it && it.aco);
   $('#w-discount-row').hidden = !link;
@@ -776,6 +782,8 @@ $('#w-form').addEventListener('submit', (e) => {
       url: $('#w-url').value, store: shop ? '' : $('#w-store').value, sku: shop ? '' : $('#w-sku').value, name: $('#w-name').value,
       price: $('#w-price').value, maxPrice: $('#w-max').value, profileId: $('#w-profile').value, aco: $('#w-aco').checked,
     };
+    // (A store's checkout link pasted in, …/cart/<number>:<quantity>: its own quantities, never the box's.)
+    if (!$('#w-qty').disabled && !/\/cart\/\d+:\d+/.test(body.url)) body.quantity = $('#w-qty').value || 1;
     if (shop) body.discount = $('#w-discount').value.trim();
     if (state.me.user.role === 'admin') body.announce = $('#w-announce').checked;
     try {

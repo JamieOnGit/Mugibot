@@ -69,7 +69,7 @@ test('connection codes are easy to type', () => {
 
 test('retailers: each store has its own flow; product codes from links; demo copies on the dummy store', () => {
   assert.deepEqual(RETAILER_DEFS.map((r) => r.id), ['kmart', 'bigw', 'target', 'ebgames', 'zing', 'jbhifi', 'toysrus', 'trainertown', 'amazon', 'thegamescube', 'gamerholic', 'pokemoncenter', 'pbandai', 'citybeach',
-    'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gamesmen', 'gamesworld', 'gameology', 'shoplink']);
+    'pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gamesmen', 'gamesworld', 'gameology', 'fromthedeep', 'shoplink']);
   for (const r of RETAILER_DEFS) {
     // (A Shop checkout link has no product page to add from: the link is the order, straight to Shop's checkout.)
     assert.ok(r.flow && (r.flow.product || r.cartLinks) && r.flow.checkout, `${r.id} has a flow`);
@@ -115,16 +115,35 @@ test('retailers: each store has its own flow; product codes from links; demo cop
     ['gamesworld', 'https://www.gamesworld.com.au/product/one-piece-starter-deck-sabo-st35/', 'one-piece-starter-deck-sabo-st35'],
     // Gameology (1.28.0): its links as its collection pages give them (a member's), and as Shopify's own.
     ['gameology', 'https://www.gameology.com.au/collections/one-piece-booster-boxs/products/one-piece-card-game-op-15-booster-box', 'one-piece-card-game-op-15-booster-box'],
-    ['gameology', 'https://gameology.com.au/products/one-piece-card-game-op-15-booster-box?variant=43938378907763', 'one-piece-card-game-op-15-booster-box']]) {
+    ['gameology', 'https://gameology.com.au/products/one-piece-card-game-op-15-booster-box?variant=43938378907763', 'one-piece-card-game-op-15-booster-box'],
+    // From The Deep Games (1.29.0): its links, with a collection on the way (as its collection pages give them) or not.
+    ['fromthedeep', 'https://fromthedeepgames.com.au/products/pokemon-tcg-pitch-black-booster-box-in-store-only-preorder', 'pokemon-tcg-pitch-black-booster-box-in-store-only-preorder'],
+    ['fromthedeep', 'https://www.fromthedeepgames.com.au/collections/pokemon-tcg/products/pokemon-tcg-pitch-black-booster-box-in-store-only-preorder?variant=1', 'pokemon-tcg-pitch-black-booster-box-in-store-only-preorder']]) {
     assert.equal(retailers.forUrl(url).id, id, url);
     assert.equal(sku(url), code, url);
   }
-  for (const id of ['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']) {
+  for (const id of ['pokebox', 'goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology', 'fromthedeep']) {
     const r = retailers.get(id);
     assert.equal(r.platform, 'shopify', id);
     assert.equal(r.flow, retailers.get('jbhifi').flow, `${id}: the Shopify flow`);
     assert.equal(retailers.cartUrl(id, { variantId: '123' }), `${r.base}/cart/123:1`);
+    // (How many, in Shopify's own cart link: /cart/<variant>:<quantity>.)
+    assert.equal(retailers.cartUrl(id, { variantId: '123', qty: 3 }), `${r.base}/cart/123:3`);
   }
+  // Every store's quick way to checkout carries how many: Amazon's add link, Games World's add-to-cart link.
+  assert.equal(retailers.cartUrl('amazon', { sku: 'B0ABCDEF12', qty: 2 }), 'https://www.amazon.com.au/gp/aws/cart/add.html?ASIN.1=B0ABCDEF12&Quantity.1=2');
+  assert.equal(retailers.cartUrl('gamesworld', { variantId: '687010', qty: 4 }), 'https://www.gamesworld.com.au/checkout/?add-to-cart=687010&quantity=4');
+  // From The Deep Games: its own address, Shopify's search, its collections read whole (never its singles'), and
+  // its Preorders collection as every keyword's second page. Its pages are new to the extension in 1.29.0.
+  const ftd = retailers.get('fromthedeep');
+  assert.equal(ftd.base, 'https://fromthedeepgames.com.au');
+  assert.equal(ftd.acoVersion, '1.29.0');
+  assert.equal(retailers.productUrlFromSku(ftd, 'riftbound-vendetta-booster-box'), 'https://fromthedeepgames.com.au/products/riftbound-vendetta-booster-box');
+  for (const path of ['/collections/pokemon-tcg/products/x-y', '/products/x-y']) assert.ok(ftd.productPath.test(path), path);
+  assert.equal(ftd.productPath.test('/collections/pokemon-tcg'), false, 'a collection page is no product');
+  assert.ok(ftd.sweep.collectionSkip.test('Pokemon Singles (All)') && !ftd.sweep.collectionSkip.test('Pokemon TCG Sealed'));
+  assert.ok(ftd.sweep.collectionPrefer.test('Pokemon TCG Sealed') && !ftd.sweep.collectionPrefer.test('Pokemon TCG Preorders'));
+  assert.equal(ftd.sweep.feedPath, '/collections/preorders/products.json?limit=250');
   // Gameology: a product page with a collection on the way or without; a collection page isn't one. Its pages
   // are new to the extension in 1.28.0, so an older copy is never sent there.
   for (const path of ['/collections/one-piece-booster-boxs/products/one-piece-card-game-op-15-booster-box', '/products/one-piece-card-game-op-15-booster-box']) assert.ok(retailers.get('gameology').productPath.test(path), path);
@@ -164,6 +183,22 @@ test('input checks: usernames, SKUs by link or by store, delivery details, alert
   for (const bad of ['a', 'with space', '.dot', 'admin', 'x'.repeat(30)]) assert.throws(() => username(bad), bad);
   const byLink = item({ url: 'https://www.kmart.com.au/product/x-43000001/#frag', quantity: 99, price: '12.5' }, { retailers });
   assert.deepEqual([byLink.store, byLink.sku, byLink.quantity, byLink.price, byLink.url], ['kmart', '43000001', 10, 12.5, 'https://www.kmart.com.au/product/x-43000001/']);
+  // How many: 1 unless you say (a whole number, 1 to 10).
+  assert.equal(item({ url: 'https://www.kmart.com.au/product/x-43000001/' }, { retailers }).quantity, 1, 'one unless you say');
+  for (const [q, want] of [[3, 3], ['2', 2], [0, 1], [-4, 1], [2.4, 2], ['', 1], [null, 1], [10, 10], [11, 10]]) {
+    assert.equal(item({ url: 'https://www.kmart.com.au/product/x-43000001/', quantity: q }, { retailers }).quantity, want, `quantity ${JSON.stringify(q)}`);
+  }
+  assert.equal(item({ name: 'Renamed' }, { retailers, existing: { ...byLink, quantity: 4 } }).quantity, 4, 'an edit that doesn\'t say keeps it');
+  // A Shop checkout link with one product in it: the link's own number, unless you say — then the link says it too.
+  const shopLink = (url, extra = {}) => item({ url, ...extra }, { retailers });
+  const one = shopLink('https://creations.mattel.com/cart/48835830579405:2');
+  assert.deepEqual([one.quantity, one.url, one.sku], [2, 'https://creations.mattel.com/cart/48835830579405:2', '48835830579405:2'], 'the link\'s own 2');
+  const three = shopLink('https://creations.mattel.com/cart/48835830579405:2', { quantity: 3 });
+  assert.deepEqual([three.quantity, three.url, three.sku], [3, 'https://creations.mattel.com/cart/48835830579405:3', '48835830579405:3'], 'you said 3: the link changed to it');
+  assert.equal(shopLink('https://creations.mattel.com/cart/48835830579405:1', { quantity: '' }).quantity, 1, 'an empty box: the link\'s');
+  // (Several products: each as the link has it — the item's quantity 1, the link left alone.)
+  const two = shopLink('https://creations.mattel.com/cart/48835830579405:2,40653613531341:1', { quantity: 5 });
+  assert.deepEqual([two.quantity, two.url], [1, 'https://creations.mattel.com/cart/48835830579405:2,40653613531341:1']);
   const bySku = item({ store: 'bigw', sku: '6012345' }, { retailers });
   assert.deepEqual([bySku.store, bySku.sku, bySku.url], ['bigw', '6012345', ''], 'found by the monitor later');
   assert.equal(item({ store: 'jbhifi', sku: 'pokemon-etb' }, { retailers }).url, 'https://www.jbhifi.com.au/products/pokemon-etb', 'Shopify link from the handle');

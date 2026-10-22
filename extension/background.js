@@ -513,7 +513,7 @@ async function probeGate(p) {
   let res;
   let html = '';
   try {
-    res = await fetch(p.url, { credentials: 'omit', cache: 'no-store', redirect: 'follow' });
+    res = await fetch(p.url, { credentials: 'omit', cache: 'no-store', redirect: 'follow', signal: AbortSignal.timeout(20000) });
     html = (await res.text()).slice(0, 3000000);
   } catch {
     return { store: p.store, status: 'unknown', how: 'probe' };
@@ -833,7 +833,11 @@ function sweepTab(store) {
 async function openSweepTab(store) {
   const saved = await sweepWindow();
   if (saved.tabs[store] !== undefined) {
-    try { return await chrome.tabs.get(saved.tabs[store]); } catch { /* closed */ }
+    try {
+      const tab = await chrome.tabs.get(saved.tabs[store]);
+      if (tab.autoDiscardable !== false) await keepTab(tab.id);
+      return tab;
+    } catch { /* closed */ }
   }
   let tab = null;
   if (saved.windowId !== null) {
@@ -847,7 +851,28 @@ async function openSweepTab(store) {
   }
   saved.tabs[store] = tab.id;
   await chrome.storage.session.set({ [SWEEP_WINDOW]: saved });
+  await keepTab(tab.id);
   return tab;
+}
+
+/** A sweep tab Chrome never throws out to save memory (its Memory Saver): a store searched from here all day long. */
+async function keepTab(tabId) {
+  await chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => null);
+}
+
+/** The store's sweep tab, closed — opened afresh for its next search — unless it's in the store's queue (never touched then). */
+async function dropSweepTab(store) {
+  const g = await gatesNow().catch(() => ({}));
+  const forget = sweepTabLock.then(async () => {
+    const saved = await sweepWindow();
+    const old = saved.tabs[store];
+    if (old === undefined || ((g[store] || {}).line || {})[old]) return;
+    delete saved.tabs[store];
+    await chrome.storage.session.set({ [SWEEP_WINDOW]: saved });
+    await chrome.tabs.remove(old).catch(() => null);
+  });
+  sweepTabLock = forget.catch(() => null);
+  await forget;
 }
 
 /**
@@ -1124,6 +1149,21 @@ let sweepAgain = false;
 let wakeSweeps = null;
 // Searches going now in this browser: store → its search (each store's runs on its own).
 const sweepsGoing = new Map();
+// Watched all day from here (BIG W's searches come only from admins' browsers), whatever happens in a page: one
+// store's search is given up after jobMs — said as a failed one, its tab opened afresh for the next (a page that
+// never answered) — and a loop that's gone stuckMs without a beat is started again by the alarm, the old one
+// stopping at its next step (sweepWatch). (Tests shorten them: globalThis.mugibotSweepLimits.)
+const SWEEP_LIMITS = { jobMs: 90000, stuckMs: 3 * 60 * 1000 };
+globalThis.mugibotSweepLimits = SWEEP_LIMITS;
+let sweepBeatAt = 0;
+let sweepGen = 0;
+class SweepTooLong extends Error {}
+/** p, or SweepTooLong after ms. */
+function withinLimit(p, ms) {
+  let timer;
+  const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new SweepTooLong()), ms); });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
 let lastSweepLock = Promise.resolve();
 /** The popup's "last search" at each store (one change at a time: searches finish side by side). */
 function noteLastSweep(t, result) {
@@ -1144,15 +1184,18 @@ async function sweepLoop() {
   if (!FROM_STORE && (await chrome.storage.local.get('retired')).retired) return;
   if (!(await getAuth())) return;
   sweeping = true;
+  const gen = ++sweepGen;
   try {
     for (;;) {
       sweepAgain = false;
+      sweepBeatAt = Date.now();
       // (With this copy's version: stores added since an older one are kept for browsers that can open them.
       //  And the stores whose queue it's through: the others' are left alone while they're up.)
       // (And the stores it's still searching: none of theirs handed out again until that search is in.)
       // (And the stores turning this browser away just now — "Access Denied": left alone for half an hour.)
       const denied = await deniedStores();
       const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}&through=${encodeURIComponent((await throughStores()).join(','))}&busy=${encodeURIComponent([...sweepsGoing.keys(), ...denied].join(','))}`);
+      if (gen !== sweepGen) return; // (started again by the alarm: that one goes on)
       if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) {
         if (sweepAgain) continue;
         // (Searches still going: asked again once they're in — they may be the last of a store swept from here.)
@@ -1162,9 +1205,9 @@ async function sweepLoop() {
       if (Array.isArray(due.body.gates)) await noteGatesUp(due.body.gates);
       // Is a store's queue up (or down again)? Looked at as a new visitor, with no cookies.
       const looks = [];
-      for (const p of due.body.probes || []) looks.push(await probeGate(p));
+      for (const p of due.body.probes || []) { looks.push(await probeGate(p)); sweepBeatAt = Date.now(); }
       if (looks.length) await api('POST', '/api/ext/gates', { seen: looks });
-      await watchSweepTabsInLine().catch(() => null);
+      await withinLimit(watchSweepTabsInLine(), 20000).catch(() => null);
       const held = await heldStores();
       for (const t of due.body.terms || []) {
         if (held.has(t.store) || sweepsGoing.has(t.store) || denied.has(t.store)) continue; // its queue is up in this browser (nothing asked there), it's still searching, or it's turning this browser away
@@ -1172,12 +1215,21 @@ async function sweepLoop() {
         // after the slowest store's (BIG W's page, drawn once it's open). One at a time at each store.
         const job = (async () => {
           // (A search that went wrong in here is said as a failed one: the store's backed off as for any.)
-          const result = await sweepOne(t).catch((e) => ({ store: t.store, keyword: t.keyword, page: t.page, ok: false, error: `This browser's search went wrong: ${String((e && e.message) || e).slice(0, 120)}`, ms: 0 }));
+          // (One that never ends — a page that never answered: given up, its tab opened afresh for the next.)
+          const began = Date.now();
+          const result = await withinLimit(sweepOne(t), SWEEP_LIMITS.jobMs).catch(async (e) => {
+            if (e instanceof SweepTooLong) {
+              await dropSweepTab(t.store).catch(() => null);
+              return { store: t.store, keyword: t.keyword, page: t.page, ok: false, error: `This browser's search took over ${Math.round(SWEEP_LIMITS.jobMs / 1000)} s — given up, and the store's tab opened afresh for the next one`, ms: Date.now() - began };
+            }
+            return { store: t.store, keyword: t.keyword, page: t.page, ok: false, error: `This browser's search went wrong: ${String((e && e.message) || e).slice(0, 120)}`, ms: 0 };
+          });
           if (result.gate) await sweepTabInLine(t).catch(() => null);
           await api('POST', '/api/ext/sweeps', { results: [result] });
           await noteLastSweep(t, result);
         })().catch(() => null).finally(() => {
-          sweepsGoing.delete(t.store);
+          // (Started again meanwhile, this store searched anew: that search's, not this one's, to clear.)
+          if (sweepsGoing.get(t.store) === job) sweepsGoing.delete(t.store);
           sweepAgain = true; // (its next search, at its pace: asked for now)
           if (wakeSweeps) wakeSweeps();
         });
@@ -1190,14 +1242,33 @@ async function sweepLoop() {
           wakeSweeps = r;
           setTimeout(r, Math.min(20000, Math.max(1000, due.body.waitMs)));
         });
+        if (gen !== sweepGen) return;
         wakeSweeps = null;
       }
       if (!(await getAuth())) break;
     }
   } finally {
-    sweeping = false;
+    if (gen === sweepGen) sweeping = false;
   }
 }
+
+/**
+ * The alarm's look at the sweep loop (every 30 s): not running — started; running but gone quiet past stuckMs
+ * (something in it never answered) — started again, the old one stopping at its next step, the stores it was
+ * searching handed out afresh.
+ */
+async function sweepWatch() {
+  if (sweeping && sweepBeatAt && Date.now() - sweepBeatAt > SWEEP_LIMITS.stuckMs) {
+    sweepGen += 1;
+    sweeping = false;
+    sweepsGoing.clear();
+    if (wakeSweeps) { const w = wakeSweeps; wakeSweeps = null; w(); }
+  }
+  return sweepLoop();
+}
+globalThis.mugibotSweepWatch = sweepWatch;
+// (What the loop's doing, for the popup and tests: running, its last beat, its turn, the stores searching now.)
+globalThis.mugibotSweepState = () => ({ sweeping, beatAt: sweepBeatAt, gen: sweepGen, going: [...sweepsGoing.keys()] });
 
 // --- Auto-checkout ---------------------------------------------------------------
 // While you have it switched on with items armed (or a Trigger ACO test waiting), this browser asks your account for runs to start
@@ -1840,7 +1911,7 @@ heldUpTick().catch(() => null);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== CHECK_ALARM) return;
   runChecks().catch(() => null);
-  sweepLoop().catch(() => null);
+  sweepWatch().catch(() => null);
   acoLoop().catch(() => null);
   releaseTurns().catch(() => null); // (a checkout waiting for you that's had its few minutes)
   if (!heldTimer) heldUpTick().catch(() => null); // (a Shop checkout link's tab held up in the store's queue)
