@@ -22,6 +22,7 @@
       <a href="#members" data-tab="members">Members</a>
       <a href="#skus" data-tab="skus">SKUs &amp; restock pings</a>
       <a href="#blacklist" data-tab="blacklist">Blacklist</a>
+      <a href="#news" data-tab="news">News</a>
       <a href="#retailers" data-tab="retailers">Stores &amp; flows</a>
       <a href="#integrations" data-tab="integrations">Setup check</a>
       <a href="#whop" data-tab="whop">Whop memberships</a>
@@ -92,6 +93,59 @@
           <tbody id="blacklist"></tbody>
         </table></div>
       </div>
+    </section>
+
+    <!-- 📰 Release news (docs/NEWS.md): admins' own, and what the news feeds bring; posted in #news -->
+    <section data-panel="news" hidden>
+      <form class="card" id="nw-form" novalidate>
+        <h2 id="nw-form-title">Add news</h2>
+        <p class="muted small">What's being released, when, and which stores are dropping it — trading cards, consoles, collectibles, anything that sells out. It's on every member's dashboard (Drops → 📰 News) and, with <b>Post to #news</b>, in the Discord server's <code>#news</code>. With a release date, it's in the morning's <b>📅 Coming up</b> too (8:31 in Sydney, the next 14 days). See <code>docs/NEWS.md</code>.</p>
+        <div class="grid2">
+          <div class="span2"><label for="nw-title">Title</label><input id="nw-title" maxlength="200" placeholder="e.g. Pokémon TCG: Ascended Heroes — pre-orders" autocomplete="off"></div>
+          <div class="span2"><label for="nw-url">Link <span class="muted">(optional)</span></label><input id="nw-url" type="url" placeholder="https://…" autocomplete="off"></div>
+          <div><label for="nw-date">Release date <span class="muted">(optional)</span></label><input id="nw-date" type="date"></div>
+          <div><label for="nw-category">Category</label><select id="nw-category"><option value="">Guess from the title</option></select></div>
+        </div>
+        <fieldset class="kinds" id="nw-stores"><legend>Stores dropping it</legend></fieldset>
+        <label for="nw-summary">Summary <span class="muted">(optional)</span></label>
+        <textarea id="nw-summary" rows="3" maxlength="1000" placeholder="e.g. Elite Trainer Box and booster bundles, limit 2 per customer"></textarea>
+        <label class="check mt"><input type="checkbox" id="nw-post" checked> <span>📣 Post to <code>#news</code></span></label>
+        <div class="form-actions"><button class="btn primary" type="submit" id="nw-save">Add news</button><button class="btn" type="button" id="nw-cancel" hidden>Cancel</button><span class="msg" id="nw-msg"></span></div>
+      </form>
+      <div class="card">
+        <h2>News</h2>
+        <p class="muted small">Newest first: yours, and the feeds' (only what reads like a release of something hyped). <b>Post now</b> posts it in <code>#news</code> (again, if it was already).</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Release</th><th>News</th><th>Stores</th><th>From</th><th>Posted</th><th></th></tr></thead>
+          <tbody id="nw-items"></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>The <code>#news</code> channel</h2>
+        <ul class="checks" id="nw-channel"></ul>
+        <p class="muted small">Found by name (<code>news</code>, or with an emoji: <code>📰┃news</code>), or made by the bot under <b>Mugibot alerts</b> — <b>Set up store channels</b> (Drops → Settings) sets it up too. Its posts never ping @everyone; give a role to ping it.</p>
+        <div class="status-row">
+          <input id="nw-role" inputmode="numeric" placeholder="Role to ping (optional ID)" aria-label="Role each news post pings (optional)">
+          <button class="btn primary" id="nw-setup" type="button">Set up #news</button>
+          <button class="btn" id="nw-digest" type="button">Post 📅 Coming up now</button>
+          <span class="msg" id="nw-channel-msg"></span>
+        </div>
+      </div>
+      <form class="card" id="nf-form" novalidate>
+        <div class="tab-head"><h2>News feeds</h2><button class="btn small" id="nf-check" type="button">⟳ Check feeds now</button></div>
+        <p class="muted small" id="nf-help"></p>
+        <details class="small"><summary>The words it goes by</summary><p class="muted small" id="nf-words-list"></p></details>
+        <div class="grid3">
+          <div><label for="nf-url">Feed link (RSS or Atom)</label><input id="nf-url" type="url" placeholder="https://www.example.com/feed/" autocomplete="off"></div>
+          <div><label for="nf-name">Name <span class="muted">(optional)</span></label><input id="nf-name" maxlength="60" autocomplete="off"></div>
+          <div><label for="nf-words">Words <span class="muted">(optional)</span></label><input id="nf-words" maxlength="300" placeholder="e.g. funko, -pocket" autocomplete="off"></div>
+        </div>
+        <div class="form-actions"><button class="btn primary" type="submit">+ Add feed</button><span class="msg" id="nf-msg"></span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Feed</th><th>On</th><th>Words</th><th>Last read</th><th>Found</th><th></th></tr></thead>
+          <tbody id="nf-feeds"></tbody>
+        </table></div>
+      </form>
     </section>
 
     <section data-panel="retailers" hidden>

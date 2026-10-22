@@ -2,6 +2,7 @@
 import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, money, renderPager, setMsg, toast, when } from './common.js';
 import { setupDrops } from './drops.js';
 import { setupMonitor } from './monitor.js';
+import { setupNews } from './news.js';
 
 const STATUS = {
   in_stock: 'In stock', preorder: 'Pre-order open', out_of_stock: 'Sold out', coming_soon: 'Coming soon', in_store: 'In store only', not_listed: 'Not listed yet',
@@ -31,10 +32,10 @@ const SCROLL_TO = { checkout: '[data-panel="checkout"]', discord: '[data-panel="
 // The Monitor's own pages (Settings and Check log are for admins): the sidebar's Drops stays lit.
 const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
 // The lists on the Drops page (tracked products, your watchlist, your armed items, your drop watches,
-// your activity). #watch and #activity — the old tabs, still in links and DMs — #armed and #drops open
-// the Drops page at that list.
-const LISTS = ['tracked', 'watch', 'armed', 'drops', 'activity'];
-const LIST_HASH = { watch: 'watch', armed: 'armed', drops: 'drops', activity: 'activity' };
+// the release news, your activity). #watch and #activity — the old tabs, still in links and DMs —
+// #armed, #drops and #news open the Drops page at that list.
+const LISTS = ['tracked', 'watch', 'armed', 'drops', 'news', 'activity'];
+const LIST_HASH = { watch: 'watch', armed: 'armed', drops: 'drops', news: 'news', activity: 'activity' };
 const LIST_KEY = 'mgb-list';
 const loaders = {};
 
@@ -87,6 +88,8 @@ const dropsUI = setupDrops({
   watch: (p) => watchProduct(p),
   buyUrl: (p) => `/buy?${new URLSearchParams(Object.entries({ store: p.store, sku: p.sku, url: p.url, name: p.name }).filter(([, v]) => v))}`,
 });
+// 📰 News: what's being released, when and at which stores (news.js).
+const newsUI = setupNews({ isAdmin: () => !!state.me && state.me.user.role === 'admin' });
 
 // --- The lists on the Drops page --------------------------------------------
 function savedList() {
@@ -98,7 +101,7 @@ async function showList(name, { load = true } = {}) {
   const member = state.me.entitlement.active;
   // (No choice yet: what the monitor tracks — or, before a membership, your watchlist.)
   let list = LISTS.includes(name) ? name : savedList() || (member ? 'tracked' : 'watch');
-  if ((list === 'tracked' || list === 'drops' || list === 'armed') && !member) list = 'watch';
+  if ((list === 'tracked' || list === 'drops' || list === 'armed' || list === 'news') && !member) list = 'watch';
   state.list = list;
   for (const b of $$('.mon-ptab')) {
     const on = b.dataset.ptab === list;
@@ -113,6 +116,7 @@ async function showList(name, { load = true } = {}) {
   if (list === 'watch') await loadWatch();
   else if (list === 'armed') await loadArmed();
   else if (list === 'drops') await dropsUI.load();
+  else if (list === 'news') await newsUI.load();
   else if (list === 'activity') await loadFeed(state.feedPage);
 }
 const listOpen = (name) => !$('[data-panel="monitor"]').hidden && state.list === name;
@@ -140,6 +144,7 @@ loaders.monitor = async () => {
   $('#pt-tracked').hidden = !state.me.entitlement.active;
   $('#pt-armed').hidden = !state.me.entitlement.active;
   $('#pt-drops').hidden = !state.me.entitlement.active;
+  $('#pt-news').hidden = !state.me.entitlement.active;
   renderLoadout().catch(() => null);
   await Promise.all([monitorUI.load(), showList(state.list)]);
 };

@@ -3,6 +3,7 @@
 // check input the same way.
 
 import { ALERT_KINDS, CATEGORIES, DEFAULT_KINDS, toMonitor, toProduct } from '../catalog.js';
+import { NEWS_CHANNEL, NEWS_TOPIC, isNewsChannel } from '../news.js';
 import { HttpError, bad, bool, item as checkItem, num, str } from '../schema.js';
 import { OWN_CHANNEL_STORES } from './feed.js';
 import { GATE_CHANNEL, GATE_TOPIC } from './gates.js';
@@ -136,8 +137,8 @@ export class MonitorAdmin {
    * isn't trading cards, and misc-retailers for everything else — found by name, or made by the bot
    * (under "Mugibot alerts") — each with its
    * alert rule. Then #virtual-queue-detection: the stores' checkpoints and virtual queues going up
-   * and coming down (monitor/gates.js). opts.roleId: a role every channel pings. opts.replace:
-   * remove the other rules.
+   * and coming down (monitor/gates.js); and #news, the release news (news.js). opts.roleId: a role
+   * every channel but #news pings. opts.replace: remove the other rules.
    */
   async setupChannels(opts = {}, user = null) {
     const { discord, cfg } = this.ctx;
@@ -196,11 +197,21 @@ export class MonitorAdmin {
     }
     const before = this.ctx.repo.getSetting('gateChannel') || {};
     this.ctx.repo.setSetting('gateChannel', { channelId: String(gate.id), roleId: roleId || (before.channelId === String(gate.id) ? before.roleId || '' : '') });
-    if (user) this.ctx.repo.audit(user.id, null, 'alert-channels-setup', `${out.length + 1} channels (${made.length} made), ${added} rules added${removed ? `, ${removed} removed` : ''}`);
+    // #news: release news (server/news.js) — no alert rule either. (It doesn't ping the store channels'
+    // role: news isn't a drop. "Set up #news" picks its own.)
+    let news = channels.find(isNewsChannel);
+    if (!news) {
+      if (!parent) parent = await make({ name: 'Mugibot alerts', type: 4 });
+      news = await make({ name: NEWS_CHANNEL, type: 0, parent_id: parent.id, topic: NEWS_TOPIC });
+      made.push(news.name);
+    }
+    this.ctx.news.saveChannel(String(news.id));
+    if (user) this.ctx.repo.audit(user.id, null, 'alert-channels-setup', `${out.length + 2} channels (${made.length} made), ${added} rules added${removed ? `, ${removed} removed` : ''}`);
     return {
       channels: [
         ...out.map((w) => ({ name: w.channelName, id: w.channelId, made: made.includes(w.channelName), rule: `#${w.channelName}` })),
         { name: gate.name, id: String(gate.id), made: made.includes(gate.name), rule: 'Checkpoints and virtual queues' },
+        { name: news.name, id: String(news.id), made: made.includes(news.name), rule: 'Release news' },
       ],
       made: made.length, added, removed,
     };

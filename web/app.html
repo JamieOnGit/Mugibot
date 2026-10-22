@@ -119,6 +119,7 @@
                   <button type="button" role="tab" class="mon-ptab" data-ptab="watch" id="pt-watch" aria-controls="pp-watch">My watchlist <span class="mon-meta" id="w-count"></span></button>
                   <button type="button" role="tab" class="mon-ptab" data-ptab="armed" id="pt-armed" aria-controls="pp-armed">🤖 Armed <span class="mon-meta" id="aco-armed-count"></span></button>
                   <button type="button" role="tab" class="mon-ptab" data-ptab="drops" id="pt-drops" aria-controls="pp-drops">🎯 Drop watches <span class="mon-meta" id="dw-count"></span></button>
+                  <button type="button" role="tab" class="mon-ptab" data-ptab="news" id="pt-news" aria-controls="pp-news">📰 News <span class="mon-meta" id="nm-count"></span></button>
                   <button type="button" role="tab" class="mon-ptab" data-ptab="activity" id="pt-activity" aria-controls="pp-activity">My activity</button>
                 </div>
                 <div class="mon-adds"><button class="btn small primary" id="w-add-toggle" type="button" hidden>+ Add SKU</button><button class="btn small primary" id="sl-add" type="button" hidden>+ Add checkout link</button></div>
@@ -225,6 +226,15 @@
                 <h4 class="dw-h">Yours <span class="mon-meta" id="dw-used"></span></h4>
                 <ul class="dw-list" id="dw-mine"></ul>
                 <div id="dw-shared-box" hidden><h4 class="dw-h">From the admins — for everyone</h4><ul class="dw-list" id="dw-shared"></ul></div>
+              </div>
+              <!-- 📰 News: what's being released, when, and which stores are dropping it (docs/NEWS.md) -->
+              <div class="mon-ppanel" data-ppanel="news" id="pp-news" role="tabpanel" aria-labelledby="pt-news" hidden>
+                <p class="muted small">What's coming out, when, and which stores are dropping it — trading cards, consoles, collectibles, whatever sells out — from the admins and the news sites Mugibot reads. It's in the Discord server's <code>#news</code> too, with <b>📅 Coming up</b> each morning. <a id="nm-admin" href="/admin#news" hidden>Manage news ↗</a></p>
+                <div class="filters sn-filters"><select id="nm-show" aria-label="Category"><option value="">Everything</option></select></div>
+                <h4 class="dw-h">📅 Coming up</h4>
+                <ul class="feed-list" id="nm-upcoming"></ul>
+                <h4 class="dw-h">🗞 Latest news</h4>
+                <ul class="feed-list" id="nm-recent"></ul>
               </div>
               <div class="mon-ppanel" data-ppanel="activity" id="pp-activity" role="tabpanel" aria-labelledby="pt-activity" hidden>
                 <p class="muted small">Everything about your account, newest first: your SKUs' restocks and pings, ⚡ Buy and Auto-checkout, your membership.</p>

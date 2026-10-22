@@ -754,6 +754,29 @@ test('admin console: members and memberships, not personal details; SKU totals a
   assert.ok(!env.app.catalog.isBlocked('kmart', '43834044'));
   if (shots) await page.screenshot({ path: path.join(shots, 'admin-blacklist.png'), fullPage: true });
 
+  // 📰 News: an admin's own (its date and stores), posted in #news; the default feeds, switched off one by one.
+  await page.click('a[data-tab="news"]');
+  await page.waitForFunction(() => /PokéBeach/.test(document.querySelector('#nf-feeds').textContent) && document.querySelector('#nw-stores input'));
+  await page.fill('#nw-title', 'Pokémon TCG: Ascended Heroes — pre-orders');
+  await page.fill('#nw-url', 'https://cards.example/ascended-heroes');
+  await page.fill('#nw-date', new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10));
+  await page.check('#nw-stores input[value="ebgames"]');
+  await page.click('#nw-form button[type=submit]');
+  await page.waitForFunction(() => /Added and posted in #news/.test(document.querySelector('#nw-msg').textContent));
+  assert.match(await page.textContent('#nw-items'), /Ascended Heroes.*EB Games/s);
+  assert.ok(discord.state.channels.some((c) => c.name === 'news'), 'the bot made #news');
+  await page.locator('#nf-feeds tr', { hasText: 'IGN' }).locator('input[aria-label="IGN on"]').uncheck();
+  await waitFor(() => env.app.news.data.feedRows().some((f) => f.name === 'IGN' && !f.enabled), { message: 'feed switched off' });
+  if (shots) await page.screenshot({ path: path.join(shots, 'admin-news.png'), fullPage: true });
+  // …and on the dashboard: Drops → 📰 News.
+  await page.goto(`${env.url}/app#news`);
+  await page.waitForFunction(() => /Ascended Heroes/.test(document.querySelector('#nm-upcoming').textContent));
+  assert.equal(await page.getAttribute('#pt-news', 'aria-selected'), 'true');
+  assert.match(await page.textContent('#nm-upcoming'), /EB Games/);
+  if (shots) await page.screenshot({ path: path.join(shots, 'news.png'), fullPage: true });
+  await page.goto(`${env.url}/admin#news`);
+  await page.waitForSelector('#nw-items tr');
+
   await page.click('a[data-tab="retailers"]');
   await page.waitForSelector('#retailers tr');
   assert.match(await page.textContent('#retailers'), /Kmart.*verified/s);
