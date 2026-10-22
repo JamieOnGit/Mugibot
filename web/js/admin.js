@@ -9,7 +9,7 @@ let offset = 0;
 let total = 0;
 const date = (ts) => (ts ? new Date(ts).toLocaleDateString() : '—');
 const loaders = {};
-const TABS = ['overview', 'members', 'skus', 'blacklist', 'retailers', 'integrations', 'whop', 'audit'];
+const TABS = ['overview', 'members', 'skus', 'blacklist', 'news', 'retailers', 'integrations', 'whop', 'audit'];
 const STATUS = { in_stock: 'in stock', preorder: 'pre-order', out_of_stock: 'sold out', coming_soon: 'coming soon', in_store: 'in store only', not_listed: 'not listed', not_found: 'gone', blocked: 'blocked', error: 'error', pending: 'pending', unknown: 'unknown' };
 
 function showTab() {
@@ -232,6 +232,176 @@ $('#bl-form').addEventListener('submit', async (e) => {
   $('#bl-sku').value = '';
   $('#bl-note').value = '';
   loaders.blacklist();
+});
+
+// --- News: release news (docs/NEWS.md) — admins' own, the news feeds', and #news ---------------
+const news = { data: null, editing: null };
+// (Release days are days in Sydney, like the stores'.)
+const SYDNEY_DAY = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit', day: '2-digit' });
+const dayBox = (ms) => {
+  if (!ms) return '';
+  const p = Object.fromEntries(SYDNEY_DAY.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+};
+const releaseDay = (ms) => new Date(ms).toLocaleDateString('en-AU', { timeZone: 'Australia/Sydney', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+const tick = (ok, label, detail) => h('li', {}, h('span', { class: ok ? 'ok-mark' : 'no-mark' }, ok ? '✓' : '✕'), h('div', {}, h('b', {}, label), detail ? h('div', { class: 'muted small' }, detail) : null));
+
+async function newsCall(method, path, body, done) {
+  try {
+    const r = await api(method, path, body);
+    if (r && r.items) renderNews(r);
+    if (done) done(r);
+    return r;
+  } catch (e) {
+    toast("Couldn't do that", e.message, 'warn');
+    return null;
+  }
+}
+
+function newsForm(item = null) {
+  news.editing = item ? item.id : null;
+  $('#nw-form-title').textContent = item ? 'Edit news' : 'Add news';
+  $('#nw-save').textContent = item ? 'Save changes' : 'Add news';
+  $('#nw-cancel').hidden = !item;
+  $('#nw-title').value = item ? item.title : '';
+  $('#nw-url').value = item ? item.url : '';
+  $('#nw-date').value = item ? dayBox(item.releaseAt) : '';
+  $('#nw-category').value = item ? item.category : '';
+  $('#nw-summary').value = item ? item.summary : '';
+  $('#nw-post').checked = !item;
+  const ids = new Set(item ? item.stores.map((s) => s.id) : []);
+  for (const box of $$('#nw-stores input')) box.checked = ids.has(box.value);
+  if (item) $('#nw-form').scrollIntoView({ block: 'start' });
+}
+
+function renderNews(d) {
+  news.data = d;
+  const cat = $('#nw-category');
+  if (cat.options.length < 2) for (const [k, v] of Object.entries(d.categories)) cat.append(h('option', { value: k }, v));
+  const stores = $('#nw-stores');
+  if (!stores.querySelector('input')) for (const s of d.stores) stores.append(h('label', { class: 'check inline' }, h('input', { type: 'checkbox', value: s.id }), s.name));
+
+  const body = $('#nw-items');
+  body.textContent = '';
+  if (!d.items.length) body.append(h('tr', {}, h('td', { colspan: '6', class: 'empty' }, 'No news yet. Add some above, or wait for the feeds.')));
+  for (const x of d.items) {
+    body.append(h('tr', {},
+      h('td', { class: 'small' }, x.releaseAt ? releaseDay(x.releaseAt) : x.releaseText || '—'),
+      h('td', {}, x.url ? h('a', { href: x.url, target: '_blank', rel: 'noopener' }, h('b', {}, x.title)) : h('b', {}, x.title),
+        h('div', { class: 'muted small' }, `${d.categories[x.category] || x.category}${x.summary ? ` · ${x.summary.slice(0, 140)}${x.summary.length > 140 ? '…' : ''}` : ''}`)),
+      h('td', { class: 'small' }, x.stores.map((s) => s.name).join(', ') || '—'),
+      h('td', { class: 'small' }, x.source === 'admin' ? 'Admin' : x.sourceName, h('div', { class: 'muted small' }, when(x.at))),
+      h('td', { class: 'small' }, x.postedAt ? when(x.postedAt) : h('span', { class: 'muted' }, 'not posted')),
+      h('td', {}, h('div', { class: 'acts status-row' },
+        h('button', { class: 'btn small', type: 'button', onclick: () => newsCall('POST', `/api/admin/news/${x.id}/post`, {}, () => toast('Posted in #news', x.title, 'success')) }, x.postedAt ? 'Post again' : 'Post now'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => newsForm(x) }, 'Edit'),
+        h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Delete ${x.title}`, onclick: () => { if (confirm(`Delete "${x.title}"? (A post in #news stays there.)`)) newsCall('DELETE', `/api/admin/news/${x.id}`); } }, 'Delete')))));
+  }
+
+  const ch = $('#nw-channel');
+  ch.textContent = '';
+  // (The role it pings now: pressing "Set up #news" again keeps it — an empty box pings no one.)
+  if (document.activeElement !== $('#nw-role')) $('#nw-role').value = (d.newsChannel && d.newsChannel.roleId) || '';
+  ch.append(
+    tick(d.bot, 'Discord bot', d.bot ? 'Ready' : 'Not set up yet (Setup check) — news still shows on the dashboard'),
+    tick(!!d.newsChannel, '#news', d.newsChannel ? `Channel ${d.newsChannel.channelId}${d.newsChannel.roleId ? ` · pings role ${d.newsChannel.roleId}` : ' · pings no one'}` : 'Not set up yet: the bot finds it by name (or makes it) the first time there\'s news to post'),
+    tick(!!d.digest, '📅 Coming up', d.digest ? `Last posted ${d.digest.day} (${d.digest.count} release${d.digest.count === 1 ? '' : 's'})` : 'Each morning at 8:31 (Sydney), when something comes out in the next 14 days'));
+
+  $('#nf-help').textContent = `Each feed is read every ${d.everyMinutes} minutes${d.running ? '' : ' (not on this server: its monitor is off)'}, as Mugibot. An entry becomes news when its title reads like a release — pre-orders, a release date, launches, restocks, drops… — and it names a hyped product, or one of the feed's own words. A feed's first read only sets the scene: nothing in it is posted.`;
+  $('#nf-words-list').textContent = `Hyped products: ${d.defaults.words.join(', ')}. Left out when the title says: ${d.defaults.notWords.join(', ')}. A feed's own words are added to the hyped products; "-word" leaves out entries with that word in the title.`;
+  const feeds = $('#nf-feeds');
+  feeds.textContent = '';
+  if (!d.feeds.length) feeds.append(h('tr', {}, h('td', { colspan: '6', class: 'empty' }, 'No feeds. Add one above.')));
+  for (const f of d.feeds) {
+    const on = h('input', { type: 'checkbox', checked: f.enabled, 'aria-label': `${f.name} on` });
+    on.addEventListener('change', () => newsCall('PUT', `/api/admin/news/feeds/${f.id}`, { enabled: on.checked }, () => toast('Saved', `${f.name}: ${on.checked ? 'on' : 'off'}`, 'success')));
+    const last = !f.lastFetchAt ? h('span', { class: 'muted' }, 'not yet')
+      : [h('div', {}, when(f.lastFetchAt)), f.lastError
+        ? h('div', { class: 'small warn-text' }, `${f.lastError}${f.nextAt ? ` — tries again ${when(f.nextAt)}` : ''}`)
+        : h('div', { class: 'muted small' }, f.lastResult)];
+    feeds.append(h('tr', {},
+      h('td', {}, h('b', {}, f.name), h('div', { class: 'small wrap-anywhere' }, h('a', { href: f.url, target: '_blank', rel: 'noopener' }, f.url))),
+      h('td', {}, on),
+      h('td', { class: 'small' }, f.keywords || h('span', { class: 'muted' }, 'the defaults')),
+      h('td', { class: 'small' }, last),
+      h('td', { class: 'small' }, String(f.found)),
+      h('td', {}, h('div', { class: 'acts status-row' },
+        h('button', { class: 'btn small', type: 'button', onclick: () => newsCall('POST', '/api/admin/news/feeds/check', { id: f.id }, (r) => { const x = r.results[0]; toast(x.ok ? `Read ${f.name}` : `${f.name}: not read`, x.ok ? (x.notModified ? 'Nothing new' : `${x.added} new`) : x.error, x.ok ? 'success' : 'warn'); }) }, 'Check'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => { const w = prompt(`Words for ${f.name}, comma-separated — added to the hyped products. "-word" leaves out entries with it in the title. Empty: just the defaults.`, f.keywords); if (w !== null) newsCall('PUT', `/api/admin/news/feeds/${f.id}`, { keywords: w }); } }, 'Words…'),
+        h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove ${f.name}`, onclick: () => { if (confirm(`Stop reading ${f.name}? (The news it found stays.)`)) newsCall('DELETE', `/api/admin/news/feeds/${f.id}`); } }, 'Remove')))));
+  }
+}
+
+loaders.news = async () => renderNews(await api('GET', '/api/admin/news'));
+
+$('#nw-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    title: $('#nw-title').value.trim(), url: $('#nw-url').value.trim(), releaseAt: $('#nw-date').value || null,
+    category: $('#nw-category').value || undefined, summary: $('#nw-summary').value.trim(), stores: $$('#nw-stores input').filter((b) => b.checked).map((b) => b.value),
+  };
+  const msg = $('#nw-msg');
+  try {
+    const editing = news.editing;
+    const r = editing ? await api('PUT', `/api/admin/news/${editing}`, body) : await api('POST', '/api/admin/news', { ...body, post: $('#nw-post').checked });
+    let posted = !!r.posted;
+    let problem = r.postError || '';
+    if (editing && $('#nw-post').checked) {
+      try { renderNews(await api('POST', `/api/admin/news/${editing}/post`, {})); posted = true; } catch (err) { problem = err.message; }
+    } else {
+      renderNews(r);
+    }
+    msg.textContent = `${editing ? 'Saved' : 'Added'}${posted ? ' and posted in #news' : ''}.${problem ? ` Not posted: ${problem}` : ''}`;
+    msg.className = `msg ${problem ? 'err' : 'ok'}`;
+    newsForm();
+  } catch (err) {
+    msg.textContent = err.message;
+    msg.className = 'msg err';
+  }
+});
+$('#nw-cancel').addEventListener('click', () => { newsForm(); $('#nw-msg').textContent = ''; });
+
+$('#nw-setup').addEventListener('click', () => newsCall('POST', '/api/admin/news/channel', { roleId: $('#nw-role').value.trim() }, (r) => {
+  $('#nw-channel-msg').textContent = `Done: #${r.channel.name} ${r.channel.made ? 'made' : 'found'}${r.roleId ? `, pinging role ${r.roleId}` : ''}.`;
+  $('#nw-channel-msg').className = 'msg ok';
+}));
+$('#nw-digest').addEventListener('click', async () => {
+  try {
+    const r = await api('POST', '/api/admin/news/digest', {});
+    $('#nw-channel-msg').textContent = `Posted 📅 Coming up: ${r.count} release${r.count === 1 ? '' : 's'}.`;
+    $('#nw-channel-msg').className = 'msg ok';
+  } catch (err) {
+    $('#nw-channel-msg').textContent = err.message;
+    $('#nw-channel-msg').className = 'msg err';
+  }
+});
+
+$('#nf-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = $('#nf-msg');
+  msg.textContent = 'Reading it…';
+  msg.className = 'msg';
+  try {
+    const r = await api('POST', '/api/admin/news/feeds', { url: $('#nf-url').value.trim(), name: $('#nf-name').value.trim(), keywords: $('#nf-words').value });
+    renderNews(r);
+    msg.textContent = r.result.ok ? `Added: ${r.result.entries} entries in it, ${r.result.matched} about releases (its first read: kept, not posted).` : `Added, but it couldn't be read: ${r.result.error}`;
+    msg.className = `msg ${r.result.ok ? 'ok' : 'err'}`;
+    for (const id of ['#nf-url', '#nf-name', '#nf-words']) $(id).value = '';
+  } catch (err) {
+    msg.textContent = err.message;
+    msg.className = 'msg err';
+  }
+});
+$('#nf-check').addEventListener('click', async () => {
+  const msg = $('#nf-msg');
+  msg.textContent = 'Reading every feed that\'s on…';
+  msg.className = 'msg';
+  const r = await newsCall('POST', '/api/admin/news/feeds/check', {});
+  if (!r) { msg.textContent = ''; return; }
+  const bad = r.results.filter((x) => !x.ok);
+  const added = r.results.reduce((n, x) => n + (x.added || 0), 0);
+  msg.textContent = `Read ${r.results.length - bad.length} of ${r.results.length}: ${added} new.${bad.length ? ` Not read: ${bad.map((x) => x.name).join(', ')}.` : ''}`;
+  msg.className = `msg ${bad.length ? 'err' : 'ok'}`;
 });
 
 // --- Stores and flows -------------------------------------------------------------------

@@ -69,6 +69,12 @@ community. Built on TCGCopBot's working Kmart flow.
   Auto-checkout work at every store Mugibot knows, the same way as for cards;
   other websites get the alert only. See
   [docs/MONITORING.md](docs/MONITORING.md#-drop-watches-anything-that-isnt-the-card-keywords).
+- **📰 Release news.** What's coming out, when, and which stores are dropping
+  it: trading cards, consoles, collectibles. It comes from the admins and from
+  news sites' feeds (PokéBeach, Nintendo Life, Press Start…), read every 15
+  minutes, where only release news about hyped products counts. It's posted in
+  `#news`, shown on every dashboard, and summed up each morning in **📅 Coming
+  up**. See [docs/NEWS.md](docs/NEWS.md).
 - **Every store has its own flow.** Kmart is verified. BIG W, EB Games,
   JB Hi-Fi, Target, Toys"R"Us, Amazon, The Games Cube, Gamerholic, Premium
   Bandai (Australia), and the card shops Pokébox, Good Games, Collectible
@@ -144,6 +150,7 @@ community. Built on TCGCopBot's working Kmart flow.
 | Understand Auto-checkout: arming, limits, what it checks, the run history, card backup | [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md) |
 | Run the community day to day (admin console) | [docs/ADMIN.md](docs/ADMIN.md) |
 | Set up the Monitor feed: products, alert channels, schedules | [docs/MONITORING.md](docs/MONITORING.md) |
+| Release news: #news, the news feeds, the morning digest | [docs/NEWS.md](docs/NEWS.md) |
 | Put the extension on the Chrome Web Store, so it updates itself | [docs/CHROME-WEB-STORE.md](docs/CHROME-WEB-STORE.md) |
 
 ## Quick start (on your computer)
@@ -523,8 +530,10 @@ server/
                     SKU page checks and in-browser check results, feed.js (alerts),
                     public.js (what members see of the sweeps), gates.js and gate.js
                     (checkpoints and virtual queues: up, down, #virtual-queue-detection),
-                    drops.js (drop watches: anything outside the card keywords, #non-tcg-alerts)
+                    drops.js (drop watches: anything outside the card keywords, #non-tcg-alerts),
+                    rss.js (RSS and Atom feeds, for the news)
   catalog.js        the Monitor's products, monitors, price history, check log, alert rules
+  news.js           release news: admins' and the news feeds', #news, 📅 Coming up (docs/NEWS.md); newsdata.js its data
   discord.js        Discord OAuth, server roles, DMs, channel posts
   whop.js           Whop checkout links, webhooks, membership sync
   notifier.js       a member's pings: activity feed, Discord DM, webhook, email

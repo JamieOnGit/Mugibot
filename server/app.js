@@ -19,6 +19,7 @@ import { Gates } from './monitor/gates.js';
 import { storeFetch } from './monitor/http.js';
 import { Monitor } from './monitor/index.js';
 import { Sweeper } from './monitor/sweep.js';
+import { News } from './news.js';
 import { Notifier } from './notifier.js';
 import { Repo } from './repo.js';
 import { Retailers } from './retailers/index.js';
@@ -30,6 +31,7 @@ import * as discordRoutes from './routes/discord.js';
 import * as ext from './routes/ext.js';
 import * as membership from './routes/membership.js';
 import * as monitorRoutes from './routes/monitor.js';
+import * as newsRoutes from './routes/news.js';
 import { servePage } from './routes/pages.js';
 import * as user from './routes/user.js';
 import { handleWebRoute } from './routes/web.js';
@@ -75,7 +77,9 @@ export async function createApp(options = {}) {
   monitor.drops = drops;
   sweeper.drops = drops;
   feed.drops = drops;
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, limiter, pageCache: new Map() };
+  // Release news: admins' and the news feeds', posted in #news (and a digest each morning).
+  const news = new News({ cfg, db, repo, retailers, discord, notifier, fetchImpl: storeFetchImpl, now });
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, news, limiter, pageCache: new Map() };
   drops.ctx = ctx;
   // Auto-checkout: started by the monitor when an armed item drops.
   const aco = new Aco({ ...ctx, now });
@@ -94,6 +98,7 @@ export async function createApp(options = {}) {
   discordRoutes.register(router, ctx);
   admin.register(router, ctx);
   monitorRoutes.register(router, ctx);
+  newsRoutes.register(router, ctx);
 
   const headers = securityHeaders(cfg);
   const allowedOrigins = () => new Set([new URL(cfg.baseUrl).origin, ...cfg.extraOrigins]);
@@ -237,6 +242,7 @@ export async function createApp(options = {}) {
     sweeper,
     gates,
     drops,
+    news,
     aco,
     bags,
     catalog,
@@ -259,6 +265,7 @@ export async function createApp(options = {}) {
       sweeper.start();
       gates.start();
       drops.start();
+      news.start();
       aco.start();
       bags.start();
       startJobs();
@@ -269,6 +276,7 @@ export async function createApp(options = {}) {
       sweeper.stop();
       gates.stop();
       drops.stop();
+      news.stop();
       aco.stop();
       bags.stop();
       timers.forEach(clearInterval);

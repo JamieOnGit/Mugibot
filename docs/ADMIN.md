@@ -46,6 +46,14 @@ any monitor on it is removed. **Remove** takes it off again. Admins also have
 **🚫 Blacklist** on each product's page on the Drops page. See
 [MONITORING.md](MONITORING.md#the-blacklist).
 
+**News.** Release news: what's coming out, when, and which stores are
+dropping it. You can add your own (title, link, stores, release date, summary,
+**📣 Post to #news**), and post, edit or delete any item. **News feeds** are the
+RSS and Atom feeds Mugibot reads every 15 minutes: add one, give it words,
+switch it on or off, and see its last read or error. **Set up #news** finds or
+makes the channel, and takes a role to ping. **Post 📅 Coming up now** posts
+the digest of the next 14 days' releases. See [NEWS.md](NEWS.md).
+
 **Stores & flows.** Each store, its flow status (verified / beta / draft) and three switches:
 - **On**: off hides the store from members and stops its checks and flows.
 - **Server checks**: switch off for stores that block servers. Members'

@@ -260,6 +260,7 @@ channels** → **Set up store channels** makes them in one go:
 | `non-tcg-alerts` | What isn't trading cards, from every store and website: the admins' 🎯 drop watches (an Xbox at JB Hi-Fi, a figure at any shop — docs/MONITORING.md → Drop watches). Only there, not in the store's own channel |
 | `misc-retailers` | Everything no other channel takes: other stores (Trainer Town, Amazon AU, The Games Cube, Gamerholic…) and other games (Gundam, Dragon Ball, Riftbound…) at the split stores |
 | `virtual-queue-detection` | JB Hi-Fi's hCaptcha checkpoint and EB Games' and Pokémon Center's virtual queues going up and coming down (docs/MONITORING.md → Checkpoints and virtual queues), with **📥 Join the queue on my computer** on a queue's post |
+| `news` | Release news: what's coming out, when, and which stores are dropping it — admins' own and the news feeds' — and **📅 Coming up** each morning ([NEWS.md](NEWS.md)) |
 
 - The bot uses channels with those names that are **already there** (it also
   finds `kmart-onepiece` and `misc-retailer`), and makes the rest in a
@@ -287,6 +288,10 @@ channels** → **Set up store channels** makes them in one go:
   checkpoints and queues. It pings the same role. Made before this channel
   existed? Press **Set up store channels** again. Until then, the bot finds a
   channel with that name, or makes one, the first time it has something to post.
+- `news` has no rule either: only release news goes there. It's found by name
+  (an emoji in it is fine, e.g. `📰┃news`), and it doesn't ping the store
+  channels' role. It can also be set up on its own, with a role of its own to
+  ping, under Admin → **News** → **Set up #news**. See [NEWS.md](NEWS.md).
 - The bot needs **View Channel**, **Send Messages** and **Embed Links** in each
   channel (in the category's permissions, they apply to all of them).
 

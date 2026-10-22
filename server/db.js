@@ -496,6 +496,52 @@ const MIGRATIONS = [
   `
   ALTER TABLE items ADD COLUMN queue_at INTEGER;
   `,
+  // 16 — release news (server/news.js, docs/NEWS.md): what's coming out, when and at which stores — an
+  //      admin's, or from the news feeds Mugibot reads (RSS and Atom) — posted in the Discord server's
+  //      #news; and the feeds, with what their last read said.
+  `
+  CREATE TABLE news_items (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'admin',   -- 'admin' | 'feed'
+    source_name TEXT NOT NULL DEFAULT '',   -- the feed's name ("Nintendo Life"), or the app's for an admin's
+    feed_id TEXT,                           -- the feed it came from (NULL: an admin's)
+    category TEXT NOT NULL DEFAULT 'other', -- 'tcg' | 'console' | 'collectible' | 'other'
+    stores TEXT NOT NULL DEFAULT '[]',      -- the retailers it names: ["ebgames", "bigw", …]
+    release_at INTEGER,                     -- its release date (midnight in Sydney), when it says one
+    release_text TEXT NOT NULL DEFAULT '',  -- …as written ("14 November")
+    dedupe_key TEXT NOT NULL UNIQUE,        -- a feed entry's guid or link ('admin:<id>' for an admin's)
+    published_at INTEGER,                   -- when its feed says it was published
+    posted_at INTEGER,                      -- last posted in #news
+    posted_channel TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX news_items_release ON news_items (release_at);
+  CREATE INDEX news_items_created ON news_items (created_at);
+  CREATE INDEX news_items_url ON news_items (url);
+
+  CREATE TABLE news_feeds (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    keywords TEXT NOT NULL DEFAULT '',      -- comma list added to the hyped products ('' = the defaults; -word leaves out)
+    baseline_at INTEGER,                    -- its first read: what was in it then is old news, never posted
+    next_at INTEGER NOT NULL DEFAULT 0,
+    fails INTEGER NOT NULL DEFAULT 0,       -- reads gone wrong in a row (it backs off)
+    last_fetch_at INTEGER,
+    last_ok_at INTEGER,
+    last_error TEXT NOT NULL DEFAULT '',
+    last_result TEXT NOT NULL DEFAULT '',
+    etag TEXT NOT NULL DEFAULT '',          -- for a conditional read (304: nothing new)
+    last_modified TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export class Db {
