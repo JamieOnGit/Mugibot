@@ -489,20 +489,36 @@ It **never** gets past your bank's check or a store's bot check. It stops and
 tells you.
 
 **Your bank's check, as it really comes up** (extension 1.30.0). After "Pay",
-most Australian cards are sent to the bank's check (3-D Secure): a pop-up on
-the checkout, or the whole tab sent to the bank's own site, asking you to
-approve the payment in your bank's app (CommBank, NAB, Westpac, ANZ…) or type in
-a code it texts you. Until you do, the store waits, and nothing's bought. The
-bank's page is usually posted into its frame, so there's no address to know it
-by. Mugibot goes by what it can see:
+most cards are sent to the bank's check (3-D Secure): asking you to approve the
+payment in your bank's app, or to type in a code it texts you. Until you do, the
+store waits, and nothing's bought. It's the same for **every store and every
+bank**: Mugibot never goes by a store's or a bank's name. The bank's page is
+usually posted into a frame with no address to know it by, and Mugibot can't
+read inside it, so Mugibot goes by where it appears and how:
 
-- a frame named, titled or boxed for it (Adyen's "threeDSIframe", Cardinal's,
-  Stripe's), or any frame the press brought up in front of the checkout, big
-  enough to answer in (not chat, ads, video, PayPal or Afterpay);
-- words the press brought up about approving the payment ("Approve this payment
-  in your CommBank app", "Payment authentication", "Enter your NetCode");
-- the checkout sent on to another site (one Mugibot can't open, still there a
-  few seconds later: a check that passes by itself comes straight back).
+- **A frame on the checkout**, named, titled or boxed for it (the names payment
+  providers give it: Adyen's "threeDSIframe", Cardinal's, Stripe's,
+  "challenge", "step-up"), or any frame the press brought up in front of the
+  checkout, big enough to answer in (not chat, ads, video, PayPal or Afterpay).
+- **Inside the payment provider's own frame** (the one with your card boxes,
+  or a whole checkout in a frame like Premium Bandai's Global-e): a frame of a
+  size to answer in that the press brought up there. Every frame on the page
+  is looked at, every 2 seconds, while the store hasn't answered.
+- **A page of the store's own** after "Pay" ("Processing your payment…") with
+  the bank's frame on it.
+- **A window of its own** the checkout opens.
+- **The whole tab sent to the bank's site**, by the page or by the store's
+  server. That's a site Mugibot can't open; if the tab's still there 5 seconds
+  later, it's the bank's check (one that passes by itself comes straight back).
+- **Words the press brought up**, in any bank's terms: "Approve this payment in
+  your banking app", "We've sent a code to your phone", "Enter the
+  verification code", "Verify your purchase", "Confirm it's you". A line saying
+  it went wrong ("Payment authentication failed") isn't counted: what the store
+  said reaches you as it is.
+
+It's looked for until the half hour after "Pay" is up, also on a page the store
+moves on to that's only "processing" for a while. If your account has already
+said "no confirmation" by then, the bank's check still reaches you.
 
 Then, within seconds: **🏦 Approve the payment in your bank's app** as a Discord
 DM (and email, if you get them), with **🖥️ Open my computer** (Chrome Remote
@@ -510,6 +526,15 @@ Desktop) for a code you have to type into the checkout tab. The run says
 **Needs you**. Approve it on your phone and the store goes on to its
 confirmation; Mugibot is still watching (for the half hour) and the run turns
 **✅ Order placed** by itself. "Pay" is never pressed again meanwhile.
+
+**Allow pop-ups for the stores you buy from** in the browser that checks out.
+Chrome blocks a window a page opens without a person's click, and a store that
+opens your bank's check in a window of its own would wait for it in vain. In
+Chrome, go to Settings → Privacy and security → Site settings → Pop-ups and
+redirects → Allowed to send pop-ups → Add, then add each store
+(`www.ebgames.com.au`, `checkout.shopify.com`, `shop.app`…). Most stores show
+the bank's check on the page or send the tab to the bank, so this only matters
+for a few.
 
 Before 1.30.0 Mugibot only knew the bank's check by its frame's address (…/3ds,
 …/acs) or its words on the checkout itself. Real ones often show neither, and

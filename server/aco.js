@@ -768,7 +768,11 @@ export class Aco {
     // that's an order, counted towards the day's limits and the arming used up. (Pressing it *again*, the
     // browser asks first — again — and a closed run says no.)
     const late = (row.status === 'failed' && row.reason === 'timeout') && !again && (status === 'placing' || status === 'placed');
-    if (DONE.has(row.status) && !(row.status === 'needs_you' && status === 'placed') && !late) return toRun(row);
+    // (Your bank's check, come up on a slow store after the run was closed here for want of news: said all the same
+    //  — you're DM'd to approve it — and placed after it if the store confirms.)
+    const lateBank = status === 'needs_you' && reason === 'bank_check'
+      && ((row.status === 'needs_you' && row.reason === 'unconfirmed') || (row.status === 'failed' && row.reason === 'timeout'));
+    if (DONE.has(row.status) && !(row.status === 'needs_you' && status === 'placed') && !late && !lateBank) return toRun(row);
     if (typeof total === 'number' && Number.isFinite(total) && total > 0) this.db.run('UPDATE aco_runs SET total = :t WHERE id = :id', { t: Math.round(total * 100) / 100, id: row.id });
     if (late && status === 'placing') {
       // (Pressed after the run had been closed here: counted as an order — for the member to check — and never

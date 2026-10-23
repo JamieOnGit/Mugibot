@@ -199,6 +199,22 @@ test("a bank's check after the press: the member finishes it, and it can still t
   // Said as what it is, straight away: approve it in your bank's app (with its total).
   assert.ok((await events(ash)).some((e) => /^🏦 Approve the payment in your bank's app: Night UPC — .*\$360\.00$/.test(e.message)), JSON.stringify((await events(ash)).slice(0, 3)));
   assert.equal((await report(run.id, { status: 'placed' })).body.run.status, 'placed');
+  // A slow store: the run closed here for want of news ("no confirmation") — then the bank's check comes up after
+  // all: said all the same (approve it), and placed after it. (Room in the day's limits for it, put back after.)
+  const limits = (await ash.get('/api/aco')).body.settings;
+  await ash.put('/api/aco', { perDay: 20, spendPerDay: 5000 });
+  const slow = await arm(ashItems[1], 380);
+  await drop(slow.id, 360);
+  const late = (await pickUp()).run;
+  await report(late.id, { status: 'placing', total: 360 });
+  env.app.db.run("UPDATE aco_runs SET status = 'needs_you', reason = 'unconfirmed' WHERE id = :id", { id: late.id });
+  const bankLate = (await report(late.id, { status: 'needs_you', reason: 'bank_check', message: 'Your bank wants you to approve this payment', pressed: true })).body.run;
+  assert.deepEqual([bankLate.status, bankLate.reason], ['needs_you', 'bank_check'], 'said all the same');
+  assert.equal((await events(ash)).filter((e) => /^🏦 Approve the payment in your bank's app: Night UPC/.test(e.message)).length, 2);
+  assert.equal((await report(late.id, { status: 'placed' })).body.run.status, 'placed');
+  // (Not one of today's orders for the tests after: the day's limits are counted from here as before.)
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE id = :id', { id: late.id });
+  await ash.put('/api/aco', { perDay: limits.perDay, spendPerDay: limits.spendPerDay });
   // An unknown reason from a browser is kept as "something went wrong".
   const other = await arm(ashItems[2], 30);
   await ash.put('/api/aco', { perDay: 3 });

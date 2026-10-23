@@ -545,12 +545,17 @@ test("Auto-checkout's read of a store's answer to its final button (extension/ch
   assert.equal(C.savedCardShown(doc('...2387 08/27'), null, true), false, 'card boxes on the page: they need filling, whatever else shows');
   // Words about approving a payment, as a checkout's pop-up or the bank puts them after the final button (only new
   // ones count: checks.js bankAfterPress) — and not what a checkout says anyway.
+  // (Whatever the bank — its name is never needed: any bank's words for it.)
   for (const said of ['Approve this payment in your CommBank app', 'Open your banking app to approve the payment', 'Check your NAB app to confirm', 'Payment authentication', 'Verify your purchase',
-    'Waiting for your bank', 'Enter your NetCode', 'Use the Westpac app to approve', 'Visa Secure', 'Mastercard Identity Check', 'Approve it in the ANZ app']) assert.ok(C.bankWords(said).length, said);
+    'Waiting for your bank', 'Enter your NetCode', 'Use the Westpac app to approve', 'Visa Secure', 'Mastercard Identity Check', 'Approve it in the ANZ app', 'Check your Up app',
+    "We've sent a code to your phone", 'We sent a 6-digit code to 04•• ••• 123', 'Enter the verification code', 'Check your phone for a notification', 'Confirm it’s you',
+    'Approve the request in your app', 'Continue the verification with your bank', 'We texted you a one-time code', 'American Express SafeKey', 'Banco Santander: confirma it in the app? Approve it with the Santander app',
+    'Monzo: check your mobile', 'Authorise this payment', 'Confirm the transaction']) assert.ok(C.bankWords(said).length, said);
   for (const not of ['CONFIRM & PAY', 'Pay now $239.00', 'Secure checkout', 'Your payment details are encrypted', 'Approved retailer', 'Download our shopping app', 'Order summary', 'Card verification code (CVV)',
     // (The check gone wrong is what the store says, for you as it is — not the bank asking.)
     'Payment authentication failed. Please try again.', "We couldn't verify your payment", 'Your bank declined to approve the payment']) assert.deepEqual([...C.bankWords(not)], [], not);
-  assert.deepEqual([...C.bankWords('Order summary\nApprove this payment in your CommBank app\nPayment authentication failed')], ['approve this payment', 'commbank app'], 'line by line');
+  for (const not of ['Enter the security code on the back of your card', 'Download the Shop app', 'Code: SAVE10 applied', 'Text me with news and offers']) assert.deepEqual([...C.bankWords(not)], [], not);
+  assert.deepEqual([...C.bankWords('Order summary\nApprove this payment in your CommBank app\nPayment authentication failed')], ['approve this payment'], 'line by line');
   assert.match(C.bankMessage('EB Games', null), /^Your bank wants you to approve this payment: approve it in your bank's app .* once EB Games confirms the order\.$/);
   assert.match(C.bankMessage('Shop', { how: 'popup', host: 'acs.example.com' }), /^A pop-up came up on the checkout after paying \(acs\.example\.com\) — most likely your bank/);
   assert.ok(C.bankMessage('Premium Bandai', { how: 'popup', host: 'acs1.sbs.netcode.commbank.com.au' }).length <= 300, 'within what the run keeps');

@@ -183,8 +183,14 @@
   const CHECKS = new Set(['bank_check', 'human_check']);
   let watchingPlaced = false;
   // (A page the store moved on to after the press that isn't its checkout — nor a store whose checkout is a frame on
-  //  its page: what it shows counts from the start — MGBChecks.markAfter.)
-  const awayFromCheckout = () => !(checkoutFlow && (checkoutFlow.inFrame || (checkoutFlow.path instanceof RegExp && checkoutFlow.path.test(location.pathname))));
+  //  its page: what it shows counts from the start — MGBChecks.markAfter. One at the checkout's address with no
+  //  final button on it — the store's own "verify your payment" page — is away too: the checkout back again shows it.)
+  const finalShown = () => {
+    const finals = ((checkoutFlow && checkoutFlow.final) || []).filter((re) => re && re.test);
+    return [...document.querySelectorAll('button, input[type="submit"], [role="button"]')]
+      .some((el) => MGBFill.isVisible(el) && !el.closest('#mugibot-qc') && finals.some((re) => re.test((el.innerText || el.value || '').replace(/\s+/g, ' ').trim())));
+  };
+  const awayFromCheckout = () => !(checkoutFlow && (checkoutFlow.inFrame || (checkoutFlow.path instanceof RegExp && checkoutFlow.path.test(location.pathname) && finalShown())));
   // Why a run stopped short of checkout (core.js): failed, unless it's something for you to do (sign in).
   // (The store's queue, drawn by its page's code after Mugibot looked: not a failure — it waits there, see go().)
   const acoWhy = (reason, message, status) => {
@@ -257,6 +263,9 @@
     report('step', `Auto-checkout pressed "${text}" on the last step (place order)`, null);
     panel.setStatus('🤖 Placing your order…');
     markNotices();
+    // (What's up before this press — here and in every frame — isn't what it brought up: the bank's check.)
+    MGBChecks.markErrors(document);
+    await Promise.race([ask({ type: 'bankMark' }), MGBFlows.wait(150)]);
     btn.click();
     return true;
   }
@@ -272,7 +281,7 @@
     let errSince = 0;
     while (Date.now() < until) {
       await MGBFlows.wait(400);
-      let o = outcome();
+      let o = outcome() || await framesBank();
       if (!o && await pressReview(run)) continue;
       // The store said no to the final button (a Shop link's "not available for purchase"): its notice up, the
       // page still here 8 seconds on and its button free again — so nothing was bought. It's pressed again
@@ -297,6 +306,36 @@
       if (o.status === 'failed') return;
       if (CHECKS.has(o.reason)) { watchPlaced(total); return; }
     }
+    if (!said) await watchLong(run, total);
+  }
+
+  /**
+   * After the final button, on a page the store moved on to that's said nothing in 45 s (a "processing" page): watched
+   * on, nothing pressed, to the half hour since the press — the bank's check can come up later there, in a frame of
+   * its own or in a payment provider's, and the order can still be confirmed. Your account isn't kept waiting meanwhile
+   * (it says "no confirmation" in its own time), and still hears the bank's check the moment it comes up. (This tab's
+   * pass and checkout flag are kept good meanwhile, saying nothing.)
+   */
+  async function watchLong(run, total) {
+    const until = ((run && run.placingAt) || Date.now()) + MGBChecks.RETRY_MS;
+    let keptAt = 0;
+    while (Date.now() < until) {
+      await nap(1000);
+      assistFlag.keep();
+      if (Date.now() - keptAt > 30000) { keptAt = Date.now(); ask({ type: 'acoReport', status: 'beat', quiet: true }); }
+      const o = outcome() || await framesBank();
+      if (o && (o.status === 'placed' || o.status === 'failed' || CHECKS.has(o.reason))) { await said(o, total); return; }
+    }
+  }
+
+  // The bank's check inside a frame on the checkout — a payment provider's, or one in that — as that frame sees it
+  // (background.js bankFrames, every 2 s at most): what your account's told, as for one on the page.
+  let framesAt = 0;
+  async function framesBank() {
+    if (Date.now() - framesAt < 2000) return null;
+    framesAt = Date.now();
+    const b = await ask({ type: 'bankFrames' });
+    return b ? { status: 'needs_you', reason: 'bank_check', message: MGBChecks.bankMessage(retailer.name, b), how: b.how } : null;
   }
 
   // Your bank's check — or a human one — after the final button was pressed: you're told at once (your account
@@ -681,6 +720,9 @@
       }
       const message = live ? `Pressing "${fin.text}" again (${live.presses + 1}) — ${retailer.name} says it isn't on sale yet (for ${took(Date.now() - live.since)})`
         : n === 0 ? `Pressing "${fin.text}" — total $${total.toFixed(2)}` : `Pressing "${fin.text}" again — ${retailer.name} hasn't taken the order yet`;
+      // (Every frame on the checkout notes what's in it now — a payment provider's: what the press brings up there is
+      //  the bank's check, bankFrames — while the press is asked for; waited for at most a moment more before it.)
+      const marked = ask({ type: 'bankMark' });
       const go = await ask({ type: 'acoRetry', message, total, live: !!live });
       if (!go || !go.ok) {
         if (go && go.over) return acoStop('needs_you', 'not_placed', `Pressed "${fin.text}" again and again for ${Math.round((Date.now() - go.since) / 60000)} minutes and ${retailer.name} kept turning it away — nothing more pressed. Check your email before buying it again.`, fin, total);
@@ -698,6 +740,7 @@
       markNotices();
       // (What the page said before this press isn't its answer to it: only something it says anew.)
       MGBChecks.markErrors(document);
+      await Promise.race([marked, MGBFlows.wait(150)]);
       watchPress(btn);
       btn.click();
       const ans = await answer(run, total, () => leaving);
@@ -820,7 +863,7 @@
       assistFlag.keep();
       // (Shopify's "Too many checkout attempts": the press turned away — waited out as it asks, coolDown.)
       if (waitLive && throttledNow()) return { kind: 'throttled' };
-      const o = outcome();
+      const o = outcome() || await framesBank();
       if (o) { await said(o, total); return { kind: 'done' }; }
       if (await pressReview(run)) continue;
       // The store said no to the final button (a Shop link's "not available for purchase"): its notice up once

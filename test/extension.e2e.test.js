@@ -3369,6 +3369,64 @@ test('🤖 Auto-checkout at The Games Cube: fills everything in, then stops at "
   await closeStorePages('thegamescube');
 });
 
+// 🏦 Your bank's check after the final button, at every kind of checkout — whichever store, whichever way the
+// bank's check comes up (the dummy bank's pages are on bank.test: nothing Mugibot can open or read, as with a real
+// bank, and no bank's name anywhere). Each store as its own Auto-checkout test sets it up.
+const BANK_CASES = [
+  // Its card in the payment provider's frame — the bank's page posted into a frame inside that one.
+  { shop: 'kmart', mode: 'nested', item: () => ({ url: store.productUrl('kmart', '43818587'), maxPrice: 120 }), setup: () => { store.state.cardInIframe = true; } },
+  // A window of its own, opened by the checkout.
+  { shop: 'kmart', mode: 'window', item: () => ({ url: store.productUrl('kmart', '43818587'), maxPrice: 120 }) },
+  // A posted form (EB Games'): the store's own server sends the tab on to the bank; a page of its own with the bank's pop-up.
+  { shop: 'ebgames', mode: 'redirect', item: () => ({ url: store.productUrl('ebgames', '312346'), maxPrice: 120 }) },
+  { shop: 'ebgames', mode: 'popup', item: () => ({ url: store.productUrl('ebgames', '312346'), maxPrice: 120 }) },
+  // Shopify's one-page checkout (JB Hi-Fi — Good Games', Pokébox's, Toys"R"Us' the same): "Pay now" posts the form.
+  { shop: 'jbhifi', mode: 'posted', item: () => ({ store: 'demo-jbhifi', sku: 'pokemon-tcg-30th-celebration-etb', maxPrice: 120 }) },
+  { shop: 'toysrus', mode: 'redirect', item: () => ({ store: 'demo-toysrus', sku: 'pokemon-tcg-scarlet-violet-151-ultra-premium-collection', maxPrice: 200 }), setup: () => { store.state.signedIn.toysrus = 'shop'; } },
+  // Target (Paydock's card form), City Beach's last "place order" stage.
+  { shop: 'target', mode: 'popup', item: () => ({ url: store.productUrl('target', '71234567'), maxPrice: 90 }), setup: () => { store.set('target', '71234567', { status: 'in_stock' }); } },
+  { shop: 'citybeach', mode: 'posted', item: () => ({ url: store.productUrl('citybeach', '20499999-01'), maxPrice: 150 }), setup: () => { store.set('citybeach', '20499999-01', { listed: true, status: 'in_stock' }); store.shop('citybeach').reviewStage = true; } },
+  // Magento (The Gamesmen), WooCommerce (Games World).
+  { shop: 'gamesmen', mode: 'popup', item: () => ({ url: store.productUrl('gamesmen', 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box'), maxPrice: 150 }) },
+  { shop: 'gamesworld', mode: 'posted', item: () => ({ url: store.productUrl('gamesworld', 'pokemon-tcg-mega-evolution-elite-trainer-box'), maxPrice: 120 }), setup: () => { store.set('gamesworld', 'pokemon-tcg-mega-evolution-elite-trainer-box', { status: 'in_stock' }); } },
+  // Global-e's checkout in a frame (Premium Bandai): the bank's pop-up inside it.
+  { shop: 'pbandai', mode: 'popup', item: () => ({ url: store.productUrl('pbandai', 'N2903432001'), maxPrice: 40 }), setup: () => { store.state.signedIn.pbandai = true; store.set('pbandai', 'N2903432001', { status: 'preorder' }); } },
+  // Amazon's "Place your order" (a posted form): on to the bank's site.
+  { shop: 'amazon', mode: 'redirect', item: () => ({ url: store.productUrl('amazon', 'B0MGBTEST1'), maxPrice: 70 }), setup: () => seenSignedIn('amazon') },
+];
+
+test("🏦 your bank's check after the final button at every kind of checkout — Kmart's, EB Games', Shopify's, Target's, City Beach's last stage, Magento's, WooCommerce's, Global-e's frame, Amazon's — however it comes up (a frame inside the payment provider's, a window of its own, the store sending the tab to the bank, a page of its own, a pop-up): you're told at once, nothing's pressed again, nothing's bought until you approve it — then placed", async () => {
+  for (const c of BANK_CASES) {
+    const label = `${c.shop} (${c.mode})`;
+    store.reset();
+    store.state.account = KMART_ACCOUNT;
+    if (c.setup) await c.setup();
+    store.shop(c.shop).threeDS = c.mode;
+    const name = `ACO bank ${c.shop} ${c.mode}`;
+    await useItems([{ ...c.item(), name }]);
+    const dmsBefore = discord.dmsTo('d-ash').length;
+    await testRun(name);
+    await waitFor(async () => (await lastRun()).reason === 'bank_check', { timeout: 60000, message: `${label}: the bank's check noticed` })
+      .catch(async (e) => {
+        const tabs = await Promise.all(ctx.pages().map(async (pg) => `${pg.url()} [${await pg.locator('#mugibot-qc').textContent({ timeout: 1000 }).catch(() => '-')}]`));
+        throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps.slice(-3))} — tabs: ${tabs.join(' | ')}`);
+      });
+    const run = await lastRun();
+    assert.equal(run.status, 'needs_you', label);
+    assert.match(run.message, /approve it in your bank's app/, label);
+    assert.equal(store.shop(c.shop).orders.length, 0, `${label}: nothing bought until you approve it`);
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => m.body.embeds[0].title === `🏦 Approve the payment in your bank's app: ${name}`), { message: `${label}: the DM` });
+    store.approveBank();
+    await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 30000, message: `${label}: placed once approved` })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps.slice(-3))}`); });
+    assert.equal(store.shop(c.shop).orders.length, 1, `${label}: one order`);
+    assert.equal(store.shop(c.shop).challenged, 1, `${label}: pressed once`);
+    await closeStorePages(c.shop);
+    for (const pg of ctx.pages()) if (/bank\.test/.test(pg.url())) await pg.close();
+  }
+  store.state.cardInIframe = false;
+});
+
 test('🤖 ⚡ Buy with Mugibot on a channel alert, pressed on a phone with Auto-checkout on: this browser checks out by itself and places the order — up to the price the alert showed — and Discord\'s reply says so', async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   await useItems([]);

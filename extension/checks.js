@@ -15,14 +15,35 @@ var MGBChecks = (function () {
   var BANK_FRAME = /3ds|\/acs|acs\.|challenge|authenticat|cardinalcommerce|securecode|threeds|3dsecure/i;
   var HUMAN_FRAME = /recaptcha|hcaptcha|challenges\.cloudflare|turnstile|captcha|arkoselabs|funcaptcha/i;
   // After the final button, the bank's check as stores and payment providers really show it (Oct 2026: two
-  // runs sat waiting on one Mugibot didn't see) — its frame often has no address to go by (the bank's page is
-  // posted into it), but its name, title or the box it's in say what it is (Adyen's "threeDSIframe", Cardinal's,
-  // Stripe's, Shopify's) — or the words the press brought up beside it ("Approve this payment in your CommBank app").
-  var BANK_HINT = /3ds|3-?d.?secure|three.?d.?s|threeds|\bacs\b|challenge|authenticat|cardinal|songbird|secure.?code|safekey|identity.?check|visa.?secure|step.?up|verif(y|ication)/i;
-  var BANK_SAID = /approve (it|this|the|your) (payment|purchase|transaction|request|order)|approve (it |this |the payment |the purchase )?(in|with|on) (your|the) [\w' .-]{0,30}app\b|(check|open|use|go to) (your|the) [\w' .-]{0,30}app to (approve|confirm|verify|authori[sz]e)|(payment|purchase|transaction) (authentication|verification|approval)|(verify|authori[sz]e) (this|the|your) (payment|purchase|transaction)|confirm (this|the) (payment|purchase|transaction)|wait(ing)? for (your )?(bank|approval|authori[sz]ation)|\bnetcode\b|\bbanking app\b|\b(commbank|nab|anz|westpac|st\.? ?george|bankwest|bank of melbourne|banksa|macquarie|bendigo|suncorp|amex|american express|hsbc|citi) app\b|visa secure|\bsafekey\b|mastercard (identity check|securecode)|strong customer authentication/i;
+  // runs sat waiting on one Mugibot didn't see) — whatever the store, whatever the bank. Its frame often has no
+  // address to go by (the bank's page is posted into it), but its name, title or the box it's in say what it is
+  // (the 3-D Secure names payment providers give it: Adyen's "threeDSIframe", Cardinal's, Stripe's, Checkout.com's,
+  // "challenge", "step-up", "acsFrame") — or the words the press brought up beside it, in any bank's terms
+  // ("Approve this payment in your banking app", "We've sent a code to your phone", "Verify your purchase").
+  // Never a bank's name alone: no list of banks to keep up.
+  var BANK_HINT = /3ds|3-?d.?secure|three.?d.?s|threeds|\bacs\b|acs.?frame|challenge|authenticat|cardinal|songbird|secure.?code|safekey|identity.?check|visa.?secure|step.?up|verif(y|ication)|\botp\b|one.?time.?pass/i;
+  var BANK_SAID = new RegExp([
+    // approving it: in an app, by a notification, on a device
+    "approve (it|this|the|your) (payment|purchase|transaction|request|order)",
+    "approve (it |this |the payment |the purchase )?(in|with|on) (your|the) [\\w' .-]{0,30}app\\b",
+    "(check|open|use|go to) (your|the) [\\w' .-]{0,30}app to (approve|confirm|verify|authori[sz]e)", "(check|open) your [\\w' .-]{0,30}app\\b",
+    "(approve|confirm|accept) (the )?(request|notification|prompt) (in|on|from|we)",
+    "check your (phone|mobile|device)", "push notification", "\\bbanking app\\b",
+    // a code it sends
+    "(we('ve| have)? )?(sent|texted) (a |an |you a |you an )?(\\d-digit |one.?time |verification |security )?(code|passcode|sms)",
+    "(enter|type|input) (the |your )?(\\d-digit )?(verification|one.?time|sms) (code|passcode|password)", "verification code (was |has been )?sent",
+    "one.?time (pass(code|word)|code)", "enter the code (we|sent)", "\\bnetcode\\b",
+    // checking it's you, the payment
+    "(payment|purchase|transaction) (authentication|verification|approval)",
+    "(verify|authori[sz]e) (this|the|your) (payment|purchase|transaction)", "confirm (this|the) (payment|purchase|transaction)",
+    "(confirm|verify) (it.?s|it is) you", "(continue|complete) (the )?(verification|authentication)",
+    "wait(ing)? for (your )?(bank|approval|authori[sz]ation)",
+    // the card schemes' own names for it
+    "visa secure", "\\bsafekey\\b", "mastercard (identity check|securecode)", "strong customer authentication",
+  ].join('|'), 'i');
   // Frames that come and go on a checkout for other reasons (chat, reviews, ads, video, other ways to pay) — or
   // that are a store's whole checkout (Global-e's, Amazon's): never the bank's.
-  var NOT_BANK_FRAME = /intercom|zendesk|zopim|livechat|tawk|crisp\.chat|drift|gorgias|tidio|freshchat|hubspot|facebook|doubleclick|googletagmanager|google-analytics|googlesyndication|youtube|vimeo|klaviyo|privy|justuno|attentive|yotpo|trustpilot|okendo|judge\.me|hotjar|clarity\.ms|tiktok|pinterest|paypal|afterpay|klarna|zip\.co|global-e|amazon\./i;
+  var NOT_BANK_FRAME = /intercom|zendesk|zopim|livechat|tawk|crisp\.chat|drift|gorgias|tidio|freshchat|hubspot|facebook|doubleclick|googletagmanager|google-analytics|googlesyndication|youtube|vimeo|klaviyo|privy|justuno|attentive|yotpo|trustpilot|okendo|judge\.me|hotjar|clarity\.ms|tiktok|pinterest|paypal|afterpay|klarna|zip\.co|pay\.google|global-e|amazon\./i;
   var AMOUNT_RE = /(?:AUD\s?\$?|A\$|\$)\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/g;
   var OURS = '#mugibot-qc, #mugibot-banner';
   // A card already saved with the store or its wallet (Shop Pay, a store account), shown instead of card boxes.
@@ -192,7 +213,7 @@ var MGBChecks = (function () {
   function markPress(doc, fresh, away) {
     var said = {};
     if (!away) saidIn((doc.body.innerText || '').slice(0, 20000)).forEach(function (t) { said[t] = true; });
-    pressMark = { doc: doc, frames: Array.prototype.slice.call(doc.querySelectorAll('iframe')), said: said, fresh: !!fresh, away: !!away };
+    pressMark = { doc: doc, frames: Array.prototype.slice.call(doc.querySelectorAll('iframe')), said: said, fresh: !!fresh, away: !!away, at: Date.now() };
   }
 
   /**
@@ -246,7 +267,7 @@ var MGBChecks = (function () {
    * - a page after the press whose address says it's the bank's check (…/3ds, …/authentication).
    * { how: 'frame' | 'popup' | 'words' | 'page', host }
    */
-  function bankAfterPress(doc, text) {
+  function bankAfterPress(doc, text, inFrame) {
     var m = pressMark;
     if (!m || m.doc !== doc) return null;
     var frames = Array.prototype.slice.call(doc.querySelectorAll('iframe')).filter(function (f) { return visible(f) && !f.closest(OURS); });
@@ -258,11 +279,41 @@ var MGBChecks = (function () {
       var fresh = m.frames.indexOf(f) === -1;
       // (Card boxes are a line high, and up before the press: never these.)
       if ((fresh || m.fresh) && sized(f, 100, 100) && BANK_HINT.test(frameWords(f))) return { how: 'frame', host: host };
-      if ((fresh || m.away) && inFront(f)) return { how: 'popup', host: host };
+      // (Inside a payment provider's frame — its card boxes, its form: a frame of a size to answer in that the
+      //  press brought up there is the bank's, wherever it sits in that frame.)
+      if ((fresh || m.away) && (inFront(f) || (inFrame && sized(f, 200, 200)))) return { how: 'popup', host: host };
     }
     if (saidIn(text).some(function (t) { return !m.said[t]; })) return { how: 'words', host: '' };
     if (m.fresh && /3ds|three.?d.?s|threeds|\/acs\b|authenticat|challenge/i.test(doc.location.pathname + doc.location.search)) return { how: 'page', host: '' };
     return null;
+  }
+
+  /**
+   * Every frame on the checkout marked as the final button's pressed (the background asks each: bankMark — not
+   * waited for, so the press isn't held up). A frame that marked itself for its own press a moment ago (a checkout
+   * in a frame: frame.js) keeps that mark: the background's may come after what the press brought up.
+   */
+  function markPressed(doc) {
+    doc = doc || document;
+    if (pressMark && pressMark.doc === doc && !pressMark.fresh && Date.now() - pressMark.at < 3000) return;
+    markPress(doc, false, false);
+  }
+
+  /**
+   * In a frame on the checkout — a payment provider's (its card boxes, its form), or one inside one — asked from
+   * the background after the final button (bankFrames): the bank's check the press brought up in it, as on the
+   * page (bankAfterPress). A frame that came after the press counts what it shows from the start. (Its own
+   * frames the extension may not open — the bank's — are looked at from here, the frame they're in.)
+   */
+  function bankShown(doc) {
+    doc = doc || document;
+    if (!doc.body) return null;
+    // (Not marked at the press: it came after it — what it shows counts, words too, if it's a frame of a size to
+    //  answer in. A card box's frame that's drawn again shows only its labels, never words of this kind, but a
+    //  provider's "Visa Secure" badge isn't an ask: only what's new since the press, or in a new frame, counts.)
+    var win = doc.defaultView;
+    if (!pressMark || pressMark.doc !== doc) markPress(doc, true, !!(win && win.innerWidth >= 200 && win.innerHeight >= 150));
+    return bankAfterPress(doc, (doc.body.innerText || '').slice(0, 20000), true);
   }
 
   /** What your account's told when the bank's check comes up (it DMs you at once). */
@@ -373,5 +424,5 @@ var MGBChecks = (function () {
   // it again while the store's struggling (a hot drop) — then it stops, nothing bought.
   var RETRY_MS = 30 * 60 * 1000;
 
-  return { CONFIRM_RE: CONFIRM_RE, DECLINE_RE: DECLINE_RE, RETRY_MS: RETRY_MS, errorKind: errorKind, retryWait: retryWait, orderTotal: orderTotal, pageError: pageError, pageErrors: pageErrors, markErrors: markErrors, markAfter: markAfter, missingRequired: missingRequired, outcome: outcome, showing: showing, bankMessage: bankMessage, bankWords: saidIn, savedCardShown: savedCardShown, unavailable: unavailable, visible: visible };
+  return { CONFIRM_RE: CONFIRM_RE, DECLINE_RE: DECLINE_RE, RETRY_MS: RETRY_MS, errorKind: errorKind, retryWait: retryWait, orderTotal: orderTotal, pageError: pageError, pageErrors: pageErrors, markErrors: markErrors, markAfter: markAfter, markPressed: markPressed, bankShown: bankShown, missingRequired: missingRequired, outcome: outcome, showing: showing, bankMessage: bankMessage, bankWords: saidIn, savedCardShown: savedCardShown, unavailable: unavailable, visible: visible };
 })();

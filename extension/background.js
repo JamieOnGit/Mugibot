@@ -2168,7 +2168,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (cur && cur.aco && cur.aco.runId === run.runId) await chrome.storage.session.set({ [key]: { ...cur, expires: Date.now() + PASS_TTL } });
           // (Not on sale yet, between presses: still waiting for the sale, as far as your account's concerned.)
           const body = run.notLive && !run.placing ? { status: 'waiting', reason: 'not_live' } : { status: run.placing ? 'placing' : 'checkout' };
-          if (!run.done && !run.stopped) api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, message: String(msg.message || '').slice(0, 300) }).catch(() => null);
+          // (quiet: a page only watching on for the order after the press — its pass kept good, nothing said.)
+          if (!run.done && !run.stopped && !msg.quiet) api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, message: String(msg.message || '').slice(0, 300) }).catch(() => null);
           return { ok: true };
         }
         if (status === 'checkout') {
@@ -2205,6 +2206,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const over = res.status === 200 && !!(res.body && res.body.run && res.body.run.active === false) && (status === 'waiting' || status === 'started');
         if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...run, done: true } } });
         return res.status === 200 ? { ok: true, over, text: over ? String(res.body.run.message || '') : '' } : { ok: false, status: res.status };
+      }
+      case 'bankMark': {
+        // The final button's being pressed in this tab: every frame on the checkout notes what's in it now (its
+        // frames, what it says), so that what the press brings up in any of them — a payment provider's — is seen
+        // as new (bankFrames). Frames the extension may not open (the bank's own) are seen from the one they're in.
+        if (!sender.tab) return null;
+        await chrome.scripting.executeScript({ target: { tabId: sender.tab.id, allFrames: true }, func: () => { if (window.top !== window && typeof MGBChecks !== 'undefined') MGBChecks.markPressed(document); } }).catch(() => null);
+        return { ok: true };
+      }
+      case 'bankFrames': {
+        // After the final button: the bank's check in any frame on the checkout — inside a payment provider's
+        // frame, or one in that — as each frame sees it (MGBChecks.bankShown). The first found, or null. Only for
+        // a tab whose run has pressed it.
+        if (!sender.tab) return null;
+        const pass = sender.frameId === 0 ? await passFor(sender) : ((await checkoutFrame(sender)) || {}).pass;
+        if (!pass || !pass.aco || !pass.aco.placing) return null;
+        const res = await chrome.scripting.executeScript({ target: { tabId: sender.tab.id, allFrames: true }, func: () => (window.top === window || typeof MGBChecks === 'undefined' ? null : MGBChecks.bankShown(document)) }).catch(() => []);
+        return (res || []).map((r) => r && r.result).find(Boolean) || null;
       }
       case 'acoGoing': {
         // After the final button, the store's sending the checkout on to another site (content.js watchAway): where,
@@ -2249,7 +2268,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const cur = (await chrome.storage.session.get(key))[key] || pass;
         // (Pressing on Shop's checkout: not held up in the store's queue — heldUp — whatever it last looked like.)
         // (page: the checkout it was pressed on — whose store's it is, should the tab go somewhere Mugibot can't see: bankAway.)
-        const next = { ...(cur.aco || run), presses: (run.presses || 0) + 1, placing: true, placingAt: run.placingAt || now, away: null, page: run.page || sender.tab.url || '' };
+        // (pressAt: this press — a pop-up window the checkout opens is its: bankWindow.)
+        const next = { ...(cur.aco || run), presses: (run.presses || 0) + 1, placing: true, placingAt: run.placingAt || now, pressAt: now, away: null, page: run.page || sender.tab.url || '' };
         await chrome.storage.session.set({ [key]: { ...cur, aco: next, expires: now + PASS_TTL } });
         return { ok: true, n: next.presses, since: next.placingAt };
       }
@@ -2562,6 +2582,44 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.url) turnMoved(tabId, info.url).catch(() => null);
   if (info.status === 'complete') bankAwaySoon(tabId);
 });
+
+// A window the checkout opened itself after the final button (its own window.open, not Mugibot's): the bank's
+// check in a window of its own, most likely — still open a few seconds on (one that closes by itself passed by
+// itself), and your account's told at once, as for a page. Its checkout: the tab Chrome names as its opener (a tab)
+// — or, a pop-up window (Chrome names no opener for those), the checkout whose final button was pressed last, in
+// the 2 minutes before it opened (never a tab or window you open yourself: those aren't pop-ups). (Chrome blocks a
+// pop-up a checkout opens without a person's click unless pop-ups are allowed for that store: docs/AUTO-CHECKOUT.md.)
+chrome.tabs.onCreated.addListener((tab) => {
+  const at = Date.now();
+  setTimeout(() => { bankWindow(tab, at).catch(() => null); }, BANK_AWAY_MS);
+});
+
+async function bankWindow(tab, at) {
+  let openerId = tab.openerTabId;
+  if (openerId == null) {
+    const win = await chrome.windows.get(tab.windowId).catch(() => null);
+    if (!win || win.type !== 'popup') return;
+    const all = await chrome.storage.session.get(null);
+    const last = Object.entries(all)
+      .filter(([k, v]) => k.startsWith('fill:') && v && v.aco && v.aco.placing && v.aco.pressAt && v.aco.pressAt <= at && at - v.aco.pressAt < 2 * 60 * 1000)
+      .sort((a, b) => b[1].aco.pressAt - a[1].aco.pressAt)[0];
+    if (!last) return;
+    openerId = Number(last[0].slice('fill:'.length));
+  }
+  const key = passKey(openerId);
+  const pass = (await chrome.storage.session.get(key))[key];
+  const run = pass && pass.aco;
+  if (!run || !run.runId || !run.placing || run.done || run.stopped || !run.placingAt || Date.now() - run.placingAt > RETRY_MS) return;
+  if (!(await chrome.tabs.get(tab.id).catch(() => null))) return;
+  const r = storeOfUrl((await getState()).flows, run.page || `https://${pass.host}/`);
+  const name = (r && r.name) || 'The store';
+  await chrome.storage.session.set({ [key]: { ...pass, aco: { ...run, stopped: true }, expires: awayExpiry(run) } });
+  turnEnded(openerId, { parked: true }).catch(() => null);
+  await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, {
+    status: 'needs_you', reason: 'bank_check', pressed: true, total: null,
+    message: `After paying, ${name}'s checkout opened a window of its own — most likely your bank wanting you to approve it: approve it in your bank's app (or with the code it sent you), or in that window. It's marked placed once ${name} confirms the order.`.slice(0, 300),
+  }).catch(() => null);
+}
 
 // --- after the final button: the checkout gone on to a site Mugibot can't see ----------------------
 // A store that sends the checkout to its bank's check — the whole tab, not a frame on its page (straight from

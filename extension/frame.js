@@ -206,6 +206,8 @@
         // (Asked first — and said to your account: the frame may go the moment it's pressed. Pressing again,
         //  your account is asked whether the run's still going.)
         const message = n === 0 ? `Pressing "${f.text}" — total $${total.toFixed(2)}` : `Pressing "${f.text}" again — ${name} hasn't taken the order yet`;
+        // (Every frame in this one notes what's in it now — a payment provider's — while the press is asked for.)
+        const marked = ask({ type: 'bankMark' });
         const go = await ask({ type: 'acoRetry', message, total });
         if (!go || !go.ok) {
           if (go && go.over) return stop('needs_you', 'not_placed', `Pressed "${f.text}" again and again for ${Math.round((Date.now() - go.since) / 60000)} minutes and ${name} kept turning it away — nothing more pressed. Check your email before buying it again.`, total);
@@ -214,16 +216,25 @@
         }
         status(go.n === 1 ? `🤖 Placing your order ($${total.toFixed(2)})…` : `🤖 Pressing "${f.text}" again (${go.n}) — ${name}'s struggling…`);
         report('step', `Auto-checkout pressed "${f.text}"${go.n > 1 ? ` again (${go.n})` : ''} (total $${total.toFixed(2)})`);
-        // (What the form said before this press isn't its answer to it: only something it says anew.)
+        // (What the form said before this press isn't its answer to it: only something it says anew. Every frame
+        //  in it — a payment provider's — marked too: what the press brings up in one is the bank's check.)
         MGBChecks.markErrors(document);
+        await Promise.race([marked, wait(150)]);
         btn.click();
         // The store's answer, as far as this frame shows it (the page above takes over if it moves on). No
         // answer at all is never a reason to press again: waited for, up to the half hour.
         let ans = null;
         let errSince = 0;
+        let framesAt = 0;
         for (const started = Date.now(); !ans;) {
           await wait(400);
-          const o = MGBChecks.outcome(document, C.done, name);
+          let o = MGBChecks.outcome(document, C.done, name);
+          // (The bank's check inside a frame in this one, as that frame sees it: every 2 s.)
+          if (!o && Date.now() - framesAt > 2000) {
+            framesAt = Date.now();
+            const b = await ask({ type: 'bankFrames' });
+            if (b) o = { status: 'needs_you', reason: 'bank_check', message: MGBChecks.bankMessage(name, b) };
+          }
           if (o) { await said(o); return; }
           const e = MGBChecks.pageError(document, null, true);
           errSince = e ? errSince || Date.now() : 0;
