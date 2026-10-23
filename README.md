@@ -32,7 +32,10 @@ community. Built on TCGCopBot's working Kmart flow.
   on the Checkout page with each step, how long after the drop it came and why it
   ended, and DM'd. **Clear
   cart** empties a store's bag in the checkout browser (or **Clear all**, every
-  store in turn), from anywhere, so nothing else in a bag stops a drop. See
+  store in turn), from anywhere, so nothing else in a bag stops a drop. A store
+  that won't deliver an order (a pick-up-only pre-order) gets **Click & Collect**
+  at the store nearest you instead, at every store, and you're told where to pick
+  it up (unless your delivery details say home delivery only). See
   [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md).
 - **⚡ Buy from your phone.** Press ⚡ Buy on a Discord alert or DM anywhere,
   your phone included, with nothing signed in there: Discord says who pressed
@@ -61,8 +64,10 @@ community. Built on TCGCopBot's working Kmart flow.
   Shop sign-in is read off Shop's checkout itself, and each link shows it. See
   [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md#️-shop-checkout-links).
 - **🎯 Drop watches: anything that isn't the card keywords.** A console at
-  JB Hi-Fi, a figure at any shop: paste its link, or type the words in its name
-  and where to look (a store Mugibot searches, or any other website). An admin's
+  JB Hi-Fi, a figure at any shop: paste its link, or **key phrases** (several at
+  once, one a line: "Heavy Hitters Premium") and where to look: **every store
+  Mugibot searches** (each store's search in turn, and every product its card
+  searches read), one of them, or any other website. An admin's
   are for everyone: posted in `#non-tcg-alerts` and every dashboard, with ⚡ Buy,
   and members arm Auto-checkout on them as on anything else. A member's own are
   theirs alone: what they find goes on their watchlist, DM'd. ⚡ Buy and

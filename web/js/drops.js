@@ -11,6 +11,10 @@ const STATUS = {
 };
 const ARM = { armed: '🤖 armed', pending: '🤖 armed if it isn\'t on sale yet', skipped: 'on sale before the watch looked — not armed' };
 const OTHER = 'other';
+// A key phrase looked for at every store Mugibot searches (server/monitor/drops.js: ALL_STORES).
+const ALL = 'all';
+/** Key phrases pasted in: one a line (or ; between them), each tidied — or [] for a link. */
+const phrasesOf = (raw) => [...new Set(String(raw || '').split(/[\n;]+/).map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean))];
 
 export function setupDrops({ isAdmin = () => false, watching = () => null, watch = null, buyUrl }) {
   // (draft: what's chosen in an open ✎ editor — kept when the list refreshes underneath it.)
@@ -39,8 +43,10 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const sel = $('#dw-store');
     const keep = sel.value;
     sel.textContent = '';
-    sel.append(h('option', { value: '' }, 'Choose…'));
-    for (const s of (d.data.stores || []).filter((x) => x.words)) sel.append(h('option', { value: s.id }, s.name));
+    const searched = (d.data.stores || []).filter((x) => x.words);
+    if (searched.length) sel.append(h('option', { value: ALL }, 'Every store Mugibot searches'));
+    else sel.append(h('option', { value: '' }, 'Choose…'));
+    if (searched.length) sel.append(h('optgroup', { label: 'One store' }, ...searched.map((s) => h('option', { value: s.id }, s.name))));
     const off = (d.data.stores || []).filter((x) => !x.words && !x.demo);
     if (off.length) sel.append(h('optgroup', { label: 'Not searched at the moment (paste a link)' }, ...off.map((s) => h('option', { value: s.id, disabled: true }, s.name))));
     sel.append(h('option', { value: OTHER }, 'Another website…'));
@@ -72,12 +78,16 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
       }
       note = 'A link is bought as soon as it\'s on sale — now, if it already is.';
     } else {
-      const words = raw.toLowerCase().replace(/[^a-z0-9à-ÿ ]+/g, ' ').trim();
+      const list = phrasesOf(raw).map((x) => x.toLowerCase().replace(/[^a-z0-9à-ÿ ]+/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+      const words = list.length > 1 ? list.map((x) => `"${x}"`).join(', ') : `"${list[0] || ''}"`;
+      const several = list.length > 1 ? `${list.length} key phrases, a watch each: ` : '';
       const s = (d.data.stores || []).find((x) => x.id === where);
-      aco = !!(s && s.aco);
-      hint.textContent = words.length < 3 ? 'Type a few words of its name.' : where === OTHER
-        ? `Anything at that website whose name has "${words}" — its search is read every couple of minutes, and you're told when one drops, comes back, opens for pre-order or gets cheaper. Alerts only there.`
-        : s ? `Anything at ${s.name} whose name has "${words}" — searched in turn with the card keywords (every ${d.data.sweepSeconds} seconds or so, more when ${s.name} is busy), and you're told when one drops, comes back or gets cheaper.` : 'Now choose where to look.';
+      aco = !!(s && s.aco) || where === ALL;
+      const said = list.every((x) => x.length < 3) ? 'Type a few words of its name.' : where === OTHER
+        ? `${several}anything at that website whose name has ${words} — its search is read every couple of minutes, and you're told when one drops, comes back, opens for pre-order or gets cheaper. Alerts only there.`
+        : where === ALL ? `${several}anything at every store Mugibot searches whose name has ${words} — each store's own search in turn (about every ${d.data.sweepSeconds} seconds), and every product its card searches read — and you're told the moment one drops, comes back or gets cheaper.`
+        : s ? `${several}anything at ${s.name} whose name has ${words} — searched in turn with the card keywords (every ${d.data.sweepSeconds} seconds or so, more when ${s.name} is busy), and you're told when one drops, comes back or gets cheaper.` : 'Now choose where to look.';
+      hint.textContent = said.charAt(0).toUpperCase() + said.slice(1);
       note = 'Words buy only what drops after the watch has looked — never what\'s on sale already.';
     }
     $('#dw-aco-wrap').hidden = !aco;
@@ -349,8 +359,11 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     e.preventDefault();
     const raw = $('#dw-input').value.trim();
     const body = { label: $('#dw-label').value.trim() };
+    const list = isLink(raw) ? [] : phrasesOf(raw);
     if (isLink(raw)) body.url = linkOf(raw);
-    else Object.assign(body, { words: raw, store: $('#dw-store').value, site: $('#dw-store').value === OTHER ? $('#dw-site').value.trim() : '' });
+    // (Several key phrases, one a line: a watch each.)
+    else if (list.length > 1) Object.assign(body, { phrases: list, store: $('#dw-store').value, site: $('#dw-store').value === OTHER ? $('#dw-site').value.trim() : '' });
+    else Object.assign(body, { words: list[0] || raw, store: $('#dw-store').value, site: $('#dw-store').value === OTHER ? $('#dw-site').value.trim() : '' });
     if ($('#dw-aco').checked) Object.assign(body, { aco: true, maxPrice: $('#dw-max').value ? Number($('#dw-max').value) : null });
     if (isAdmin()) Object.assign(body, { shared: $('#dw-share').checked, category: $('#dw-category').value });
     if (isAdmin() && $('#dw-share').checked) Object.assign(body, { channelId: $('#dw-post').value, roleId: $('#dw-ping').value });
@@ -368,7 +381,10 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
         $('#dw-post').value = '';
         $('#dw-ping').value = '';
         shape();
-        setMsg($('#dw-msg'), r.watch.kind === 'link' ? 'Watching — its page is being read now.' : r.watch.store === OTHER ? 'Watching — the website is read in a few seconds.' : `Watching — searched at ${r.watch.storeName}'s next search.`, true);
+        const w = r.watch || (r.added && r.added[0]);
+        const next = w.kind === 'link' ? 'its page is being read now.' : w.store === OTHER ? 'the website is read in a few seconds.' : w.store === ALL ? 'searched at each store\'s next search.' : `searched at ${w.storeName}'s next search.`;
+        const notAdded = (r.errors || []).map((x) => `"${x.phrase}" (${x.error})`).join('; ');
+        setMsg($('#dw-msg'), r.added ? `Watching ${r.added.length} key phrase${r.added.length === 1 ? '' : 's'} — ${next}${notAdded ? ` Not added: ${notAdded}` : ''}` : `Watching — ${next}`, true);
         setTimeout(refreshSoon, 4000);
       } catch (err) {
         setMsg($('#dw-msg'), err.message);

@@ -32,6 +32,9 @@ import { STATUS, isOrderable } from './status.js';
 
 const KINDS = ['restock', 'listed', 'price_drop'];
 export const DROP_NOTE = 'Drop watch';
+// Words (a key phrase: "Heavy Hitters Premium") looked for at every store Mugibot searches at once: each store's own
+// search, in its turn, and every product any of its searches reads — each store's first look its own "before".
+export const ALL_STORES = 'all';
 // What one watch keeps of what it found: an admin's (monitored products), anyone's own (watchlist items).
 const MAX_FOUND_SHARED = 20;
 const MAX_FOUND_OWN = 10;
@@ -93,7 +96,7 @@ function toWatch(r) {
     id: r.id, userId: r.user_id, username: r.username || '', active: r.active !== 0, shared: !!r.shared,
     store: r.store, site: r.site, words: r.words, url: r.url, label: r.label, category: r.category,
     aco: !!r.aco, maxPrice: r.max_price ?? null, found: json(r.found, []), how: r.how, seen: r.seen ?? 0,
-    baselineAt: r.baseline_at ?? null, nextAt: r.next_at || 0, lastAt: r.last_at ?? null, lastOkAt: r.last_ok_at ?? null,
+    baselineAt: r.baseline_at ?? null, bases: json(r.bases, {}), nextAt: r.next_at || 0, lastAt: r.last_at ?? null, lastOkAt: r.last_ok_at ?? null,
     fails: r.fails || 0, error: r.error || '', createdAt: r.created_at,
     channelId: r.channel_id || '', roleId: r.role_id || '',
   };
@@ -156,7 +159,8 @@ export class Drops {
    * (Finds from before this was told apart: listed already if they were found by its first look.)
    */
   room(w, baseline) {
-    const max = w.shared ? MAX_FOUND_SHARED : MAX_FOUND_OWN;
+    // (Every store's: twice as much — the same phrase at several stores.)
+    const max = (w.shared ? MAX_FOUND_SHARED : MAX_FOUND_OWN) * (w.store === ALL_STORES ? 2 : 1);
     const isBase = (f) => (typeof f.base === 'boolean' ? f.base : !!w.baselineAt && f.at <= w.baselineAt);
     // (Your own watch's finds you've taken off your watchlist make room: they're never put back.)
     const kept = (f) => !f.itemId || !!this.db.get('SELECT 1 AS y FROM items WHERE id = :id', { id: f.itemId });
@@ -166,7 +170,7 @@ export class Drops {
   /** What it found (kept on the watch object too, so a loop over finds sees each one). */
   saveFound(w, found) {
     // (Both kinds of find, each to its most: what's dropped since its first look is never dropped from it.)
-    w.found = found.slice(-2 * Math.max(MAX_FOUND_SHARED, MAX_FOUND_OWN));
+    w.found = found.slice(-4 * Math.max(MAX_FOUND_SHARED, MAX_FOUND_OWN));
     this.db.run('UPDATE drop_watches SET found = :f WHERE id = :id', { id: w.id, f: JSON.stringify(w.found) });
     this.changed();
   }
@@ -174,15 +178,21 @@ export class Drops {
   /** Where a watch looks: the store's name, or the website's address. */
   where(w) {
     if (w.store === 'other') return this.retailers.siteName('other', w.site || w.url);
+    if (w.store === ALL_STORES) return 'every store';
     return this.retailers.name(w.store);
   }
 
   // ---------------------------------------------------------------------------
   // Words at a store Mugibot searches: in the live sweeps' turn (sweep.js)
   // ---------------------------------------------------------------------------
-  /** The words watches at a store. */
+  /** The words watches at a store (its own, and every store's). */
   wordsAt(storeId) {
-    return this.live().filter((w) => w.words && w.store === storeId);
+    return this.live().filter((w) => w.words && (w.store === storeId || (w.store === ALL_STORES && storeId !== 'other')));
+  }
+
+  /** When a watch first looked at this store (what was listed there then was there already) — or null. */
+  baseAt(w, storeId) {
+    return w.store === ALL_STORES ? (w.bases && w.bases[storeId]) || null : w.baselineAt;
   }
 
   /** A search for these words at a store: 'shared' when an admin's watch for everyone has them, else 'private'. */
@@ -203,7 +213,8 @@ export class Drops {
     const key = (wd) => `${r.id}|${wd}`;
     const words = [...new Set(list.map((w) => w.words))];
     const lastAt = (wd) => this.searchedAt.get(key(wd)) ?? Math.max(0, ...list.filter((w) => w.words === wd).map((w) => w.lastAt || 0));
-    let pick = words.find((wd) => this.urgent.has(key(wd))) || words.find((wd) => !lastAt(wd) && list.some((w) => w.words === wd && !w.baselineAt));
+    // (A watch yet to look here — every store's too, at each store in turn — goes first.)
+    let pick = words.find((wd) => this.urgent.has(key(wd))) || words.find((wd) => !this.searchedAt.has(key(wd)) && list.some((w) => w.words === wd && !this.baseAt(w, r.id)));
     st.dropTurn = ((st.dropTurn || 0) + 1) % 3;
     if (!pick && st.dropTurn === 0) pick = words.filter((wd) => now - lastAt(wd) >= this.sweepMs).sort((a, b) => lastAt(a) - lastAt(b))[0];
     if (!pick) return null;
@@ -232,15 +243,17 @@ export class Drops {
     if (!list.length) return;
     const now = this.now();
     for (const w of list) {
+      // (Every store's: its first look at this store is this store's own "before".)
+      const bases = w.store === ALL_STORES && info.ok && !this.baseAt(w, storeId) ? JSON.stringify({ ...w.bases, [storeId]: now }) : null;
       this.db.run(`UPDATE drop_watches SET last_at = :now, last_ok_at = CASE WHEN :ok = 1 THEN :now ELSE last_ok_at END,
           fails = CASE WHEN :ok = 1 THEN 0 ELSE fails + 1 END, error = :err, seen = CASE WHEN :ok = 1 THEN :seen ELSE seen END,
-          baseline_at = CASE WHEN :ok = 1 AND baseline_at IS NULL THEN :now ELSE baseline_at END WHERE id = :id`,
-      { id: w.id, now, ok: info.ok ? 1 : 0, seen: info.found || 0, err: info.ok ? '' : String(info.error || 'The search failed').slice(0, 200) });
+          baseline_at = CASE WHEN :ok = 1 AND baseline_at IS NULL THEN :now ELSE baseline_at END, bases = COALESCE(:bases, bases) WHERE id = :id`,
+      { id: w.id, now, ok: info.ok ? 1 : 0, seen: info.found || 0, err: info.ok ? '' : String(info.error || 'The search failed').slice(0, 200), bases });
     }
     this.changed();
     for (const w of list) {
       this.hub.publish(w.userId, 'drop', { id: w.id });
-      if (info.ok && !w.baselineAt) this.firstLook(this.get(w.id));
+      if (info.ok && !w.baselineAt && w.store !== ALL_STORES) this.firstLook(this.get(w.id));
     }
   }
 
@@ -255,7 +268,7 @@ export class Drops {
     this.monitorFor(w, product);
     if (w.found.some((f) => f.productId === product.id) || !this.room(w, baseline)) return;
     const arm = this.armOf(w, product.store, product.url, status, baseline);
-    this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, at: this.now(), base: !!baseline, ...(arm ? { arm } : {}) }]);
+    this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, store: product.store, at: this.now(), base: !!baseline, ...(arm ? { arm } : {}) }]);
     this.repo.ensurePageFor({ store: product.store, sku: product.sku, url: product.url });
     if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url: product.url });
     if (arm === 'armed') {
@@ -359,7 +372,8 @@ export class Drops {
    * p: the search's product; status: its stock there (or null).
    */
   async foundOwn(w, r, p, status, { baseline = false } = {}) {
-    if (!w || !p || !p.url || w.found.some((f) => String(f.sku).toLowerCase() === String(p.sku).toLowerCase())) return null;
+    // (The same code at two stores is two products: an every-store watch's finds go by store too.)
+    if (!w || !p || !p.url || w.found.some((f) => String(f.sku).toLowerCase() === String(p.sku).toLowerCase() && (!f.store || f.store === r.id))) return null;
     if (!this.room(w, baseline)) { if (!baseline) this.noRoom(w); return null; }
     return this.addOwn(w, { store: r.id, sku: p.sku, url: p.url, name: p.title || p.name, price: p.price ?? null }, status, { baseline });
   }
@@ -387,7 +401,7 @@ export class Drops {
       this.db.run(`UPDATE items SET drop_watch = :w, status = :st, status_source = 'server', status_at = :t, checked_at = :t,
         last_price = COALESCE(:price, last_price) WHERE id = :id`, { w: w.id, st, t, price: typeof p.price === 'number' ? p.price : null, id: item.id });
     }
-    this.saveFound(w, [...w.found, { itemId: item.id, sku: p.sku, at: this.now(), base: !!baseline, ...(arm ? { arm } : {}) }]);
+    this.saveFound(w, [...w.found, { itemId: item.id, sku: p.sku, store: p.store, at: this.now(), base: !!baseline, ...(arm ? { arm } : {}) }]);
     this.hub.publish(user.id, 'watch', { id: item.id, added: true });
     this.hub.publish(user.id, 'drop', { id: w.id });
     if (added && !baseline) {
@@ -754,7 +768,10 @@ export class Drops {
       words = wordsOf(input.words);
       if (words.length < 3) throw bad('Paste the product\'s link, or type the words in its name (e.g. "xbox series x" — every word must be in the name)');
       store = str(input.store, 40);
-      if (store === 'other') {
+      if (store === ALL_STORES) {
+        // (A key phrase at every store Mugibot searches: Auto-checkout at whichever of them checks out.)
+        if (!this.stores().some((x) => x.words)) throw bad("No store is searched at the moment — paste the product's link instead");
+      } else if (store === 'other') {
         site = httpUrl(input.site, 'The website\'s address');
         const r = this.retailers.forUrl(site);
         if (r) throw bad(`That's ${r.name} — choose it from the stores instead (Mugibot searches it, and checks out there)`);
@@ -783,8 +800,9 @@ export class Drops {
     }
     this.repo.audit(user.id, null, 'drop-add', `${shared ? 'shared' : 'own'}: ${url || `${words} @ ${site || store}`}`);
     // Looked for at the store's next search (its first look is what it compares drops with) — at the
-    // store's own pace, never sooner. Another website: within a few seconds.
-    if (words && store !== 'other') this.urgent.add(`${store}|${words}`);
+    // store's own pace, never sooner (every store: each at its own). Another website: within a few seconds.
+    if (words && store === ALL_STORES) for (const x of this.stores()) { if (x.words) this.urgent.add(`${x.id}|${words}`); }
+    else if (words && store !== 'other') this.urgent.add(`${store}|${words}`);
     return this.view(this.get(id), user);
   }
 
@@ -967,7 +985,7 @@ export class Drops {
     return {
       id: w.id, kind: w.url ? 'link' : 'words', shared: w.shared, mine, by: w.shared || admin ? w.username : '',
       store: w.store, storeName: this.where(w), site: w.site, words: w.words, url: w.url, label: w.label,
-      category: w.category, aco: mine && w.aco, maxPrice: mine ? w.maxPrice : null, canBuy: this.retailers.canBuy(w.store),
+      category: w.category, aco: mine && w.aco, maxPrice: mine ? w.maxPrice : null, canBuy: w.store === ALL_STORES || this.retailers.canBuy(w.store),
       lastAt: w.lastAt, lastOkAt: w.lastOkAt, fails: w.fails, error: admin ? w.error : publicError(w.error), seen: w.seen,
       looked: !!w.baselineAt, nextAt: w.store === 'other' ? w.nextAt : null, createdAt: w.createdAt,
       // (Read from a browser while the website refuses the server: an admin's, or your own for your own watch.)

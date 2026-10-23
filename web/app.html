@@ -199,10 +199,10 @@
               </div>
               <!-- 🎯 Drop watches: anything outside the card keywords, by link or words, at any store or website -->
               <div class="mon-ppanel" data-ppanel="drops" id="pp-drops" role="tabpanel" aria-labelledby="pt-drops" hidden>
-                <p class="muted small dw-lead">Watch anything outside the card keywords — a console, a collectible, a product at any shop (Garmin, a sneaker store…). Paste its link, or type the words in its name and choose where to look. You're told when it <b>drops</b>, comes <b>back in stock</b>, opens for <b>pre-order</b> or its <b>price drops</b>. <span id="dw-scope"></span></p>
+                <p class="muted small dw-lead">Watch for anything — a product the card keywords miss, a console, a collectible, a product at any shop (Garmin, a sneaker store…). Paste its link, or <b>key phrases</b> — the words in its name, one phrase a line ("Heavy Hitters Premium") — and choose where to look: <b>every store Mugibot searches</b>, one of them, or another website. You're told when it <b>drops</b>, comes <b>back in stock</b>, opens for <b>pre-order</b> or its <b>price drops</b>. <span id="dw-scope"></span></p>
                 <form class="card dw-form" id="dw-form" novalidate>
-                  <label for="dw-input">Product link, or words in its name</label>
-                  <input id="dw-input" autocomplete="off" maxlength="2000" placeholder="https://www.jbhifi.com.au/products/…   or   xbox series x">
+                  <label for="dw-input">Product link, or key phrases (one a line)</label>
+                  <textarea id="dw-input" rows="2" autocomplete="off" maxlength="2000" placeholder="https://www.jbhifi.com.au/products/…   or key phrases, one a line:&#10;Heavy Hitters Premium"></textarea>
                   <p class="small dw-hint" id="dw-hint" aria-live="polite"></p>
                   <div class="grid2" id="dw-where" hidden>
                     <div><label for="dw-store">Where to look</label><select id="dw-store"></select></div>

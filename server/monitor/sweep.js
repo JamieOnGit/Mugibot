@@ -665,24 +665,28 @@ export class Sweeper {
         }
         const title = p.title || p.name;
         const mkt = s.skipMarketplace && p.marketplace;
+        const keyword = all ? s.keywords.find((k) => counts_(p, k)) || null : term.keyword;
+        const cards = !term.vip && !term.drop && (all ? !!keyword : counts_(p, term.keyword));
+        // (A card search's new listing — new to the catalogue, in a read that isn't setting its scene: a drop for a
+        //  drop watch whose words are in its name too, whichever search found it first.)
+        const newListing = this.drops && cards && !baseline && !edge && !mkt && ![p.sku, ...(p.aliases || [])].some((k) => this.catalog.productFor(r.id, k));
+        const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id) || (term.keyword !== w.words && !newListing);
         // Someone's own drop watch's words in the name (monitor/drops.js): on their watchlist, theirs
-        // alone. (Found by another search, it was listed already as far as that watch knows.)
+        // alone. (Found by another search, it was listed already as far as that watch knows — unless it's new.)
         if (this.drops && !mkt) {
           for (const w of this.drops.ownFor(r.id, title)) {
-            await this.drops.foundOwn(w, r, p, status, { baseline: baseline || !w.baselineAt || term.keyword !== w.words }).catch((e) => this.cfg.log('[drops]', e.message));
+            await this.drops.foundOwn(w, r, p, status, { baseline: dropDone(w) }).catch((e) => this.cfg.log('[drops]', e.message));
           }
         }
         // A VIP watch's words in the name (monitor/vip.js): it counts, trading cards or not.
         const watch = this.vip ? this.vip.matchFor(r.id, title, term.vip || null) : null;
         // An admin's drop watch for everyone (monitor/drops.js): it counts too, in #non-tcg-alerts.
         const drop = this.drops && !term.vip ? this.drops.sharedFor(r.id, title, term.drop ? term.keyword : null) : null;
-        const keyword = all ? s.keywords.find((k) => counts_(p, k)) || null : term.keyword;
-        const cards = !term.vip && !term.drop && (all ? !!keyword : counts_(p, term.keyword));
         const counted = cards || ((!!watch || !!drop) && !mkt);
         if (!counted || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
         counts.kept += 1;
-        // (Only a drop watch's: listed already, unless its own words' search found it after its first look.)
-        const dropBaseline = !!drop && (baseline || !drop.baselineAt || term.keyword !== drop.words);
+        // (Only a drop watch's: listed already, unless its own words' search found it after its first look — or it's new.)
+        const dropBaseline = !!drop && dropDone(drop);
         const dropOnly = !!drop && !cards && !watch;
         // (Found by its words alone in the whole-range list: those words, as their own search would say.)
         const found = keyword || (watch && watch.words) || (drop && drop.words) || ALL_LABEL;

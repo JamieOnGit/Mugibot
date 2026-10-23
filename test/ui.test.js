@@ -1224,8 +1224,10 @@ test('🎯 Drop watches: one box for a link or words — the form shows where to
   // Words at another website: where to look, then its address; alerts only (no Auto-checkout); just for me.
   await page.fill('#dw-input', 'Nintendo Switch 2');
   await page.waitForSelector('#dw-where:not([hidden])');
-  assert.match(await page.textContent('#dw-hint'), /choose where to look/);
+  // (Where to look: every store Mugibot searches, unless you choose one — or another website.)
+  assert.match(await page.textContent('#dw-hint'), /Anything at every store Mugibot searches whose name has "nintendo switch 2"/);
   const options = await page.locator('#dw-store option').allTextContents();
+  assert.equal(options[0], 'Every store Mugibot searches');
   assert.ok(options.includes('JB Hi-Fi') && options.includes('Another website…'), options.join('|'));
   await page.selectOption('#dw-store', 'other');
   await page.waitForSelector('#dw-site-wrap:not([hidden])');
@@ -1284,6 +1286,16 @@ test('🎯 Drop watches: one box for a link or words — the form shows where to
   await wrow.waitFor();
   assert.equal(await wrow.getByRole('button', { name: '⚡ Buy' }).count(), 0);
   assert.match(await wrow.textContent(), /Luffy Figure🎯shop\.example\.com alerts only/, 'found by a drop watch; its website, no SKU');
+  // 🔑 Key phrases pasted at once, one a line: a watch each, at every store Mugibot searches (where to look, unless you choose).
+  await fan.click('#pt-drops');
+  await fan.fill('#dw-input', 'Heavy Hitters Premium\nAscended Heroes ETB');
+  await fan.waitForFunction(() => /2 key phrases, a watch each: anything at every store Mugibot searches whose name has "heavy hitters premium", "ascended heroes etb"/.test(document.querySelector('#dw-hint').textContent));
+  assert.equal(await fan.inputValue('#dw-store'), 'all');
+  await fan.click('#dw-add');
+  await fan.waitForFunction(() => /Watching 2 key phrases — searched at each store's next search/.test(document.querySelector('#dw-msg').textContent));
+  await fan.waitForFunction(() => /Words "ascended heroes etb" · at every store/.test(document.querySelector('#dw-mine').textContent));
+  assert.match(await fan.textContent('#dw-mine'), /Words "heavy hitters premium" · at every store · 🔒 just for you/);
+  assert.equal(await fan.inputValue('#dw-input'), '', 'the box is ready for the next ones');
   await fan.close();
 
   // Removed (asked first): gone, and what it put on the watchlist with it.

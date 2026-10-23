@@ -316,6 +316,58 @@ test('🎯 a member\'s own words: what has them goes on their watchlist — thei
   assert.equal(env.app.repo.getItem(ash.user.id, bundle.id), null);
 });
 
+test('🔑 key phrases pasted at once, watched at every store Mugibot searches: each store\'s own first look is its "before"; a new listing with the phrase is DM\'d — found by the phrase\'s own search or by a card search first — and bought within the max price', async () => {
+  assert.equal((await boss.put('/api/monitor/sweep', { stores: { 'demo-jbhifi': 'server', 'demo-ebgames': 'browser', 'demo-pokebox': 'server' } })).status, 200);
+  try {
+    store.addProduct('jbhifi', { sku: 'pokemon-heavy-hitters-premium', name: 'Pokemon TCG: Heavy Hitters Premium Collection', price: 89, status: 'in_stock' });
+    store.addProduct('pokebox', { sku: 'pb-heavy-hitters-premium', name: 'Pokemon TCG: Heavy Hitters Premium Collection', price: 95, status: 'out_of_stock' });
+    const dmsBefore = dms('d-ash').length;
+    // Two pasted at once — and one twice, and one too short: said beside it, the rest added.
+    const r = await ash.post('/api/drops', { phrases: ['Heavy Hitters Premium', 'Ascended Heroes ETB', 'Heavy Hitters Premium', 'x'], store: 'all', aco: true, maxPrice: 120 });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.body.added.map((w) => [w.words, w.store, w.storeName]), [['heavy hitters premium', 'all', 'every store'], ['ascended heroes etb', 'all', 'every store']]);
+    assert.deepEqual(r.body.errors.map((x) => x.phrase), ['x']);
+    const w = r.body.added[0];
+    const jb = R('demo-jbhifi');
+    const pb = R('demo-pokebox');
+    // Each store's first look, at its own next search: what's listed there already is the "before" — on the watchlist, no DM.
+    assert.deepEqual(sw().nextTerm(jb), { keyword: 'heavy hitters premium', page: 1, drop: 'private' });
+    assert.equal((await sw().sweepTerm(jb, { keyword: 'heavy hitters premium', page: 1, drop: 'private' })).ok, true);
+    assert.deepEqual(sw().nextTerm(pb), { keyword: 'heavy hitters premium', page: 1, drop: 'private' }, 'Pokébox has its own first look');
+    assert.equal((await sw().sweepTerm(pb, { keyword: 'heavy hitters premium', page: 1, drop: 'private' })).ok, true);
+    const atJb = env.app.repo.itemBySku(ash.user.id, 'demo-jbhifi', 'pokemon-heavy-hitters-premium');
+    const atPb = env.app.repo.itemBySku(ash.user.id, 'demo-pokebox', 'pb-heavy-hitters-premium');
+    assert.ok(atJb && atPb, 'both on the watchlist, from both stores');
+    assert.equal(atJb.aco, false, 'on sale already when the watch first looked: not armed');
+    assert.equal(atPb.aco, true, 'sold out when it first looked: armed for its return');
+    assert.equal(dms('d-ash').length, dmsBefore, 'what was listed already: no DM');
+    const stored = drops().get(w.id);
+    assert.ok(stored.bases['demo-jbhifi'] && stored.bases['demo-pokebox'], JSON.stringify(stored.bases));
+    // A new listing with the phrase at Pokébox, seen first by its card search ("pokemon" — after its own first read, which
+    // sets its scene): a drop all the same — DM'd, armed, bought.
+    assert.equal((await sw().sweepTerm(pb, { keyword: 'pokemon', page: 1 })).ok, true);
+    assert.equal(dms('d-ash').length, dmsBefore, 'the card search\'s first read: nothing new');
+    store.addProduct('pokebox', { sku: 'pb-heavy-hitters-premium-box', name: 'Pokemon TCG: Heavy Hitters Premium Collection Box', price: 110, status: 'in_stock' });
+    assert.equal((await sw().sweepTerm(pb, { keyword: 'pokemon', page: 1 })).ok, true);
+    const fresh = env.app.repo.itemBySku(ash.user.id, 'demo-pokebox', 'pb-heavy-hitters-premium-box');
+    assert.ok(fresh, 'on the watchlist');
+    assert.equal(fresh.aco, true);
+    assert.ok(dms('d-ash').slice(dmsBefore).some((m) => /Heavy Hitters Premium Collection Box/.test(m.body.embeds[0].title)), 'DM\'d at once');
+    assert.equal(runsFor(fresh.id).length, 1, 'Auto-checkout started');
+    // The phrase's own search there next: nothing new (it's found already).
+    const n = dms('d-ash').length;
+    await sw().sweepTerm(pb, { keyword: 'heavy hitters premium', page: 1, drop: 'private' });
+    assert.equal(dms('d-ash').length, n);
+    // Shown as watched at every store.
+    const mine = (await ash.get('/api/drops')).body.watches.find((x) => x.id === w.id);
+    assert.equal(mine.storeName, 'every store');
+    assert.equal(mine.canBuy, true);
+    for (const x of r.body.added) assert.equal((await ash.del(`/api/drops/${x.id}`)).status, 200);
+  } finally {
+    assert.equal((await boss.put('/api/monitor/sweep', { stores: { 'demo-jbhifi': 'server', 'demo-ebgames': 'browser' } })).status, 200);
+  }
+});
+
 test('🎯 a link at another website: its page read for stock, the member DM\'d when it\'s back — alerts only (no ⚡ Buy, no Auto-checkout there)', async () => {
   const url = store.acmeUrl('xbox-series-x-console-1tb');
   const no = await ash.post('/api/drops', { url, aco: true, maxPrice: 900 });

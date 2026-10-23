@@ -226,7 +226,21 @@ export function register(router, ctx) {
   router.get('/api/drops', async (req) => ctx.drops.viewFor(req.user), member);
   router.post('/api/drops', async (req) => {
     if (!limiter.hit(`dropadd:${req.user.id}`, 30, 10 * 60 * 1000)) throw new HttpError(429, 'Slow down a little — try again in a few minutes');
-    const watch = await ctx.drops.add(req.body || {}, req.user);
+    const body = req.body || {};
+    // Several key phrases pasted at once (one a line): a watch each, where they're to be looked for — each one's
+    // own trouble (one you have already, your limit reached) said beside it, the rest added.
+    if (Array.isArray(body.phrases)) {
+      const phrases = [...new Set(body.phrases.map((x) => str(x, 120)).filter(Boolean))].slice(0, 20);
+      if (!phrases.length) throw bad('Paste a key phrase or two, one a line');
+      const added = [];
+      const errors = [];
+      for (const words of phrases) {
+        try { added.push(await ctx.drops.add({ ...body, phrases: undefined, url: '', words }, req.user)); } catch (e) { errors.push({ phrase: words, error: e.message }); }
+      }
+      if (!added.length) throw bad(errors.map((x) => `"${x.phrase}": ${x.error}`).join(' · '));
+      return { ...ctx.drops.viewFor(req.user), added, errors };
+    }
+    const watch = await ctx.drops.add(body, req.user);
     return { watch, ...ctx.drops.viewFor(req.user) };
   }, member);
   router.post('/api/drops/channel', async (req) => {
