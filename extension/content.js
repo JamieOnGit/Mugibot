@@ -162,6 +162,9 @@
     // Kept good while a run's still at it on this page — pressing for hours, waiting on a slow store: once a
     // minute at most. Never brought back once it's gone (stopped from the panel, or over).
     keep: () => { const a = assistFlag.read(); if (a && a.until - Date.now() < ASSIST_TTL - 60000) assistFlag.on(a.profileId); },
+    // Kept good for longer: the checkout going off to another page after the final button (its bank's check),
+    // for the store's confirmation page whenever it comes back to it.
+    hold: (ms) => { const a = assistFlag.read(); if (a) { try { sessionStorage.setItem(ASSIST_KEY, JSON.stringify({ ...a, until: Math.max(a.until, Date.now() + ms) })); } catch { /* ignore */ } } },
   };
   let busy = false;
   let assisting = false;
@@ -176,6 +179,12 @@
   // The run in this tab (from its ⚡ Buy code, or — on later pages — from the tab's pass in the extension).
   let aco = null;
   const acoReport = (status, reason, message, total) => ask({ type: 'acoReport', status, reason: reason || '', message: message || '', total: typeof total === 'number' ? total : undefined });
+  // (What the store puts up after the final button that's for you to do — watched on for the order meanwhile: watchPlaced.)
+  const CHECKS = new Set(['bank_check', 'human_check']);
+  let watchingPlaced = false;
+  // (A page the store moved on to after the press that isn't its checkout — nor a store whose checkout is a frame on
+  //  its page: what it shows counts from the start — MGBChecks.markAfter.)
+  const awayFromCheckout = () => !(checkoutFlow && (checkoutFlow.inFrame || (checkoutFlow.path instanceof RegExp && checkoutFlow.path.test(location.pathname))));
   // Why a run stopped short of checkout (core.js): failed, unless it's something for you to do (sign in).
   // (The store's queue, drawn by its page's code after Mugibot looked: not a failure — it waits there, see go().)
   const acoWhy = (reason, message, status) => {
@@ -254,6 +263,9 @@
 
   /** After the final button: what happened (up to 45 s here; a new page carries on by itself). */
   async function watchOutcome(run, total) {
+    // (A page the store moved on to after the press: the bank's check on it counts from the start — and what it
+    //  says about approving the payment too, unless it's the checkout itself back again.)
+    MGBChecks.markAfter(document, awayFromCheckout());
     const started = Date.now();
     const until = started + 45000;
     let said = null;
@@ -283,7 +295,45 @@
       panel.setStatus(o.message);
       await acoReport(o.status, o.reason, o.message, total);
       if (o.status === 'failed') return;
+      if (CHECKS.has(o.reason)) { watchPlaced(total); return; }
     }
+  }
+
+  // Your bank's check — or a human one — after the final button was pressed: you're told at once (your account
+  // DMs you), and the order may still go through once you've done it. So the page is watched on for the half
+  // hour, nothing pressed: "placed" the moment the store confirms it (a page it moves on to says so itself). This
+  // tab's pass and checkout flag are kept good meanwhile, for that page.
+  async function watchPlaced(total) {
+    if (watchingPlaced) return;
+    watchingPlaced = true;
+    for (const until = Date.now() + MGBChecks.RETRY_MS; Date.now() < until;) {
+      await nap(1000);
+      assistFlag.keep();
+      beat('Waiting for you to approve the payment');
+      const o = outcome();
+      if (o && o.status === 'placed') { await said(o, total); return; }
+    }
+  }
+
+  /**
+   * After the final button, the store sends the checkout on to another site (not a page of this store's: its
+   * bank's check, most likely — Mugibot doesn't run there). The extension's told where, and looks at the tab a
+   * few seconds on: still somewhere Mugibot can't see, and your account hears it's most likely your bank wanting
+   * you to approve the payment (a check that passed by itself has come back by then). (checkout.leaves: Shop's
+   * own way on — watchLeaving.)
+   */
+  function watchAway() {
+    const nav = globalThis.navigation;
+    if (!nav || !nav.addEventListener) return;
+    nav.addEventListener('navigate', (e) => {
+      let to = null;
+      try { to = new URL(e.destination.url); } catch { return; }
+      if (seekingNow || e.destination.sameDocument) return;
+      // (Off to another page — here, by way of the store's own server, or the bank's: this tab's checkout kept
+      //  going for the confirmation page, however long you take to approve it.)
+      assistFlag.hold(MGBChecks.RETRY_MS + 5 * 60 * 1000);
+      if (MGBFlows.forLocation(retailers, to) !== retailer) ask({ type: 'acoGoing', host: to.host });
+    });
   }
 
   /** The final button, still working on the press (disabled, or busy): not yet the store's answer. */
@@ -422,8 +472,11 @@
   /**
    * A checkout that goes on to another address once its final button's pressed (checkout.leaves: Shop's,
    * on to the store's own order page — where Mugibot doesn't run): where it goes says how it went. The
-   * store's order page: placed. Anywhere else: for you to check. (On to another page here: that page says.)
+   * store's order page: placed. Its bank's check (by its address): for you to approve. Anywhere else: for you to
+   * check. (On to another page here: that page says.)
    */
+  // (An address that's the bank's check: its 3-D Secure page.)
+  const BANK_AWAY = /3ds|three.?d.?s|threeds|\bacs\b|acs[.-]|authenticat|challenge|cardinal|securecode|safekey|verif/i;
   function watchLeaving(label, total) {
     const nav = globalThis.navigation;
     if (!nav || !nav.addEventListener) return;
@@ -439,6 +492,8 @@
       //  nothing was bought. Waited for there, and pressed again once back — background.js heldUp.)
       if (!done.test(to.pathname) && waitLive && noticeEls().length) { ask({ type: 'acoAway' }); return; }
       if (done.test(to.pathname)) acoReport('placed', '', `Order placed — ${retailer.name} went on to ${to.host}'s order page`, total);
+      // (On to the bank's check, by its address: you're told to approve it.)
+      else if (BANK_AWAY.test(to.host + to.pathname)) acoReport('needs_you', 'bank_check', `"${label}" was pressed and ${retailer.name} went on to ${to.host} — your bank wanting you to approve the payment: approve it in your bank's app (or with the code it sent you), or finish it in the checkout tab. Then check your email for the order confirmation.`, total);
       else acoReport('needs_you', 'unconfirmed', `"${label}" was pressed and ${retailer.name} went on to ${to.host} — check your email for the order confirmation before buying it again.`, total);
     });
   }
@@ -637,7 +692,7 @@
       if (!live) panel.setStatus(go.n === 1 ? `🤖 Placing your order ($${total.toFixed(2)})…` : `🤖 Pressing "${fin.text}" again (${go.n}) — ${retailer.name}'s struggling…`);
       // (In your activity: each press — or, not on sale yet, the first and then one every 150 or so: every 5 minutes.)
       if (!live || live.presses % 150 === 0) report('step', `Auto-checkout pressed "${fin.text}"${go.n > 1 ? ` again (${go.n})` : ''} (total $${total.toFixed(2)})${live ? ` — ${retailer.name} says it isn't on sale yet` : ''}`, null);
-      if (checkoutFlow.leaves && !watching) { watching = true; watchLeaving(fin.text, total); }
+      if (!watching) { watching = true; if (checkoutFlow.leaves) watchLeaving(fin.text, total); else watchAway(); }
       // (Stopped meanwhile — from the panel: nothing more pressed.)
       if (!assistFlag.active()) return;
       markNotices();
@@ -736,6 +791,7 @@
     }
     panel.setStatus(o.message);
     await acoReport(o.status, o.reason, o.message, total);
+    if (CHECKS.has(o.reason) && aco && aco.placing) watchPlaced(total);
   }
 
   // Your account told how a slow checkout's going, every half a minute or so (it keeps the run going).
@@ -795,8 +851,12 @@
         return { kind: 'done' };
       }
       // (Still at it — its button busy, the page loading, "Processing…" — or nothing said yet: waited for. Your
-      //  account hears after a few seconds of it: a quick answer is no slow checkout.)
-      if (Date.now() - started > 5000) beat(`Pressed — waiting for ${retailer.name} to answer (it's slow)`);
+      //  account hears after a few seconds of it: a quick answer is no slow checkout — with what's on the page
+      //  meanwhile, a pop-up's words or a frame the press brought up, so a run that's waiting shows why.)
+      if (Date.now() - started > 5000) {
+        const s = MGBChecks.showing(document);
+        beat(`Pressed — waiting for ${retailer.name} to answer (it's slow)${s ? ` — on the page: ${s}` : ''}`);
+      }
     }
   }
 
@@ -818,9 +878,11 @@
         // now), within the half hour: filled in again and pressed again (below). Back at it saying nothing,
         // or anything else, it's only watched: the order may be going through. (A frame presses its own.)
         aco = data.aco;
+        MGBChecks.markAfter(document, awayFromCheckout());
         const o = outcome();
         if (o) await acoReport(o.status, o.reason, o.message);
         if (o && o.status === 'placed') { assistFlag.off(); ask({ type: 'endFill' }); }
+        if (o && CHECKS.has(o.reason)) watchPlaced(null);
         if (o) return;
         // (Its last "place order" stage — City Beach's: pressed by watchOutcome at once, not waited on.)
         const onReview = !!(checkoutFlow && checkoutFlow.review && checkoutFlow.review.path instanceof RegExp && checkoutFlow.review.path.test(location.pathname + location.search));

@@ -52,21 +52,38 @@
     const run = data.aco || null;
     // (Pressed already, the store hasn't taken the order, and it's not 30 minutes yet: it may press again.)
     const retrying = (r) => !!(r && r.placing && !r.stopped && !r.done && r.placingAt && Date.now() - r.placingAt < MGBChecks.RETRY_MS);
+    let beatAt = 0;
+    const beat = (text) => { if (!run || Date.now() - beatAt < 30000) return; beatAt = Date.now(); ask({ type: 'acoReport', status: 'beat', message: text }); };
+    // Your bank's check (or a human one) after the final button: you're told at once, and the order may still go
+    // through once you've done it — so the form's watched on for the half hour, nothing pressed: "placed" the
+    // moment the store confirms it. (beat: this tab's pass kept good meanwhile.)
+    const CHECKS = ['bank_check', 'human_check'];
+    const watchPlaced = async (total) => {
+      for (const until = Date.now() + MGBChecks.RETRY_MS; Date.now() < until; await wait(1000)) {
+        beat('Waiting for you to approve the payment');
+        const o = MGBChecks.outcome(document, C.done, name);
+        if (o && o.status === 'placed') { status('🤖 Order placed.'); await acoReport('placed', '', `Order confirmed at ${name}`, total); return; }
+      }
+    };
     if (run && run.placing) {
       // Back after this run's final button was pressed (the frame moved on): how it went — and, its form back
       // without having taken the order (the store's struggling), filled in again and pressed again (below).
       // (Only when the form says the store's struggling — busy, try again, sold out just now: saying nothing,
       //  or anything else, the order may be going through, and it's only watched, for 30 s as ever.)
+      MGBChecks.markAfter(document, false);
       let busy = false;
       for (const until = Date.now() + 30000; Date.now() < until && !busy; await wait(500)) {
         const o = MGBChecks.outcome(document, C.done, name);
-        if (o) { status(o.status === 'placed' ? '🤖 Order placed.' : o.message); await acoReport(o.status, o.reason, o.status === 'placed' ? `Order confirmed at ${name}` : o.message); return; }
+        if (o) {
+          status(o.status === 'placed' ? '🤖 Order placed.' : o.message);
+          await acoReport(o.status, o.reason, o.status === 'placed' ? `Order confirmed at ${name}` : o.message);
+          if (CHECKS.includes(o.reason)) await watchPlaced();
+          return;
+        }
         busy = retrying(run) && MGBChecks.errorKind(MGBChecks.pageError(document)) === 'busy';
       }
       if (!busy) return;
     }
-    let beatAt = 0;
-    const beat = (text) => { if (!run || Date.now() - beatAt < 30000) return; beatAt = Date.now(); ask({ type: 'acoReport', status: 'beat', message: text }); };
     const cardHere = () => [...document.querySelectorAll('input, select')]
       .filter((el) => /^card(Number|Expiry|ExpMonth|Cvc)$/.test(MGBFill.classifyField(el, C) || '') && MGBFill.isVisible(el));
     const cardReady = async (whole) => {
@@ -159,6 +176,7 @@
       const said = async (o) => {
         status(o.status === 'placed' ? '🤖 Order placed.' : o.message);
         await acoReport(o.status, o.reason, o.status === 'placed' ? `Order confirmed at ${name}` : o.message, total);
+        if (CHECKS.includes(o.reason)) watchPlaced(total);
       };
       let fieldTries = 0;
       for (let n = 0; ; n++) {
@@ -218,7 +236,8 @@
             return;
           }
           if (Date.now() - started > MGBChecks.RETRY_MS) { await said({ status: 'needs_you', reason: 'unconfirmed', message: `"${f.text}" was pressed and ${name} still hadn't answered after 30 minutes — check your email for the order confirmation before buying it again.` }); return; }
-          beat(`Pressed — waiting for ${name} to answer (it's slow)`);
+          const s = MGBChecks.showing(document);
+          beat(`Pressed — waiting for ${name} to answer (it's slow)${s ? ` — on the form: ${s}` : ''}`);
         }
         if (ans.kind === 'field' && ++fieldTries > 2) return stop('needs_you', 'needs_details', `${name} said: "${ans.text}" — finish it yourself in this tab.`, total);
         const w = MGBChecks.retryWait(n);

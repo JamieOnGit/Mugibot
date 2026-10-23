@@ -61,7 +61,11 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // BIG W: a search page's own "Next" link is sent back with what it found (its later pages are read where it goes),
 // and the browser checks say this copy's version (an updated copy gets BIG W's pages at once).
 // 1.30.0: BIG W read in a private (Incognito) window of its own, where Mugibot's allowed in Incognito — its searches
-// and page reads apart from your own BIG W visits and checkouts; an ordinary window otherwise, as before.
+// and page reads apart from your own BIG W visits and checkouts; an ordinary window otherwise, as before. And your
+// bank's check after the final button seen as real checkouts show it — a frame with no address to go by (named for
+// it, or a pop-up in front of the checkout), words about approving the payment, the tab sent to the bank's own site:
+// you're told at once (a DM: approve it in your bank's app), and the order's marked placed once the store confirms
+// it. Before, such a run waited out the half hour as "no answer" (Oct 2026: two runs, EB Games' and Good Games').
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):

@@ -62,7 +62,12 @@
 //             page (/shopapp/account) says whether you're signed in.
 //
 // Placing an order: each shop's `decline` (the card is declined) and `threeDS` (the
-// bank's "verify it's you" check, in a frame) options, for Auto-checkout's tests.
+// bank's "verify it's you" check, in a frame) options, for Auto-checkout's tests. threeDS
+// as real checkouts show it, nothing on the checkout saying what it is (Kmart, City Beach,
+// Target): 'posted' (the bank's page posted into a frame named for it, Adyen's way),
+// 'popup' (into a frame with no name, in a pop-up over the checkout) or 'redirect' (the
+// whole tab sent to the bank's own site, bank.test) — the order placed once you approve it
+// in your bank's app (store.approveBank()), then on to the store's confirmation.
 //
 // Checkpoints and virtual queues (each shop's `checkpoint` and `queue`, off unless switched on):
 //   checkpoint (the Shopify shops: JB Hi-Fi's): Shopify's bot check — /checkpoint is an hCaptcha
@@ -254,6 +259,9 @@ export function defaultShopApp() {
     // Shopify's "Too many checkout attempts" (a member's, Oct 2026): throttleNext, the next "Pay now" gets it and
     // so does every press and every checkout opened for throttleMs; throttled counts them.
     throttleNext: false, throttleMs: 0, throttleUntil: 0, throttled: 0,
+    // Your bank's check after "Pay now" (bankJs: 'posted' or 'popup' over Shop's checkout), the order placed once
+    // you approve it (store.approveBank()); challenged counts them.
+    threeDS: false, challenged: 0,
     shipping: 32,
     checkouts: {}, orders: [], refused: [], shown: 0, guestViews: 0, accountViews: 0,
   };
@@ -417,6 +425,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     acme: defaultAcme(),
     // Shop's checkout and the store that checks out with it (see shopApp() below).
     shopapp: defaultShopApp(),
+    // The bank's checks waiting on you (a shop's threeDS 'posted' / 'popup' / 'redirect'): id → { shop, mode, approved, next, place }.
+    bank: {},
   };
   let cardOrigin = '';
 
@@ -1068,8 +1078,28 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const d = await r.json().catch(() => ({}));
     if (d.error) { const e = document.getElementById('${errId}'); e.textContent = d.error; e.setAttribute('role', 'alert'); return; }
     if (d.challenge) { document.querySelector('main').insertAdjacentHTML('beforeend', '<section id="threeds"><h2>Verify it\\'s you</h2><p>Your bank needs to confirm this payment.</p><iframe src="' + d.challenge + '" width="400" height="300"></iframe></section>'); return; }
+    if (d.bank) { ${bankJs()}; return; }
     location.href = '/${shop}/checkout/confirmation';
   }`;
+
+  // The bank's check as real checkouts put it up (threeDS 'posted', 'popup' or 'redirect'): the bank's page posted
+  // into a frame with no address — named for it, as Adyen's is ('posted'), or not at all, in a pop-up over the
+  // checkout ('popup') — or the whole tab sent to the bank's own site ('redirect': bank.test, an address the
+  // extension may not open). Nothing on the checkout says what it is. The page waits for the bank to say it's
+  // approved (store.approveBank(): you, in your bank's app), then goes on to the store's confirmation.
+  const bankJs = () => `{
+      const b = d.bank;
+      if (b.mode === 'redirect') { location.href = b.acs; return; }
+      const frame = b.mode === 'posted'
+        ? '<div class="adyen-checkout__threeds2__challenge"><iframe name="threeDSIframe" class="adyen-checkout__iframe adyen-checkout__iframe--threeDSIframe" width="390" height="400" frameborder="0"></iframe></div>'
+        : '<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:50"><div style="background:#fff;padding:8px;border-radius:8px"><iframe name="f' + b.id + '" width="400" height="420" frameborder="0"></iframe></div></div>';
+      document.body.insertAdjacentHTML('beforeend', frame + '<form id="creq" method="POST" action="' + b.acs + '" target="' + (b.mode === 'posted' ? 'threeDSIframe' : 'f' + b.id) + '" style="display:none"><input name="creq" value="' + b.id + '"></form>');
+      document.getElementById('creq').submit();
+      const poll = setInterval(async () => {
+        const s = await (await fetch(b.status)).json().catch(() => ({}));
+        if (s.approved) { clearInterval(poll); location.href = s.next; }
+      }, 500);
+    }`;
 
   function kmartCheckout() {
     const acc = state.account || {};
@@ -2028,6 +2058,23 @@ for (const el of document.querySelectorAll('input')) {
       res.end('<!doctype html><html><body style="font:14px system-ui"><h3>Verify it\'s you</h3><p>Enter the code we sent to your phone.</p><input name="otp" inputmode="numeric"><button type="button">Submit</button></body></html>');
       return;
     }
+    // The bank's own pages (bankJs): posted into the checkout's frame ('approve'), or the whole tab sent here
+    // ('redirect', as bank.test) — waiting for you to approve it in the bank's app (store.approveBank()), then (the
+    // whole tab) back to the store's confirmation.
+    if (u.pathname === '/acs/status') {
+      const x = state.bank[u.searchParams.get('id') || ''];
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ approved: !!(x && x.approved) }));
+      return;
+    }
+    if (u.pathname === '/acs/approve' || u.pathname === '/acs/redirect') {
+      const id = String(u.searchParams.get('id') || '');
+      const back = String(u.searchParams.get('back') || '');
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><html><head><title>Dummy Bank — approve this payment</title></head><body style="font:14px system-ui;padding:12px"><h3>Dummy Bank</h3><p>Approve this payment in your Dummy Bank app.</p><p>Waiting for approval…</p>
+<script>${back ? `const poll = setInterval(async () => { const s = await (await fetch('/acs/status?id=${encodeURIComponent(id)}')).json(); if (s.approved) { clearInterval(poll); location.href = ${JSON.stringify(back)}; } }, 500);` : ''}</script></body></html>`);
+      return;
+    }
     if (u.pathname === '/card-frame') {
       const style = u.searchParams.get('style') || 'stripe';
       if (style === 'strict') {
@@ -2273,6 +2320,10 @@ ${body}
 
   function shopApp(sub, u, req, res, { html, json, redirect }) {
     const A = state.shopapp;
+    if (sub === '/bank-status') {
+      const x = state.bank[u.searchParams.get('id') || ''];
+      return json(200, { approved: !!(x && x.approved), next: x ? x.next : '' });
+    }
     // (Like the real Shop's pages, an app's: its code carries the words it might show — "Sign in to your
     //  account" among them — whether you're signed in or not.)
     const strings = '<script type="application/json" id="shop-i18n">{"signIn":"Sign in to your account","continue":"Continue with email"}</script>';
@@ -2312,8 +2363,17 @@ ${body}
         const why = A.unavailable ? 'This Product is not available for purchase' : A.agreement && !b.agreed ? 'You must accept membership agreement before checking out' : '';
         if (why) { A.refused.push(why); return new Promise((r) => setTimeout(r, A.real ? 300 : 0)).then(() => json(422, { error: why })); }
         const off = (b.discount && A.discounts[String(b.discount).toUpperCase()]) || 0;
-        A.orders.push({ token: m[2], lines: lines.map((l) => [l.id, l.qty]), total: Math.round((total - off) * 100) / 100, discount: off ? String(b.discount).toUpperCase() : '', agreed: !!b.agreed, marketing: !!b.marketing, rewards: !!b.rewards, at: Date.now() });
-        return json(200, { ok: true, next: `/creations/checkouts/cn/${m[2]}/thank-you` });
+        const place = () => A.orders.push({ token: m[2], lines: lines.map((l) => [l.id, l.qty]), total: Math.round((total - off) * 100) / 100, discount: off ? String(b.discount).toUpperCase() : '', agreed: !!b.agreed, marketing: !!b.marketing, rewards: !!b.rewards, at: Date.now() });
+        const next = `/creations/checkouts/cn/${m[2]}/thank-you`;
+        if (A.threeDS) {
+          // Your bank's check, in a pop-up over Shop's checkout (bankJs): the order's placed once you approve it.
+          A.challenged += 1;
+          const id = String(Object.keys(state.bank).length + 1);
+          state.bank[id] = { shop: 'shopapp', mode: A.threeDS, approved: false, next, place };
+          return json(200, { ok: false, bank: { mode: A.threeDS, id, acs: `${cardOrigin}/acs/approve?id=${id}`, status: `/shopapp/bank-status?id=${id}` } });
+        }
+        place();
+        return json(200, { ok: true, next });
       });
     }
     const back = String(u.searchParams.get('ur_back_url') || '');
@@ -2377,6 +2437,7 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     const r = await fetch(location.pathname.replace(/shoppay$/, 'pay'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agreed: !!(box && box.checked), marketing: document.getElementById('marketing').checked, back: location.pathname + location.search, discount, rewards: !!(document.querySelector('input[name="rewards"]') || {}).checked }) });
     const d = await r.json();
     if (d.queue) { location.href = d.queue; return; }
+    if (d.bank) { ${bankJs()}; return; }
     if (d.throttled) { pay.setAttribute('aria-busy', 'false'); document.getElementById('throttle').style.display = 'flex'; return; }
     if (!r.ok) {
       pay.setAttribute('aria-busy', 'false');
@@ -2981,10 +3042,25 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
       if (S.placeSlowMs) await new Promise((r) => setTimeout(r, S.placeSlowMs));
       if (S.placeTries <= S.placeBusy) return json(503, { ok: false, error: S.placeBusyText || "We're experiencing high demand right now. Something went wrong — please try again." });
       if (S.decline) { S.declined = (S.declined || 0) + 1; return json(402, { ok: false, error: 'Your card was declined. Please try another card.' }); }
-      if (S.threeDS) { S.challenged = (S.challenged || 0) + 1; return json(200, { ok: false, challenge: `${cardOrigin}/acs/challenge` }); }
+      if (S.threeDS === true) { S.challenged = (S.challenged || 0) + 1; return json(200, { ok: false, challenge: `${cardOrigin}/acs/challenge` }); }
+      if (S.threeDS) {
+        // The bank's check, as real checkouts put it up (bankJs): the order's placed once the bank says it's approved.
+        S.challenged = (S.challenged || 0) + 1;
+        const id = String(Object.keys(state.bank).length + 1);
+        const next = `/${shop}/checkout/confirmation`;
+        state.bank[id] = { shop, mode: S.threeDS, approved: false, next, place: () => { S.orders.push({ cart: S.cart.slice(), data: { ...S.data }, form: b, ts: Date.now(), bank: true }); S.cart = []; } };
+        const acs = S.threeDS === 'redirect'
+          ? `http://bank.test:${new URL(cardOrigin).port}/acs/redirect?id=${id}&back=${encodeURIComponent(`http://${req.headers.host}${next}`)}`
+          : `${cardOrigin}/acs/approve?id=${id}`;
+        return json(200, { ok: false, bank: { mode: S.threeDS, id, acs, status: `/${shop}/checkout/bank-status?id=${id}` } });
+      }
       S.orders.push({ cart: S.cart.slice(), data: { ...S.data }, form: b, ts: Date.now() });
       S.cart = [];
       return shop === 'ebgames' ? redirect('/ebgames/checkout/confirmation') : json(200, { ok: true });
+    }
+    if (sub === '/checkout/bank-status') {
+      const x = state.bank[u.searchParams.get('id') || ''];
+      return json(200, { approved: !!(x && x.approved), next: x ? x.next : '' });
     }
     if (sub === '/checkout/confirmation') return html(200, page(shop, 'Order confirmed', `<h1>Thank you for your order!</h1><p>Order number: DUMMY-${1000 + S.orders.length}</p>`));
 
@@ -3231,6 +3307,15 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
       state.cardInIframe = false;
       state.blockNonBrowsers = false;
       state.signedIn = {};
+      state.bank = {};
+    },
+    /** You approve the payment in your bank's app: every bank check waiting is passed, its order placed. */
+    approveBank() {
+      for (const x of Object.values(state.bank)) {
+        if (x.approved) continue;
+        x.approved = true;
+        x.place();
+      }
     },
     close: () => Promise.all([
       new Promise((r) => { server.close(() => r()); server.closeAllConnections?.(); }),

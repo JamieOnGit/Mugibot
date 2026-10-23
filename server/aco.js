@@ -98,7 +98,7 @@ export const REASONS = {
   card_missing: 'No card saved in the extension',
   card_not_filled: "The card didn't go into the store's card boxes",
   card_declined: 'The store declined the payment',
-  bank_check: 'Your bank asked you to confirm the payment',
+  bank_check: 'Your bank wants you to approve the payment',
   human_check: 'The store asked to check you are human',
   needs_details: 'Checkout needed something Mugibot could not fill in',
   payment_frame: "This store's payment form can't be pressed by Mugibot",
@@ -565,7 +565,9 @@ export class Aco {
       placing: `💳 Placing the order at ${where}…`,
       placed: `✅ **Order placed** at ${where}${total ? ` — ${money(total)}` : ''}. The store emails you the confirmation.`,
       ready: `🛒 **Checkout's ready** in ${deviceName} — press ${where}'s final button there to buy.`,
-      needs_you: `⚠️ **It needs you** in ${deviceName}: ${run.message || run.reasonText}`,
+      needs_you: run.reason === 'bank_check'
+        ? `🏦 **Approve the payment in your bank's app** — the checkout's in **${deviceName}**: ${run.message || run.reasonText}`
+        : `⚠️ **It needs you** in ${deviceName}: ${run.message || run.reasonText}`,
       failed: `❌ **Didn't buy it**: ${run.message || run.reasonText}`,
       expired: `❌ **Didn't start**: ${run.reason === 'no_browser' ? `${deviceName} didn't pick it up within 2 minutes — is it open, with the extension connected?` : run.message || run.reasonText}`,
       skipped: run.reason === 'phone' ? `📱 **Finishing it on your phone** — **${deviceName}** stopped. Pass ${where}'s check and pay there.` : `⏭️ **Didn't start**: ${run.message || run.reasonText}`,
@@ -1091,17 +1093,24 @@ export class Aco {
     const total = run.total ?? run.price;
     // Discord's ⚡ Buy: the member pressed it, and its reply in Discord says how it went too.
     const remote = row.trigger === 'remote';
+    // Your bank wanting you to approve the payment, after the final button (Oct 2026: two runs sat waiting on
+    // one nobody was told about): said as that, straight away — what to do, on which computer, and that the run
+    // turns "placed" by itself once the store confirms the order. (A Discord DM always: it spends your money.)
+    const bank = status === 'needs_you' && reason === 'bank_check';
+    const device = bank && row.device_id ? this.repo.listDevices(userId).find((d) => d.id === row.device_id) : null;
     const ev = {
       placed: { level: 'success', title: `✅ Auto-checkout placed your order: ${row.name}`, message: `${storeName}${total ? ` · ${money(total)}` : ''}\nThe store emails you the confirmation.${remote ? '' : ' To buy it again, arm it again in Mugibot.'}` },
       ready: { level: 'urgent', title: `🛒 Checkout ready: ${row.name}`, message: `${storeName}\nYour browser filled checkout in and stopped at the final button — press it to buy.` },
-      needs_you: { level: 'urgent', title: `⚠️ Auto-checkout needs you: ${row.name}`, message: `${storeName}\n${text}${pressed ? '' : ' Finish it in the tab that opened.'}` },
+      needs_you: bank
+        ? { level: 'urgent', title: `🏦 Approve the payment in your bank's app: ${row.name}`, message: `${storeName}${total ? ` · ${money(total)}` : ''}\n${text}\nThe checkout's open in ${device ? device.name : 'your checkout browser'} — to finish it there from your phone: 🖥️ Open my computer (Chrome Remote Desktop).` }
+        : { level: 'urgent', title: `⚠️ Auto-checkout needs you: ${row.name}`, message: `${storeName}\n${text}${pressed ? '' : ' Finish it in the tab that opened.'}` },
       failed: { level: 'warn', title: `❌ Auto-checkout didn't buy ${row.name}`, message: `${storeName}\n${text}${pressed || remote ? '' : ' It stays armed for the next drop.'}` },
       expired: { level: 'warn', title: `❌ Auto-checkout didn't start: ${row.name}`, message: `${storeName}\n${text}` },
     }[status];
     if (ev && reason !== 'disarmed' && !quiet) {
       await this.notifier.notify(userId, {
         type: 'aco', channel: 'aco', ...ev, name: row.name, sku: row.sku, url: row.url || null,
-        buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
+        buttons: [...(bank ? [{ label: '🖥️ Open my computer', url: REMOTE_DESKTOP_URL }] : []), { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
       });
     }
     return run;

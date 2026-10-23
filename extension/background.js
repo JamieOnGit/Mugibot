@@ -2206,6 +2206,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...run, done: true } } });
         return res.status === 200 ? { ok: true, over, text: over ? String(res.body.run.message || '') : '' } : { ok: false, status: res.status };
       }
+      case 'acoGoing': {
+        // After the final button, the store's sending the checkout on to another site (content.js watchAway): where,
+        // for what your account's told if it's still there in a few seconds (bankAway).
+        if (!sender.tab || sender.frameId !== 0) return null;
+        const pass = await passFor(sender);
+        if (!pass || !pass.aco || !pass.aco.placing) return null;
+        await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...pass.aco, awayHost: String(msg.host || '').slice(0, 120) }, expires: awayExpiry(pass.aco) } });
+        bankAwaySoon(sender.tab.id);
+        return { ok: true };
+      }
       case 'acoRetry': {
         // The final button, about to be pressed (again): may it be? Only in a run that's placing the order,
         // hasn't been stopped or ended, and is within the 30 minutes since it was first pressed. Counted, and
@@ -2238,7 +2248,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // (Only its press count and times changed — on the pass as it is now.)
         const cur = (await chrome.storage.session.get(key))[key] || pass;
         // (Pressing on Shop's checkout: not held up in the store's queue — heldUp — whatever it last looked like.)
-        const next = { ...(cur.aco || run), presses: (run.presses || 0) + 1, placing: true, placingAt: run.placingAt || now, away: null };
+        // (page: the checkout it was pressed on — whose store's it is, should the tab go somewhere Mugibot can't see: bankAway.)
+        const next = { ...(cur.aco || run), presses: (run.presses || 0) + 1, placing: true, placingAt: run.placingAt || now, away: null, page: run.page || sender.tab.url || '' };
         await chrome.storage.session.set({ [key]: { ...cur, aco: next, expires: now + PASS_TTL } });
         return { ok: true, n: next.presses, since: next.placingAt };
       }
@@ -2549,7 +2560,55 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.url) turnMoved(tabId, info.url).catch(() => null);
+  if (info.status === 'complete') bankAwaySoon(tabId);
 });
+
+// --- after the final button: the checkout gone on to a site Mugibot can't see ----------------------
+// A store that sends the checkout to its bank's check — the whole tab, not a frame on its page (straight from
+// "Pay", or by way of its own server) — goes somewhere Mugibot doesn't run, so nothing on the page can say so.
+// Looked at a few seconds after each page in a tab that's placing an order finishes loading: on a site this
+// extension can't open (not a store, nor a payment provider's), still within the half hour of the press, and
+// your account's told at once — most likely it's your bank wanting you to approve the payment (a check that
+// passed by itself has come back to the store by then). Once: the run's for you then, and the store's
+// confirmation page — when the tab gets there — says "placed" as ever. (Shop checkout links go on to the
+// store's own order page by design: theirs say how it went before they leave — content.js watchLeaving.)
+const BANK_AWAY_MS = 5000;
+const awayTimers = new Map();
+// (Its pass kept good meanwhile — no page of the store's is there to keep it so — for the confirmation page,
+//  however long the approving takes within the half hour.)
+const awayExpiry = (run) => Math.max(Date.now() + PASS_TTL, ((run && run.placingAt) || Date.now()) + RETRY_MS + 5 * 60 * 1000);
+function bankAwaySoon(tabId) {
+  clearTimeout(awayTimers.get(tabId));
+  awayTimers.set(tabId, setTimeout(() => { awayTimers.delete(tabId); bankAway(tabId).catch(() => null); }, BANK_AWAY_MS));
+}
+
+async function bankAway(tabId) {
+  const key = passKey(tabId);
+  const pass = (await chrome.storage.session.get(key))[key];
+  const run = pass && pass.aco;
+  if (!run || !run.runId || !run.placing || run.done || run.stopped || !run.placingAt || Date.now() - run.placingAt > 30 * 60 * 1000) return;
+  const r = storeOfUrl((await getState()).flows, run.page || `https://${pass.host}/`);
+  if (r && r.flow && r.flow.checkout && r.flow.checkout.leaves) return;
+  // (A page this extension may open — the store's, a payment provider's: that page says how it's going. Still
+  //  loading: its own "complete" looks again. Looked at twice, a moment apart: a page on its way out isn't one.)
+  const here = async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || tab.status !== 'complete') return true;
+    return chrome.scripting.executeScript({ target: { tabId }, func: () => location.host }).then(() => true, () => false);
+  };
+  if (await here()) return;
+  await new Promise((res) => setTimeout(res, 1500));
+  if (await here()) return;
+  const cur = (await chrome.storage.session.get(key))[key];
+  if (!cur || !cur.aco || cur.aco.runId !== run.runId || cur.aco.done || cur.aco.stopped) return;
+  const name = (r && r.name) || 'The store';
+  await chrome.storage.session.set({ [key]: { ...cur, aco: { ...cur.aco, stopped: true }, expires: awayExpiry(cur.aco) } });
+  turnEnded(tabId, { parked: true }).catch(() => null);
+  await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, {
+    status: 'needs_you', reason: 'bank_check', pressed: true, total: null,
+    message: `After paying, ${name} sent the checkout on to ${run.awayHost || "a page Mugibot can't see"} — most likely your bank wanting you to approve it: approve it in your bank's app (or with the code it sent you), or in the checkout tab. It's marked placed once ${name} confirms the order.`.slice(0, 300),
+  }).catch(() => null);
+}
 
 // For tests and the "Check now" button.
 globalThis.mugibotGates = async () => ({ gates: await gatesNow(), held: [...(await heldStores())], through: await throughStores() });

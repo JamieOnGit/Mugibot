@@ -196,7 +196,8 @@ test("a bank's check after the press: the member finishes it, and it can still t
   const bank = (await report(run.id, { status: 'needs_you', reason: 'bank_check' })).body.run;
   assert.equal(bank.status, 'needs_you');
   assert.equal(itemRow(item.id).aco, 0, 'pressed: disarmed whatever happens next');
-  assert.ok((await events(ash)).some((e) => /needs you: Night UPC/.test(e.message)));
+  // Said as what it is, straight away: approve it in your bank's app (with its total).
+  assert.ok((await events(ash)).some((e) => /^🏦 Approve the payment in your bank's app: Night UPC — .*\$360\.00$/.test(e.message)), JSON.stringify((await events(ash)).slice(0, 3)));
   assert.equal((await report(run.id, { status: 'placed' })).body.run.status, 'placed');
   // An unknown reason from a browser is kept as "something went wrong".
   const other = await arm(ashItems[2], 30);

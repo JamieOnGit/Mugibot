@@ -40,7 +40,8 @@ let profileDir;
 // Tests never touch the real stores: this browser can't reach any store's address (the
 // extension's own checks, like the store login monitor's, go to every store it knows), and
 // it connects directly (a proxy from the environment would look the addresses up itself).
-const NO_STORES = [`--host-resolver-rules=${[...new Set(RETAILER_DEFS.flatMap((r) => r.hosts))].map((h) => `MAP ${h} 127.0.0.1`).join(', ')}`, '--no-proxy-server'];
+// (bank.test: the dummy bank's own site — an address the extension may not open, as a real bank's isn't.)
+const NO_STORES = [`--host-resolver-rules=${[...new Set(RETAILER_DEFS.flatMap((r) => r.hosts)), 'bank.test'].map((h) => `MAP ${h} 127.0.0.1`).join(', ')}`, '--no-proxy-server'];
 
 /** Start Chromium with the extension (again: the same profile, like reopening the browser). dir: another copy of it. */
 async function launch(dir = extDir) {
@@ -2327,6 +2328,40 @@ test("🤖 Auto-checkout when the card is declined, or your bank wants you to co
   await closeStorePages('kmart');
 });
 
+test("🏦 Your bank wanting you to approve the payment, as real checkouts show it — its page posted into a frame with no address (named for it, or not at all, in a pop-up), or the whole tab sent to the bank's site: you're told at once what to do, nothing's pressed again, and it's placed once you approve it", async () => {
+  const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB');
+  for (const mode of ['posted', 'popup', 'redirect']) {
+    store.reset();
+    store.state.account = KMART_ACCOUNT;
+    store.shop('kmart').threeDS = mode;
+    await browserApi('PUT', `/api/items/${it.id}`, { aco: true });
+    const dmsBefore = discord.dmsTo('d-ash').length;
+    await acoListen();
+    await drop('kmart', '43818587');
+    await waitFor(async () => (await lastRun()).reason === 'bank_check', { timeout: 45000, message: `${mode}: the bank's check noticed` })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps)}`); });
+    const run = await lastRun();
+    assert.equal(run.status, 'needs_you');
+    assert.match(run.message, /approve it in your bank's app/, mode);
+    // (Its frame has no address to name it by: the bank's page was posted into it.)
+    if (mode === 'popup') assert.match(run.message, /^A pop-up came up on the checkout after paying — most likely your bank/);
+    if (mode === 'redirect') assert.match(run.message, /sent the checkout on to bank\.test:\d+ — most likely your bank/);
+    assert.equal(store.shop('kmart').orders.length, 0, `${mode}: nothing bought until you approve it`);
+    // Told at once, on your phone: approve it in your bank's app — or finish it on the computer (Chrome Remote Desktop).
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /^🏦 Approve the payment in your bank's app: ACO ETB$/.test(m.body.embeds[0].title)), { message: `${mode}: the DM` });
+    const dm = discord.dmsTo('d-ash').slice(dmsBefore).find((m) => /Approve the payment/.test(m.body.embeds[0].title));
+    assert.match(JSON.stringify(dm.body), /remotedesktop\.google\.com/, 'Open my computer');
+    // You approve it in the bank's app: the store confirms the order, and the run says so by itself — pressed once.
+    store.approveBank();
+    await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 30000, message: `${mode}: placed once approved` })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps)}`); });
+    assert.equal(store.shop('kmart').orders.length, 1);
+    assert.equal(store.shop('kmart').challenged, 1, 'pressed once');
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /Auto-checkout placed your order: ACO ETB/.test(m.body.embeds[0].title)), { message: `${mode}: the "placed" DM` });
+    await closeStorePages('kmart');
+  }
+});
+
 test("🤖 Auto-checkout at a Kmart that won't add it: no blind trip to checkout — it tries Add twice, then says so (with what the page said) and buys nothing", async () => {
   const S = store.shop('kmart');
   S.quiet = true;
@@ -2768,6 +2803,32 @@ test("🛍️🔢 a Shop checkout link of one product, its quantity changed to 3
     assert.deepEqual(store.state.shopapp.orders[0].lines, [[String(PORSCHE), 3]], '3 of it, as the link says');
     await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 20000, message: 'the run says placed' });
   } finally {
+    await putBack();
+    await closeShopPages();
+  }
+});
+
+test("🛍️🏦 a Shop checkout link, your bank wanting you to approve the payment after \"Pay now\" — its page in a pop-up over Shop's checkout, nothing there saying what it is: you're told at once (a DM: approve it in your bank's app), \"Pay now\" isn't pressed again, and it's placed once you approve it", async () => {
+  const putBack = await roomForALink();
+  try {
+    shopSignedIn(true);
+    store.state.shopapp.threeDS = 'popup';
+    const link = store.cartLink([[PORSCHE, 1]]);
+    await useItems([{ url: link, name: 'ACO bank link', maxPrice: 90, aco: true }]);
+    const dmsBefore = discord.dmsTo('d-ash').length;
+    await acoListen();
+    await dropLink(link);
+    await waitFor(async () => (await lastRun()).reason === 'bank_check', { timeout: 45000, message: "the bank's check noticed" })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps)}`); });
+    assert.equal((await lastRun()).status, 'needs_you');
+    assert.equal(store.state.shopapp.orders.length, 0, 'nothing bought until you approve it');
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /^🏦 Approve the payment in your bank's app: ACO bank link$/.test(m.body.embeds[0].title)), { message: 'the DM' });
+    store.approveBank();
+    await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 30000, message: 'placed once approved (Shop went on to the store\'s order page)' });
+    assert.equal(store.state.shopapp.orders.length, 1);
+    assert.equal(store.state.shopapp.payTries, 1, '"Pay now" pressed once');
+  } finally {
+    store.state.shopapp.threeDS = false;
     await putBack();
     await closeShopPages();
   }
