@@ -35,6 +35,8 @@ primary_region = "syd"   # Sydney
     path = "/healthz"
     timeout = "5s"
 
+# A quarter of a core guaranteed (shared-cpu-1x is held to 1/16 once its burst credit runs out, and the
+# round-the-clock store searches used it up: every search then queued for the CPU).
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
+  size = "shared-cpu-4x"
+  memory = "1gb"
