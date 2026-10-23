@@ -208,6 +208,9 @@ var MGBFill = (function () {
       email: profile.email || '', phone: profile.phone || '', firstName: profile.firstName || '', lastName: profile.lastName || '',
       fullName: [profile.firstName, profile.lastName].filter(Boolean).join(' '), address1: profile.address1 || '', address2: profile.address2 || '',
       suburb: profile.suburb || '', state: profile.state || '', postcode: profile.postcode || '', country: 'Australia',
+      // Click & collect when home delivery isn't offered (on unless your details say home delivery only), near
+      // where you say (else your postcode).
+      collect: profile.collect !== false, collectNear: profile.collectNear || profile.postcode || '',
     };
     if (card) {
       v.cardNumber = card.number;
@@ -429,7 +432,169 @@ var MGBFill = (function () {
     return (radioLabel(el) + ' ' + headingBefore(el)).replace(/\s+/g, ' ').trim();
   }
 
+  // --- Click & collect: home delivery not offered (see COLLECT_START_RE) ---------------------------------
+  /** A store's name from its line in a list ("Kmart Chadstone 1341 Dandenong Rd … 2.1 km"): its first line, short. */
+  function storeName(text) {
+    var line = String(text || '').split(/\n|\s{2,}|\s[|·•–—]\s/)[0].replace(/\s+/g, ' ').trim();
+    return line.slice(0, 80);
+  }
+
+  /** A box for finding stores near a postcode or suburb (not your address's postcode box). */
+  function isStoreBox(el) {
+    if (el.tagName !== 'INPUT' || /^(checkbox|radio|hidden)$/i.test(el.type || '')) return false;
+    var d = describe(el);
+    if (/address|street|card/.test(d)) return false;
+    return STORE_BOX_RE.test(d) || (/post.?code|suburb/.test(d) && !!el.closest(STORE_AREA));
+  }
+
+  /** The element a delivery choice's words are in that's clicked (a tile, a tab, a radio's label, a button). */
+  function choiceHost(el) {
+    return el.closest('[role="radio"], [role="tab"], [role="option"], [role="button"], button, label, a') || el.closest('[class*="tile" i], [class*="option" i]') || el;
+  }
+
+  /** A delivery choice switched off for this order: disabled, greyed, or saying it's not available. */
+  function choiceOff(host) {
+    if (host.disabled || host.getAttribute('aria-disabled') === 'true' || /(^|[\s_-])(is-)?(disabled|unavailable|inactive)([\s_-]|$)/i.test(String(host.className || ''))) return true;
+    var input = host.matches('input') ? host : host.querySelector('input[type="radio"], input[type="checkbox"]') || (host.matches('label') && host.htmlFor ? document.getElementById(host.htmlFor) : null);
+    if (input && input.disabled) return true;
+    var t = norm(textOf(host));
+    return t.length <= 200 && UNAVAILABLE_RE.test(t) && !PARTLY_RE.test(t);
+  }
+
+  /** The delivery choices on the page: { home: [...], collect: [...] } (never the header's, footer's or menu's). */
+  function deliveryOffer() {
+    var home = [];
+    var collect = [];
+    toArray(document.querySelectorAll('button, a, label, [role="button"], [role="tab"], [role="radio"], [role="option"], [class*="tile" i], [class*="option" i]')).forEach(function (el) {
+      if (inPanel(el) || !isVisible(el) || el.closest('header, footer, nav')) return;
+      var t = norm(textOf(el));
+      if (!t || t.length > 120) return;
+      var list = COLLECT_START_RE.test(t) ? collect : HOME_START_RE.test(t) ? home : null;
+      var host = list && choiceHost(el);
+      if (host && list.indexOf(host) === -1) list.push(host);
+    });
+    return { home: home, collect: collect };
+  }
+
+  /**
+   * A delivery radio that isn't collecting and can be chosen (Shopify's "Ship", Kmart's "Home delivery", WooCommerce's
+   * "Flat rate" beside its "Local pickup"): in a group of delivery choices, never payments.
+   */
+  function homeRadio() {
+    var groups = {};
+    toArray(document.querySelectorAll('input[type="radio"]')).forEach(function (r) {
+      var l = r.closest('label') || r.parentElement;
+      if (inPanel(r) || !(isVisible(r) || (l && isVisible(l)))) return;
+      (groups[r.name || r.id] = groups[r.name || r.id] || []).push(r);
+    });
+    return Object.keys(groups).some(function (g) {
+      var labs = groups[g].map(radioLabel);
+      if (labs.some(function (l) { return /paypal|afterpay|credit|debit|\bcard\b/.test(l); })) return false;
+      if (!labs.some(function (l) { return COLLECT_RE.test(l) || HOME_RADIO_RE.test(l); })) return false;
+      return groups[g].some(function (r) { return !r.disabled && !COLLECT_RE.test(radioLabel(r)); });
+    });
+  }
+
+  /** Visible, enabled buttons whose words match re. */
+  function buttonsMatching(re) {
+    return toArray(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]')).filter(function (el) {
+      return !inPanel(el) && isVisible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' && re.test(norm(textOf(el)));
+    });
+  }
+
+  /**
+   * One step of click & collect, when home delivery isn't offered for this order (assist's loop; cc: its state —
+   * allowed, on, store, …). Returns 'home_only' (your details say home delivery only), 'acted' (something was
+   * chosen, clicked or typed: the page gets a moment), or null (nothing to do).
+   */
+  async function collectStep(cc, C, values, fill, say) {
+    if (C.collect === false || C.delivery === 'collect') return null;
+    if (fill.noHome) return 'home_only';
+    if (fill.collect && !cc.on) { cc.on = true; say('on'); }
+    if (fill.store && !cc.store) { cc.store = fill.store; say('store'); }
+    if (!cc.on) {
+      var offer = deliveryOffer();
+      var col = offer.collect.find(function (h) { return !choiceOff(h); });
+      if (!col) { cc.since = 0; return null; }
+      if (!cc.since) cc.since = Date.now();
+      var off = offer.home.length > 0 && offer.home.every(choiceOff);
+      // (Not there at all — no home choice and no home radio — once the page has had a couple of seconds to draw it.)
+      var missing = !offer.home.length && !homeRadio() && Date.now() - cc.since > 2000;
+      // (What the checkout says about it — Shopify's "Your order cannot be shipped", under its shipping methods.)
+      var area = col.closest('form, main, [role="main"]') || document.body;
+      var says = NO_HOME_RE.test(norm(area.innerText || ''));
+      if (!(off || missing || says)) return null;
+      if (!values.collect) return 'home_only';
+      cc.on = true;
+      say('on');
+      if (!isChosen(col)) {
+        var input = col.matches('label') ? (col.htmlFor ? document.getElementById(col.htmlFor) : col.querySelector('input[type="radio"]')) : null;
+        (input || col).click();
+      }
+      await wait(400);
+      return 'acted';
+    }
+    // Collecting: the store to collect from — a store's "Select" in the list (nearest first), else find the stores near
+    // you (your postcode, or where your details say), else open the store finder.
+    if (cc.store) return null;
+    var rowOf = function (b) {
+      var row = b.closest(STORE_ROW);
+      var t = row ? norm(row.innerText || '') : '';
+      return row && t.length <= 300 && STORE_ITEM_RE.test(t) ? row : null;
+    };
+    var pick = buttonsMatching(STORE_PICK_RE).find(rowOf);
+    if (pick) {
+      var row = rowOf(pick);
+      var words = (row.innerText || '').replace(textOf(pick), ' ');
+      cc.store = storeName(words) || 'the nearest store';
+      pick.click();
+      say('store');
+      await wait(500);
+      return 'acted';
+    }
+    var box = toArray(document.querySelectorAll('input')).find(function (el) { return !inPanel(el) && isVisible(el) && !el.disabled && isStoreBox(el); });
+    if (box && (cc.searched || 0) < 2 && values.collectNear) {
+      cc.searched = (cc.searched || 0) + 1;
+      if (box.value !== values.collectNear) { if (box.value) setNative(box, ''); typeInto(box, values.collectNear, 'storeSearch', true); }
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      var near = box.closest(STORE_AREA + ', form, section') || document;
+      var go = toArray(near.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]')).find(function (b) { return isVisible(b) && !b.disabled && STORE_SEARCH_RE.test(norm(textOf(b))); });
+      if (go) go.click();
+      await wait(800);
+      return 'acted';
+    }
+    var open = (cc.opened || 0) < 2 ? buttonsMatching(STORE_OPEN_RE)[0] : null;
+    if (open) {
+      cc.opened = (cc.opened || 0) + 1;
+      open.click();
+      await wait(500);
+      return 'acted';
+    }
+    return null;
+  }
+
   var COLLECT_RE = /collect|pick ?up|in-?store|click (&|and) collect/;
+  // Click & collect when home delivery isn't offered (extension 1.31.0). Home delivery is always the first
+  // choice. A checkout that doesn't offer it for this order — its option switched off or not there, or the
+  // page saying so (a pre-order that's pick-up only) — gets click & collect at the store nearest your
+  // postcode instead, unless your delivery details say home delivery only (values.collect false). A store's
+  // flow with collect: false has none (Amazon's).
+  var COLLECT_START_RE = /^(click (&|and) collect|pick ?up|in-?store pick ?up|store pick ?up|local pick ?up|collect (in[- ]?store|from (a |the |your )?store|at (a |the )?store)|collect$)/;
+  var HOME_START_RE = /^(home delivery|delivery\b|deliver( it)?( to\b|$)|ship( it)?( to\b|$)|shipping\b|standard (delivery|shipping)|express (delivery|shipping))/;
+  var HOME_RADIO_RE = /home delivery|\bdeliver|\bship\b|shipping|standard|express|courier|\bpost\b|parcel/;
+  var UNAVAILABLE_RE = /\b(not available|unavailable|not eligible|ineligible|sold out|out of stock)\b|\bcan.?t be (delivered|shipped)|\bcannot be (delivered|shipped)/;
+  // (What a checkout says when it won't deliver this order — never "Express delivery unavailable to your area".)
+  var NO_HOME_RE = /\b(not available|unavailable|not eligible|ineligible) for (home )?(delivery|shipping)\b|\bhome delivery (is )?(not available|unavailable)\b|\bhome delivery isn.?t available\b|\b(order|item|items|product|products) (can(not|.?t)|is not|isn.?t|are not|aren.?t) (be )?(delivered|shipped)\b|\bno (shipping|delivery) (options|methods|rates)( are)? available\b|\b(click (&|and) collect|pick ?up|collect in[- ]?store|in-?store pick ?up)( is)? only\b(?! (available )?(at|from|in) )|\bonly available (for|via|with|as) (click (&|and) collect|pick ?up|in-?store)|\bwe (don.?t|do not) (ship|deliver) (this|these)\b/;
+  var PARTLY_RE = /\b(express|same.?day|next.?day|priority|overnight)\b[^.]{0,25}\b(not available|unavailable)\b/;
+  // The store to collect from: its "Select" in a list of stores, a box to find stores near a postcode, the button that opens them.
+  var STORE_PICK_RE = /^((select|choose|pick)( this)?( store)?|collect (from )?(here|this store)|pick ?up (from )?here|set as (my )?(preferred )?store|use this store|collect here|make (this )?my store)$/;
+  // (A store's own line in the list it's picked from: one store's card, not the whole finder.)
+  var STORE_ROW = 'li, article, tr, [role="option"], [role="listitem"], [class*="store" i], [class*="location" i], [class*="result" i]';
+  var STORE_OPEN_RE = /^((select|choose|find|pick|change)( a| your)? (store|pick ?up (store|location|point)|collection (store|point)|location)|find (a )?store( near (me|you))?)$/;
+  var STORE_SEARCH_RE = /^(search|find|go|find stores?|search stores?|look ?up|show stores)$/;
+  var STORE_BOX_RE = /\bstores?\b|postcode or suburb|suburb or postcode|\blocation\b|near (me|you)|find a/;
+  var STORE_ITEM_RE = /\bstores?\b|\bkm\b|\d ?km\b|\bopen\b|\bready\b|pick ?up|collect|\b\d{4}\b|\b(nsw|vic|qld|wa|sa|tas|act|nt)\b/;
+  var STORE_AREA = '[role="dialog"], [aria-modal="true"], [class*="store" i], [id*="store" i], [class*="pickup" i], [id*="pickup" i], [class*="collect" i], [id*="collect" i], [class*="location" i]';
   // Payments that aren't the card (a store's default can be one): switched to the card when the flow pays by card.
   var NOT_CARD_RE = /paypal|afterpay|\bzip\b|zip ?pay|klarna|humm|latitude|apple ?pay|google ?pay|pay (in|later)|\bpay later\b|gift ?card|flypay/;
   // Radio groups switched away from the store's default, per page: never more than twice (a page that switches back).
@@ -535,7 +700,18 @@ var MGBFill = (function () {
     });
 
     var ctx = { hasParts: addressParts(fields, C) };
+    var collectOn = !!(opts.collect && opts.collect.on);
     fields.forEach(function (el) {
+      // Collecting: the store's drop-down of its stores ("Choose a store"), still on its placeholder — the first
+      // (nearest) store. A box for finding stores is left for the store step (assist: collectStep).
+      if (collectOn && !opts.onlyCard && !C.ownDetails) {
+        if (el.tagName === 'SELECT' && /\bstores?\b|location|pick ?up|collect|branch/.test(describe(el)) && !classifyField(el, C) && placeholderSelected(el)) {
+          var first = toArray(el.options).find(function (o) { return !o.disabled && (o.value || '').trim() && !/^(-+|select|choose|please|pick)\b/i.test(o.textContent.trim()); });
+          if (first) { setNative(el, first.value); out.filled.push('store'); out.store = first.textContent.replace(/\s+/g, ' ').trim().slice(0, 80); }
+          return;
+        }
+        if (isStoreBox(el)) return;
+      }
       var kind = fieldKind(el, C, ctx);
       if (!kind) return;
       out.kinds[kind] = true;
@@ -566,7 +742,10 @@ var MGBFill = (function () {
       // Radio groups: home delivery (or what the flow says) and the flow's shipping choice; card payment.
       // A group nobody has chosen in yet gets one; a store's own default is changed only when it's
       // click & collect (for home delivery), a payment that isn't the card, or not the flow's shipping.
-      var wantCollect = C.delivery === 'collect';
+      // Home delivery not there to choose for this order (its option switched off, or none): click & collect
+      // (out.collect), when your details allow it (else out.noHome) — and, collecting, never switched back.
+      var wantCollect = C.delivery === 'collect' || collectOn;
+      var collectOk = values.collect !== false && C.collect !== false;
       var wantShip = C.shipping && C.shipping.length ? C.shipping : null;
       var groups = {};
       fields.forEach(function (el) {
@@ -578,20 +757,39 @@ var MGBFill = (function () {
         var list = groups[g];
         var labels = list.map(radioLabel);
         var isPayment = labels.some(function (l) { return /paypal|afterpay|zip|klarna|apple pay|google pay|credit|debit/.test(l); });
-        var isDelivery = !isPayment && labels.some(function (l) { return /deliver|shipping|post|courier|express|standard|collect|pick ?up/.test(l); });
-        var home = function (r) { var l = radioLabel(r); return /home delivery|standard|deliver|shipping|post/.test(l) && !COLLECT_RE.test(l); };
+        var isDelivery = !isPayment && labels.some(function (l) { return /deliver|shipping|\bship\b|post|courier|express|standard|collect|pick ?up/.test(l); });
+        var home = function (r) { var l = radioLabel(r); return /home delivery|standard|deliver|shipping|\bship\b|post/.test(l) && !COLLECT_RE.test(l); };
+        var collects = function (r) { return COLLECT_RE.test(radioLabel(r)); };
         var card = function (r) { return /credit|debit|card/.test(radioLabel(r)) && !NOT_CARD_RE.test(radioLabel(r)); };
         var ship = function (r) { return wantShip && !COLLECT_RE.test(radioLabel(r)) && any(wantShip, radioContext(r)); };
         var checked = list.find(function (r) { return r.checked; });
         var pick = null;
+        // (Every option left to choose is collecting: home delivery's switched off — not in the list — or not there.)
+        var onlyCollect = isDelivery && list.every(collects);
         if (!checked) {
           if (isPayment) pick = list.find(card);
-          else if (isDelivery && wantCollect) pick = list.find(function (r) { return COLLECT_RE.test(radioLabel(r)); });
+          else if (isDelivery && wantCollect) pick = list.find(collects);
           // (C.shippingFallback 'first': the flow's choice, else whatever the store offers first — Gamesmen's.)
-          else if (isDelivery) pick = list.find(ship) || list.find(home) || (C.shippingFallback === 'first' ? list.find(function (r) { return !COLLECT_RE.test(radioLabel(r)); }) : null);
-        } else if (isDelivery && !wantCollect && COLLECT_RE.test(radioLabel(checked))) {
+          else if (isDelivery) pick = list.find(ship) || list.find(home) || (C.shippingFallback === 'first' ? list.find(function (r) { return !collects(r); }) : null);
+          if (!pick && onlyCollect) {
+            if (collectOk) {
+              pick = list[0];
+              out.collect = true;
+              // (Its store in its words — WooCommerce's "Local pickup: Games World Melbourne".)
+              var at = (labelText(pick) || '').match(/(?:pick ?up|collect)[^:–—]*[:–—]\s*(.+)$/i);
+              if (at) out.store = storeName(at[1]);
+            } else out.noHome = true;
+          }
+          // Collecting: a list of stores (or pick-up points) nothing's chosen in yet — Shopify's — the first, nearest one.
+          else if (!pick && collectOn && !isPayment && !list.some(home) && (/store|location|pick_?up|collect/i.test(g) || labels.every(function (l) { return STORE_ITEM_RE.test(l); }))) {
+            pick = list[0];
+            out.store = storeName(labelText(list[0]) || radioLabel(list[0]));
+          }
+        } else if (isDelivery && !wantCollect && collects(checked)) {
           pick = list.find(ship) || list.find(home); // the store chose click & collect for you
-        } else if (isDelivery && wantShip && !ship(checked)) {
+          // (…and home delivery isn't there for this order: kept.)
+          if (!pick && onlyCollect) { if (collectOk) out.collect = true; else out.noHome = true; }
+        } else if (isDelivery && wantShip && !ship(checked) && !wantCollect) {
           pick = list.find(ship); // a shipping method the flow says to pick (e.g. Standard), when it isn't the one chosen
         } else if (isPayment && C.payment === 'card' && NOT_CARD_RE.test(radioLabel(checked)) && !card(checked)) {
           pick = list.find(card); // the store chose PayPal (or the like) for you
@@ -725,7 +923,7 @@ var MGBFill = (function () {
    * the nearest thing to click around them. Null when there's none still to make. chosen: what's
    * been pressed already (each only once).
    */
-  function findChoice(C, chosen, pressed) {
+  function findChoice(C, chosen, pressed, cc) {
     if (!C.choose || !C.choose.length) return null;
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     var CLICKABLE = 'button, a, label, [role="button"], [role="tab"], [role="radio"], [role="option"], [role="checkbox"], [role="menuitemradio"], [tabindex], [onclick], [class*="option" i], [class*="tile" i]';
@@ -733,6 +931,8 @@ var MGBFill = (function () {
     for (var n = walker.nextNode(); n; n = walker.nextNode()) {
       var t = norm(n.nodeValue);
       if (!t || t.length > 60 || !any(C.choose, t)) continue;
+      // (Collecting — home delivery isn't offered: its choice is never made.)
+      if (cc && cc.on && HOME_START_RE.test(t)) continue;
       var host = n.parentElement;
       // (Each choice at most 3 times: a store that re-draws it without showing it's chosen.)
       if (!host || inPanel(host) || !isVisible(host) || (chosen[t] || 0) >= 3) continue;
@@ -740,7 +940,10 @@ var MGBFill = (function () {
       var clickable = !!el && norm(textOf(el)).length <= 160;
       if (!clickable) el = host;
       if ((pressed && pressed.has(el)) || el.disabled || el.getAttribute('aria-disabled') === 'true' || isChosen(el)) continue;
+      // (A home delivery choice switched off for this order — greyed, or "not available": not pressed.)
+      if (HOME_START_RE.test(t) && choiceOff(choiceHost(host))) continue;
       var radio = el.matches('label') ? (el.htmlFor ? document.getElementById(el.htmlFor) : el.querySelector('input[type="radio"], input[type="checkbox"]')) : null;
+      if (radio && radio.disabled) continue;
       var hit = { el: radio || el, text: t, from: el };
       // The same words can show up where there's nothing to press (an order summary's "Home Delivery $9"):
       // something to click first, plain words only if there's nothing else.
@@ -778,6 +981,27 @@ var MGBFill = (function () {
       beatAt = Date.now();
       opts.onBeat(text);
     };
+    // Click & collect, when home delivery isn't offered for this order (collectStep): said once, and the store once it's known.
+    var cc = { on: false, store: '' };
+    var say = function (what) {
+      if (what === 'on' && !cc.saidOn) {
+        cc.saidOn = true;
+        report('step', '🏬 ' + (opts.storeName || 'The store') + ' doesn\'t offer home delivery for this order — Click & Collect chosen instead');
+        setStatus('Home delivery isn\'t offered for this order — choosing Click & Collect…');
+        if (opts.onCollect) opts.onCollect({ store: cc.store || '' });
+      } else if (what === 'store' && cc.store && cc.saidStore !== cc.store) {
+        cc.saidStore = cc.store;
+        report('step', '🏬 Click & Collect from ' + cc.store);
+        if (opts.onCollect) opts.onCollect({ store: cc.store });
+      }
+    };
+    var homeOnly = function () {
+      var msg = (opts.storeName || 'The store') + ' doesn\'t offer home delivery for this order, and your delivery details say home delivery only — choose Click & Collect yourself if you want it.';
+      setStatus(msg);
+      report('error', msg);
+      opts.stuck = { reason: 'home_only', message: msg };
+      return 'needs_you';
+    };
     setStatus('Filling in checkout…');
     while (Date.now() < deadline) {
       if (opts.isActive && !opts.isActive()) { setStatus('Stopped.'); return 'stopped'; }
@@ -791,12 +1015,18 @@ var MGBFill = (function () {
         if (popup) { report('step', 'Closed the "' + popup + '" pop-up'); await wait(300); continue; }
       }
 
-      var fill = fillFields(document, opts.values, { flow: C });
+      var fill = fillFields(document, opts.values, { flow: C, collect: cc });
       if (fill.filled.length) setStatus('Filled: ' + fill.filled.join(', '));
+      // Home delivery not offered for this order: click & collect (and the store to collect from) — or, your details
+      // saying home delivery only, it's for you.
+      var cstep = await collectStep(cc, C, opts.values, fill, say);
+      if (cstep === 'home_only') return homeOnly();
+      if (cstep) { idle = 0; continue; }
       var list = buttons(C);
       var finals = list.filter(function (b) { return b.kind === 'final'; });
       var manual = list.find(function (b) { return b.kind === 'manual'; });
-      var choice = list.find(function (b) { return b.kind === 'choose' && !b.disabled && !chosen[norm(b.text)] && !isSelected(b.el); }) || findChoice(C, chosen, pressed);
+      var homeAway = function (b) { var t = norm(b.text); return HOME_START_RE.test(t) && (cc.on || choiceOff(choiceHost(b.el))); };
+      var choice = list.find(function (b) { return b.kind === 'choose' && !b.disabled && !chosen[norm(b.text)] && !isSelected(b.el) && !homeAway(b); }) || findChoice(C, chosen, pressed, cc);
       var steps = list.filter(function (b) { return (b.kind === 'step' || b.kind === 'guest') && !b.disabled; });
       var fresh = steps.filter(function (b) { return !clicked[norm(b.text)]; });
 
@@ -867,7 +1097,7 @@ var MGBFill = (function () {
           continue;
         }
         await wait(200); // let the last fields settle
-        fillFields(document, opts.values, { flow: C });
+        fillFields(document, opts.values, { flow: C, collect: cc });
         var fin = finals.find(function (b) { return !b.disabled; }) || finals[0];
         if (opts.auto) {
           setStatus('Filled in — placing your order…');
@@ -875,7 +1105,8 @@ var MGBFill = (function () {
           return 'final';
         }
         var card = opts.hasCard ? (fill.missingCard ? ' Type in anything still empty on the card (like the CVV).' : '') : (CARD_ISSUE[opts.cardIssue] || '');
-        var msg = 'Ready — review everything and press "' + fin.text + '" yourself.' + card;
+        var pickup = cc.on ? ' Click & Collect' + (cc.store ? ' from ' + cc.store : '') + ' (home delivery isn\'t offered for this order).' : '';
+        var msg = 'Ready —' + pickup + ' review everything and press "' + fin.text + '" yourself.' + card;
         highlight(fin.el, 'Mugibot: ' + msg);
         setStatus(msg);
         report('ready', 'Checkout filled in' + (opts.storeName ? ' at ' + opts.storeName : '') + ' — waiting for you to press "' + fin.text + '"');

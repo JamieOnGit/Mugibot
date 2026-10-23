@@ -208,6 +208,14 @@ export function defaultShops() {
       drawerShut: false, noPermalink: false,
       // From The Deep Games: its header cart's drop-down open after an add (cartOpens), as well as from the cart.
       cartOpens: false,
+      // collectOnly: the order can't be delivered — a pre-order that's pick-up only — so its checkout's home
+      // delivery is switched off ("Not available for this order") or not there (Shopify: "Your order cannot be
+      // shipped"; WooCommerce and Magento: only their pick-up method), and Click & Collect works, with a store to
+      // choose as each store has you choose one: Kmart's and BIG W's store finder (a postcode, Search, a store's
+      // "Select"), EB Games' drop-down, Target's "Find stores" and "Select store", City Beach's list of stores,
+      // Shopify's pick-up locations. (pickup: a Shopify shop's Ship / Pick up choice, Ship chosen — JB Hi-Fi's.)
+      // (A product page whose only buy button adds it for Click & Collect: addLabel "Add to cart for Click & Collect".)
+      collectOnly: false, pickup: id === 'jbhifi',
       // (log: every request while it's on — { id, at, path, what } — to show nothing asked again too soon.)
       queue: { on: false, admitAfterMs: 4000, refreshMs: 1500, tooSoonMs: 700, wait: 23, lateMs: 0, places: {}, admittedIds: [], kicks: 0, shown: 0, admitted: 0, cookieless: 0, log: [] },
     };
@@ -1134,7 +1142,51 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     return res.end(page(shop, 'Processing your payment', `<h1>Processing your payment…</h1><script>(() => { const d = ${JSON.stringify({ bank: b })}; ${bankJs()} })();</script>`));
   };
 
+  // The stores near you, nearest first (collectOnly's Click & Collect).
+  const PICKUP_STORES = {
+    kmart: ['Kmart Cheltenham', 'Kmart Southland'], bigw: ['BIG W Chadstone', 'BIG W Malvern'], target: ['Target Highpoint', 'Target Sunshine'],
+    ebgames: ['EB Games Sydney CBD', 'EB Games Broadway'], citybeach: ['City Beach Chadstone', 'City Beach Southland'],
+  };
+  /**
+   * A store finder, as Kmart's, BIG W's and Target's are: (opener) a button that opens it in a dialog, else on the
+   * page; a box for a postcode or suburb (box: its placeholder) and its search button (go); the stores near it,
+   * nearest first, each with its own button (pick). Choosing one posts it (step 'store': the store, and what was
+   * searched) and shows "Collecting from …"; window.__store has it, and 'store-chosen' is said on the page.
+   */
+  const storeFinder = (shop, { opener = '', box = 'Enter postcode', go = 'Search', pick = 'Select' } = {}) => `
+    <p id="sf-chosen" class="store-chosen"></p>
+    ${opener ? `<button type="button" id="sf-open">${opener}</button>` : ''}
+    <div id="sf-finder" class="store-finder"${opener ? ' role="dialog" aria-modal="true" aria-label="Find a store" hidden style="position:fixed;top:80px;left:30px;width:460px;background:#fff;border:1px solid #888;padding:16px;z-index:20"' : ''}>
+      <h3>Find a store near you</h3>
+      <input id="sf-q" type="text" placeholder="${box}" autocomplete="off"> <button type="button" id="sf-go">${go}</button>
+      <ul id="sf-list" class="store-list"></ul>
+    </div>
+    <script>
+      (() => {
+        const $ = (id) => document.getElementById(id);
+        const STORES = ${JSON.stringify(PICKUP_STORES[shop] || [])};
+        if ($('sf-open')) $('sf-open').addEventListener('click', () => { $('sf-finder').hidden = false; $('sf-q').focus(); });
+        const find = () => {
+          const q = $('sf-q').value.trim();
+          if (q.length < 3) { $('sf-list').innerHTML = '<li class="err">Enter a postcode or suburb</li>'; return; }
+          setTimeout(() => { $('sf-list').innerHTML = STORES.map((s, i) => '<li class="store-result"><b>' + s + '</b> · ' + (2.1 + i * 3).toFixed(1) + ' km · Open until 9pm <button type="button" class="sf-pick" data-store="' + s + '">${pick}</button></li>').join(''); }, 250);
+        };
+        $('sf-go').addEventListener('click', find);
+        $('sf-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); find(); } });
+        $('sf-list').addEventListener('click', (e) => {
+          const b = e.target.closest('.sf-pick');
+          if (!b) return;
+          window.__store = b.dataset.store;
+          $('sf-chosen').textContent = 'Collecting from ' + b.dataset.store;
+          if ($('sf-open')) { $('sf-finder').hidden = true; $('sf-open').textContent = 'Change store'; }
+          fetch('/${shop}/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step: 'store', data: { store: b.dataset.store, near: $('sf-q').value } }) });
+          document.dispatchEvent(new CustomEvent('store-chosen'));
+        });
+      })();
+    </script>`;
+
   function kmartCheckout() {
+    const co = !!shopOf('kmart').collectOnly;
     const acc = state.account || {};
     const v = (x) => esc(x || '');
     const cardFields = ['strict', 'keys', 'never', 'slow'].includes(state.cardInIframe) ? strictCardBoxes(state.cardInIframe) : state.cardInIframe ? cardBoxes(state.cardInIframe === 'mystery' ? 'mystery' : 'kmart')
@@ -1157,12 +1209,14 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <button type="button" id="k-to-delivery">Continue to delivery</button></section>
       <section id="k-delivery" hidden><h2>③ Delivery</h2>
         <label><input type="radio" name="method" value="cc"> Click &amp; Collect</label>
-        <label><input type="radio" name="method" value="home"> Home delivery</label>
+        <label${co ? ' class="is-disabled"' : ''}><input type="radio" name="method" value="home"${co ? ' disabled' : ''}> Home delivery${co ? ' <small>Not available for this order</small>' : ''}</label>
+        <div id="k-cc" hidden>${storeFinder('kmart', { opener: 'Select a store', box: 'Enter postcode' })}</div>
+        <div id="k-home">
         <label>Street address* <input name="address1" required></label>
         <label>Apartment, unit, etc. (optional) <input name="address2"></label>
         <label>Suburb* <input name="suburb" required></label>
         <label>State* <select name="state" required>${STATES}</select></label>
-        <label>Postcode* <input name="postcode" required maxlength="4"></label>
+        <label>Postcode* <input name="postcode" required maxlength="4"></label></div>
         <button type="button" id="k-to-payment">Continue to payment</button></section>
       <section id="k-payment" hidden><h2>④ Payment</h2><p>Select a payment method</p>
         <p class="order-total"><b>Total $${(total('kmart') + 10).toFixed(2)}</b></p>
@@ -1174,10 +1228,12 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <p><button type="button" id="k-place"${state.shops.kmart.finalGreyedMs ? ' disabled' : ''}>Checkout securely</button></p></section>
       <p id="k-error" class="err"></p>
       <script>
-        const data = (sec) => Object.fromEntries([...sec.querySelectorAll('input,select')].map((i) => [i.name, i.type === 'checkbox' || i.type === 'radio' ? (i.checked ? (i.value || true) : undefined) : i.value]).filter(([, x]) => x !== undefined));
+        const data = (sec) => Object.fromEntries([...sec.querySelectorAll('input,select')].filter((i) => i.name && !i.closest('[hidden]')).map((i) => [i.name, i.type === 'checkbox' || i.type === 'radio' ? (i.checked ? (i.value || true) : undefined) : i.value]).filter(([, x]) => x !== undefined));
+        for (const r of document.querySelectorAll('input[name=method]')) r.addEventListener('change', () => { const cc = r.value === 'cc' && r.checked; document.getElementById('k-cc').hidden = !cc; document.getElementById('k-home').hidden = cc; });
         const step = (name, sec, next) => {
-          const missing = [...sec.querySelectorAll('[required]')].filter((i) => !i.value);
+          const missing = [...sec.querySelectorAll('[required]')].filter((i) => !i.value && !i.closest('[hidden]'));
           if (name === 'delivery' && !sec.querySelector('input[name=method]:checked')) missing.push({ name: 'method' });
+          if (name === 'delivery' && sec.querySelector('input[name=method][value=cc]:checked') && !window.__store) missing.push({ name: 'store' });
           if (missing.length) { document.getElementById('k-error').textContent = 'Please complete: ' + missing.map((m) => m.name).join(', '); return; }
           document.getElementById('k-error').textContent = '';
           fetch('/kmart/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step: name, data: data(sec) }) });
@@ -1204,14 +1260,22 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   // provider's frame, the total) → "Confirm & pay".
   function citybeachCheckout() {
     const sum = total('citybeach');
-    const ship = 9.95;
+    // (collectOnly: its Delivery tab greyed out, "Unavailable for this order"; Click & Collect: its stores near you as a
+    //  list to choose one from — nothing chosen — and your name and mobile.)
+    const co = !!shopOf('citybeach').collectOnly;
+    const ship = co ? 0 : 9.95;
     const f = (n) => `dwfrm_shipping_shippingAddress_addressFields_${n}`;
     return `<h1>Checkout</h1>
       <section id="cb-customer" class="customer-section"><h2>Customer</h2>
         <label for="email-guest">Email</label> <input id="email-guest" name="dwfrm_coCustomer_email" type="email" autocomplete="email" required>
         <p><button type="button" class="btn submit-customer" id="cb-guest">Continue as guest</button> <a href="/citybeach/login">Login</a></p></section>
       <section id="cb-shipping" class="shipping-section" hidden><h2>Shipping</h2>
-        <div class="nav nav-tabs" role="tablist"><a class="nav-link" role="tab" href="#home-delivery" id="cb-tab-home">Delivery</a> <a class="nav-link" role="tab" href="#click-collect" id="cb-tab-cc">Click &amp; Collect</a></div>
+        <div class="nav nav-tabs" role="tablist"><a class="nav-link${co ? ' disabled' : ''}" role="tab" href="#home-delivery" id="cb-tab-home"${co ? ' aria-disabled="true"' : ''}>Delivery${co ? ' <small>Unavailable for this order</small>' : ''}</a> <a class="nav-link" role="tab" href="#click-collect" id="cb-tab-cc">Click &amp; Collect</a></div>
+        <div id="cb-cc" hidden><h3>Collect from</h3>
+          ${PICKUP_STORES.citybeach.map((s, i) => `<label class="store-option"><input type="radio" name="dwfrm_shipping_storeId" value="cb${i + 1}"> ${s} · ${(1.8 + i * 4).toFixed(1)} km · Ready in 2 hours</label>`).join('')}
+          <label>First name <input name="ccFirstName" autocomplete="given-name"></label>
+          <label>Last name <input name="ccLastName" autocomplete="family-name"></label>
+          <label>Mobile <input name="ccPhone" type="tel" autocomplete="tel"></label></div>
         <div id="cb-home" hidden>
           <label><input type="radio" name="deliveryType" value="home"> Delivery to my address</label>
           <label><input type="radio" name="deliveryType" value="po"> Delivery to a PO box</label>
@@ -1246,9 +1310,20 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           $('cb-guest').remove();
           setTimeout(() => stage('shipping', $('cb-shipping')), 300);
         });
-        $('cb-tab-home').addEventListener('click', (e) => { e.preventDefault(); $('cb-tab-home').classList.add('active'); $('cb-tab-home').setAttribute('aria-selected', 'true'); $('cb-home').hidden = false; });
-        $('cb-tab-cc').addEventListener('click', (e) => { e.preventDefault(); err('Choose a store to collect from'); });
+        $('cb-tab-home').addEventListener('click', (e) => { e.preventDefault(); if ($('cb-tab-home').getAttribute('aria-disabled') === 'true') return; $('cb-tab-home').classList.add('active'); $('cb-tab-home').setAttribute('aria-selected', 'true'); $('cb-home').hidden = false; $('cb-cc').hidden = true; });
+        $('cb-tab-cc').addEventListener('click', (e) => { e.preventDefault(); $('cb-tab-cc').classList.add('active'); $('cb-tab-cc').setAttribute('aria-selected', 'true'); $('cb-home').hidden = true; $('cb-cc').hidden = false; });
         $('cb-ship').addEventListener('click', () => {
+          if (!$('cb-cc').hidden) {
+            // Click & Collect: a store, and your name and mobile.
+            const store = document.querySelector('input[name=dwfrm_shipping_storeId]:checked');
+            const d = data($('cb-cc'));
+            const m = (store ? [] : ['store']).concat(['ccFirstName', 'ccLastName', 'ccPhone'].filter((k) => !d[k]));
+            if (m.length) return err('Please complete: ' + m.join(', '));
+            err('');
+            fetch('/citybeach/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step: 'shipping', data: { ...d, collect: true, store: store.closest('label').textContent.trim().split(' · ')[0] } }) });
+            $('cb-ship').remove();
+            return setTimeout(() => stage('payment', $('cb-payment')), 400);
+          }
           if ($('cb-home').hidden) return err('Choose Delivery or Click & Collect');
           if (!document.querySelector('input[name=deliveryType]:checked')) return err('Please select a delivery option');
           const m = missing($('cb-shipping'));
@@ -1278,7 +1353,9 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   // home delivery, your address, your saved card — and only "CONFIRM & PAY" is left.
   function ebgamesCheckout() {
     const sum = total('ebgames');
-    const signed = !!state.signedIn.ebgames;
+    // (collectOnly: Home Delivery switched off — Click & Collect, its store chosen from the drop-down, then payment.)
+    const co = !!shopOf('ebgames').collectOnly;
+    const signed = !!state.signedIn.ebgames && !co;
     const acc = signed ? { email: 'ash.eb@example.com', firstName: 'Ash', lastName: 'Ketchum', phone: '0412345678' } : {};
     const v = (k) => (acc[k] ? ` value="${esc(acc[k])}"` : '');
     return `<h1>Checkout</h1>
@@ -1291,8 +1368,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <label><input type="checkbox" name="news"> Send me news and offers</label></section>
       <section id="eb-delivery"><h2>Delivery</h2>
         <label><input type="radio" name="fulfilment" value="cnc" ${signed ? '' : 'checked'}> Click &amp; Collect</label>
-        <label><input type="radio" name="fulfilment" value="home" ${signed ? 'checked' : ''}> Home Delivery</label>
-        <div id="eb-cnc" ${signed ? 'hidden' : ''}><label>Choose a store <select name="cncStore"><option value="">Select a store</option><option>EB Games Sydney CBD</option></select></label></div>
+        <label${co ? ' class="disabled"' : ''}><input type="radio" name="fulfilment" value="home" ${signed ? 'checked' : ''}${co ? ' disabled' : ''}> Home Delivery${co ? ' <small>(not available for this item)</small>' : ''}</label>
+        <div id="eb-cnc" ${signed ? 'hidden' : ''}><label>Choose a store <select name="cncStore"><option value="">Select a store</option>${PICKUP_STORES.ebgames.map((s) => `<option>${s}</option>`).join('')}</select></label></div>
         <div id="eb-home" ${signed ? '' : 'hidden'}>
           <label>Country <select name="country"><option value="">Select country</option><option value="NZ">New Zealand</option><option value="AU" ${signed ? 'selected' : ''}>Australia</option></select></label>
           <label for="eb-addr">Address</label>
@@ -1329,6 +1406,11 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           post('fulfilment', { fulfilment: r.value });
         });
         form.querySelector('select[name=country]').addEventListener('change', (e) => { $('eb-addr').disabled = e.target.value !== 'AU'; post('country', { country: e.target.value }); });
+        // Click & Collect: its store chosen, then how you'd like to pay.
+        form.querySelector('select[name=cncStore]').addEventListener('change', (e) => {
+          post('store', { store: e.target.value, fulfilment: 'cnc' });
+          if (e.target.value) setTimeout(() => { $('eb-pay').hidden = false; }, 300);
+        });
         const ADDRESSES = ['1 Pallet Town Rd, SYDNEY NSW 2000', '1 Pallet Town Rd, PALLET QLD 4999'];
         const list = $('eb-addr-list');
         $('eb-addr').addEventListener('input', () => {
@@ -1378,21 +1460,26 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   // Signed in (state.signedIn.target): your details are already in; the rest is the same.
   function targetCheckout() {
     const sum = total('target');
+    // (collectOnly: Home Delivery greyed out, "Not available for this order"; Click & Collect: its store finder on the
+    //  page — a postcode, "Find stores", a store's "Select store" — then your details, without an address.)
+    const co = !!shopOf('target').collectOnly;
     const acc = state.signedIn.target ? { firstName: 'Ash', lastName: 'Ketchum', phone: '0412345678', email: 'ash.target@example.com' } : {};
     const v = (k) => (acc[k] ? ` value="${esc(acc[k])}"` : '');
     const tile = (cls, attr, title, sub) => `<div class="${cls}" role="radio" aria-checked="false" tabindex="0" ${attr}><span class="${cls}-title">${title}</span>${sub ? `<small> ${sub}</small>` : ''}</div>`;
     return `<h1>Checkout</h1>
       <section id="t-options"><h2>Delivery Options</h2>
-        ${tile('DeliveryOption', 'data-mode="home"', 'Home Delivery', 'Delivered to your door')}
+        ${co ? tile('DeliveryOption is-disabled', 'data-mode="home" aria-disabled="true"', 'Home Delivery', 'Not available for this order') : tile('DeliveryOption', 'data-mode="home"', 'Home Delivery', 'Delivered to your door')}
         ${tile('DeliveryOption', 'data-mode="cnc"', 'Click &amp; Collect', 'Free, at a store near you')}</section>
+      <section id="t-store" hidden><h2>Choose your store</h2>${storeFinder('target', { box: 'Enter postcode or suburb', go: 'Find stores', pick: 'Select store' })}</section>
       <section id="t-details" hidden><h2>Your details</h2>
         <label>First Name <input name="firstName" autocomplete="given-name" required${v('firstName')}></label>
         <label>Last Name <input name="lastName" autocomplete="family-name" required${v('lastName')}></label>
         <label>Contact Number <input name="contactNumber" type="tel" required${v('phone')}></label>
         <label>Email <input name="email" type="email" required${v('email')}></label>
-        <label for="t-addr">Delivery Address</label>
+        <div id="t-addr-wrap"><label for="t-addr">Delivery Address</label>
         <input id="t-addr" name="deliveryAddress" role="combobox" aria-autocomplete="list" aria-controls="t-addr-list" aria-expanded="false" autocomplete="off" placeholder="Start typing your address">
-        <ul id="t-addr-list" role="listbox" class="AddressSuggestions" hidden></ul></section>
+        <ul id="t-addr-list" role="listbox" class="AddressSuggestions" hidden></ul></div>
+        <p><button type="button" id="t-cc-next" hidden>Continue to payment</button></p></section>
       <section id="t-payment" hidden><h2>Payment Method</h2>
         ${tile('PaymentTile', 'data-pay="card"', 'Credit Card')}${tile('PaymentTile', 'data-pay="paypal"', 'PayPal')}${tile('PaymentTile', 'data-pay="afterpay"', 'Afterpay')}${tile('PaymentTile', 'data-pay="zip"', 'Zip')}
         <div id="t-card" hidden><iframe id="paydock" title="Credit card" src="${cardOrigin}/paydock-widget" width="380" height="260" style="border:1px solid #ccc"></iframe></div></section>
@@ -1407,15 +1494,31 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         let mode = '', address = '', pay = '';
         const pick = (el, group) => { for (const t of document.querySelectorAll(group)) { t.setAttribute('aria-checked', 'false'); t.classList.remove('is-selected'); } el.setAttribute('aria-checked', 'true'); el.classList.add('is-selected'); };
         const ready = () => {
-          const d = Object.fromEntries([...$('t-details').querySelectorAll('input')].filter((i) => i.name !== 'deliveryAddress').map((i) => [i.name, i.value]));
+          const d = Object.fromEntries([...$('t-details').querySelectorAll('input')].filter((i) => i.name && i.name !== 'deliveryAddress').map((i) => [i.name, i.value]));
           const card = $('t-cardNumber').value && $('t-cardExpiry').value && $('t-cardCvv').value && $('t-cardName').value;
-          $('t-place').disabled = !(mode === 'home' && address && Object.values(d).every(Boolean) && pay === 'card' && card);
+          const where = (mode === 'home' && address) || (mode === 'cnc' && window.__store);
+          $('t-place').disabled = !(where && Object.values(d).every(Boolean) && pay === 'card' && card);
           return d;
         };
         for (const t of document.querySelectorAll('.DeliveryOption')) t.addEventListener('click', () => {
+          if (t.getAttribute('aria-disabled') === 'true') return;
           pick(t, '.DeliveryOption'); mode = t.dataset.mode;
-          if (mode === 'cnc') { $('t-error').textContent = 'Choose a store to collect from'; $('t-details').hidden = true; return; }
+          if (mode === 'cnc') { $('t-error').textContent = 'Choose a store to collect from'; $('t-details').hidden = true; $('t-store').hidden = false; return; }
+          $('t-store').hidden = true; $('t-addr-wrap').hidden = false; $('t-cc-next').hidden = true;
           $('t-error').textContent = ''; setTimeout(() => { $('t-details').hidden = false; }, 250);
+        });
+        // Click & Collect: the store chosen, your details (no address), then payment.
+        document.addEventListener('store-chosen', () => {
+          $('t-error').textContent = '';
+          $('t-addr-wrap').hidden = true; $('t-cc-next').hidden = false;
+          setTimeout(() => { $('t-details').hidden = false; }, 250);
+        });
+        $('t-cc-next').addEventListener('click', () => {
+          const d = ready();
+          if (!Object.values(d).every(Boolean)) { $('t-error').textContent = 'Please complete your details'; return; }
+          post('delivery', { mode, ...d, store: window.__store });
+          $('t-cc-next').remove();
+          setTimeout(() => { $('t-payment').hidden = false; ready(); }, 400);
         });
         // The address finder: suggestions once a few letters are in; only a picked one counts.
         const list = $('t-addr-list');
@@ -1460,6 +1563,11 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const P = shopPay ? { email: 'ash.shop@example.com', firstName: 'Ash', lastName: 'Ketchum', address1: '1 Pallet Town Rd', city: 'Sydney', zone: 'NSW', postalCode: '2000', phone: '0412345678' }
       : state.signedIn[shop] === 'account' ? { email: `ash.${shop}@example.com`, firstName: 'Ash', lastName: 'Ketchum', address1: '7 Viridian St', city: 'Melbourne', zone: 'VIC', postalCode: '3000', phone: '0498765432' } : {};
     const v = (k) => (P[k] ? ` value="${esc(P[k])}"` : '');
+    // Its Ship / Pick up choice (pickup, or collectOnly), Ship chosen: Pick up shows its pick-up locations (none
+    // chosen) instead of the address and shipping methods. collectOnly: "Shipping not available" and no methods.
+    const co = !!shopOf(shop).collectOnly;
+    const methods = shopOf(shop).pickup || co;
+    const locs = ['Chadstone', 'Southland'].map((s, i) => `<label class="pickup-location"><input type="radio" name="pickupLocation" value="loc${i + 1}"> ${esc(SHOPS[shop].name)} ${s} · ${i ? '1239 Nepean Hwy, Cheltenham VIC 3192' : '1341 Dandenong Rd, Chadstone VIC 3148'} · Usually ready in 2 hours · Free</label>`).join('');
     const ship = shopOf(shop).shippingRates || (shop === 'jbhifi' ? 'standard' : 'none');
     const rates = [['standard', shop === 'toysrus' ? 'Standard Shipping - AusPost' : 'Standard Shipping', 10], ['express', shop === 'toysrus' ? 'Express Shipping - AusPost' : 'Express Shipping', 15]];
     const field = (f, label) => `<div class="card-field"><iframe class="card-fields-iframe" name="card-fields-${f}-abc" title="Field container for: ${label}" src="${cardOrigin}/shopify-card?field=${f}" width="300" height="44" style="border:1px solid #ccc"></iframe></div>`;
@@ -1471,18 +1579,21 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     return `<h1>Checkout</h1><form method="post" id="sf">
         <h3>Contact</h3><input name="email" type="email" autocomplete="email" placeholder="Email" required${v('email')}>
         <h3>Delivery</h3>
+        ${methods ? '<div class="delivery-methods" role="radiogroup" aria-label="Choose a delivery method"><label><input type="radio" name="deliveryMethod" value="ship" checked> Ship</label> <label><input type="radio" name="deliveryMethod" value="pickup"> Pick up</label></div>' : ''}
+        <div id="pickup-locs" hidden><h3>Pickup locations</h3><p>There are 2 stores with stock close to you</p>${locs}</div>
         <select name="countryCode" autocomplete="shipping country"><option value="AU" selected>Australia</option><option value="NZ">New Zealand</option></select>
         <input name="firstName" autocomplete="shipping given-name" placeholder="First name" required${v('firstName')}>
         <input name="lastName" autocomplete="shipping family-name" placeholder="Last name" required${v('lastName')}>
+        <div id="ship-address">
         <input name="address1" autocomplete="shipping address-line1" placeholder="Address" required role="combobox" aria-autocomplete="list" aria-controls="address1-options"${v('address1')}>
         ${SUGGESTS.has(shop) ? '<ul id="address1-options" role="listbox" class="address-suggestions" hidden style="position:absolute;background:#fff;border:1px solid #ccc;margin:0;padding:0;list-style:none;z-index:5;width:320px"></ul>' : ''}
         <input name="address2" autocomplete="shipping address-line2" placeholder="Apartment, suite, etc. (optional)">
         <input name="city" autocomplete="shipping address-level2" placeholder="Suburb" required${v('city')}>
         <select name="zone" autocomplete="shipping address-level1" required><option value="" disabled ${P.zone ? '' : 'selected'}>State/territory</option><option value="ACT">Australian Capital Territory</option><option value="NSW" ${P.zone === 'NSW' ? 'selected' : ''}>New South Wales</option><option value="VIC" ${P.zone === 'VIC' ? 'selected' : ''}>Victoria</option><option value="QLD">Queensland</option></select>
-        <input name="postalCode" autocomplete="shipping postal-code" placeholder="Postcode" required${v('postalCode')}>
+        <input name="postalCode" autocomplete="shipping postal-code" placeholder="Postcode" required${v('postalCode')}></div>
         <input name="phone" autocomplete="shipping tel" placeholder="Phone${shop === 'gamerholic' ? ' (optional)' : ''}" type="tel"${v('phone')}>
         ${shop === 'toysrus' ? '<label><input type="checkbox" name="atl" checked> Authority to leave</label>' : ''}
-        <h3>Shipping method</h3>${rates.map(([id, label, price]) => `<label><input type="radio" name="shipping" value="${id}" ${ship === id ? 'checked' : ''}> ${label} $${price.toFixed(2)}</label>`).join('')}
+        <div id="ship-rates"><h3>Shipping method</h3>${co ? '<div class="notice" role="alert"><p><b>Shipping not available</b></p><p>Your order cannot be shipped to the selected address. Review your address to ensure it\'s correct and try again, or select a different address.</p></div>' : rates.map(([id, label, price]) => `<label><input type="radio" name="shipping" value="${id}" ${ship === id ? 'checked' : ''}> ${label} $${price.toFixed(2)}</label>`).join('')}</div>
         <h3>Payment</h3><p>All transactions are secure and encrypted.</p>${card}
         <input type="hidden" name="card_number"><input type="hidden" name="card_expiry"><input type="hidden" name="card_cvv"><input type="hidden" name="card_name">
         <p class="order-total">Total: $<span id="tot">${(total(shop) + 10).toFixed(2)}</span></p>
@@ -1492,6 +1603,15 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         const map = { number: 'card_number', expiry: 'card_expiry', verification_value: 'card_cvv', name: 'card_name' };
         addEventListener('message', (e) => { if (e.data && e.data.cardField && map[e.data.cardField]) document.querySelector('[name=' + map[e.data.cardField] + ']').value = e.data.value; });
         for (const r of document.querySelectorAll('input[name=shipping]')) r.addEventListener('change', () => { document.getElementById('tot').textContent = (${total(shop)} + (r.value === 'express' ? 15 : 10)).toFixed(2); });
+        // Ship or Pick up: picking up, its locations instead of the address (left out of the form) and the shipping methods.
+        for (const r of document.querySelectorAll('input[name=deliveryMethod]')) r.addEventListener('change', () => {
+          const pickup = r.value === 'pickup' && r.checked;
+          document.getElementById('pickup-locs').hidden = !pickup;
+          document.getElementById('ship-address').hidden = pickup;
+          document.getElementById('ship-rates').hidden = pickup;
+          for (const i of document.querySelectorAll('#ship-address input, #ship-address select')) i.disabled = pickup;
+          document.getElementById('tot').textContent = (${total(shop)} + (pickup ? 0 : 10)).toFixed(2);
+        });
         document.querySelector('[name=billingSame]')?.addEventListener('change', (e) => { document.getElementById('billing-address').hidden = e.target.checked; });
         // Shopify's address suggestions (as you type the address): picking one fills in the suburb, state/territory and postcode.
         const list = document.getElementById('address1-options');
@@ -1517,13 +1637,21 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   }
 
   function bigwCheckout() {
+    // (collectOnly: "Home delivery" greyed out; Click & Collect: "Choose a store" opens its store finder — a postcode,
+    //  Search, a store's "Select" — then your name and phone, "Continue to payment".)
+    const co = !!shopOf('bigw').collectOnly;
     return `<h1>Secure checkout</h1>
       <section id="b-contact"><h2>1. Contact details</h2>
         <label>Email address <input name="email" type="email" required></label>
         <p><button type="button" id="b-guest">Continue as guest</button> or <a href="#" id="b-signin">Sign in</a></p></section>
       <section id="b-delivery" hidden><h2>2. Delivery</h2><p>How would you like to get your order?</p>
-        <button type="button" class="choice" id="b-home" aria-pressed="false">Home delivery</button>
+        <button type="button" class="choice" id="b-home" aria-pressed="false"${co ? ' disabled' : ''}>Home delivery${co ? ' — Not available for this order' : ''}</button>
         <button type="button" class="choice" id="b-cc" aria-pressed="false">Click &amp; Collect</button>
+        <div id="b-cc-sec" hidden>${storeFinder('bigw', { opener: 'Choose a store', box: 'Postcode or suburb', go: 'Search', pick: 'Select' })}
+          <label>First name <input name="ccFirstName" autocomplete="given-name"></label>
+          <label>Last name <input name="ccLastName" autocomplete="family-name"></label>
+          <label>Phone number <input name="ccPhone" type="tel" autocomplete="tel"></label>
+          <p><button type="button" id="b-cc-next">Continue to payment</button></p></div>
         <div id="b-address" hidden>
           <label>First name <input name="firstName" required></label>
           <label>Last name <input name="lastName" required></label>
@@ -1555,7 +1683,16 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           setTimeout(() => { $('b-delivery').hidden = false; }, 300);
         });
         $('b-home').addEventListener('click', () => { $('b-home').setAttribute('aria-pressed', 'true'); $('b-cc').setAttribute('aria-pressed', 'false'); post('method', { method: 'home' }); setTimeout(() => { $('b-address').hidden = false; }, 200); });
-        $('b-cc').addEventListener('click', () => { $('b-cc').setAttribute('aria-pressed', 'true'); $('b-home').setAttribute('aria-pressed', 'false'); post('method', { method: 'collect' }); $('b-address').hidden = true; });
+        $('b-cc').addEventListener('click', () => { $('b-cc').setAttribute('aria-pressed', 'true'); $('b-home').setAttribute('aria-pressed', 'false'); post('method', { method: 'collect' }); $('b-address').hidden = true; $('b-cc-sec').hidden = false; });
+        $('b-cc-next').addEventListener('click', () => {
+          const d = vals($('b-cc-sec'));
+          const missing = (window.__store ? [] : ['store']).concat(['ccFirstName', 'ccLastName', 'ccPhone'].filter((k) => !d[k]));
+          if (missing.length) { $('b-error').textContent = 'Please complete: ' + missing.join(', '); return; }
+          $('b-error').textContent = '';
+          post('collect', { ...d, store: window.__store });
+          $('b-cc-next').remove();
+          setTimeout(() => { $('b-payment').hidden = false; }, 300);
+        });
         $('b-manual').addEventListener('click', (e) => { e.preventDefault(); $('b-manual-fields').hidden = false; $('b-lookup').closest('label')?.remove(); $('b-lookup').remove(); });
         $('b-to-payment').addEventListener('click', () => {
           const d = vals($('b-address'));
@@ -1706,7 +1843,9 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           <div class="field _required"><label class="label" for="sa-country_id"><span>Country</span></label><div class="control"><select class="select" name="country_id" id="sa-country_id" aria-required="true"><option value="AU" selected>Australia</option><option value="NZ">New Zealand</option></select></div></div>
           ${field('telephone', 'Mobile / Phone Number', ' autocomplete="tel"')}
         </form>`;
-    const methods = S.noStandard ? [['courier', 'Courier', 'Couriers Please', 12.95], ['express', 'Express', 'StarTrack', 18.95]] : [['standard', 'Standard', 'Australia Post', 9.95], ['express', 'Express', 'Australia Post', 14.95]];
+    // (collectOnly: only its store pick-up, nothing chosen.)
+    const methods = S.collectOnly ? [['pickup', 'Store Pickup', 'Click & Collect — The Gamesmen Melbourne', 0]]
+      : S.noStandard ? [['courier', 'Courier', 'Couriers Please', 12.95], ['express', 'Express', 'StarTrack', 18.95]] : [['standard', 'Standard', 'Australia Post', 9.95], ['express', 'Express', 'Australia Post', 14.95]];
     const box = (f, label) => `<div class="field"><label class="label" for="braintree-${f}"><span>${label}</span></label><div class="control hosted-control" id="braintree-${f}"><iframe src="${cardOrigin}/hosted-field?field=${f}" name="braintree-hosted-field-${f}" title="Secure Credit Card Frame - ${label}" width="300" height="40" style="border:1px solid #ccc"></iframe></div></div>`;
     return `<h1 class="page-title"><span class="base">Checkout</span></h1><div class="opc-wrapper one-step-checkout">
       <div class="checkout-shipping-address"><div class="step-title" data-role="title">Shipping Address</div>${address}
@@ -1820,9 +1959,12 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <h3 id="order_review_heading">Your order</h3>
         <div id="order_review" class="woocommerce-checkout-review-order"><table class="shop_table woocommerce-checkout-review-order-table"><tbody>${shopOf('gamesworld').cart.map((c) => `<tr class="cart_item"><td class="product-name">${esc(c.name)}&nbsp;<strong class="product-quantity">×&nbsp;${c.qty}</strong></td><td class="product-total"><span class="amount">$${(c.price * c.qty).toFixed(2)}</span></td></tr>`).join('')}</tbody>
           <tfoot><tr class="woocommerce-shipping-totals shipping"><th>Shipping</th><td data-title="Shipping"><ul id="shipping_method" class="woocommerce-shipping-methods">
-            <li><input type="radio" name="shipping_method[0]" data-index="0" id="shipping_method_0_table_rate821" value="table_rate:8:21" class="shipping_method" checked data-price="10"><label for="shipping_method_0_table_rate821">Standard Shipping (5-7 business days): <span class="woocommerce-Price-amount amount">$10.00</span></label></li>
-            <li><input type="radio" name="shipping_method[0]" data-index="0" id="shipping_method_0_table_rate824" value="table_rate:8:24" class="shipping_method" data-price="15"><label for="shipping_method_0_table_rate824">Express Shipping (3-5 business days): <span class="woocommerce-Price-amount amount">$15.00</span></label></li></ul></td></tr>
-            <tr class="order-total"><th>Total</th><td><strong><span class="woocommerce-Price-amount amount" id="gw-total">$${(total('gamesworld') + 10).toFixed(2)}</span></strong></td></tr></tfoot></table>
+            ${S.collectOnly
+    // (collectOnly: only its pick-up method, nothing chosen.)
+    ? '<li><input type="radio" name="shipping_method[0]" data-index="0" id="shipping_method_0_local_pickup3" value="local_pickup:3" class="shipping_method" data-price="0"><label for="shipping_method_0_local_pickup3">Local pickup: Games World Melbourne</label></li>'
+    : `<li><input type="radio" name="shipping_method[0]" data-index="0" id="shipping_method_0_table_rate821" value="table_rate:8:21" class="shipping_method" checked data-price="10"><label for="shipping_method_0_table_rate821">Standard Shipping (5-7 business days): <span class="woocommerce-Price-amount amount">$10.00</span></label></li>
+            <li><input type="radio" name="shipping_method[0]" data-index="0" id="shipping_method_0_table_rate824" value="table_rate:8:24" class="shipping_method" data-price="15"><label for="shipping_method_0_table_rate824">Express Shipping (3-5 business days): <span class="woocommerce-Price-amount amount">$15.00</span></label></li>`}</ul></td></tr>
+            <tr class="order-total"><th>Total</th><td><strong><span class="woocommerce-Price-amount amount" id="gw-total">$${(total('gamesworld') + (S.collectOnly ? 0 : 10)).toFixed(2)}</span></strong></td></tr></tfoot></table>
           <div id="payment" class="woocommerce-checkout-payment"><ul class="wc_payment_methods payment_methods methods">
             <li class="wc_payment_method payment_method_stripe"><input id="payment_method_stripe" type="radio" class="input-radio" name="payment_method" value="stripe" checked><label for="payment_method_stripe">Credit / Debit Card</label>
               <div class="payment_box payment_method_stripe"><fieldset id="wc-stripe-upe-form" class="wc-upe-form wc-payment-form"><div class="wc-stripe-upe-element"><iframe name="__privateStripeFrame1" title="Secure payment input frame" src="${cardOrigin}/stripe-element${S.link ? '?link=1' : ''}" width="380" height="${S.link ? 70 : 170}" style="border:0"></iframe></div></fieldset></div></li>
@@ -1856,6 +1998,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           const missing = need.filter(([n]) => !v(n)).map(([, l]) => l + ' is a required field.');
           if (missing.length) return err(missing);
           const pay = document.querySelector('input[name=payment_method]:checked');
+          if (!document.querySelector('input.shipping_method:checked')) return err(['No shipping method has been selected. Please double check your address, or contact us if you need any help.']);
           if (pay.value === 'stripe' && !$('stripe-link').value && !($('stripe-number').value && $('stripe-expiry').value && $('stripe-cvc').value)) return err(['Your card number is incomplete.']);
           const r = await fetch('/gamesworld/checkout/place', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
             billing: Object.fromEntries(need.filter(([n]) => n.startsWith('billing_')).map(([n]) => [n.slice(8), v(n)])), shipToDifferent: different, newsletter: $('kl_newsletter_checkbox').checked,
@@ -3306,7 +3449,8 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
         const b = await parseBody(req);
         const shopPay = state.signedIn[shop] === 'shop';
         // Like Shopify: no shipping method, or no card (unless Shop Pay has one), and it's not placed.
-        if (!b.shipping) return html(200, page(shop, 'Checkout', '<p class="err" role="alert">Choose a shipping method</p>'));
+        if (b.deliveryMethod === 'pickup' && !b.pickupLocation) return html(200, page(shop, 'Checkout', '<p class="err" role="alert">Choose a pickup location</p>'));
+        if (!b.shipping && b.deliveryMethod !== 'pickup') return html(200, page(shop, 'Checkout', '<p class="err" role="alert">Choose a shipping method</p>'));
         if (!shopPay && !b.card_number) return html(200, page(shop, 'Checkout', '<p class="err" role="alert">Enter a card number</p>'));
         if (S.decline) { S.declined = (S.declined || 0) + 1; return html(200, page(shop, 'Checkout', '<p class="err" role="alert">Your card was declined. Please try another card.</p>')); }
         if (S.threeDS) {

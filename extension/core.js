@@ -70,6 +70,8 @@ var MGBQuick = (function () {
     /^add$/i,
   ];
   var NOT_ADD = /wish ?list|favou?rite|compare|registry|gift ?card|notify|remind|alert me|pay later|pay in \d|lay-?by|laybuy|afterpay|zip ?pay|\bzip\b|paypal|klarna|humm|latitude|apple ?pay|google ?pay|g ?pay|shop ?pay|with shop\b|in-?store|click (&|and) collect|pick ?up|reserve/i;
+  // A buy button that adds it for Click & Collect: only where there's no other (findAddToBag).
+  var COLLECT_ADD = /^(add (to (my |your )?(cart|bag|basket|trolley) )?(for |- |– )?(click (&|and) collect|pick ?up( in[- ]?store)?|collect in[- ]?store)|(click (&|and) collect|pick ?up in[- ]?store|collect in[- ]?store) ?(-|–|:)? ?add to (my |your )?(cart|bag|basket|trolley)|buy (for|with) (click (&|and) collect|pick ?up))$/i;
   // The final "buy" buttons are never pressed while getting to checkout, whatever a flow says
   // (only an armed Auto-checkout run presses one: content.js, at checkout). ("Buy now" on a product
   // page is its buy button — on a checkout page, fill.js knows it as the final one.)
@@ -253,9 +255,19 @@ var MGBQuick = (function () {
         .map(function (x) { return x.el; });
     }
     // Prefer the main buy box; fall back to any Add button that isn't on another product's tile.
-    return all.find(function (el) { return !el.closest(RECOMMENDATIONS); })
+    var found = all.find(function (el) { return !el.closest(RECOMMENDATIONS); })
       || all.find(function (el) { return !inOtherProductTile(el); })
       || null;
+    if (found || P.addSelector) return found;
+    // No buy button for delivery — nor one greyed out that may still turn on — but one that adds it for Click &
+    // Collect ("Add to cart for Click & Collect"): that one (extension 1.31.0). Never a reservation, a stock check
+    // or "find in store"; your delivery details saying home delivery only stops it at checkout.
+    // (Only once the page has loaded: a delivery button drawn a moment late comes first.)
+    if (greyedAdd(R) || document.readyState !== 'complete' || performance.now() < 2500) return null;
+    return controls().find(function (el) {
+      var label = labelOf(el);
+      return label.length < 70 && COLLECT_ADD.test(label) && !el.closest('header, nav, footer') && !el.closest(RECOMMENDATIONS);
+    }) || null;
   }
 
   function isCheckoutLabel(R, label, where) {
