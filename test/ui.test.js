@@ -422,15 +422,22 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"] .sn-rows'), /searches\s*1.*last answer\s*400 ms.*server first · \/search\?sEngine=c&text=/s);
   assert.equal(await page.getAttribute('#sn-channels .sn-chan[data-store="target"] .st-toggle', 'aria-expanded'), 'true');
   assert.match(await page.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /Kmart\s*Starting.*server first · ac\.cnstrc\.com\/search\//s);
-  // Server first: BIG W's page draws its products once it's open, so the server reads none — an
+  // BIG W: searched from an admin's browser (its private window) — the server never: none is connected here, so it waits
+  // for one, and says just that.
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="bigw"]'), /BIG W\s*Waiting/);
+  assert.equal((await page.textContent('#sn-channels .sn-chan[data-store="bigw"] .st-sub')).trim(), "Waiting for an admin's browser");
+  await page.click('#sn-channels .sn-chan[data-store="bigw"] .st-toggle');
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="bigw"] .sn-rows'), /from\s*admin's browser · \/search\?text=/);
+  await page.click('#sn-channels .sn-chan[data-store="bigw"] .st-toggle');
+  // Server first: Pokémon Center's page draws its products once it's open, so the server reads none — an
   // admin's browser stands in, and the server tries again in 5 minutes.
-  const bigw = env.app.retailers.get('bigw');
-  await sw.ingest(bigw, term, { products: [], total: 0, problem: 'empty' }, { source: 'server', url: sw.urlFor(bigw, 'pokemon'), ms: 350 });
-  await page.waitForFunction(() => /BIG W\s*Waiting/.test(document.querySelector('#sn-channels .sn-chan[data-store="bigw"]').textContent));
-  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="bigw"] .st-sub'), /Mugibot's server can't read it .* an admin's browser searches it meanwhile, and the server tries again within 5 min/);
-  await page.click('#sn-channels .sn-chan[data-store="bigw"] .st-toggle');
-  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="bigw"] .sn-rows'), /from\s*admin's browser, while the server's refused · \/search\?text=.*server\s*refused since \d\d:\d\d:\d\d · tries again at \d\d:\d\d:\d\d/s);
-  await page.click('#sn-channels .sn-chan[data-store="bigw"] .st-toggle');
+  const pc = env.app.retailers.get('pokemoncenter');
+  await sw.ingest(pc, term, { products: [], total: 0, problem: 'empty' }, { source: 'server', url: sw.urlFor(pc, 'pokemon'), ms: 350 });
+  await page.waitForFunction(() => /Pokémon Center\s*Waiting/.test(document.querySelector('#sn-channels .sn-chan[data-store="pokemoncenter"]').textContent));
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="pokemoncenter"] .st-sub'), /Mugibot's server can't read it .* an admin's browser searches it meanwhile, and the server tries again within 5 min/);
+  await page.click('#sn-channels .sn-chan[data-store="pokemoncenter"] .st-toggle');
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="pokemoncenter"] .sn-rows'), /from\s*admin's browser, while the server's refused · \/search\/.*server\s*refused since \d\d:\d\d:\d\d · tries again at \d\d:\d\d:\d\d/s);
+  await page.click('#sn-channels .sn-chan[data-store="pokemoncenter"] .st-toggle');
   // The live feed shows drops and restocks; "Everything" adds each search.
   assert.equal(await page.inputValue('#m-kind'), 'alerts');
   assert.doesNotMatch(await page.textContent('#m-log'), /Target · "pokemon" — 2 products/);
@@ -475,8 +482,8 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   // A store that keeps failing: a banner above everything says so, with Reset all.
   const amazon = env.app.retailers.get('amazon');
   for (let i = 0; i < 3; i += 1) sw.record(amazon, term, { ok: false, blocked: true, error: 'The store refused the search (HTTP 503)', source: 'server', url: sw.urlFor(amazon, 'pokemon'), ms: 300 });
-  // (BIG W too: waiting for an admin's browser to stand in.)
-  await page.waitForFunction(() => /BIG W and Amazon AU need attention/.test(document.querySelector('#sn-attention:not([hidden])')?.textContent || ''));
+  // (Pokémon Center too: waiting for an admin's browser to stand in. Not BIG W, waiting for one with nothing wrong.)
+  await page.waitForFunction(() => /(Pokémon Center and Amazon AU|Amazon AU and Pokémon Center) need attention/.test(document.querySelector('#sn-attention:not([hidden])')?.textContent || ''));
   assert.match(await page.textContent('#sn-channels .sn-chan[data-store="amazon"] .st-sub'), /HTTP 503/);
   await page.click('#sn-attention button');
   await page.waitForFunction(() => /Reset every store/.test(document.querySelector('#toasts')?.textContent || ''));
@@ -500,13 +507,16 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
   await page.waitForFunction(() => /Alerts armed/.test(document.querySelector('#toasts')?.textContent || ''));
 
   // Settings: where each store is searched from, keywords, alerts and what counts, the response times.
-  // (BIG W's server read again, after Reset all: the browser stands in once more.)
-  await sw.ingest(bigw, term, { products: [], total: 0, problem: 'empty' }, { source: 'server', url: sw.urlFor(bigw, 'pokemon'), ms: 350 });
+  // (Pokémon Center's server read again, after Reset all: the browser stands in once more.)
+  await sw.ingest(pc, term, { products: [], total: 0, problem: 'empty' }, { source: 'server', url: sw.urlFor(pc, 'pokemon'), ms: 350 });
   await page.click('[data-panel="monitor"] .mon-tabs a[data-mtab="monitor-settings"]');
   await page.waitForSelector('#ms-table tbody tr');
   assert.equal(await page.inputValue('#ms-table select[data-store="target"]'), 'auto');
   assert.match(await page.textContent('#ms-table select[data-store="target"]'), /Server first \(default\).*Server only.*Admin's browser.*Off/s);
-  assert.match(await page.textContent('#ms-table tr[data-store="bigw"]'), /Admin's browser standing in · server tries again/);
+  assert.match(await page.textContent('#ms-table tr[data-store="pokemoncenter"]'), /Admin's browser standing in · server tries again/);
+  // BIG W: an admin's browser, in a private window of its own — its default.
+  assert.equal(await page.inputValue('#ms-table select[data-store="bigw"]'), 'browser');
+  assert.match(await page.textContent('#ms-table select[data-store="bigw"]'), /Server first.*Server only.*Admin's browser · private window \(default\).*Off/s);
   assert.match(await page.textContent('#ms-table tr[data-store="target"]'), /Gentle until/, 'reset a moment ago: searched gently for a while');
   assert.match(await page.textContent('#ms-state'), /Off \(MONITOR_ENABLED=0\)/, '(tests run with the loops off)');
   await page.waitForSelector('#sn-chart svg circle.end.s3');

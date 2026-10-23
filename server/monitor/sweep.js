@@ -142,9 +142,37 @@ function seenText(seen) {
   return ` (it was ${parts.filter(Boolean).join(', ')})`;
 }
 
-/** Where a store is searched from unless an admin says otherwise: server first (dummy-store copies: off). */
+/** A search, as a note says it: its words (not a member's own drop watch's: theirs alone), and its page after the first. */
+function searchName(term) {
+  const words = term.drop === 'private' ? "a drop watch's words" : `"${term.keyword === ALL ? ALL_LABEL : term.keyword}"`;
+  return `${words}${term.page > 1 ? ` (page ${term.page})` : ''}`;
+}
+
+/**
+ * A search that found nothing, said as it was: the store saying so ("BIG W has no results for …" — its page said
+ * it, or its reader knows its empty page) — or, on a page Mugibot reads any way it can (sweep.parser 'generic'),
+ * that nothing showed on it, the page saying neither way.
+ */
+function emptyText(r, term, parsed) {
+  const said = parsed.none === true || (r.sweep.parser || 'generic') !== 'generic';
+  return said ? `${r.name} has no results for ${searchName(term)}` : `No products showed on ${r.name}'s page for ${searchName(term)}`;
+}
+
+/** A page that said it had results ("57 results"), none of which Mugibot could see on it. */
+function unreadText(r, term, stated, source) {
+  const n = `${stated} result${stated === 1 ? '' : 's'}`;
+  return source === 'browser' && r.sweep.render
+    ? `${r.name}'s page said ${n} for ${searchName(term)}, but none were on it yet when Mugibot read it — it's read again next round`
+    : `${r.name}'s page said ${n} for ${searchName(term)}, but not in the product list Mugibot reads — the store may have changed it`;
+}
+
+/**
+ * Where a store is searched from unless an admin says otherwise: server first — or its own (sweep.mode: BIG W's
+ * 'browser', an admin's browser in a private window of its own, as the server can never draw its products) —
+ * and the dummy-store copies off.
+ */
 export function defaultModeOf(r) {
-  return !r.sweep || r.demo || r.sweep.from === 'off' ? 'off' : 'auto';
+  return !r.sweep || r.demo || r.sweep.from === 'off' ? 'off' : MODES.includes(r.sweep.mode) ? r.sweep.mode : 'auto';
 }
 const REBASELINE_MS = 6 * 3600 * 1000;
 // A search read again after a long gap (REBASELINE_MS) sets the scene anew — but the first few products in it
@@ -631,6 +659,10 @@ export class Sweeper {
       && (r.sweep.render || (!!row && row.source === 'browser' && row.found > 0 && !!row.last_ok_at && now - row.last_ok_at < HOUR))) {
       return this.record(r, term, { ok: false, empty: true, url, source, ms, error: r.sweep.render ? "Mugibot's server can't read the products: they only show once the store's page has run" : "Mugibot's server got no products, where an admin's browser finds some" });
     }
+    // A page that says it has results (BIG W's "57 results") none of which were on it when it was read — not drawn
+    // yet: not an answer (no scene set, nothing marked gone, no "no products"), and said as it is. It's read again
+    // next round at the usual pace: the store didn't turn anyone away.
+    if (parsed.problem === 'unread') return this.record(r, term, { ok: false, unread: true, url, source, ms, error: unreadText(r, term, parsed.stated, source) });
     // (Read somewhere else than before, e.g. a collection instead of the search: what's there already was.)
     const baseline = !row || !row.baseline_at || !row.last_ok_at || now - row.last_ok_at > REBASELINE_MS || (!!row.url && row.url !== url);
     // (Read again after a long gap, not for the first time: the first few new products in it still alert.)
@@ -698,7 +730,7 @@ export class Sweeper {
         if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, status }).catch((e) => this.cfg.log('[drops]', e.message));
       }
       await Promise.allSettled(posting);
-      const out = this.record(r, term, { ok: true, url, source, ms, baseline, total: parsed.total ?? null, ...counts, error: parsed.problem === 'empty' ? 'No products on the page' : '' });
+      const out = this.record(r, term, { ok: true, url, source, ms, baseline, total: parsed.total ?? null, ...counts, error: parsed.problem === 'empty' ? emptyText(r, term, parsed) : '' });
       out.gone = all ? 0 : await this.markGone(r, term.keyword, now);
       return out;
     } finally {
@@ -907,7 +939,7 @@ export class Sweeper {
       if (blind) {
         const why = this.statusOf(mode, st, now, r) === 'waiting'
           ? "no admin's browser is searching it (Chrome closed, the computer asleep, or the extension signed out)"
-          : st.lastError ? `its last search said "${str(st.lastError, 160)}"` : 'its searches come back with no products on the page';
+          : st.lastError || st.lastNote ? `its last search said "${str(st.lastError || st.lastNote, 160)}"` : 'its searches come back with no products';
         went.push({ r, line: `${r.name}: no search has found a product since ${sydneyTime.format(st.lastFoundAt)} (${minutes(now - st.lastFoundAt)}) — ${why}.` });
       } else back.push({ r });
       told.push({ store: r.id, blind });
@@ -987,7 +1019,7 @@ export class Sweeper {
     // Server first, an admin's browser standing in: the server's try says whether it's back — the
     // store's own state (failures, pace, problem) is the browser's meanwhile.
     const trying = info.source === 'server' && this.standIn(r, st);
-    const keep = trying ? { fails: st.fails, lastError: st.lastError, slowUntil: st.slowUntil, lastOkAt: st.lastOkAt } : null;
+    const keep = trying ? { fails: st.fails, failKind: st.failKind, lastError: st.lastError, lastNote: st.lastNote, slowUntil: st.slowUntil, lastOkAt: st.lastOkAt } : null;
     const failedBefore = st.fails;
     const wasSlow = st.slowUntil > now;
     st.lastAt = now;
@@ -997,14 +1029,21 @@ export class Sweeper {
     this.totals.searches += 1;
     if (info.ok) {
       st.fails = 0;
+      st.failKind = '';
       st.lastOkAt = now;
       if (info.found > 0) st.lastFoundAt = now;
       if (!st.firstOkAt) st.firstOkAt = now;
-      st.lastError = info.error || '';
+      // (An answer is the store working: no problem to show. What this one search said — "BIG W has no results for
+      //  …" — is its own, a note on it, never the store's state.)
+      st.lastError = '';
+      st.lastNote = info.error || '';
       this.totals.streak += 1;
     } else {
       st.fails += 1;
+      // (unread: a page whose results hadn't been drawn when it was read — read again at the usual pace, no backing off.)
+      st.failKind = info.unread ? 'unread' : 'failed';
       st.lastError = info.error || 'Failed';
+      st.lastNote = '';
       if (info.blocked) st.slowUntil = now + SLOW_MS;
       this.totals.errors += 1;
       this.totals.streak = 0;
@@ -1028,7 +1067,7 @@ export class Sweeper {
     if (keep) Object.assign(st, keep);
     if (info.source === 'browser') st.browserAt = now;
     if (info.source === 'server' && this.modeFor(r) === 'auto') this.serverFirst(r, st, info, now, trying);
-    const out = { store: r.id, keyword: term.keyword === ALL ? ALL_LABEL : term.keyword, page: term.page, ok: info.ok, blocked: !!info.blocked, error: info.error || '', found: info.found || 0, kept: info.kept || 0, new: info.new || 0, restock: info.restock || 0, price: info.price || 0, baseline: !!info.baseline, ms: info.ms ?? null };
+    const out = { store: r.id, keyword: term.keyword === ALL ? ALL_LABEL : term.keyword, page: term.page, ok: info.ok, blocked: !!info.blocked, ...(info.unread ? { unread: true } : {}), error: info.error || '', found: info.found || 0, kept: info.kept || 0, new: info.new || 0, restock: info.restock || 0, price: info.price || 0, baseline: !!info.baseline, ms: info.ms ?? null };
     // A drop watch's words (monitor/drops.js): how it went shows on the watch. ('private': someone's own
     // watch's words — members never see them in the live log: monitor/public.js.)
     if (term.drop && this.drops) this.drops.searched(r.id, term.keyword, info);
@@ -1203,7 +1242,8 @@ export class Sweeper {
    */
   waitFor(st, every, { jitter = false, spent = 0 } = {}) {
     const asked = st.retryAt && st.retryAt > this.now() ? st.retryAt - this.now() : 0;
-    if (st.fails) return Math.max(asked, Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(st.fails, 10)));
+    // (Not after a page that hadn't drawn its results yet: the store turned nobody away — its usual pace.)
+    if (st.fails && st.failKind !== 'unread') return Math.max(asked, Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(st.fails, 10)));
     const slow = st.slowUntil > this.now() ? SLOW_FACTOR : 1;
     return Math.max(asked, MIN_GAP_MS, every * slow * (jitter ? 0.8 + 0.4 * this.random() : 1) - Math.max(0, spent));
   }
@@ -1396,11 +1436,12 @@ export class Sweeper {
         continue;
       }
       const products = (Array.isArray(res.products) ? res.products : []).slice(0, 300).map((p) => this.cleanProduct(r, p)).filter(Boolean);
-      const problem = ['blocked', 'layout', 'empty'].includes(res.problem) ? res.problem : null;
-      // (Extension 1.19.1: what the page it couldn't read was.)
+      const problem = ['blocked', 'layout', 'empty', 'unread'].includes(res.problem) ? res.problem : null;
+      // (Extension 1.19.1: what the page it couldn't read was. 1.32.0: nothing read — what the page said it had.)
       const seen = res.seen && typeof res.seen === 'object' ? { title: res.seen.title, bytes: res.seen.bytes, links: res.seen.links } : null;
+      const stated = num(res.stated, { min: 0, max: 1e7, int: true, def: null });
       if (r.sweep.followNext && !term.vip && !term.drop && !problem && products.length) this.noteNext(r, term, res.next);
-      out.push(await this.ingest(r, term, { products, total: null, problem }, { source: 'browser', url, ms, seen }));
+      out.push(await this.ingest(r, term, { products, total: null, problem, stated, none: res.none === true }, { source: 'browser', url, ms, seen }));
     }
     return out;
   }
@@ -1525,6 +1566,8 @@ export class Sweeper {
         source: this.sourceOf(r, mode), backup: this.backupOf(mode, st, r),
         defaultMode: this.defaultMode(r),
         searches: st.searches || 0, fails: st.fails, lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastMs: lastOk ? lastOk.ms : null, lastError: st.lastError,
+        // (What its last search said, when it found nothing: "BIG W has no results for …" — a note, not a problem.)
+        lastNote: st.lastNote || '',
         nextAt: st.nextAt, slowedUntil: st.slowUntil > now ? st.slowUntil : null,
         // The store asked to wait (Retry-After); when it was last reset; its last answer was a refusal.
         retryAt: st.retryAt > now ? st.retryAt : null, resetAt: st.resetAt || null, refused: !!(st.fails && st.log.length && st.log.at(-1).blocked),
@@ -1551,12 +1594,12 @@ export class Sweeper {
       const terms = this.db.all('SELECT * FROM sweep_terms WHERE store = :s ORDER BY keyword, page', { s: r.id });
       const products = this.db.get('SELECT COUNT(*) AS n FROM products WHERE store = :s AND sweep_seen_at >= :since', { s: r.id, since: now - 24 * HOUR });
       return {
-        store: r.id, name: r.name, mode, defaultMode: this.defaultMode(r), demo: !!r.demo,
+        store: r.id, name: r.name, mode, defaultMode: this.defaultMode(r), demo: !!r.demo, privateWindow: !!r.sweep.privateWindow,
         source: this.sourceOf(r, mode), backup: this.backupOf(mode, st, r),
         running: mode === 'server' || mode === 'auto' ? this.loops.has(r.id) : null,
         requests1h: recent.length, ok1h: ok.length, blocked1h: recent.filter((x) => x.blocked).length,
         avgMs: timed.length ? Math.round(timed.reduce((a, x) => a + x.ms, 0) / timed.length) : null,
-        lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastError: st.lastError, fails: st.fails, nextAt: mode === 'off' ? null : st.nextAt,
+        lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastError: st.lastError, lastNote: st.lastNote || '', fails: st.fails, nextAt: mode === 'off' ? null : st.nextAt,
         slowedUntil: st.slowUntil > now ? st.slowUntil : null,
         products24h: products ? products.n : 0,
         terms: terms.map((t) => ({ keyword: t.keyword === ALL ? ALL_LABEL : t.keyword, page: t.page, url: t.url, source: t.source, lastAt: t.last_at, lastOkAt: t.last_ok_at, found: t.found, kept: t.kept, total: t.total, fails: t.fails, error: t.error, ms: t.ms, baselineAt: t.baseline_at })),

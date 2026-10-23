@@ -1996,6 +1996,51 @@ test("BIG W: products the page downloaded but hasn't drawn (a page in a hidden w
   }
 });
 
+test("🧾 BIG W's page with no products Mugibot can see: \"57 results\" it hadn't drawn is said as that (read again at the usual pace) — and \"No results\" is BIG W's answer, a note on that search, seen at once (not 15 s later), never the store's state", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  const keywords = sweeper.settings.keywords;
+  sweeper.save({ browserEverySeconds: 5, keywords: ['pokemon'], stores: { ...off, 'demo-bigw': 'browser' } }, null);
+  const S = store.shop('bigw');
+  const st = sweeper.stat('demo-bigw');
+  Object.assign(st, { fails: 0, failKind: '', lastError: '', lastNote: '', browserNext: 0, slowUntil: 0 });
+  const count = (await (await fetch(`${store.url}/bigw/api/search?q=${encodeURIComponent('pokemon tcg')}`)).json()).products.length;
+  const term = (kw) => (sweeper.health().find((x) => x.store === 'demo-bigw').terms || []).find((t) => t.keyword === kw && t.page === 1);
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  try {
+    // Its count drawn, its products never (a page in a hidden window): not "no products" — what the page said.
+    S.clientSearch = 'count';
+    await browserSweepsUntil(() => st.failKind === 'unread', 'the page read with its results not drawn');
+    assert.equal(st.lastError, `BIG W (dummy store)'s page said ${count} results for "pokemon", but none were on it yet when Mugibot read it — it's read again next round`);
+    const card = sweeper.live().stores.find((s) => s.id === 'demo-bigw');
+    assert.equal(card.status, 'retrying');
+    assert.equal(sweeper.waitFor({ ...st, slowUntil: 0, retryAt: 0 }, 20000), 20000, 'its usual pace (20 s at BIG W), not backing off');
+    // Drawn: read as always, the store answering again.
+    S.clientSearch = true;
+    await browserSweepsUntil(() => st.fails === 0 && term('pokemon').fails === 0 && term('pokemon').found > 0, 'the page read with its products');
+    assert.deepEqual([st.lastError, st.lastNote], ['', '']);
+    // A search BIG W has nothing for ("No results" on its page): its answer, said as that — and the page left the moment
+    // it says so, not after the 15 s a page gets to draw its products.
+    S.noResultsFor = 'zzz nothing';
+    sweeper.save({ keywords: ['pokemon', 'zzz nothing'] }, null);
+    st.browserNext = 0;
+    await browserSweepsUntil(() => term('zzz nothing') && term('zzz nothing').lastOkAt, 'the search with no results');
+    const none = term('zzz nothing');
+    assert.equal(none.error, 'BIG W (dummy store) has no results for "zzz nothing"');
+    assert.equal(none.found, 0);
+    assert.ok(none.ms < 8000, `seen at once (${none.ms} ms), not after 15 s`);
+    assert.deepEqual([st.fails, st.lastError], [0, ''], "a note on that search, not the store's state");
+    assert.ok(['', 'BIG W (dummy store) has no results for "zzz nothing"'].includes(st.lastNote), st.lastNote);
+  } finally {
+    env.app.repo.updateUser(userId, { role: 'user' });
+    S.clientSearch = false;
+    S.noResultsFor = '';
+    Object.assign(st, { fails: 0, failKind: '', lastError: '', lastNote: '' });
+    sweeper.save({ keywords, stores: off }, null);
+  }
+});
+
 test("BIG W's later pages (48 a page, by relevance): the admin's browser follows its search page's own \"Next\" link — a new listing only on page 2 is found there, and the last page ends it", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;

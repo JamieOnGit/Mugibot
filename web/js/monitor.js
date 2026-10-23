@@ -455,12 +455,12 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
         : s.fails ? h('span', { class: `pill ${s.fails > 2 ? 'err' : 'warn'}`, title: s.lastError }, `${s.lastError || 'Failing'}${s.nextAt ? ` · ${retryIn(s.nextAt)}` : ''}`)
           : s.backup ? h('span', { class: 'pill warn', title: `Mugibot's server: ${s.backup.why || 'refused'}` }, `Admin's browser standing in · server ${s.backup.retryAt ? `tries again ${new Date(s.backup.retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'trying again now'}`)
           : s.slowedUntil ? h('span', { class: 'pill warn', title: 'Searched at a third of the pace for a while (after a refusal, or a reset)' }, `Gentle until ${new Date(s.slowedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
-            : s.lastOkAt ? h('span', { class: 'pill ok', title: s.lastError || '' }, s.lastError || 'OK')
+            : s.lastOkAt ? h('span', { class: 'pill ok', title: s.lastError || (s.lastNote ? `Its last search: ${s.lastNote}` : '') }, s.lastError || 'OK')
             : h('span', { class: 'pill' }, s.source === 'browser' ? "Waiting for an admin's browser" : 'Starting');
       const id = s.id || s.store;
       // Where it's searched from: changes straight away.
       const sel = h('select', { 'aria-label': `${s.name}: searched from`, dataset: { store: id } },
-        ...Object.entries(MODES).map(([v, label]) => h('option', { value: v, selected: s.mode === v }, `${label}${v === s.defaultMode ? ' (default)' : ''}`)));
+        ...Object.entries(MODES).map(([v, label]) => h('option', { value: v, selected: s.mode === v }, `${label}${v === 'browser' && s.privateWindow ? ' · private window' : ''}${v === s.defaultMode ? ' (default)' : ''}`)));
       sel.addEventListener('change', () => setMode(id, sel.value));
       body.append(h('tr', { class: s.mode === 'off' ? 'muted' : '', dataset: { store: id } },
         h('td', {}, h('b', {}, s.name), s.avgMs ? h('div', { class: 'muted small' }, `answers in ${(s.avgMs / 1000).toFixed(1)} s`) : null),

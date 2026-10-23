@@ -106,11 +106,13 @@ community. Built on TCGCopBot's working Kmart flow.
   Discord channels (image, store, price, stock and a ⚡ Buy button) and to
   every member watching that SKU. Every store is searched **server first**:
   from Mugibot's server, with an admin's browser (the extension) standing in
-  only while a store refuses the server or the server can't read it — BIG W,
+  only while a store refuses the server or the server can't read it —
   Pokémon Center, Premium Bandai and The Gamesmen (their pages opened and read once they have
   built their product lists), EB Games and Amazon AU (asked for from inside one
   of their pages) often do — and the server taking back over as soon as it's
-  let in. Admins can also monitor single products. Each channel
+  let in. BIG W, whose products the server can never draw, is searched from an
+  admin's browser by default, in a private window of its own.
+  Admins can also monitor single products. Each channel
   gets what its rule asks for (by category, store, kind or keyword), and one
   button sets up a channel per store and game (`kmart-pokemon`,
   `bigw-one-piece`…, `premium-bandai`, `pokemon-center`, and `misc-retailers`

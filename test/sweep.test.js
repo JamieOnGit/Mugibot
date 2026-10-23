@@ -12,7 +12,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
-import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseMagento, parseShopifyProducts, parseShopifySuggest, parseTarget, parseWoo, termsRegex } from '../server/monitor/listing.js';
+import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseMagento, parseShopifyProducts, parseShopifySuggest, parseTarget, parseWoo, searchSays, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
 import { Sweeper, olderVersion, retryAfterMs, statesNote } from '../server/monitor/sweep.js';
 
@@ -203,6 +203,30 @@ test('any store: product tiles in the page, and product data in its scripts (JSO
   assert.equal(parseGeneric('<html><title>Search</title><p>No results</p></html>', opts).problem, 'empty');
 });
 
+test("a search page with no products Mugibot can see: what the page says — none (\"No results for …\"), or results it hadn't drawn yet (BIG W's \"57 results\")", () => {
+  // In the page's own words: how many, or that there are none — never a cart's "0 items" or a price.
+  assert.deepEqual(searchSays('Search results for “gundam tcg” All products Delivery only Pick up only 57 results'), { stated: 57, none: false });
+  assert.deepEqual(searchSays('Showing 1 - 48 of 1,234 results'), { stated: 1234, none: false });
+  assert.deepEqual(searchSays('0 results for “heavy hitters premium”'), { stated: 0, none: true });
+  for (const t of ['No results for heavy hitters premium', 'Sorry, your search "x" did not return any results.', "We couldn't find any matches for x", 'No products were found']) assert.equal(searchSays(t).none, true, t);
+  for (const t of ['Cart 0 items', 'Results for "pokemon"', 'Loading…', 'Free delivery over $100']) assert.deepEqual(searchSays(t), { stated: null, none: false }, t);
+  const opts = { base: 'https://www.bigw.com.au/search?text=gundam%20tcg', productPath: /^(\/bigw)?\/product\/[^/]+\/p\/\d+/, skuFromPath: /\/p\/(\d+)/, storeName: 'BIG W' };
+  // Its header and menus aren't the results (a mini cart's "0 results" there means nothing).
+  const unread = parseGeneric('<html><title>Search</title><body><header><a href="/cart">0 results</a></header><main><h1>Search results for “gundam tcg”</h1><div>57 results</div><div id="grid"></div></main></body></html>', opts);
+  assert.deepEqual([unread.problem, unread.stated, unread.none], ['unread', 57, false], 'results said, none drawn yet: not a search with none');
+  const none = parseGeneric('<html><title>Search</title><body><main><h1>Search results for “heavy hitters premium”</h1><p>Sorry, no results found</p></main></body></html>', opts);
+  assert.deepEqual([none.problem, none.none], ['empty', true]);
+  const quiet = parseGeneric('<html><title>Search</title><body><main><h1>Results</h1><p>Loading…</p></main></body></html>', opts);
+  assert.deepEqual([quiet.problem, quiet.stated, quiet.none], ['empty', null, false], 'saying neither way');
+  // The search data the page downloaded (the extension's copy of it) saying how many, where the page's words don't.
+  const data = (d) => `<html><title>Search</title><body><main><h1>Results</h1></main><script type="application/json" data-mugibot-sweep>${JSON.stringify(d)}</script></body></html>`;
+  assert.deepEqual([parseGeneric(data({ data: { search: { totalResults: 57, results: [] } } }), opts).problem], ['unread']);
+  assert.deepEqual([parseGeneric(data({ totalResults: 0 }), opts).problem, parseGeneric(data({ totalResults: 0 }), opts).none], ['empty', true]);
+  // Products on the page: read as always, whatever it says.
+  const read = parseGeneric('<html><body><main><div>57 results</div><article><a href="/bigw/product/gundam-card-game-booster-box/p/6012345">Gundam Card Game Booster Box</a> $172.49 Add to cart</article></main></body></html>', opts);
+  assert.deepEqual([read.problem, read.products.map((p) => p.sku)], [null, ['6012345']]);
+});
+
 test('which products count: every word of the keyword in the name (accents ignored), trading-card words', () => {
   assert.equal(mentions('Pokémon TCG: Booster', 'pokemon'), true);
   assert.equal(mentions('Bandai ONE PIECE Card Game', 'one piece'), true);
@@ -291,8 +315,12 @@ test('sweep settings: admins only, checked, and the dummy-store copies are off u
   assert.deepEqual(r.body.settings.keywords, ['pokemon', 'one piece', 'riftbound', 'gundam card game']);
   const mode = (id) => r.body.stores.find((s) => s.store === id).mode;
   // Server first, every store: Mugibot's server searches it, and an admin's browser stands in only
-  // while the store refuses the server (Amazon, BIG W, Pokémon Center and Premium Bandai often do).
-  for (const id of ['target', 'jbhifi', 'trainertown', 'kmart', 'amazon', 'bigw', 'ebgames', 'pokemoncenter', 'pbandai']) assert.equal(mode(id), 'auto', id);
+  // while the store refuses the server (Amazon, Pokémon Center and Premium Bandai often do).
+  for (const id of ['target', 'jbhifi', 'trainertown', 'kmart', 'amazon', 'ebgames', 'pokemoncenter', 'pbandai']) assert.equal(mode(id), 'auto', id);
+  // BIG W: an admin's browser (its private window), the server never — the server can never draw its products.
+  assert.equal(mode('bigw'), 'browser');
+  assert.equal(r.body.stores.find((s) => s.store === 'bigw').defaultMode, 'browser');
+  assert.equal(r.body.stores.find((s) => s.store === 'bigw').privateWindow, true);
   // Zing: its site sends you to EB Games, already searched there — not in the live sweeps at all.
   assert.equal(r.body.stores.some((s) => s.store === 'zing'), false, 'no Zing');
   assert.equal(mode('demo-kmart'), 'off');
@@ -730,18 +758,20 @@ test("where each store is searched: server first everywhere (saved modes from be
     assert.equal(sw.modeFor(R('amazon')), 'auto');
     assert.equal(sw.modeFor(R('target')), 'off', 'a store switched off stays off');
     assert.equal(sw.modeFor(R('demo-kmart')), saved.stores['demo-kmart'], "the dummy stores keep theirs (they're off unless switched on)");
-    // Saved before server first (version 2): a store set to the server or a browser is searched server first now.
-    env.app.repo.setSetting('sweep', { ...saved, modesVersion: 2, stores: { ...saved.stores, bigw: 'browser', pbandai: 'server' } });
-    assert.deepEqual([sw.modeFor(R('bigw')), sw.modeFor(R('pbandai'))], ['auto', 'auto']);
-    // A store's own default isn't saved, so a better default later reaches everyone.
-    const r = await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'auto', bigw: 'auto' } });
+    // Saved before server first (version 2): a store set to the server or a browser is searched its own default way
+    // now — server first, or BIG W's: an admin's browser (the server can never draw its products).
+    env.app.repo.setSetting('sweep', { ...saved, modesVersion: 2, stores: { ...saved.stores, bigw: 'server', pbandai: 'server' } });
+    assert.deepEqual([sw.modeFor(R('bigw')), sw.modeFor(R('pbandai'))], ['browser', 'auto']);
+    // A store's own default isn't saved, so a better default later reaches everyone (BIG W's admin's browser, since
+    // Oct 2026, reached everyone who'd left it as it was).
+    const r = await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'auto', bigw: 'browser' } });
     assert.equal(r.status, 200, r.text);
     assert.equal(r.body.settings.stores.kmart, undefined);
     assert.equal(r.body.settings.stores.bigw, undefined);
     assert.equal(r.body.settings.modesVersion, 3);
-    // An admin who wants Kmart from a browser after all (or the server only): that sticks.
-    assert.equal((await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'browser', bigw: 'server' } })).body.settings.stores.kmart, 'browser');
-    assert.deepEqual([sw.modeFor(R('kmart')), sw.modeFor(R('bigw'))], ['browser', 'server']);
+    // An admin who wants Kmart from a browser after all (or BIG W server first): that sticks.
+    assert.equal((await boss.put('/api/monitor/sweep', { stores: { ...saved.stores, kmart: 'browser', bigw: 'auto' } })).body.settings.stores.kmart, 'browser');
+    assert.deepEqual([sw.modeFor(R('kmart')), sw.modeFor(R('bigw'))], ['browser', 'auto']);
   } finally {
     env.app.repo.setSetting('sweep', saved);
   }
@@ -1705,6 +1735,48 @@ test("📵 BIG W not watched (no admin's browser searching it — Chrome closed,
     assert.ok(dms().some((m) => /BIG W \(dummy store\) is being watched again/.test(m)));
   }).finally(() => { sw.running = false; });
   env.app.repo.updateUser(boss.user.id, { discord_id: null });
+});
+
+test("🧾 a BIG W search with no products says what BIG W's page said: no results for that search (a note on it, never the store's state) — or results it hadn't drawn yet (said as that, no scene set, read again at the usual pace)", async () => {
+  await asBigwBrowser(async (admin) => {
+    const st = sw.stat('demo-bigw');
+    const card = () => sw.live().stores.find((s) => s.id === 'demo-bigw');
+    const send = async (extra, keyword = 'one piece') => {
+      const r = await admin.call('POST', '/api/ext/sweeps', { results: [{ store: 'demo-bigw', keyword, page: 1, ok: true, status: 200, ms: 3000, products: [], problem: 'empty', ...extra }] });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      return r.body.results[0];
+    };
+    // "No results for …" on the page: BIG W's answer for that search — an answer, the store working. A note on it.
+    let r = await send({ none: true, stated: null });
+    assert.equal(r.ok, true);
+    assert.equal(r.error, 'BIG W (dummy store) has no results for "one piece"');
+    assert.equal(card().fails, 0);
+    assert.equal(card().lastError, '', "not the store's problem");
+    assert.equal(card().lastNote, 'BIG W (dummy store) has no results for "one piece"');
+    // An extension before 1.32.0 doesn't say what the page said: that nothing showed on it — no more than that.
+    r = await send({});
+    assert.equal(r.error, `No products showed on BIG W (dummy store)'s page for "one piece"`);
+    // "57 results" on the page, none of them drawn yet when it was read: not "no products" — said as it is; not an
+    // answer (that search's scene and what it found stand), and read again at the usual pace (BIG W turned nobody away).
+    await bigwSearch(admin, [bigwTile('6099601', 'Pokemon TCG: Drawn Tin', true, 25)]);
+    const row = () => env.app.db.get("SELECT * FROM sweep_terms WHERE store = 'demo-bigw' AND keyword = 'pokemon' AND page = 1");
+    const before = row();
+    r = await send({ problem: 'unread', stated: 57, none: false }, 'pokemon');
+    assert.equal(r.ok, false);
+    assert.equal(r.error, `BIG W (dummy store)'s page said 57 results for "pokemon", but none were on it yet when Mugibot read it — it's read again next round`);
+    assert.equal(card().status, 'retrying');
+    assert.equal(card().lastError, r.error);
+    assert.equal(card().lastNote, '');
+    assert.deepEqual([row().baseline_at, row().found, row().last_ok_at], [before.baseline_at, before.found, before.last_ok_at]);
+    assert.equal(sw.waitFor({ ...st, slowUntil: 0, retryAt: 0 }, 20000), 20000, 'its usual pace');
+    assert.equal(sw.waitFor({ ...st, slowUntil: 0, retryAt: 0, failKind: 'failed' }, 20000), 40000, '(a store that failed backs off)');
+    // Members see it too (it doesn't say where searches come from).
+    assert.equal((await ash.get('/api/monitor/live')).body.stores.find((s) => s.id === 'demo-bigw').lastError, r.error);
+    // Drawn next round: answering, nothing to show.
+    r = await bigwSearch(admin, [bigwTile('6099601', 'Pokemon TCG: Drawn Tin', true, 25)]);
+    assert.equal(r.ok, true);
+    assert.deepEqual([card().fails, card().lastError, card().lastNote], [0, '', '']);
+  });
 });
 
 test('the keywords: Pokémon, One Piece, Riftbound and Gundam by default — added to a list saved before them, and left off once an admin takes them off', async () => {

@@ -62,8 +62,10 @@ async function browserRead(id, keyword = 'pokemon') {
   return sw.browserResults(admin, [{ store: id, keyword: t.keyword || keyword, page: t.page, ok: true, status: 200, ms: 250, products: parsed.products }]);
 }
 
-test("every store is server first unless an admin says otherwise; the dummy stores' copies are off", () => {
-  for (const id of ['target', 'kmart', 'bigw', 'amazon', 'ebgames', 'pbandai', 'pokemoncenter', 'jbhifi']) assert.equal(sw.defaultMode(R(id)), 'auto', id);
+test("every store is server first unless an admin says otherwise (BIG W: an admin's browser); the dummy stores' copies are off", () => {
+  for (const id of ['target', 'kmart', 'amazon', 'ebgames', 'pbandai', 'pokemoncenter', 'jbhifi']) assert.equal(sw.defaultMode(R(id)), 'auto', id);
+  // BIG W: an admin's browser (its private window) — the server can never draw its products.
+  assert.equal(sw.defaultMode(R('bigw')), 'browser');
   assert.equal(sw.defaultMode(R('zing')), 'off');
   assert.equal(sw.modeFor(R('zing')), 'off', "Zing's site sends you to EB Games: never searched, whatever was saved");
   assert.equal(sw.defaultMode(R('demo-kmart')), 'off');

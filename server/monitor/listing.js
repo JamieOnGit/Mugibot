@@ -747,8 +747,56 @@ function tiles(doc, ctx) {
   return out;
 }
 
+// What a search page says about its results, in its own words: how many ("57 results", "1–48 of 57 results") or
+// that there are none ("0 results", "No results for …", "did not return any results", "We couldn't find any …").
+// (Not "0 items": that's a cart's badge on every page.)
+const SAID_OF_RE = /\bof\s+(\d{1,3}(?:,\d{3})+|\d+)\s+(?:results?|products?)\b/i;
+const SAID_COUNT_RE = /(?:^|[^\w$.,/-])(\d{1,3}(?:,\d{3})+|\d+)\s+(?:search\s+)?(?:results?|matches)\b/i;
+const SAID_NONE_RE = /\b(?:0|no|zero)\s+(?:matching\s+)?(?:search\s+)?results?\b|\bno\s+(?:products|matches)\s+(?:were\s+)?found\b|\bdid(?:n['’]?t| not)\s+(?:return|match|find)\s+any|\b(?:could(?:n['’]?t| not)|can(?:no|['’])t|were unable to)\s+find\s+(?:any|anything)\b|\bnothing\s+(?:matched|matches|found)\b/i;
+
+/** What a search page's text says about its results: { stated: how many it says it has (null: it doesn't say), none }. */
+export function searchSays(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').slice(0, 20000);
+  const m = SAID_OF_RE.exec(t) || SAID_COUNT_RE.exec(t);
+  const stated = m ? Number(m[1].replace(/,/g, '')) : null;
+  return { stated, none: stated === 0 || (!stated && SAID_NONE_RE.test(t)) };
+}
+
+// (The keys a store's own search data gives its number of results under: totalResults, nbHits…)
+const COUNT_KEYS = ['totalResults', 'totalNumberOfResults', 'numberOfResults', 'resultCount', 'resultsCount', 'totalHits', 'nbHits', 'numFound', 'totalProducts', 'totalNumProducts', 'totalProductCount', 'productCount', 'total_results'];
+
+function countIn(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 8) return null;
+  if (Array.isArray(node)) {
+    for (const n of node.slice(0, 50)) { const c = countIn(n, depth + 1); if (c !== null) return c; }
+    return null;
+  }
+  for (const k of COUNT_KEYS) {
+    const v = typeof node[k] === 'string' && /^\d+$/.test(node[k]) ? Number(node[k]) : node[k];
+    if (Number.isInteger(v) && v >= 0) return v;
+  }
+  for (const v of Object.values(node)) { const c = v && typeof v === 'object' ? countIn(v, depth + 1) : null; if (c !== null) return c; }
+  return null;
+}
+
+/** The page's own words (not its header, menus or footer: a cart's "0 items", a menu's "Results"). */
+function pageWords(doc) {
+  const parts = [];
+  const rec = (n) => {
+    if (n.type === 3) { parts.push(n.text); return; }
+    if (SKIP_TEXT.has(n.tag) || ['header', 'nav', 'footer'].includes(n.tag)) return;
+    for (const c of n.children) rec(c);
+    parts.push(' ');
+  };
+  rec(doc);
+  return parts.join('').replace(/\s+/g, ' ').trim();
+}
+
 /**
  * opts: { base (the search page's address), productPath (RegExp), skuFromPath (RegExp), storeName }
+ * No products found: problem 'empty' — or 'unread' where the page (or the search data it downloaded) says it has
+ * some (stated: how many), so a page whose products hadn't been drawn yet isn't taken for a search with none.
+ * none: the page says in so many words that the search found nothing.
  */
 export function parseGeneric(html, { base, productPath = null, skuFromPath = null, storeName = '' } = {}) {
   const problem = pageProblem(html);
@@ -781,7 +829,19 @@ export function parseGeneric(html, { base, productPath = null, skuFromPath = nul
     prev.marketplace = prev.marketplace || p.marketplace;
     prev.preorder = prev.preorder || p.preorder;
   }
-  return { products: [...map.values()].slice(0, 300), problem: map.size ? null : 'empty' };
+  if (map.size) return { products: [...map.values()].slice(0, 300), problem: null };
+  // Nothing read: what the page says it has — in its words, or in the search data it downloaded (the extension's copy of it).
+  const says = searchSays(pageWords(doc));
+  const data = findAll(doc, (n) => n.tag === 'script' && n.attrs['data-mugibot-sweep'] !== undefined && n.text);
+  let stated = says.stated;
+  if (stated === null) {
+    for (const s of data) {
+      try { stated = countIn(JSON.parse(s.text)); } catch { /* not JSON */ }
+      if (stated !== null) break;
+    }
+  }
+  const none = says.none || stated === 0;
+  return { products: [], problem: !none && stated > 0 ? 'unread' : 'empty', stated, none };
 }
 
 export const PARSERS = { woo: parseWoo, magento: parseMagento, citybeach: parseCityBeach, target: parseTarget, 'shopify-suggest': parseShopifySuggest, shopify: parseShopifyProducts, constructor: parseConstructor, amazon: parseAmazon, ebgames: parseEbGames, crystal: parseCrystal, pbandai: parsePBandai, generic: parseGeneric };
