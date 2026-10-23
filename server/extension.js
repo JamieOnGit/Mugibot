@@ -74,6 +74,9 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // chosen, or its drop-down's, or its list's; said on the run and in the order's DM. Your delivery details can say
 // home delivery only (stopped for you instead). A product page whose only buy button adds it for Click & Collect has
 // it pressed. Your delivery details read afresh as each checkout starts.
+// 1.32.0: a search page Mugibot couldn't see any products on (BIG W's) says what the page itself said — "No results
+// for …" (and it stops waiting there at once, not 15 s later) or "57 results" that hadn't been drawn yet when it was
+// read — so a search with none and a page not drawn yet are told apart. Nothing else changed in how checkouts go.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):

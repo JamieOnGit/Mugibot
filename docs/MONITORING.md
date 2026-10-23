@@ -24,14 +24,19 @@ same products, the same alerts, the same ⚡ Buy.
 
 ## 1. Where each store is searched from
 
-**Server first** is every store's default: Mugibot's server searches it, and
-an admin's browser (the extension) only stands in while the server can't:
+**Server first** is every store's default but BIG W's: Mugibot's server searches it, and
+an admin's browser (the extension) only stands in while the server can't.
+**BIG W** is searched from **an admin's browser** by default (October 2026), in a
+private window of its own where Mugibot's allowed in Incognito: the server can never
+draw its products, so its tries only ever handed BIG W over to the browser again — and
+the console said **Waiting** each time it did (after every restart, too). The server
+never searches BIG W now unless an admin sets it to **Server first** or **Server only**.
 
 - **Hand-over.** The store refuses the server, or its search fails, **3 times
-  in a row** — once, at a store known to turn servers away (BIG W, Amazon, EB
+  in a row** — once, at a store known to turn servers away (Amazon, EB
   Games, Pokémon Center, Premium Bandai, The Gamesmen). Or the server's read has **no
   products** where there are some: a page that only draws them once it's open
-  (BIG W's, Pokémon Center's), or a search an admin's browser found products
+  (Pokémon Center's), or a search an admin's browser found products
   for in the last hour. That empty read sets no scene, so the browser's first
   look doesn't turn everything into a "new drop". From then on the store's
   searches go to admins' browsers, at the browser pace (15 s, or the store's own
@@ -154,6 +159,25 @@ browsers, so the extension keeps it going for as long as the browser is open:
   round a refusal. After 20 minutes with no BIG W finds,
   every admin gets the "BIG W isn't being watched" DM, as above.
 
+**BIG W from an admin's browser by default, and what an empty page said**
+(October 2026, extension **1.32.0**). BIG W's line on the live monitor kept saying
+**Waiting · No products on the page** while its searches were finding plenty:
+
+- **Admin's browser by default.** BIG W was server first, but the server can never
+  draw its products, so each of its tries (and every restart) handed BIG W back to
+  the browser and showed **Waiting** until the browser's next search. Now it's
+  searched from an admin's browser (its private window, where allowed) from the
+  start. An admin can still pick **Server first** in Monitor → Settings → Stores;
+  BIG W left as it was gets the new default.
+- **One search's empty answer isn't the store's state.** A search that found nothing
+  (a key phrase BIG W doesn't sell) is a note on that search — its details' **last
+  search**, and **Every search** — and the store's line says **Searching**, or why
+  it's **Waiting** ("Waiting for an admin's browser"), never "No products on the page".
+- **What the page said.** With nothing to read, the extension says what BIG W's page
+  said: **No results** (BIG W's answer — and it stops waiting there at once, not after
+  15 s) or **57 results** that hadn't been drawn yet (said as that, read again next
+  round at the usual pace, nothing taken for new).
+
 BIG W is watched only while an admin's computer is on with Chrome open and the
 extension connected. Two admins' browsers in different places read its product
 pages twice as often, and keep it watched if one is turned away.
@@ -178,7 +202,7 @@ stick.
 | Kmart | Server first | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online. Its loop reads **every trading card it sells in one list** (its Trading Cards browse, newest first, 200 to a page — 177 products in October 2026): each product every few seconds, whatever the keywords. A VIP or drop watch's words are searched on their own, across the whole store |
 | The Games Cube | Server first | Its search pages (CrystalCommerce, made on the server): a tile per product with each option's stock and price, up to 4 pages of 25–30. Pre-orders are the ones in its "… Pre-Orders" categories. The cards it buys from customers (its buylist) are left out |
 | Gamerholic | Server first | Its **newest 100 products** (Shopify's product list, newest first, every option's stock), for every keyword: Gamerholic lists hundreds of products a day, so a new drop shows up there the moment it's listed. At most one read every 15 seconds |
-| BIG W | Server first: **an admin's browser** (the extension) stands in, as the server can't draw its products | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list — or, if the page has downloaded its products but not drawn them (pages in a minimised window may not), the product data it downloaded |
+| BIG W | **An admin's browser** (the extension), in a private window of its own where Mugibot's allowed in Incognito — its default; the server never, as it can't draw BIG W's products | BIG W's search page, **opened** in a minimised window of the extension's own and read once the page has built its product list — or, if the page has downloaded its products but not drawn them (pages in a minimised window may not), the product data it downloaded. A page with no products to read says what BIG W's page said (1.32.0): **No results**, or **57 results** not drawn yet (see below) |
 | Amazon AU | Server first: **an admin's browser** (the extension, 1.11.0 or later) stands in at the first refusal | Amazon's search page, newest first (2 pages of 48), with "tcg" added to each keyword — asked for from inside an Amazon page in the extension's window. Amazon turns Mugibot's server away (**HTTP 503**, "An error occurred"), so nothing came through from the server. At most one search every 20 seconds |
 | EB Games | Server first: **an admin's browser** (the extension) stands in at the first refusal | EB Games' own search data (the JSON its search page asks for: every product's code, price, picture, stock, pre-order and release date), newest first, 2 pages — asked for from inside an EB Games page in the extension's window |
 | Zing | Not searched | zingpopculture.com.au now sends every visitor to EB Games, so EB Games' sweeps cover its range. It's no longer in the live sweeps at all (switched on, an admin's browser only ever got "couldn't reach the store") |
@@ -857,7 +881,10 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | **This browser couldn't open the store's page (…)** | The reason in brackets is Chrome's. "Cannot access contents of the page": the extension is too old for that store (update it). Anything else: the store's page didn't load in the sweep window; it tries again on its own. |
 | **The page didn't have the product list Mugibot reads** (it was “…”, … KB, … product links) | The store changed its search page, or sent something else: the brackets say what the page was (its title, size and — from an admin's browser, 1.19.1 or later — how many product links it had). Send that line and a copy of the page (open the search in Chrome, wait for the products, right-click → Save as → Webpage, HTML only) so the reader can be updated. |
 | **The store showed its bot check in the admin's browser** (Pokémon Center's "Request unsuccessful" / its security check) | The store wants a person to pass its check in that browser. Open the store in the admin's Chrome (a normal window), pass the check yourself, then press **↻ Reset** on the store. Mugibot never answers a bot check; it backs off and tries again later. If it comes back every time, the store is turning that connection away: try again later, or from another admin's browser. |
-| **No products on the page** for a store and keyword | The store has nothing for that keyword, or its page builds the list later with JavaScript (that's why Kmart and BIG W showed 0 before 1.6.0). Check **Every search**: if it stays 0 for a keyword the store does sell, send a copy of the page. |
+| **BIG W has no results for "…"** (a store's details, **last search**, or **Every search**) | The store's own page said that search found nothing ("No results" — often a drop watch's or key phrase's words it doesn't sell yet). It's that one search's answer, not a problem with the store: the store's line still says **Searching**. Nothing to do. |
+| **BIG W's page said 57 results for "…", but none were on it yet when Mugibot read it** (**Retrying**) | BIG W's page said it had results, but hadn't drawn them in the 15 s it gets (a page in a minimised window may not). It's read again next round at the usual pace — no backing off, and that search's scene isn't reset, so nothing is taken for "new". If it keeps happening, leave the sweep window minimised but not closed, or press **↻ Reset** on BIG W. If it never stops, send a copy of BIG W's search page. |
+| **No products showed on BIG W's page for "…"** | The page said neither that it had results nor that it had none — from an extension older than **1.32.0**, which doesn't say. Update the extension in the admin's browser. |
+| **No products on the page** for a store and keyword (before October 2026) | What the line above says now, for every store read this way. Check **Every search**: if it stays 0 for a keyword the store does sell, send a copy of the page. |
 | A product keeps pinging that you don't want | Open it (the **Price history** button in the Discord post) and press **🚫 Blacklist**, or add it in **Admin → Blacklist** (by SKU or product link, or a whole store). |
 | "In stock" pings for something that never sold out | Fixed in 1.6.0: when a store refused the checks for a while and then answered again, that counted as a restock. Now it's compared with the last check that could read the page. |
 | A Target product shows **Out of stock** but it's on the site | It was missing from Target's results for 6 minutes. The next sweep that finds it puts it back (and alerts a restock). If it keeps happening, the keyword has more results than Mugibot reads: use a more specific keyword. |

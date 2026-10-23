@@ -35,7 +35,9 @@ export default {
   // to it (followNext: its "Next", rel="next"; nothing guessed about BIG W's addresses), only where it has one.
   // (privateWindow: read in a private window of its own in Mugibot's browsers — apart from your own BIG W visits and
   //  checkouts, so its Akamai taking Mugibot's reading for a bot never turns you away. extension 1.30.0.)
-  sweep: { from: 'browser', parser: 'generic', render: true, privateWindow: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20, pages: 3, followNext: true },
+  // (mode: searched from an admin's browser by default — not server first: the server can never draw BIG W's products,
+  //  so its tries only ever handed over to the browser, and the store showed "Waiting" each time. Oct 2026.)
+  sweep: { from: 'browser', mode: 'browser', parser: 'generic', render: true, privateWindow: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20, pages: 3, followNext: true },
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
   account: { signIn: '' },

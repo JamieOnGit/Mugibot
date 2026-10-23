@@ -37,7 +37,7 @@ import './vault.js';
 import './logins.js';
 import { extractProduct, extractProductLinks } from './lib/extract.js';
 import { classify, gateOnPage } from './lib/gate.js';
-import { parseListing, siteAnswer } from './lib/listing.js';
+import { parseListing, siteAnswer, searchSays } from './lib/listing.js';
 
 const CONFIG = globalThis.MGB_CONFIG;
 const Vault = globalThis.MGBVault;
@@ -986,7 +986,10 @@ function readSweepPage(path) {
   const nextLink = document.querySelector('link[rel~="next"][href], a[rel~="next"][href]')
     || [...document.querySelectorAll('a[href]')].find((a) => /^\s*next(\s+page)?\s*[›»>→]?\s*$/i.test(a.textContent || '') || /^\s*next(\s+page)?\s*$/i.test(a.getAttribute('aria-label') || ''));
   const next = nextLink ? String(nextLink.href || '') : '';
-  return { products, data, challenge, denied, next, url: location.href, title: document.title, html: document.documentElement.outerHTML };
+  // (What the page says about its results — "57 results", "No results for …": its own words, not its header's.)
+  const main = document.querySelector('main, [role="main"]') || document.body;
+  const said = String((main && main.innerText) || '').slice(0, 20000);
+  return { products, data, challenge, denied, next, said, ready: document.readyState === 'complete', url: location.href, title: document.title, html: document.documentElement.outerHTML };
 }
 
 /** Runs in the store's page: asks the store for something, the way the page itself does (with the headers its own code adds). */
@@ -1015,7 +1018,7 @@ async function renderedPage(t) {
   let page = null;
   let failed = null;
   let dataAt = 0;
-  for (let seen = 0; ;) {
+  for (let seen = 0, noneSince = 0; ;) {
     // The page can be changing under us: a store's bot check (Imperva's, F5's) reloads it once it's
     // satisfied. Reading it at that moment fails: look again a moment later.
     const now = await inPage(tabId, readSweepPage, [path]).then((x) => { failed = null; return x; }, (e) => { failed = e; return null; });
@@ -1024,6 +1027,12 @@ async function renderedPage(t) {
     // Products on the page: one more look a moment later, so their prices have filled in too.
     // A bot check's page: wait (it may let the page through), and say so if it never does.
     if (now && now.products) { if (seen++) break; } else if (Date.now() > until) break;
+    // The page, loaded, saying the search found nothing ("No results for …") for 3 s on end: that's its answer — not 15 s
+    // more. (Not the moment it says "0 results": a page can say that while its search is still on its way.)
+    if (now && now.ready && !now.products && !now.challenge && searchSays(now.said).none) {
+      if (!noneSince) noneSince = Date.now();
+      else if (Date.now() - noneSince >= 3000) break;
+    } else noneSince = 0;
     // The page downloaded its product data but hasn't drawn it (a page in a hidden window
     // may never draw it): a moment longer for the drawing, then read the data instead.
     if (page && !page.products && page.data.length) {
@@ -1133,7 +1142,9 @@ async function sweepOne(t) {
     const seen = problem === 'layout' ? { title: String(page.title || '').slice(0, 200), bytes: page.html.length, links: page.products } : undefined;
     // (next: the page's own link to its next page of results — BIG W's later pages are read where it goes.)
     // (privateWindow: whether it was read in its private window — Mugibot allowed in Incognito here — or the ordinary one.)
-    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, next: String(page.next || '').slice(0, 2000), products: parsed.products.slice(0, 300), ...(t.privateWindow ? { privateWindow: page.incognito } : {}) };
+    // (stated, none: nothing read — what the page said it had: "57 results" that hadn't been drawn, or "No results for …".)
+    const said = parsed.products.length ? {} : { stated: parsed.stated ?? null, none: !!parsed.none };
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, ...said, next: String(page.next || '').slice(0, 2000), products: parsed.products.slice(0, 300), ...(t.privateWindow ? { privateWindow: page.incognito } : {}) };
   }
   if (t.inPage) {
     let res;

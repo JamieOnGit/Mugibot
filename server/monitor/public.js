@@ -19,7 +19,7 @@ export function publicStore(s) {
   return {
     id: s.id, name: s.name, status: waiting ? 'starting' : s.status,
     searches: s.searches, fails: s.fails, lastAt: s.lastAt, lastOkAt: s.lastOkAt, lastMs: s.lastMs,
-    lastError: waiting ? '' : publicError(s.lastError), nextAt: waiting ? null : s.nextAt, slowedUntil: s.slowedUntil,
+    lastError: waiting ? '' : publicError(s.lastError), lastNote: waiting ? '' : publicError(s.lastNote), nextAt: waiting ? null : s.nextAt, slowedUntil: s.slowedUntil,
     retryAt: s.retryAt, resetAt: s.resetAt, latency: s.latency,
   };
 }

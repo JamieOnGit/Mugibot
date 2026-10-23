@@ -745,6 +745,9 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
 
   const searchHits = (shop, q) => {
     const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    // (noResultsFor: a search with those words in it finds nothing — a store with nothing for them.)
+    const none = shopOf(shop).noResultsFor;
+    if (none && String(q || '').toLowerCase().includes(none)) return [];
     return shopOf(shop).products.filter((x) => x.listed && words.some((w) => slugify(x.name).includes(slugify(w)) || x.sku === w));
   };
   // Search results the way stores show them: a tile per product, with its price and an add / sold out button.
@@ -794,16 +797,24 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
       : `<div class="no-results"><p>Sorry, your search "${esc(q)}" did not return any results.</p></div>`);
   }
 
-  // A search page whose products are only filled in by its own code once it's open (BIG W's real one).
+  // A search page whose products are only filled in by its own code once it's open (BIG W's real one), with how many
+  // there are above them ("57 results", as BIG W's says) — or "No results". clientSearch 'data': downloaded, not drawn;
+  // 'count': its count drawn, its products never (a page in a hidden window that never draws its grid).
   function clientSearchPage(shop, q, pageNo = 1) {
     const { next } = paged(shop, q, pageNo);
+    const how = shopOf(shop).clientSearch;
+    const count = searchHits(shop, q).length;
+    if (how === 'count') {
+      return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1><div id="results"><p>Loading…</p></div>${next}
+        <script>setTimeout(() => { document.getElementById('results').innerHTML = ${JSON.stringify(`<p class="result-count">${count} results</p><div class="product-grid"></div>`)}; }, 400);</script>`);
+    }
     return page(shop, `Search: ${q}`, `<h1>Results for "${esc(q)}"</h1><div id="results"><p>Loading…</p></div>${next}
       <script>
         setTimeout(async () => {
           const d = await (await fetch('/${shop}/api/search?q=' + encodeURIComponent(${JSON.stringify(q)}) + '&page=${Math.max(1, Number(pageNo) || 1)}')).json();
-          if (${JSON.stringify(shopOf(shop).clientSearch === 'data')}) return; // downloaded, not drawn yet (like a page in a hidden window)
-          document.getElementById('results').innerHTML = d.products.map((x) => '<article class="product-card"><a href="' + x.url + '"><img src="' + x.image + '" alt="">' + x.name.replace(/</g, '&lt;') + '</a>'
-            + '<div class="price">$' + x.price.toFixed(2) + '</div>' + (x.status === 'in_stock' ? '<button type="button">Add to cart</button>' : '<button type="button" disabled>Out of stock</button>') + '</article>').join('') || '<p>No results</p>';
+          if (${JSON.stringify(how === 'data')}) return; // downloaded, not drawn yet (like a page in a hidden window)
+          document.getElementById('results').innerHTML = (d.products.length ? '<p class="result-count">${count} results</p>' : '') + (d.products.map((x) => '<article class="product-card"><a href="' + x.url + '"><img src="' + x.image + '" alt="">' + x.name.replace(/</g, '&lt;') + '</a>'
+            + '<div class="price">$' + x.price.toFixed(2) + '</div>' + (x.status === 'in_stock' ? '<button type="button">Add to cart</button>' : '<button type="button" disabled>Out of stock</button>') + '</article>').join('') || '<p>No results</p>');
         }, 400);
       </script>`);
   }

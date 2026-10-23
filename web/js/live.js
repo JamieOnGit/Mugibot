@@ -202,6 +202,8 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
         L.admin && s.backup ? h('div', { class: 'r' }, h('span', {}, 'server'), h('b', {}, `refused since ${clockOf(s.backup.since - L.skew)} · ${s.backup.retryAt ? `tries again at ${clockOf(s.backup.retryAt - L.skew)}` : 'trying again now'}`)) : null,
         s.retryAt ? h('div', { class: 'r' }, h('span', {}, 'store asked'), h('b', {}, `wait until ${clockOf(s.retryAt - L.skew)}`)) : null,
         s.fails || s.lastError ? h('div', { class: 'r' }, h('span', {}, s.fails ? 'problem' : 'note'), h('b', {}, s.lastError || `${s.fails} failed`)) : null,
+        // (Its last search found nothing: what it said — "BIG W has no results for …".)
+        !s.fails && s.lastNote ? h('div', { class: 'r' }, h('span', {}, 'last search'), h('b', {}, s.lastNote)) : null,
         waiting && !/extension/i.test(s.lastError || '') ? h('div', { class: 'r' }, h('span', {}, ''), h('b', {}, 'Keep Chrome open with the extension connected to an admin account')) : null,
         // A store that keeps refusing the server (set to the server only): server first lets an
         // admin's browser stand in while it's refused.
@@ -856,17 +858,21 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
           s.fails = 0;
           s.lastOkAt = ev.at;
           if (typeof ev.ms === 'number') s.lastMs = ev.ms;
-          s.lastError = ev.error || '';
+          // (An answer: no problem. What this search said when it found nothing is a note on it, not the store's state.)
+          s.lastError = '';
+          s.lastNote = ev.error || '';
           s.status = s.slowedUntil && s.slowedUntil > serverNow() ? 'slowed' : 'ok';
         } else {
           s.fails += 1;
           s.lastError = ev.error || 'Failed';
+          s.lastNote = '';
           s.status = 'retrying';
         }
-        // When the next search comes: the set pace, slower after a refusal, doubling after each failure.
+        // When the next search comes: the set pace, slower after a refusal, doubling after each failure (not after a
+        // page that hadn't drawn its results yet: the usual pace).
         const every = ((ev.source === 'browser' || s.source === 'browser' ? L.settings.browserEverySeconds : L.settings.everySeconds) || 5) * 1000;
         const slow = s.slowedUntil && s.slowedUntil > serverNow() ? 3 : 1;
-        s.nextAt = ev.at + (ev.type === 'hb' ? every * slow : Math.min(15 * 60 * 1000, every * 2 ** Math.min(s.fails, 10)));
+        s.nextAt = ev.at + (ev.type === 'hb' || ev.unread ? every * slow : Math.min(15 * 60 * 1000, every * 2 ** Math.min(s.fails, 10)));
         s.latency = [...(s.latency || []), { at: ev.at, ms: ev.ms, ok: ev.type === 'hb' }].filter((p) => p.at >= serverNow() - 2 * CHART_WINDOW).slice(-300);
       } else {
         refreshSoon(); // a store that just started being swept
