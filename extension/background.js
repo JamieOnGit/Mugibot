@@ -620,7 +620,7 @@ function hasSku(url, sku) {
 async function renderCheck(c, gate) {
   let tab;
   try {
-    tab = await sweepTab(`check:${c.store}`);
+    tab = await sweepTab(`check:${c.store}`, { privateWindow: !!c.privateWindow });
     await openIn(tab.id, c.url, gate || null);
   } catch (e) {
     if (e instanceof GateHeld) return { id: c.id, gate: e.gate };
@@ -815,7 +815,7 @@ async function markDenied(store) {
 
 async function sweepWindow() {
   const { [SWEEP_WINDOW]: saved } = await chrome.storage.session.get(SWEEP_WINDOW);
-  return saved && saved.tabs ? saved : { windowId: null, tabs: {} };
+  return saved && saved.tabs ? { privateWindowId: null, ...saved } : { windowId: null, privateWindowId: null, tabs: {} };
 }
 
 async function isSweepTab(tabId) {
@@ -823,36 +823,76 @@ async function isSweepTab(tabId) {
 }
 
 let sweepTabLock = Promise.resolve();
-/** The store's tab in the sweep window (opened if needed) — one at a time: searches at several stores start side by side. */
-function sweepTab(store) {
-  const next = sweepTabLock.then(() => openSweepTab(store));
+/**
+ * The store's tab in the sweep window (opened if needed) — one at a time: searches at several stores start side by side.
+ * privateWindow (BIG W's): in a minimised private (Incognito) window of its own instead — see privateAllowed().
+ */
+function sweepTab(store, { privateWindow = false } = {}) {
+  const next = sweepTabLock.then(() => openSweepTab(store, privateWindow));
   sweepTabLock = next.catch(() => null);
   return next;
 }
 
-async function openSweepTab(store) {
+// A store read from a private (Incognito) window of its own (BIG W's: sweep.privateWindow): its searches and page
+// reads keep their own cookies, apart from your own visits to it — so its bot protection taking Mugibot's reading for
+// a bot never turns you away there, nor your checkouts. Only where you've allowed Mugibot in Incognito
+// (chrome://extensions → Mugibot → Details → Allow in Incognito); otherwise the ordinary sweep window, as before.
+// (Its "Access Denied" is waited out the same either way — half an hour, the private window kept as it is: never
+// a fresh private window to get round it.)
+let privateOff = 0; // (Chrome wouldn't open one — Incognito switched off on this computer: tried again in an hour)
+async function privateAllowed() {
+  if (Date.now() < privateOff) return false;
+  return !!(await chrome.extension.isAllowedIncognitoAccess().catch(() => false));
+}
+
+async function openSweepTab(store, privateWindow = false) {
   const saved = await sweepWindow();
+  const priv = privateWindow && (await privateAllowed());
   if (saved.tabs[store] !== undefined) {
     try {
       const tab = await chrome.tabs.get(saved.tabs[store]);
-      if (tab.autoDiscardable !== false) await keepTab(tab.id);
-      return tab;
+      // (In the window it should be in: a store moved to its private window gets a new tab there.)
+      if (!!tab.incognito === priv) {
+        if (tab.autoDiscardable !== false) await keepTab(tab.id);
+        return tab;
+      }
+      await chrome.tabs.remove(tab.id).catch(() => null);
     } catch { /* closed */ }
   }
   let tab = null;
-  if (saved.windowId !== null) {
+  if (priv) tab = await privateTab(saved);
+  if (!tab && saved.windowId !== null) {
     try { tab = await chrome.tabs.create({ windowId: saved.windowId, url: 'about:blank', active: false }); } catch { /* the window was closed */ }
   }
   if (!tab) {
     const win = await chrome.windows.create({ url: 'about:blank', focused: false, state: 'minimized' });
     saved.windowId = win.id;
-    saved.tabs = {};
+    for (const [k, id] of Object.entries(saved.tabs)) if (!(await chrome.tabs.get(id).then((t) => t.incognito, () => false))) delete saved.tabs[k];
     tab = win.tabs[0];
   }
   saved.tabs[store] = tab.id;
   await chrome.storage.session.set({ [SWEEP_WINDOW]: saved });
   await keepTab(tab.id);
   return tab;
+}
+
+/**
+ * A tab in the private sweep window (opened, minimised, if needed: its first tab left blank, so closing a store's tab
+ * never closes the window — and its cookies stay as they are). null if Chrome won't open one.
+ */
+async function privateTab(saved) {
+  if (saved.privateWindowId !== null) {
+    try { return await chrome.tabs.create({ windowId: saved.privateWindowId, url: 'about:blank', active: false }); } catch { /* the window was closed */ }
+  }
+  try {
+    const win = await chrome.windows.create({ incognito: true, url: 'about:blank', focused: false, state: 'minimized' });
+    saved.privateWindowId = win.id;
+    for (const [k, id] of Object.entries(saved.tabs)) if (await chrome.tabs.get(id).then((t) => t.incognito, () => true)) delete saved.tabs[k];
+    return await chrome.tabs.create({ windowId: win.id, url: 'about:blank', active: false });
+  } catch {
+    privateOff = Date.now() + 60 * 60 * 1000;
+    return null;
+  }
 }
 
 /** A sweep tab Chrome never throws out to save memory (its Memory Saver): a store searched from here all day long. */
@@ -959,7 +999,7 @@ const inPage = (tabId, func, args) => chrome.scripting.executeScript({ target: {
   .then(([res]) => res && res.result);
 
 async function renderedPage(t) {
-  const { id: tabId } = await sweepTab(t.store);
+  const { id: tabId, incognito } = await sweepTab(t.store, { privateWindow: !!t.privateWindow });
   await openIn(tabId, t.url, t.gate);
   const path = t.productPath ? [t.productPath.re, t.productPath.f || ''] : null;
   // (Longer than the page needs: a store's bot check may hold it up for a few seconds first.)
@@ -994,12 +1034,13 @@ async function renderedPage(t) {
     const json = got.filter((g) => g.status === 200 && /^\s*[[{]/.test(g.text || ''));
     page.html += json.map((g) => `<script type="application/json" data-mugibot-sweep>${g.text.replace(/<\//g, '<\\/')}</script>`).join('');
   }
+  page.incognito = !!incognito;
   return page;
 }
 
 /** The store's own search JSON, asked for from inside a page of the store (opened first when needed). */
 async function askFromStorePage(t) {
-  const tab = await sweepTab(t.store);
+  const tab = await sweepTab(t.store, { privateWindow: !!t.privateWindow });
   const origin = new URL(t.url).origin;
   const onStore = () => chrome.tabs.get(tab.id).then((x) => String(x.url || '').startsWith(origin)).catch(() => false);
   if (!(await onStore())) await openIn(tab.id, t.pageUrl || origin, t.gate);
@@ -1039,7 +1080,7 @@ async function freshStart(t) {
   await forget;
   if (!t.frontUrl) return;
   if (t.render || t.inPage) {
-    const tab = await sweepTab(t.store);
+    const tab = await sweepTab(t.store, { privateWindow: !!t.privateWindow });
     await openIn(tab.id, t.frontUrl);
   } else {
     await fetch(t.frontUrl, { credentials: 'include', cache: 'no-store' }).catch(() => null);
@@ -1083,7 +1124,8 @@ async function sweepOne(t) {
     // (A page it couldn't read: what it was, for the live monitor — its title, size and product links.)
     const seen = problem === 'layout' ? { title: String(page.title || '').slice(0, 200), bytes: page.html.length, links: page.products } : undefined;
     // (next: the page's own link to its next page of results — BIG W's later pages are read where it goes.)
-    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, next: String(page.next || '').slice(0, 2000), products: parsed.products.slice(0, 300) };
+    // (privateWindow: whether it was read in its private window — Mugibot allowed in Incognito here — or the ordinary one.)
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, next: String(page.next || '').slice(0, 2000), products: parsed.products.slice(0, 300), ...(t.privateWindow ? { privateWindow: page.incognito } : {}) };
   }
   if (t.inPage) {
     let res;
@@ -1169,7 +1211,7 @@ let lastSweepLock = Promise.resolve();
 function noteLastSweep(t, result) {
   lastSweepLock = lastSweepLock.then(async () => {
     const { lastSweeps } = await chrome.storage.local.get('lastSweeps');
-    await chrome.storage.local.set({ lastSweeps: { ...(lastSweeps || {}), [t.store]: { at: Date.now(), name: t.storeName, ok: result.ok, found: (result.products || []).length, status: result.status || 0 } } });
+    await chrome.storage.local.set({ lastSweeps: { ...(lastSweeps || {}), [t.store]: { at: Date.now(), name: t.storeName, ok: result.ok, found: (result.products || []).length, status: result.status || 0, privateWanted: !!t.privateWindow, private: result.privateWindow === true } } });
   }).catch(() => null);
   return lastSweepLock;
 }
@@ -1335,7 +1377,8 @@ async function acoLoop() {
 async function openStoreTab(url, { active = true } = {}) {
   let tab = null;
   const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
-  if (win && win.id !== undefined && !(await isSweepWindow(win.id))) {
+  // (Never into a private window — yours or the sweep's: a checkout needs your own sign-ins and cookies.)
+  if (win && win.id !== undefined && !win.incognito && !(await isSweepWindow(win.id))) {
     tab = await chrome.tabs.create({ windowId: win.id, url, active }).catch(() => null);
     if (tab && active) await chrome.windows.update(win.id, { focused: true, state: win.state === 'minimized' ? 'normal' : undefined }).catch(() => null);
   }
@@ -1531,7 +1574,8 @@ async function stopRuns(ids) {
 }
 
 async function isSweepWindow(windowId) {
-  return (await sweepWindow()).windowId === windowId;
+  const saved = await sweepWindow();
+  return saved.windowId === windowId || saved.privateWindowId === windowId;
 }
 
 // --- several checkouts at once: one at a time at each store -----------------------------------
@@ -2124,7 +2168,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (cur && cur.aco && cur.aco.runId === run.runId) await chrome.storage.session.set({ [key]: { ...cur, expires: Date.now() + PASS_TTL } });
           // (Not on sale yet, between presses: still waiting for the sale, as far as your account's concerned.)
           const body = run.notLive && !run.placing ? { status: 'waiting', reason: 'not_live' } : { status: run.placing ? 'placing' : 'checkout' };
-          if (!run.done && !run.stopped) api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, message: String(msg.message || '').slice(0, 300) }).catch(() => null);
+          // (quiet: a page only watching on for the order after the press — its pass kept good, nothing said.)
+          if (!run.done && !run.stopped && !msg.quiet) api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, { ...body, message: String(msg.message || '').slice(0, 300) }).catch(() => null);
           return { ok: true };
         }
         if (status === 'checkout') {
@@ -2162,6 +2207,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (over) await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...run, done: true } } });
         return res.status === 200 ? { ok: true, over, text: over ? String(res.body.run.message || '') : '' } : { ok: false, status: res.status };
       }
+      case 'bankMark': {
+        // The final button's being pressed in this tab: every frame on the checkout notes what's in it now (its
+        // frames, what it says), so that what the press brings up in any of them — a payment provider's — is seen
+        // as new (bankFrames). Frames the extension may not open (the bank's own) are seen from the one they're in.
+        if (!sender.tab) return null;
+        await chrome.scripting.executeScript({ target: { tabId: sender.tab.id, allFrames: true }, func: () => { if (window.top !== window && typeof MGBChecks !== 'undefined') MGBChecks.markPressed(document); } }).catch(() => null);
+        return { ok: true };
+      }
+      case 'bankFrames': {
+        // After the final button: the bank's check in any frame on the checkout — inside a payment provider's
+        // frame, or one in that — as each frame sees it (MGBChecks.bankShown). The first found, or null. Only for
+        // a tab whose run has pressed it.
+        if (!sender.tab) return null;
+        const pass = sender.frameId === 0 ? await passFor(sender) : ((await checkoutFrame(sender)) || {}).pass;
+        if (!pass || !pass.aco || !pass.aco.placing) return null;
+        const res = await chrome.scripting.executeScript({ target: { tabId: sender.tab.id, allFrames: true }, func: () => (window.top === window || typeof MGBChecks === 'undefined' ? null : MGBChecks.bankShown(document)) }).catch(() => []);
+        return (res || []).map((r) => r && r.result).find(Boolean) || null;
+      }
+      case 'acoGoing': {
+        // After the final button, the store's sending the checkout on to another site (content.js watchAway): where,
+        // for what your account's told if it's still there in a few seconds (bankAway).
+        if (!sender.tab || sender.frameId !== 0) return null;
+        const pass = await passFor(sender);
+        if (!pass || !pass.aco || !pass.aco.placing) return null;
+        await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...pass.aco, awayHost: String(msg.host || '').slice(0, 120) }, expires: awayExpiry(pass.aco) } });
+        bankAwaySoon(sender.tab.id);
+        return { ok: true };
+      }
       case 'acoRetry': {
         // The final button, about to be pressed (again): may it be? Only in a run that's placing the order,
         // hasn't been stopped or ended, and is within the 30 minutes since it was first pressed. Counted, and
@@ -2194,7 +2267,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // (Only its press count and times changed — on the pass as it is now.)
         const cur = (await chrome.storage.session.get(key))[key] || pass;
         // (Pressing on Shop's checkout: not held up in the store's queue — heldUp — whatever it last looked like.)
-        const next = { ...(cur.aco || run), presses: (run.presses || 0) + 1, placing: true, placingAt: run.placingAt || now, away: null };
+        // (page: the checkout it was pressed on — whose store's it is, should the tab go somewhere Mugibot can't see: bankAway.)
+        // (pressAt: this press — a pop-up window the checkout opens is its: bankWindow.)
+        const next = { ...(cur.aco || run), presses: (run.presses || 0) + 1, placing: true, placingAt: run.placingAt || now, pressAt: now, away: null, page: run.page || sender.tab.url || '' };
         await chrome.storage.session.set({ [key]: { ...cur, aco: next, expires: now + PASS_TTL } });
         return { ok: true, n: next.presses, since: next.placingAt };
       }
@@ -2505,7 +2580,93 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.url) turnMoved(tabId, info.url).catch(() => null);
+  if (info.status === 'complete') bankAwaySoon(tabId);
 });
+
+// A window the checkout opened itself after the final button (its own window.open, not Mugibot's): the bank's
+// check in a window of its own, most likely — still open a few seconds on (one that closes by itself passed by
+// itself), and your account's told at once, as for a page. Its checkout: the tab Chrome names as its opener (a tab)
+// — or, a pop-up window (Chrome names no opener for those), the checkout whose final button was pressed last, in
+// the 2 minutes before it opened (never a tab or window you open yourself: those aren't pop-ups). (Chrome blocks a
+// pop-up a checkout opens without a person's click unless pop-ups are allowed for that store: docs/AUTO-CHECKOUT.md.)
+chrome.tabs.onCreated.addListener((tab) => {
+  const at = Date.now();
+  setTimeout(() => { bankWindow(tab, at).catch(() => null); }, BANK_AWAY_MS);
+});
+
+async function bankWindow(tab, at) {
+  let openerId = tab.openerTabId;
+  if (openerId == null) {
+    const win = await chrome.windows.get(tab.windowId).catch(() => null);
+    if (!win || win.type !== 'popup') return;
+    const all = await chrome.storage.session.get(null);
+    const last = Object.entries(all)
+      .filter(([k, v]) => k.startsWith('fill:') && v && v.aco && v.aco.placing && v.aco.pressAt && v.aco.pressAt <= at && at - v.aco.pressAt < 2 * 60 * 1000)
+      .sort((a, b) => b[1].aco.pressAt - a[1].aco.pressAt)[0];
+    if (!last) return;
+    openerId = Number(last[0].slice('fill:'.length));
+  }
+  const key = passKey(openerId);
+  const pass = (await chrome.storage.session.get(key))[key];
+  const run = pass && pass.aco;
+  if (!run || !run.runId || !run.placing || run.done || run.stopped || !run.placingAt || Date.now() - run.placingAt > RETRY_MS) return;
+  if (!(await chrome.tabs.get(tab.id).catch(() => null))) return;
+  const r = storeOfUrl((await getState()).flows, run.page || `https://${pass.host}/`);
+  const name = (r && r.name) || 'The store';
+  await chrome.storage.session.set({ [key]: { ...pass, aco: { ...run, stopped: true }, expires: awayExpiry(run) } });
+  turnEnded(openerId, { parked: true }).catch(() => null);
+  await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, {
+    status: 'needs_you', reason: 'bank_check', pressed: true, total: null,
+    message: `After paying, ${name}'s checkout opened a window of its own — most likely your bank wanting you to approve it: approve it in your bank's app (or with the code it sent you), or in that window. It's marked placed once ${name} confirms the order.`.slice(0, 300),
+  }).catch(() => null);
+}
+
+// --- after the final button: the checkout gone on to a site Mugibot can't see ----------------------
+// A store that sends the checkout to its bank's check — the whole tab, not a frame on its page (straight from
+// "Pay", or by way of its own server) — goes somewhere Mugibot doesn't run, so nothing on the page can say so.
+// Looked at a few seconds after each page in a tab that's placing an order finishes loading: on a site this
+// extension can't open (not a store, nor a payment provider's), still within the half hour of the press, and
+// your account's told at once — most likely it's your bank wanting you to approve the payment (a check that
+// passed by itself has come back to the store by then). Once: the run's for you then, and the store's
+// confirmation page — when the tab gets there — says "placed" as ever. (Shop checkout links go on to the
+// store's own order page by design: theirs say how it went before they leave — content.js watchLeaving.)
+const BANK_AWAY_MS = 5000;
+const awayTimers = new Map();
+// (Its pass kept good meanwhile — no page of the store's is there to keep it so — for the confirmation page,
+//  however long the approving takes within the half hour.)
+const awayExpiry = (run) => Math.max(Date.now() + PASS_TTL, ((run && run.placingAt) || Date.now()) + RETRY_MS + 5 * 60 * 1000);
+function bankAwaySoon(tabId) {
+  clearTimeout(awayTimers.get(tabId));
+  awayTimers.set(tabId, setTimeout(() => { awayTimers.delete(tabId); bankAway(tabId).catch(() => null); }, BANK_AWAY_MS));
+}
+
+async function bankAway(tabId) {
+  const key = passKey(tabId);
+  const pass = (await chrome.storage.session.get(key))[key];
+  const run = pass && pass.aco;
+  if (!run || !run.runId || !run.placing || run.done || run.stopped || !run.placingAt || Date.now() - run.placingAt > 30 * 60 * 1000) return;
+  const r = storeOfUrl((await getState()).flows, run.page || `https://${pass.host}/`);
+  if (r && r.flow && r.flow.checkout && r.flow.checkout.leaves) return;
+  // (A page this extension may open — the store's, a payment provider's: that page says how it's going. Still
+  //  loading: its own "complete" looks again. Looked at twice, a moment apart: a page on its way out isn't one.)
+  const here = async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || tab.status !== 'complete') return true;
+    return chrome.scripting.executeScript({ target: { tabId }, func: () => location.host }).then(() => true, () => false);
+  };
+  if (await here()) return;
+  await new Promise((res) => setTimeout(res, 1500));
+  if (await here()) return;
+  const cur = (await chrome.storage.session.get(key))[key];
+  if (!cur || !cur.aco || cur.aco.runId !== run.runId || cur.aco.done || cur.aco.stopped) return;
+  const name = (r && r.name) || 'The store';
+  await chrome.storage.session.set({ [key]: { ...cur, aco: { ...cur.aco, stopped: true }, expires: awayExpiry(cur.aco) } });
+  turnEnded(tabId, { parked: true }).catch(() => null);
+  await api('POST', `/api/ext/aco/${encodeURIComponent(run.runId)}`, {
+    status: 'needs_you', reason: 'bank_check', pressed: true, total: null,
+    message: `After paying, ${name} sent the checkout on to ${run.awayHost || "a page Mugibot can't see"} — most likely your bank wanting you to approve it: approve it in your bank's app (or with the code it sent you), or in the checkout tab. It's marked placed once ${name} confirms the order.`.slice(0, 300),
+  }).catch(() => null);
+}
 
 // For tests and the "Check now" button.
 globalThis.mugibotGates = async () => ({ gates: await gatesNow(), held: [...(await heldStores())], through: await throughStores() });

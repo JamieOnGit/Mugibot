@@ -52,21 +52,38 @@
     const run = data.aco || null;
     // (Pressed already, the store hasn't taken the order, and it's not 30 minutes yet: it may press again.)
     const retrying = (r) => !!(r && r.placing && !r.stopped && !r.done && r.placingAt && Date.now() - r.placingAt < MGBChecks.RETRY_MS);
+    let beatAt = 0;
+    const beat = (text) => { if (!run || Date.now() - beatAt < 30000) return; beatAt = Date.now(); ask({ type: 'acoReport', status: 'beat', message: text }); };
+    // Your bank's check (or a human one) after the final button: you're told at once, and the order may still go
+    // through once you've done it — so the form's watched on for the half hour, nothing pressed: "placed" the
+    // moment the store confirms it. (beat: this tab's pass kept good meanwhile.)
+    const CHECKS = ['bank_check', 'human_check'];
+    const watchPlaced = async (total) => {
+      for (const until = Date.now() + MGBChecks.RETRY_MS; Date.now() < until; await wait(1000)) {
+        beat('Waiting for you to approve the payment');
+        const o = MGBChecks.outcome(document, C.done, name);
+        if (o && o.status === 'placed') { status('🤖 Order placed.'); await acoReport('placed', '', `Order confirmed at ${name}`, total); return; }
+      }
+    };
     if (run && run.placing) {
       // Back after this run's final button was pressed (the frame moved on): how it went — and, its form back
       // without having taken the order (the store's struggling), filled in again and pressed again (below).
       // (Only when the form says the store's struggling — busy, try again, sold out just now: saying nothing,
       //  or anything else, the order may be going through, and it's only watched, for 30 s as ever.)
+      MGBChecks.markAfter(document, false);
       let busy = false;
       for (const until = Date.now() + 30000; Date.now() < until && !busy; await wait(500)) {
         const o = MGBChecks.outcome(document, C.done, name);
-        if (o) { status(o.status === 'placed' ? '🤖 Order placed.' : o.message); await acoReport(o.status, o.reason, o.status === 'placed' ? `Order confirmed at ${name}` : o.message); return; }
+        if (o) {
+          status(o.status === 'placed' ? '🤖 Order placed.' : o.message);
+          await acoReport(o.status, o.reason, o.status === 'placed' ? `Order confirmed at ${name}` : o.message);
+          if (CHECKS.includes(o.reason)) await watchPlaced();
+          return;
+        }
         busy = retrying(run) && MGBChecks.errorKind(MGBChecks.pageError(document)) === 'busy';
       }
       if (!busy) return;
     }
-    let beatAt = 0;
-    const beat = (text) => { if (!run || Date.now() - beatAt < 30000) return; beatAt = Date.now(); ask({ type: 'acoReport', status: 'beat', message: text }); };
     const cardHere = () => [...document.querySelectorAll('input, select')]
       .filter((el) => /^card(Number|Expiry|ExpMonth|Cvc)$/.test(MGBFill.classifyField(el, C) || '') && MGBFill.isVisible(el));
     const cardReady = async (whole) => {
@@ -159,6 +176,7 @@
       const said = async (o) => {
         status(o.status === 'placed' ? '🤖 Order placed.' : o.message);
         await acoReport(o.status, o.reason, o.status === 'placed' ? `Order confirmed at ${name}` : o.message, total);
+        if (CHECKS.includes(o.reason)) watchPlaced(total);
       };
       let fieldTries = 0;
       for (let n = 0; ; n++) {
@@ -188,6 +206,8 @@
         // (Asked first — and said to your account: the frame may go the moment it's pressed. Pressing again,
         //  your account is asked whether the run's still going.)
         const message = n === 0 ? `Pressing "${f.text}" — total $${total.toFixed(2)}` : `Pressing "${f.text}" again — ${name} hasn't taken the order yet`;
+        // (Every frame in this one notes what's in it now — a payment provider's — while the press is asked for.)
+        const marked = ask({ type: 'bankMark' });
         const go = await ask({ type: 'acoRetry', message, total });
         if (!go || !go.ok) {
           if (go && go.over) return stop('needs_you', 'not_placed', `Pressed "${f.text}" again and again for ${Math.round((Date.now() - go.since) / 60000)} minutes and ${name} kept turning it away — nothing more pressed. Check your email before buying it again.`, total);
@@ -196,16 +216,25 @@
         }
         status(go.n === 1 ? `🤖 Placing your order ($${total.toFixed(2)})…` : `🤖 Pressing "${f.text}" again (${go.n}) — ${name}'s struggling…`);
         report('step', `Auto-checkout pressed "${f.text}"${go.n > 1 ? ` again (${go.n})` : ''} (total $${total.toFixed(2)})`);
-        // (What the form said before this press isn't its answer to it: only something it says anew.)
+        // (What the form said before this press isn't its answer to it: only something it says anew. Every frame
+        //  in it — a payment provider's — marked too: what the press brings up in one is the bank's check.)
         MGBChecks.markErrors(document);
+        await Promise.race([marked, wait(150)]);
         btn.click();
         // The store's answer, as far as this frame shows it (the page above takes over if it moves on). No
         // answer at all is never a reason to press again: waited for, up to the half hour.
         let ans = null;
         let errSince = 0;
+        let framesAt = 0;
         for (const started = Date.now(); !ans;) {
           await wait(400);
-          const o = MGBChecks.outcome(document, C.done, name);
+          let o = MGBChecks.outcome(document, C.done, name);
+          // (The bank's check inside a frame in this one, as that frame sees it: every 2 s.)
+          if (!o && Date.now() - framesAt > 2000) {
+            framesAt = Date.now();
+            const b = await ask({ type: 'bankFrames' });
+            if (b) o = { status: 'needs_you', reason: 'bank_check', message: MGBChecks.bankMessage(name, b) };
+          }
           if (o) { await said(o); return; }
           const e = MGBChecks.pageError(document, null, true);
           errSince = e ? errSince || Date.now() : 0;
@@ -218,7 +247,8 @@
             return;
           }
           if (Date.now() - started > MGBChecks.RETRY_MS) { await said({ status: 'needs_you', reason: 'unconfirmed', message: `"${f.text}" was pressed and ${name} still hadn't answered after 30 minutes — check your email for the order confirmation before buying it again.` }); return; }
-          beat(`Pressed — waiting for ${name} to answer (it's slow)`);
+          const s = MGBChecks.showing(document);
+          beat(`Pressed — waiting for ${name} to answer (it's slow)${s ? ` — on the form: ${s}` : ''}`);
         }
         if (ans.kind === 'field' && ++fieldTries > 2) return stop('needs_you', 'needs_details', `${name} said: "${ans.text}" — finish it yourself in this tab.`, total);
         const w = MGBChecks.retryWait(n);

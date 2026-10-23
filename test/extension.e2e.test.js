@@ -40,7 +40,8 @@ let profileDir;
 // Tests never touch the real stores: this browser can't reach any store's address (the
 // extension's own checks, like the store login monitor's, go to every store it knows), and
 // it connects directly (a proxy from the environment would look the addresses up itself).
-const NO_STORES = [`--host-resolver-rules=${[...new Set(RETAILER_DEFS.flatMap((r) => r.hosts))].map((h) => `MAP ${h} 127.0.0.1`).join(', ')}`, '--no-proxy-server'];
+// (bank.test: the dummy bank's own site — an address the extension may not open, as a real bank's isn't.)
+const NO_STORES = [`--host-resolver-rules=${[...new Set(RETAILER_DEFS.flatMap((r) => r.hosts)), 'bank.test'].map((h) => `MAP ${h} 127.0.0.1`).join(', ')}`, '--no-proxy-server'];
 
 /** Start Chromium with the extension (again: the same profile, like reopening the browser). dir: another copy of it. */
 async function launch(dir = extDir) {
@@ -2327,6 +2328,44 @@ test("🤖 Auto-checkout when the card is declined, or your bank wants you to co
   await closeStorePages('kmart');
 });
 
+test("🏦 Your bank wanting you to approve the payment, as real checkouts show it — its page posted into a frame with no address (named for it, or not at all, in a pop-up), or the whole tab sent to the bank's site: you're told at once what to do, nothing's pressed again, and it's placed once you approve it", async () => {
+  const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB');
+  // (Each a day of its own — the orders before it count as yesterday's — and the tests after it too.)
+  const yesterday = () => env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
+  for (const mode of ['posted', 'popup', 'redirect']) {
+    yesterday();
+    store.reset();
+    store.state.account = KMART_ACCOUNT;
+    store.shop('kmart').threeDS = mode;
+    await browserApi('PUT', `/api/items/${it.id}`, { aco: true });
+    const dmsBefore = discord.dmsTo('d-ash').length;
+    await acoListen();
+    await drop('kmart', '43818587');
+    await waitFor(async () => (await lastRun()).reason === 'bank_check', { timeout: 45000, message: `${mode}: the bank's check noticed` })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps)}`); });
+    const run = await lastRun();
+    assert.equal(run.status, 'needs_you');
+    assert.match(run.message, /approve it in your bank's app/, mode);
+    // (Its frame has no address to name it by: the bank's page was posted into it.)
+    if (mode === 'popup') assert.match(run.message, /^A pop-up came up on the checkout after paying — most likely your bank/);
+    if (mode === 'redirect') assert.match(run.message, /sent the checkout on to bank\.test:\d+ — most likely your bank/);
+    assert.equal(store.shop('kmart').orders.length, 0, `${mode}: nothing bought until you approve it`);
+    // Told at once, on your phone: approve it in your bank's app — or finish it on the computer (Chrome Remote Desktop).
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /^🏦 Approve the payment in your bank's app: ACO ETB$/.test(m.body.embeds[0].title)), { message: `${mode}: the DM` });
+    const dm = discord.dmsTo('d-ash').slice(dmsBefore).find((m) => /Approve the payment/.test(m.body.embeds[0].title));
+    assert.match(JSON.stringify(dm.body), /remotedesktop\.google\.com/, 'Open my computer');
+    // You approve it in the bank's app: the store confirms the order, and the run says so by itself — pressed once.
+    store.approveBank();
+    await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 30000, message: `${mode}: placed once approved` })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps)}`); });
+    assert.equal(store.shop('kmart').orders.length, 1);
+    assert.equal(store.shop('kmart').challenged, 1, 'pressed once');
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /Auto-checkout placed your order: ACO ETB/.test(m.body.embeds[0].title)), { message: `${mode}: the "placed" DM` });
+    await closeStorePages('kmart');
+  }
+  yesterday();
+});
+
 test("🤖 Auto-checkout at a Kmart that won't add it: no blind trip to checkout — it tries Add twice, then says so (with what the page said) and buys nothing", async () => {
   const S = store.shop('kmart');
   S.quiet = true;
@@ -2768,6 +2807,32 @@ test("🛍️🔢 a Shop checkout link of one product, its quantity changed to 3
     assert.deepEqual(store.state.shopapp.orders[0].lines, [[String(PORSCHE), 3]], '3 of it, as the link says');
     await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 20000, message: 'the run says placed' });
   } finally {
+    await putBack();
+    await closeShopPages();
+  }
+});
+
+test("🛍️🏦 a Shop checkout link, your bank wanting you to approve the payment after \"Pay now\" — its page in a pop-up over Shop's checkout, nothing there saying what it is: you're told at once (a DM: approve it in your bank's app), \"Pay now\" isn't pressed again, and it's placed once you approve it", async () => {
+  const putBack = await roomForALink();
+  try {
+    shopSignedIn(true);
+    store.state.shopapp.threeDS = 'popup';
+    const link = store.cartLink([[PORSCHE, 1]]);
+    await useItems([{ url: link, name: 'ACO bank link', maxPrice: 90, aco: true }]);
+    const dmsBefore = discord.dmsTo('d-ash').length;
+    await acoListen();
+    await dropLink(link);
+    await waitFor(async () => (await lastRun()).reason === 'bank_check', { timeout: 45000, message: "the bank's check noticed" })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps)}`); });
+    assert.equal((await lastRun()).status, 'needs_you');
+    assert.equal(store.state.shopapp.orders.length, 0, 'nothing bought until you approve it');
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /^🏦 Approve the payment in your bank's app: ACO bank link$/.test(m.body.embeds[0].title)), { message: 'the DM' });
+    store.approveBank();
+    await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 30000, message: 'placed once approved (Shop went on to the store\'s order page)' });
+    assert.equal(store.state.shopapp.orders.length, 1);
+    assert.equal(store.state.shopapp.payTries, 1, '"Pay now" pressed once');
+  } finally {
+    store.state.shopapp.threeDS = false;
     await putBack();
     await closeShopPages();
   }
@@ -3306,6 +3371,64 @@ test('🤖 Auto-checkout at The Games Cube: fills everything in, then stops at "
   assert.notEqual(await page.title(), 'paypal', 'PayPal not pressed');
   assert.equal(await page.isChecked('input[name=shipping][value=parcel]'), true);
   await closeStorePages('thegamescube');
+});
+
+// 🏦 Your bank's check after the final button, at every kind of checkout — whichever store, whichever way the
+// bank's check comes up (the dummy bank's pages are on bank.test: nothing Mugibot can open or read, as with a real
+// bank, and no bank's name anywhere). Each store as its own Auto-checkout test sets it up.
+const BANK_CASES = [
+  // Its card in the payment provider's frame — the bank's page posted into a frame inside that one.
+  { shop: 'kmart', mode: 'nested', item: () => ({ url: store.productUrl('kmart', '43818587'), maxPrice: 120 }), setup: () => { store.state.cardInIframe = true; } },
+  // A window of its own, opened by the checkout.
+  { shop: 'kmart', mode: 'window', item: () => ({ url: store.productUrl('kmart', '43818587'), maxPrice: 120 }) },
+  // A posted form (EB Games'): the store's own server sends the tab on to the bank; a page of its own with the bank's pop-up.
+  { shop: 'ebgames', mode: 'redirect', item: () => ({ url: store.productUrl('ebgames', '312346'), maxPrice: 120 }) },
+  { shop: 'ebgames', mode: 'popup', item: () => ({ url: store.productUrl('ebgames', '312346'), maxPrice: 120 }) },
+  // Shopify's one-page checkout (JB Hi-Fi — Good Games', Pokébox's, Toys"R"Us' the same): "Pay now" posts the form.
+  { shop: 'jbhifi', mode: 'posted', item: () => ({ store: 'demo-jbhifi', sku: 'pokemon-tcg-30th-celebration-etb', maxPrice: 120 }) },
+  { shop: 'toysrus', mode: 'redirect', item: () => ({ store: 'demo-toysrus', sku: 'pokemon-tcg-scarlet-violet-151-ultra-premium-collection', maxPrice: 200 }), setup: () => { store.state.signedIn.toysrus = 'shop'; } },
+  // Target (Paydock's card form), City Beach's last "place order" stage.
+  { shop: 'target', mode: 'popup', item: () => ({ url: store.productUrl('target', '71234567'), maxPrice: 90 }), setup: () => { store.set('target', '71234567', { status: 'in_stock' }); } },
+  { shop: 'citybeach', mode: 'posted', item: () => ({ url: store.productUrl('citybeach', '20499999-01'), maxPrice: 150 }), setup: () => { store.set('citybeach', '20499999-01', { listed: true, status: 'in_stock' }); store.shop('citybeach').reviewStage = true; } },
+  // Magento (The Gamesmen), WooCommerce (Games World).
+  { shop: 'gamesmen', mode: 'popup', item: () => ({ url: store.productUrl('gamesmen', 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box'), maxPrice: 150 }) },
+  { shop: 'gamesworld', mode: 'posted', item: () => ({ url: store.productUrl('gamesworld', 'pokemon-tcg-mega-evolution-elite-trainer-box'), maxPrice: 120 }), setup: () => { store.set('gamesworld', 'pokemon-tcg-mega-evolution-elite-trainer-box', { status: 'in_stock' }); } },
+  // Global-e's checkout in a frame (Premium Bandai): the bank's pop-up inside it.
+  { shop: 'pbandai', mode: 'popup', item: () => ({ url: store.productUrl('pbandai', 'N2903432001'), maxPrice: 40 }), setup: () => { store.state.signedIn.pbandai = true; store.set('pbandai', 'N2903432001', { status: 'preorder' }); } },
+  // Amazon's "Place your order" (a posted form): on to the bank's site.
+  { shop: 'amazon', mode: 'redirect', item: () => ({ url: store.productUrl('amazon', 'B0MGBTEST1'), maxPrice: 70 }), setup: () => seenSignedIn('amazon') },
+];
+
+test("🏦 your bank's check after the final button at every kind of checkout — Kmart's, EB Games', Shopify's, Target's, City Beach's last stage, Magento's, WooCommerce's, Global-e's frame, Amazon's — however it comes up (a frame inside the payment provider's, a window of its own, the store sending the tab to the bank, a page of its own, a pop-up): you're told at once, nothing's pressed again, nothing's bought until you approve it — then placed", async () => {
+  for (const c of BANK_CASES) {
+    const label = `${c.shop} (${c.mode})`;
+    store.reset();
+    store.state.account = KMART_ACCOUNT;
+    if (c.setup) await c.setup();
+    store.shop(c.shop).threeDS = c.mode;
+    const name = `ACO bank ${c.shop} ${c.mode}`;
+    await useItems([{ ...c.item(), name }]);
+    const dmsBefore = discord.dmsTo('d-ash').length;
+    await testRun(name);
+    await waitFor(async () => (await lastRun()).reason === 'bank_check', { timeout: 60000, message: `${label}: the bank's check noticed` })
+      .catch(async (e) => {
+        const tabs = await Promise.all(ctx.pages().map(async (pg) => `${pg.url()} [${await pg.locator('#mugibot-qc').textContent({ timeout: 1000 }).catch(() => '-')}]`));
+        throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps.slice(-3))} — tabs: ${tabs.join(' | ')}`);
+      });
+    const run = await lastRun();
+    assert.equal(run.status, 'needs_you', label);
+    assert.match(run.message, /approve it in your bank's app/, label);
+    assert.equal(store.shop(c.shop).orders.length, 0, `${label}: nothing bought until you approve it`);
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => m.body.embeds[0].title === `🏦 Approve the payment in your bank's app: ${name}`), { message: `${label}: the DM` });
+    store.approveBank();
+    await waitFor(async () => (await lastRun()).status === 'placed', { timeout: 30000, message: `${label}: placed once approved` })
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await lastRun()).steps.slice(-3))}`); });
+    assert.equal(store.shop(c.shop).orders.length, 1, `${label}: one order`);
+    assert.equal(store.shop(c.shop).challenged, 1, `${label}: pressed once`);
+    await closeStorePages(c.shop);
+    for (const pg of ctx.pages()) if (/bank\.test/.test(pg.url())) await pg.close();
+  }
+  store.state.cardInIframe = false;
 });
 
 test('🤖 ⚡ Buy with Mugibot on a channel alert, pressed on a phone with Auto-checkout on: this browser checks out by itself and places the order — up to the price the alert showed — and Discord\'s reply says so', async () => {
@@ -4424,5 +4547,132 @@ test('Chrome Web Store copy: downloaded copies are asked to move to it, and with
     env.app.repo.setSetting('chrome_store_url', null);
     await ctx3.close();
     for (const d of [dlDir, storeDir, profile]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// --- 🔒 BIG W in a private window of its own (retailers/bigw.js sweep.privateWindow) -------------------------
+/** This browser connected to an account again (signed in to the dashboard as them, "Connect this browser"). */
+async function connectAs(username) {
+  const page = await ctx.newPage();
+  await browserApi('POST', '/api/auth/logout');
+  await page.goto(`${env.url}/login`);
+  await page.fill('#li-username', username);
+  await page.fill('#li-password', PASSWORD);
+  await page.click('#login button[type=submit]');
+  await page.waitForURL(/\/app/);
+  await page.goto(`${env.url}/app#extension`);
+  await page.waitForFunction(() => /not connected|another account|Extension connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 15000 });
+  if (!/Extension connected/.test(await page.textContent('#ext-status-2'))) {
+    if (await page.isVisible('#pair-now')) await page.click('#pair-now');
+    else await page.locator('#ext-status-2 button').click();
+    await page.waitForFunction(() => /Extension connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 15000 });
+  }
+  await page.close();
+}
+
+/** chrome://extensions → Mugibot → Details → "Allow in Incognito", as a person switches it on. The extension reloads. */
+async function allowIncognito() {
+  const page = await ctx.newPage();
+  await page.goto('chrome://extensions/');
+  await page.waitForTimeout(800);
+  if ((await page.locator('#devMode').getAttribute('aria-pressed')) !== 'true') await page.locator('#devMode').click();
+  await page.goto(`chrome://extensions/?id=${extId}`);
+  await page.waitForTimeout(800);
+  const ours = (w) => w.url().startsWith(`chrome-extension://${extId}/`);
+  const next = ctx.waitForEvent('serviceworker', { predicate: ours, timeout: 30000 });
+  await page.locator('#allow-incognito').click();
+  sw = await next;
+  await waitFor(async () => (await sw.evaluate(() => chrome.extension.isAllowedIncognitoAccess()).catch(() => false)) === true, { message: 'Mugibot allowed in Incognito', timeout: 15000 });
+  await page.close();
+}
+
+test("🔒 BIG W in a private window of its own: allowed in Incognito, an admin's browser searches BIG W and reads its product pages in a minimised private window — its own cookies, never the ones from your own BIG W visits — and what's new there is found as ever; not allowed, the ordinary sweep window as before, and the live monitor says how to allow it; \"Access Denied\" there is waited out (30 minutes), the private window kept as it is — never a fresh one to get round it", async () => {
+  // (The tests before it signed this browser out — connected again as Ash, the admin here.)
+  await connectAs('ash');
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-bigw': 'browser' } }, null);
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  const S = store.shop('bigw');
+  const st = () => sweeper.stat('demo-bigw');
+  const searched = async (t0, message) => {
+    Object.assign(st(), { fails: 0, slowUntil: 0, browserNext: 0, retryAt: 0 });
+    await browserSweepsUntil(() => (st().lastOkAt || 0) > t0, message);
+  };
+  const sweepTabOf = (key) => sw.evaluate(async (k) => {
+    const s = (await chrome.storage.session.get('sweepWindow')).sweepWindow;
+    const id = s && s.tabs ? s.tabs[k] : undefined;
+    const tab = id === undefined ? null : await chrome.tabs.get(id).catch(() => null);
+    return tab && { id: tab.id, incognito: tab.incognito, windowId: tab.windowId, privateWindowId: s.privateWindowId ?? null };
+  }, key);
+  const asked = (since, re) => store.state.requests.slice(since).filter((x) => re.test(x.path));
+  // Your own BIG W visits' cookie, in this browser's own cookies (not a private window's).
+  await ctx.addCookies([{ name: 'bigw_mine', value: 'yes', url: store.url }]);
+  const prev = env.app.repo.getSetting('retailer:demo-bigw');
+  try {
+    // Not allowed in Incognito (as Chrome has it until you allow it): the ordinary sweep window, as before — and the
+    // live monitor says how to allow it.
+    let since = store.state.requests.length;
+    await searched(Date.now(), 'BIG W searched in the ordinary sweep window');
+    let tab = await sweepTabOf('demo-bigw');
+    assert.equal(tab.incognito, false);
+    assert.ok(asked(since, /^\/bigw\/search$/).some((x) => /bigw_mine=yes/.test(x.cookie)), 'the ordinary window: your own cookies go with it');
+    await waitFor(() => sweeper.events.some((e) => e.type === 'sys' && /searches it in an ordinary window — allow Mugibot in Incognito there \(chrome:\/\/extensions → Mugibot → Details → Allow in Incognito\)/.test(e.message)), { message: 'the live monitor says how to allow it' });
+    assert.equal(st().privateWindow, false);
+
+    // Allowed: BIG W in a minimised private window of its own, with none of your cookies.
+    await allowIncognito();
+    store.addProduct('bigw', { sku: '6099201', name: 'Pokemon TCG Private Window Booster Box', price: 199, status: 'in_stock' });
+    since = store.state.requests.length;
+    await searched(Date.now(), 'BIG W searched in its private window');
+    tab = await sweepTabOf('demo-bigw');
+    assert.equal(tab.incognito, true, 'a private (Incognito) tab');
+    assert.equal(tab.windowId, tab.privateWindowId, "in the sweeps' own private window");
+    const priv = asked(since, /^\/bigw\/search$/);
+    assert.ok(priv.length >= 1);
+    assert.ok(priv.every((x) => !/bigw_mine/.test(x.cookie)), `none of your own cookies: ${JSON.stringify(priv.map((x) => x.cookie))}`);
+    assert.equal(st().privateWindow, true);
+    await waitFor(() => env.app.catalog.productFor('demo-bigw', '6099201'), { timeout: 30000, message: 'a new listing found from the private window' });
+    // (A private window: asked for minimised — a browser without a screen, as here, can't minimise one.)
+    assert.equal(await sw.evaluate((id) => chrome.windows.get(id).then((w) => w.incognito), tab.privateWindowId), true);
+
+    // Your BIG W items' pages, read by this browser: in the private window too.
+    env.app.repo.setSetting('retailer:demo-bigw', { ...(prev || {}), serverChecks: false });
+    await useItems([{ url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle' }]);
+    env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
+    since = store.state.requests.length;
+    const r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.equal(r.checked, 1);
+    const pages = asked(since, /^\/bigw\/product\//);
+    assert.ok(pages.length >= 1 && pages.every((x) => !/bigw_mine/.test(x.cookie)), `its page read without your cookies: ${JSON.stringify(pages.map((x) => x.cookie))}`);
+    assert.equal((await sweepTabOf('check:demo-bigw')).incognito, true);
+    assert.equal(env.app.repo.listItems(userId).find((i) => i.name === 'BIG W Bundle').statusSource, 'browser');
+
+    // "Access Denied" in the private window: waited out — nothing more asked of BIG W from here — and the private
+    // window left exactly as it is (never closed for a fresh one).
+    const before = await sweepTabOf('demo-bigw');
+    S.denied = true;
+    const served = S.deniedServed;
+    Object.assign(st(), { fails: 0, slowUntil: 0, browserNext: 0, retryAt: 0 });
+    await browserSweepsUntil(() => S.deniedServed > served, 'told "Access Denied"');
+    await waitFor(async () => (await sw.evaluate(async () => Object.keys((await chrome.storage.session.get('deniedStores')).deniedStores || {}))).includes('demo-bigw'), { message: 'BIG W left alone from this browser' });
+    const n = S.deniedServed;
+    Object.assign(st(), { fails: 0, slowUntil: 0, browserNext: 0, retryAt: 0 });
+    sweeper.sweepNow();
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await new Promise((res) => setTimeout(res, 4000));
+    assert.equal(S.deniedServed, n, 'nothing more asked of BIG W meanwhile');
+    const after = await sweepTabOf('demo-bigw');
+    assert.deepEqual([after.id, after.privateWindowId], [before.id, before.privateWindowId], 'the same private window and tab — its cookies kept');
+    assert.ok(await sw.evaluate((id) => chrome.windows.get(id).then(() => true, () => false), before.privateWindowId), 'still open');
+  } finally {
+    S.denied = false;
+    await sw.evaluate(() => chrome.storage.session.remove('deniedStores')).catch(() => null);
+    env.app.repo.setSetting('retailer:demo-bigw', prev || {});
+    await useItems([]);
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: off }, null);
+    Object.assign(st(), { slowUntil: 0, fails: 0, browserNext: 0 });
   }
 });

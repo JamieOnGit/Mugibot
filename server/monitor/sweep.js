@@ -1311,6 +1311,8 @@ export class Sweeper {
         productPath: r.productPath || null, skuFromPath: r.skuFromPath || null, storeName: r.name, storeBase: r.base,
         // Pages that build their product list once they're open (BIG W): the browser opens them and waits.
         render: !!r.sweep.render,
+        // …in a private window of their own (BIG W's), where the browser allows it: apart from the admin's own visits.
+        privateWindow: !!r.sweep.privateWindow,
         // A search the store's own page asks for (EB Games' JSON): asked from inside a page of the store.
         inPage: !!r.sweep.inPage,
         // What the store answers with: 'html' (Amazon's search page) — else JSON.
@@ -1373,6 +1375,13 @@ export class Sweeper {
         continue;
       }
       if (!st.browserAt || this.now() - st.browserAt > 2 * 60 * 1000) this.sys(`${r.name}: ${user.username}'s browser is searching it`, { store: r.id });
+      // Read in an ordinary window where it should have its own private one (Mugibot not allowed in Incognito in that
+      // browser): said once every few hours, with how to allow it.
+      if (r.sweep.privateWindow && res.privateWindow === false && this.now() - (st.privateNoteAt || 0) > 6 * HOUR) {
+        st.privateNoteAt = this.now();
+        this.sys(`${r.name}: ${user.username}'s browser searches it in an ordinary window — allow Mugibot in Incognito there (chrome://extensions → Mugibot → Details → Allow in Incognito) and it's searched in a private window of its own, apart from your own ${r.name} visits and checkouts`, { store: r.id, level: 'warn' });
+      }
+      if (r.sweep.privateWindow && typeof res.privateWindow === 'boolean') st.privateWindow = res.privateWindow;
       if (!res.ok) {
         const status = num(res.status, { min: 0, max: 999, int: true, def: 0 });
         const refused = !!res.blocked || [401, 403, 429, 503].includes(status);

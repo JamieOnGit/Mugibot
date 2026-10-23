@@ -14,6 +14,36 @@ var MGBChecks = (function () {
   var BANK_RE = /3-?d ?secure|verify (it.?s you|your (identity|payment|purchase))|authenticat(e|ion)( your)? (payment|purchase)|one-?time (pass(code|word)|code)|enter the code (we|sent)|confirm (the )?payment in your (bank|banking) app|verified by visa|id check/i;
   var BANK_FRAME = /3ds|\/acs|acs\.|challenge|authenticat|cardinalcommerce|securecode|threeds|3dsecure/i;
   var HUMAN_FRAME = /recaptcha|hcaptcha|challenges\.cloudflare|turnstile|captcha|arkoselabs|funcaptcha/i;
+  // After the final button, the bank's check as stores and payment providers really show it (Oct 2026: two
+  // runs sat waiting on one Mugibot didn't see) — whatever the store, whatever the bank. Its frame often has no
+  // address to go by (the bank's page is posted into it), but its name, title or the box it's in say what it is
+  // (the 3-D Secure names payment providers give it: Adyen's "threeDSIframe", Cardinal's, Stripe's, Checkout.com's,
+  // "challenge", "step-up", "acsFrame") — or the words the press brought up beside it, in any bank's terms
+  // ("Approve this payment in your banking app", "We've sent a code to your phone", "Verify your purchase").
+  // Never a bank's name alone: no list of banks to keep up.
+  var BANK_HINT = /3ds|3-?d.?secure|three.?d.?s|threeds|\bacs\b|acs.?frame|challenge|authenticat|cardinal|songbird|secure.?code|safekey|identity.?check|visa.?secure|step.?up|verif(y|ication)|\botp\b|one.?time.?pass/i;
+  var BANK_SAID = new RegExp([
+    // approving it: in an app, by a notification, on a device
+    "approve (it|this|the|your) (payment|purchase|transaction|request|order)",
+    "approve (it |this |the payment |the purchase )?(in|with|on) (your|the) [\\w' .-]{0,30}app\\b",
+    "(check|open|use|go to) (your|the) [\\w' .-]{0,30}app to (approve|confirm|verify|authori[sz]e)", "(check|open) your [\\w' .-]{0,30}app\\b",
+    "(approve|confirm|accept) (the )?(request|notification|prompt) (in|on|from|we)",
+    "check your (phone|mobile|device)", "push notification", "\\bbanking app\\b",
+    // a code it sends
+    "(we('ve| have)? )?(sent|texted) (a |an |you a |you an )?(\\d-digit |one.?time |verification |security )?(code|passcode|sms)",
+    "(enter|type|input) (the |your )?(\\d-digit )?(verification|one.?time|sms) (code|passcode|password)", "verification code (was |has been )?sent",
+    "one.?time (pass(code|word)|code)", "enter the code (we|sent)", "\\bnetcode\\b",
+    // checking it's you, the payment
+    "(payment|purchase|transaction) (authentication|verification|approval)",
+    "(verify|authori[sz]e) (this|the|your) (payment|purchase|transaction)", "confirm (this|the) (payment|purchase|transaction)",
+    "(confirm|verify) (it.?s|it is) you", "(continue|complete) (the )?(verification|authentication)",
+    "wait(ing)? for (your )?(bank|approval|authori[sz]ation)",
+    // the card schemes' own names for it
+    "visa secure", "\\bsafekey\\b", "mastercard (identity check|securecode)", "strong customer authentication",
+  ].join('|'), 'i');
+  // Frames that come and go on a checkout for other reasons (chat, reviews, ads, video, other ways to pay) — or
+  // that are a store's whole checkout (Global-e's, Amazon's): never the bank's.
+  var NOT_BANK_FRAME = /intercom|zendesk|zopim|livechat|tawk|crisp\.chat|drift|gorgias|tidio|freshchat|hubspot|facebook|doubleclick|googletagmanager|google-analytics|googlesyndication|youtube|vimeo|klaviyo|privy|justuno|attentive|yotpo|trustpilot|okendo|judge\.me|hotjar|clarity\.ms|tiktok|pinterest|paypal|afterpay|klarna|zip\.co|pay\.google|global-e|amazon\./i;
   var AMOUNT_RE = /(?:AUD\s?\$?|A\$|\$)\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/g;
   var OURS = '#mugibot-qc, #mugibot-banner';
   // A card already saved with the store or its wallet (Shop Pay, a store account), shown instead of card boxes.
@@ -116,6 +146,7 @@ var MGBChecks = (function () {
   var errWatch = null;
   function markErrors(doc) {
     doc = doc || document;
+    markPress(doc, false);
     Array.prototype.forEach.call(doc.querySelectorAll(ERROR_SEL), function (el) {
       var t = visibleText(el);
       if (t) el.setAttribute('data-mgb-err', t);
@@ -158,6 +189,141 @@ var MGBChecks = (function () {
     return '';
   }
 
+  // --- after the final button: what the press brought up ----------------------------------------
+  // Marked just before the press (markErrors), or as a page that came after one loads (markAfter): the frames
+  // on the page then, and the words about approving a payment it said then — so only what the press brought
+  // up counts.
+  var pressMark = null; // { doc, frames: [iframe], said: { words: true }, fresh }
+
+  // (A line that says the check went wrong — "Payment authentication failed" — isn't the bank asking: what the
+  //  store said is for you as it is: answer() / pageError.)
+  var BANK_FAILED = /fail|unsuccessful|unable|could ?n.?t|cannot|declin|error|expired|timed? ?out|try again/i;
+  function saidIn(text) {
+    var re = new RegExp(BANK_SAID.source, 'gi');
+    var out = [];
+    String(text || '').split(/\n+/).forEach(function (line) {
+      if (BANK_FAILED.test(line)) return;
+      var m;
+      re.lastIndex = 0;
+      while ((m = re.exec(line))) out.push(m[0].toLowerCase());
+    });
+    return out;
+  }
+
+  function markPress(doc, fresh, away) {
+    var said = {};
+    if (!away) saidIn((doc.body.innerText || '').slice(0, 20000)).forEach(function (t) { said[t] = true; });
+    pressMark = { doc: doc, frames: Array.prototype.slice.call(doc.querySelectorAll('iframe')), said: said, fresh: !!fresh, away: !!away, at: Date.now() };
+  }
+
+  /**
+   * This page came after the final button was pressed (the store moved on to it): a frame named, titled or boxed
+   * for the bank's check counts whether it was up as the page loaded or not. away: a page that isn't the checkout
+   * itself — what it says about approving a payment, and a frame in front of it, count from the start too (else
+   * only what it shows from now on: the checkout back again shows what it showed before).
+   */
+  function markAfter(doc, away) { markPress(doc || document, true, !!away); }
+
+  function hostOf(src, doc) {
+    if (!src) return '';
+    try { return new URL(src, doc.location.href).host; } catch (e) { return ''; }
+  }
+
+  /** What a frame is, by the frame and the boxes it sits in: its address, name, title, class and label. */
+  function frameWords(f) {
+    var parts = [f.getAttribute('src') || '', f.getAttribute('name') || '', f.id || '', f.getAttribute('title') || '', f.getAttribute('class') || '', f.getAttribute('aria-label') || ''];
+    for (var p = f.parentElement, i = 0; p && i < 5 && p !== f.ownerDocument.body; p = p.parentElement, i++) {
+      parts.push(p.id || '', p.getAttribute('class') || '', p.getAttribute('aria-label') || '', p.getAttribute('data-testid') || '');
+    }
+    return parts.join(' ');
+  }
+
+  function sized(f, w, h) {
+    var r = f.getBoundingClientRect();
+    return r.width >= w && r.height >= h;
+  }
+
+  /** In front of the checkout: in a pop-up box, or nothing over its middle — and big enough to answer in. */
+  function inFront(f) {
+    if (!sized(f, 250, 250)) return false;
+    if (f.closest('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [class*="modal" i], [class*="overlay" i], [class*="popup" i], [class*="lightbox" i]')) return true;
+    var r = f.getBoundingClientRect();
+    var win = f.ownerDocument.defaultView;
+    var x = r.left + r.width / 2;
+    var y = r.top + r.height / 2;
+    if (!win || x < 0 || y < 0 || x > win.innerWidth || y > win.innerHeight) return false;
+    return f.ownerDocument.elementFromPoint(x, y) === f;
+  }
+
+  /**
+   * The bank's check, as the final button's press brought it up on this page (null: nothing like it):
+   * - a frame named, titled or boxed for it — Adyen's "threeDSIframe", Cardinal's, Stripe's: its address is no
+   *   help, the bank's page is posted into it (new since the press; on a page after the press, any);
+   * - a frame new since the press, in front of the checkout and big enough to answer in — not chat, ads, video,
+   *   PayPal, Afterpay: most likely the bank's (the one way to tell a frame the bank's posted into with no name)
+   *   (on a page after the press that isn't the checkout, any);
+   * - words new since the press about approving the payment ("Approve this payment in your CommBank app") — on a
+   *   page after the press that isn't the checkout, any; never a line saying it went wrong (saidIn);
+   * - a page after the press whose address says it's the bank's check (…/3ds, …/authentication).
+   * { how: 'frame' | 'popup' | 'words' | 'page', host }
+   */
+  function bankAfterPress(doc, text, inFrame) {
+    var m = pressMark;
+    if (!m || m.doc !== doc) return null;
+    var frames = Array.prototype.slice.call(doc.querySelectorAll('iframe')).filter(function (f) { return visible(f) && !f.closest(OURS); });
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i];
+      var src = f.getAttribute('src') || '';
+      var host = hostOf(src, doc);
+      if (HUMAN_FRAME.test(src) || NOT_BANK_FRAME.test(host)) continue;
+      var fresh = m.frames.indexOf(f) === -1;
+      // (Card boxes are a line high, and up before the press: never these.)
+      if ((fresh || m.fresh) && sized(f, 100, 100) && BANK_HINT.test(frameWords(f))) return { how: 'frame', host: host };
+      // (Inside a payment provider's frame — its card boxes, its form: a frame of a size to answer in that the
+      //  press brought up there is the bank's, wherever it sits in that frame.)
+      if ((fresh || m.away) && (inFront(f) || (inFrame && sized(f, 200, 200)))) return { how: 'popup', host: host };
+    }
+    if (saidIn(text).some(function (t) { return !m.said[t]; })) return { how: 'words', host: '' };
+    if (m.fresh && /3ds|three.?d.?s|threeds|\/acs\b|authenticat|challenge/i.test(doc.location.pathname + doc.location.search)) return { how: 'page', host: '' };
+    return null;
+  }
+
+  /**
+   * Every frame on the checkout marked as the final button's pressed (the background asks each: bankMark — not
+   * waited for, so the press isn't held up). A frame that marked itself for its own press a moment ago (a checkout
+   * in a frame: frame.js) keeps that mark: the background's may come after what the press brought up.
+   */
+  function markPressed(doc) {
+    doc = doc || document;
+    if (pressMark && pressMark.doc === doc && !pressMark.fresh && Date.now() - pressMark.at < 3000) return;
+    markPress(doc, false, false);
+  }
+
+  /**
+   * In a frame on the checkout — a payment provider's (its card boxes, its form), or one inside one — asked from
+   * the background after the final button (bankFrames): the bank's check the press brought up in it, as on the
+   * page (bankAfterPress). A frame that came after the press counts what it shows from the start. (Its own
+   * frames the extension may not open — the bank's — are looked at from here, the frame they're in.)
+   */
+  function bankShown(doc) {
+    doc = doc || document;
+    if (!doc.body) return null;
+    // (Not marked at the press: it came after it — what it shows counts, words too, if it's a frame of a size to
+    //  answer in. A card box's frame that's drawn again shows only its labels, never words of this kind, but a
+    //  provider's "Visa Secure" badge isn't an ask: only what's new since the press, or in a new frame, counts.)
+    var win = doc.defaultView;
+    if (!pressMark || pressMark.doc !== doc) markPress(doc, true, !!(win && win.innerWidth >= 200 && win.innerHeight >= 150));
+    return bankAfterPress(doc, (doc.body.innerText || '').slice(0, 20000), true);
+  }
+
+  /** What your account's told when the bank's check comes up (it DMs you at once). */
+  function bankMessage(name, b) {
+    var what = b && b.how === 'popup'
+      ? 'A pop-up came up on the checkout after paying' + (b.host ? ' (' + b.host.slice(0, 60) + ')' : '') + ' — most likely your bank wanting you to approve it'
+      : 'Your bank wants you to approve this payment';
+    return what + ": approve it in your bank's app (or with the code it sent you), or in the checkout tab. It's marked placed once " + name + ' confirms the order.';
+  }
+
   /**
    * How it went after the final button, from what the page shows (null: can't tell yet).
    * done: the store's order-placed address; name: the store's name, for the messages.
@@ -170,11 +336,30 @@ var MGBChecks = (function () {
     if (CONFIRM_RE.test(text)) return { status: 'placed' };
     var frames = Array.prototype.slice.call(doc.querySelectorAll('iframe')).filter(visible).map(function (f) { return f.src || f.getAttribute('src') || ''; });
     if (frames.some(function (f) { return HUMAN_FRAME.test(f); })) return { status: 'needs_you', reason: 'human_check', message: name + ' wants to check you\'re human — finish it yourself in this tab (Mugibot never gets past these).' };
-    if (frames.some(function (f) { return BANK_FRAME.test(f); }) || BANK_RE.test(text)) return { status: 'needs_you', reason: 'bank_check', message: 'Your bank wants you to confirm the payment — finish it in this tab.' };
+    if (frames.some(function (f) { return BANK_FRAME.test(f); }) || BANK_RE.test(text)) return { status: 'needs_you', reason: 'bank_check', message: bankMessage(name, null) };
     var err = pageError(doc);
     if (err && DECLINE_RE.test(err)) return { status: 'failed', reason: 'card_declined', message: name + ' said: ' + err };
     if (DECLINE_RE.test(text.slice(0, 4000))) return { status: 'failed', reason: 'card_declined', message: name + ' declined the payment.' };
+    var b = bankAfterPress(doc, text);
+    if (b) return { status: 'needs_you', reason: 'bank_check', message: bankMessage(name, b), how: b.how };
     return null;
+  }
+
+  /**
+   * What's on the checkout while the store hasn't answered the press (for your account's run history, so a run
+   * that's waiting shows why): a pop-up box's words, a frame the press brought up — numbers left out. '' for none.
+   */
+  function showing(doc) {
+    doc = doc || document;
+    var out = [];
+    var box = Array.prototype.slice.call(doc.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]'))
+      .filter(function (el) { return visible(el) && !el.closest(OURS); })[0];
+    var t = box ? (box.innerText || '').replace(/\s+/g, ' ').trim() : '';
+    if (t) out.push('"' + t.replace(/\d{3,}/g, '•••').slice(0, 100) + '"');
+    var m = pressMark && pressMark.doc === doc ? pressMark : null;
+    var fresh = Array.prototype.slice.call(doc.querySelectorAll('iframe')).filter(function (f) { return visible(f) && sized(f, 100, 100) && !f.closest(OURS) && (!m || m.frames.indexOf(f) === -1); });
+    if (fresh.length) out.push(fresh.length === 1 ? 'a new frame' + (hostOf(fresh[0].getAttribute('src'), doc) ? ' from ' + hostOf(fresh[0].getAttribute('src'), doc) : '') : fresh.length + ' new frames');
+    return out.join(' and ');
   }
 
   /**
@@ -239,5 +424,5 @@ var MGBChecks = (function () {
   // it again while the store's struggling (a hot drop) — then it stops, nothing bought.
   var RETRY_MS = 30 * 60 * 1000;
 
-  return { CONFIRM_RE: CONFIRM_RE, DECLINE_RE: DECLINE_RE, RETRY_MS: RETRY_MS, errorKind: errorKind, retryWait: retryWait, orderTotal: orderTotal, pageError: pageError, pageErrors: pageErrors, markErrors: markErrors, missingRequired: missingRequired, outcome: outcome, savedCardShown: savedCardShown, unavailable: unavailable, visible: visible };
+  return { CONFIRM_RE: CONFIRM_RE, DECLINE_RE: DECLINE_RE, RETRY_MS: RETRY_MS, errorKind: errorKind, retryWait: retryWait, orderTotal: orderTotal, pageError: pageError, pageErrors: pageErrors, markErrors: markErrors, markAfter: markAfter, markPressed: markPressed, bankShown: bankShown, missingRequired: missingRequired, outcome: outcome, showing: showing, bankMessage: bankMessage, bankWords: saidIn, savedCardShown: savedCardShown, unavailable: unavailable, visible: visible };
 })();
