@@ -1479,7 +1479,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <div id="t-addr-wrap"><label for="t-addr">Delivery Address</label>
         <input id="t-addr" name="deliveryAddress" role="combobox" aria-autocomplete="list" aria-controls="t-addr-list" aria-expanded="false" autocomplete="off" placeholder="Start typing your address">
         <ul id="t-addr-list" role="listbox" class="AddressSuggestions" hidden></ul></div>
-        <p><button type="button" id="t-cc-next" hidden>Continue to payment</button></p></section>
+        <p id="t-cc-wrap" hidden><button type="button" id="t-cc-next">Continue to payment</button></p></section>
       <section id="t-payment" hidden><h2>Payment Method</h2>
         ${tile('PaymentTile', 'data-pay="card"', 'Credit Card')}${tile('PaymentTile', 'data-pay="paypal"', 'PayPal')}${tile('PaymentTile', 'data-pay="afterpay"', 'Afterpay')}${tile('PaymentTile', 'data-pay="zip"', 'Zip')}
         <div id="t-card" hidden><iframe id="paydock" title="Credit card" src="${cardOrigin}/paydock-widget" width="380" height="260" style="border:1px solid #ccc"></iframe></div></section>
@@ -1504,13 +1504,13 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           if (t.getAttribute('aria-disabled') === 'true') return;
           pick(t, '.DeliveryOption'); mode = t.dataset.mode;
           if (mode === 'cnc') { $('t-error').textContent = 'Choose a store to collect from'; $('t-details').hidden = true; $('t-store').hidden = false; return; }
-          $('t-store').hidden = true; $('t-addr-wrap').hidden = false; $('t-cc-next').hidden = true;
+          $('t-store').hidden = true; $('t-addr-wrap').hidden = false; $('t-cc-wrap').hidden = true;
           $('t-error').textContent = ''; setTimeout(() => { $('t-details').hidden = false; }, 250);
         });
         // Click & Collect: the store chosen, your details (no address), then payment.
         document.addEventListener('store-chosen', () => {
           $('t-error').textContent = '';
-          $('t-addr-wrap').hidden = true; $('t-cc-next').hidden = false;
+          $('t-addr-wrap').hidden = true; $('t-cc-wrap').hidden = false;
           setTimeout(() => { $('t-details').hidden = false; }, 250);
         });
         $('t-cc-next').addEventListener('click', () => {
