@@ -543,6 +543,47 @@ at EB Games and Good Games). While a store hasn't answered a press, the run's
 history now also says what's on the page ("on the page: a new frame from …", a
 pop-up's words, numbers left out), so a run that's waiting shows why.
 
+### 🏬 Click & Collect when home delivery isn't offered
+
+**Home delivery is always the first choice.** Sometimes a store won't deliver an
+order, a pre-order that's pick-up only for example. Every checkout Mugibot fills
+in, ⚡ Buy's and Auto-checkout's, then chooses **Click & Collect** instead, at the
+store nearest you (extension **1.31.0**). This works at every store, however its
+checkout shows it:
+
+- **How it knows home delivery isn't offered:**
+  - its Home delivery option is greyed out or says "Not available for this order";
+  - it isn't there at all, with only a pick-up option left (WooCommerce's "Local
+    pickup", Magento's "Store Pickup");
+  - or the checkout says so: Shopify's "Your order cannot be shipped", "No
+    shipping options available", "Click & Collect only".
+
+  "Express delivery unavailable to your area" doesn't count.
+- **The store to collect from:** the one nearest your postcode, or the postcode
+  or suburb you give under **Collect near**.
+  - **Kmart, BIG W:** its "Select a store" / "Choose a store", your postcode
+    searched, then the first store's "Select".
+  - **Target:** the same finder on the page ("Find stores", "Select store").
+  - **EB Games:** the first store in its drop-down.
+  - **City Beach:** the first in its list of stores.
+  - **Shopify** (JB Hi-Fi, Toys"R"Us, the card shops): "Pick up", then the first
+    pick-up location.
+- **On the product page:** a product whose only buy button is "Add to cart for
+  Click & Collect" has that button pressed. A reservation, a stock check or "Find
+  in store" is never pressed.
+- **You're told:**
+  - The run says "🏬 Click & Collect from Kmart Cheltenham — Kmart doesn't offer
+    home delivery for this order".
+  - The order's DM and Discord's ⚡ Buy reply say where to pick it up.
+  - ⚡ Buy's panel says so beside the final button.
+- **Home delivery only?** Untick **"No home delivery for an order? Click &
+  Collect it…"** in your delivery details (Setup → Delivery & card). A checkout
+  that won't deliver is then stopped for you, with nothing bought.
+- **Stores with no Click & Collect** (Amazon, Pokémon Center, Premium Bandai):
+  nothing changes there.
+- **When changes apply:** your delivery details are read afresh as each checkout
+  starts, so a change applies to the next one.
+
 ### Run history
 
 Every time an armed item drops, the Checkout page logs it in the **Run

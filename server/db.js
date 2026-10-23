@@ -546,6 +546,11 @@ const MIGRATIONS = [
   `
   ALTER TABLE aco_runs ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1;
   `,
+  // 18 — a drop watch's words (a key phrase) at every store Mugibot searches (store 'all'): its first look at each
+  //      store, { store: at } — what was listed there then was there already.
+  `
+  ALTER TABLE drop_watches ADD COLUMN bases TEXT NOT NULL DEFAULT '{}';
+  `,
 ];
 
 export class Db {

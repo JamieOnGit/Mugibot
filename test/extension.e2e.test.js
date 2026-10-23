@@ -3431,6 +3431,80 @@ test("🏦 your bank's check after the final button at every kind of checkout �
   store.state.cardInIframe = false;
 });
 
+// 🏬 Click & Collect when the store doesn't offer home delivery for the order (a pick-up-only pre-order), at every kind
+// of checkout, each as the store has you choose a store: what the order went in as (got), and the store named.
+const COLLECT_CASES = [
+  // Radios, home delivery's switched off; "Select a store" → its finder (a postcode, Search, a store's "Select").
+  { shop: 'kmart', store: 'Kmart Cheltenham', item: () => ({ url: store.productUrl('kmart', '43818587'), maxPrice: 120 }),
+    got: (S) => [S.orders[0].data.delivery.method, S.orders[0].data.store.store, S.orders[0].data.store.near], want: ['cc', 'Kmart Cheltenham', '2000'] },
+  // Click & Collect chosen for you, Home Delivery switched off: its store from the drop-down.
+  { shop: 'ebgames', store: 'EB Games Sydney CBD', item: () => ({ url: store.productUrl('ebgames', '312346'), maxPrice: 120 }),
+    got: (S) => [S.orders[0].data.store.fulfilment, S.orders[0].data.store.store], want: ['cnc', 'EB Games Sydney CBD'] },
+  // Tiles, Home Delivery greyed out ("Not available for this order"): its finder on the page ("Find stores", "Select store").
+  { shop: 'target', store: 'Target Highpoint', item: () => ({ url: store.productUrl('target', '71234567'), maxPrice: 90 }), setup: () => { store.set('target', '71234567', { status: 'in_stock' }); },
+    got: (S) => [S.orders[0].data.delivery.mode, S.orders[0].data.delivery.store, S.orders[0].data.store.near], want: ['cnc', 'Target Highpoint', '2000'] },
+  // Buttons, "Home delivery" greyed out: "Choose a store" → its finder in a pop-up.
+  { shop: 'bigw', store: 'BIG W Chadstone', item: () => ({ url: store.productUrl('bigw', '6012346'), maxPrice: 70 }),
+    got: (S) => [S.orders[0].data.method.method, S.orders[0].data.collect.store], want: ['collect', 'BIG W Chadstone'] },
+  // Tabs, Delivery greyed out: a list of its stores, nothing chosen.
+  { shop: 'citybeach', store: 'City Beach Chadstone', item: () => ({ url: store.productUrl('citybeach', '20499999-01'), maxPrice: 150 }), setup: () => { store.set('citybeach', '20499999-01', { listed: true, status: 'in_stock' }); },
+    got: (S) => [S.orders[0].data.shipping.collect, S.orders[0].data.shipping.store], want: [true, 'City Beach Chadstone'] },
+  // Shopify: "Ship" chosen, and "Your order cannot be shipped" — "Pick up", then its first pick-up location.
+  { shop: 'jbhifi', store: 'JB Hi-Fi (dummy Shopify) Chadstone', item: () => ({ store: 'demo-jbhifi', sku: 'pokemon-tcg-30th-celebration-etb', maxPrice: 120 }),
+    got: (S) => [S.orders[0].form.deliveryMethod, S.orders[0].form.pickupLocation, S.orders[0].form.shipping], want: ['pickup', 'loc1', undefined] },
+  // WooCommerce (Games World): only "Local pickup", nothing chosen.
+  { shop: 'gamesworld', store: 'Games World Melbourne', item: () => ({ url: store.productUrl('gamesworld', 'pokemon-tcg-mega-evolution-elite-trainer-box'), maxPrice: 120 }), setup: () => { store.set('gamesworld', 'pokemon-tcg-mega-evolution-elite-trainer-box', { status: 'in_stock' }); },
+    got: (S) => [S.orders[0].form.shipping], want: ['local_pickup:3'] },
+  // Magento (The Gamesmen): only "Store Pickup", nothing chosen.
+  { shop: 'gamesmen', store: 'The Gamesmen Melbourne', item: () => ({ url: store.productUrl('gamesmen', 'pokemon-tcg-mega-evolution-perfect-order-elite-trainer-box'), maxPrice: 150 }),
+    got: (S) => [S.orders[0].form.shipping], want: ['pickup'] },
+  // A product page whose only buy button is "Add to cart for Click & Collect" (BIG W's checkout from there, as above).
+  { shop: 'bigw', label: 'bigw, its only buy button for Click & Collect', store: 'BIG W Chadstone', item: () => ({ url: store.productUrl('bigw', '6012346'), maxPrice: 70 }), setup: () => { store.shop('bigw').addLabel = 'Add to cart for Click & Collect'; },
+    got: (S) => [S.orders[0].data.collect.store, S.orders[0].cart.length], want: ['BIG W Chadstone', 1] },
+];
+
+test("🏬 Click & Collect when the store doesn't offer home delivery for the order, at every kind of checkout — Kmart's, EB Games', Target's, BIG W's, City Beach's, Shopify's, WooCommerce's, Magento's, and a buy button that's only for Click & Collect: the store nearest you chosen, the order placed, and you're told where to pick it up", async () => {
+  for (const c of COLLECT_CASES) {
+    const label = c.label || c.shop;
+    store.reset();
+    store.state.account = KMART_ACCOUNT;
+    if (c.setup) await c.setup();
+    store.shop(c.shop).collectOnly = true;
+    const name = `ACO collect ${label}`;
+    await useItems([{ ...c.item(), name }]);
+    const dmsBefore = discord.dmsTo('d-ash').length;
+    await testRun(name);
+    const run = await runOver(`${label}: the run over`);
+    const S = store.shop(c.shop);
+    assert.equal(run.status, 'placed', `${label}: ${JSON.stringify(run.steps.slice(-4))}`);
+    assert.equal(S.orders.length, 1, `${label}: one order`);
+    assert.deepEqual(c.got(S), c.want, `${label}: went in as Click & Collect, at the nearest store`);
+    assert.ok(run.steps.some((x) => x.message.startsWith(`🏬 Click & Collect from ${c.store} — `) && /doesn't offer home delivery for this order$/.test(x.message)), `${label}: said on the run: ${JSON.stringify(run.steps.map((x) => x.message))}`);
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /^✅ Auto-checkout placed your order/.test(m.body.embeds[0].title) && m.body.embeds[0].description.includes(`🏬 Click & Collect from ${c.store} (no home delivery for this order) — pick it up once`)), { message: `${label}: the order's DM says where to pick it up` });
+    await closeStorePages(c.shop);
+  }
+});
+
+test("🏬 your delivery details saying home delivery only: a checkout that doesn't offer it for the order stops for you — nothing bought, and you're told why", async () => {
+  await browserApi('PUT', '/api/profiles', { profiles: [{ ...PROFILE_A, collect: false }] });
+  try {
+    store.reset();
+    store.state.account = KMART_ACCOUNT;
+    store.shop('kmart').collectOnly = true;
+    await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'ACO home only', maxPrice: 120 }]);
+    await testRun('ACO home only');
+    const run = await runOver('the home-only run over');
+    assert.equal(run.status, 'needs_you', JSON.stringify(run.steps.slice(-3)));
+    assert.equal(run.reason, 'home_only');
+    assert.match(run.message, /doesn't offer home delivery for this order, and your delivery details say home delivery only/);
+    assert.equal(store.shop('kmart').orders.length, 0, 'nothing bought');
+    assert.equal(store.shop('kmart').steps.some((x) => x.step === 'store'), false, 'no store chosen');
+  } finally {
+    await browserApi('PUT', '/api/profiles', { profiles: [PROFILE_A] });
+    await closeStorePages('kmart');
+  }
+});
+
 test('🤖 ⚡ Buy with Mugibot on a channel alert, pressed on a phone with Auto-checkout on: this browser checks out by itself and places the order — up to the price the alert showed — and Discord\'s reply says so', async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   await useItems([]);

@@ -68,6 +68,12 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // words about approving the payment: you're told at once (a DM: approve it in your bank's app), and the order's
 // marked placed once the store confirms it. Before, such a run waited out the half hour as "no answer" (Oct 2026:
 // two runs, EB Games' and Good Games').
+// 1.31.0: Click & Collect when a store doesn't offer home delivery for an order (a pick-up-only pre-order), at every
+// store — its home delivery switched off, not there, or the checkout saying so (fill.js: collectStep) — at the store
+// nearest you (your postcode, or where your delivery details say): its store finder searched and its first store
+// chosen, or its drop-down's, or its list's; said on the run and in the order's DM. Your delivery details can say
+// home delivery only (stopped for you instead). A product page whose only buy button adds it for Click & Collect has
+// it pressed. Your delivery details read afresh as each checkout starts.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):

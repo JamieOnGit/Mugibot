@@ -256,13 +256,21 @@ async function getState() {
 const PROFILE_FRESH_MS = 2 * 60 * 1000;
 const profiles = new Map();
 
-async function profileFor(chosen) {
+const profileAsks = new Map();
+async function profileFor(chosen, fresh = false) {
+  // (One asked for already — a checkout starting asks afresh: its answer, not the one from before.)
+  if (profileAsks.has(chosen)) return profileAsks.get(chosen);
   const hit = profiles.get(chosen);
-  if (hit && Date.now() - hit.at < PROFILE_FRESH_MS) return hit.profile;
-  const res = await api('GET', `/api/ext/profile${chosen ? `?profile=${encodeURIComponent(chosen)}` : ''}`);
-  if (res.status !== 200 || !res.body) return null;
-  profiles.set(chosen, { profile: res.body.profile, at: Date.now() });
-  return res.body.profile;
+  // (fresh: a checkout starting — your details as they are now, a change since included: Click & Collect or not.)
+  if (!fresh && hit && Date.now() - hit.at < PROFILE_FRESH_MS) return hit.profile;
+  const ask = (async () => {
+    const res = await api('GET', `/api/ext/profile${chosen ? `?profile=${encodeURIComponent(chosen)}` : ''}`);
+    if (res.status !== 200 || !res.body) return null;
+    profiles.set(chosen, { profile: res.body.profile, at: Date.now() });
+    return res.body.profile;
+  })();
+  profileAsks.set(chosen, ask);
+  try { return await ask; } finally { profileAsks.delete(chosen); }
 }
 
 // --- checkout passes: which tab may receive your details, for how long -----
@@ -2063,7 +2071,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (res.status === 200 && res.body && res.body.ok) {
           // (An Auto-checkout run's code: the run's limits ride on this tab's pass, never on the page.)
           await savePass(sender.tab.id, res.body.host === tabHost(sender) ? res.body.host : tabHost(sender), auth.user.id, res.body.profileId, res.body.aco || null);
-          profileFor(res.body.profileId || '').catch(() => null); // for checkout, in a moment
+          profileFor(res.body.profileId || '', true).catch(() => null); // for checkout, in a moment (as your details are now)
           // In the line for this store (one checkout at a time there: turns, above).
           const r = await storeForTab(sender);
           if (r) await joinTurn(sender.tab.id, r.id, { runId: res.body.aco ? res.body.aco.runId : null, name: res.body.name || '', own: !!r.cartLinks });
@@ -2281,6 +2289,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const n = Math.max(1, Math.min(99, Number(msg.n) || 1));
         await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...pass.aco, others: n } } });
         api('POST', `/api/ext/aco/${encodeURIComponent(pass.aco.runId)}`, { status: 'note', reason: 'others', message: String(msg.message || '').slice(0, 300) }).catch(() => null);
+        return { ok: true };
+      }
+      case 'acoCollect': {
+        // The store doesn't offer home delivery for this order: Click & Collect was chosen (and, once known, the
+        // store to collect from) — said on the run, and in the DM when the order's placed (server/aco.js).
+        if (!sender.tab) return null;
+        const pass = await passFor(sender);
+        if (!pass || !pass.aco || !pass.aco.runId) return null;
+        const store = String(msg.store || '').slice(0, 80);
+        if (pass.aco.collect && pass.aco.collect.store === store) return { ok: true };
+        await chrome.storage.session.set({ [passKey(sender.tab.id)]: { ...pass, aco: { ...pass.aco, collect: { store } } } });
+        api('POST', `/api/ext/aco/${encodeURIComponent(pass.aco.runId)}`, { status: 'note', reason: 'collect', message: String(msg.message || '').slice(0, 300) }).catch(() => null);
         return { ok: true };
       }
       case 'denied': {

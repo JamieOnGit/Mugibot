@@ -106,6 +106,8 @@ export const REASONS = {
   unconfirmed: "The final button was pressed, but no order confirmation showed",
   not_placed: 'The final button was pressed again and again for 30 minutes, and the store never took the order',
   others: 'Other things were already in the bag: they were bought too',
+  collect: "Click & Collect: the store doesn't offer home delivery for this order",
+  home_only: "The store doesn't offer home delivery for this order, and your delivery details say home delivery only",
   store_denied: 'The store\'s bot protection turned your browser away ("Access Denied")',
   wrong_item: "The checkout wasn't for this item alone",
   stopped: 'You stopped it',
@@ -552,6 +554,9 @@ export class Aco {
   remoteText(run, deviceName = 'your checkout browser') {
     const where = this.retailers.name(run.store);
     const total = run.total ?? run.price;
+    // (Click & Collect, because the store doesn't offer home delivery for this order: where to pick it up.)
+    const collect = (run.steps || []).map((x) => String(x.message || '')).reverse().find((m) => m.startsWith('🏬 Click & Collect'));
+    const pickup = collect ? ` ${collect.split(' — ')[0]} (no home delivery for this order).` : '';
     const lines = {
       queued: `⏳ Sent to **${deviceName}** — waiting for it to open ${where}.`,
       sent: `🛒 **${deviceName}** is opening ${where}…`,
@@ -563,8 +568,8 @@ export class Aco {
         : `🚦 In ${where}'s virtual queue in **${deviceName}**${run.message && /about \d+ min/.test(run.message) ? ` — ${run.message.match(/about \d+ min\w*/)[0]}` : ''}. It waits its turn (never refreshing the page), then checks out.`,
       checkout: `🛒 At ${where}'s checkout in **${deviceName}** — filling it in…`,
       placing: `💳 Placing the order at ${where}…`,
-      placed: `✅ **Order placed** at ${where}${total ? ` — ${money(total)}` : ''}. The store emails you the confirmation.`,
-      ready: `🛒 **Checkout's ready** in ${deviceName} — press ${where}'s final button there to buy.`,
+      placed: `✅ **Order placed** at ${where}${total ? ` — ${money(total)}` : ''}.${pickup} The store emails you the confirmation.`,
+      ready: `🛒 **Checkout's ready** in ${deviceName} — press ${where}'s final button there to buy.${pickup}`,
       needs_you: run.reason === 'bank_check'
         ? `🏦 **Approve the payment in your bank's app** — the checkout's in **${deviceName}**: ${run.message || run.reasonText}`
         : `⚠️ **It needs you** in ${deviceName}: ${run.message || run.reasonText}`,
@@ -1102,9 +1107,12 @@ export class Aco {
     // turns "placed" by itself once the store confirms the order. (A Discord DM always: it spends your money.)
     const bank = status === 'needs_you' && reason === 'bank_check';
     const device = bank && row.device_id ? this.repo.listDevices(userId).find((d) => d.id === row.device_id) : null;
+    // Click & Collect, because the store doesn't offer home delivery for this order (the run's note): where to pick it up.
+    const collect = parseSteps(row.steps).map((x) => String(x.message || '')).reverse().find((m) => m.startsWith('🏬 Click & Collect'));
+    const pickup = collect ? `${collect.split(' — ')[0]} (no home delivery for this order) — pick it up once ${storeName} says it's ready.\n` : '';
     const ev = {
-      placed: { level: 'success', title: `✅ Auto-checkout placed your order: ${row.name}`, message: `${storeName}${total ? ` · ${money(total)}` : ''}\nThe store emails you the confirmation.${remote ? '' : ' To buy it again, arm it again in Mugibot.'}` },
-      ready: { level: 'urgent', title: `🛒 Checkout ready: ${row.name}`, message: `${storeName}\nYour browser filled checkout in and stopped at the final button — press it to buy.` },
+      placed: { level: 'success', title: `✅ Auto-checkout placed your order: ${row.name}`, message: `${storeName}${total ? ` · ${money(total)}` : ''}\n${pickup}The store emails you the confirmation.${remote ? '' : ' To buy it again, arm it again in Mugibot.'}` },
+      ready: { level: 'urgent', title: `🛒 Checkout ready: ${row.name}`, message: `${storeName}\n${pickup}Your browser filled checkout in and stopped at the final button — press it to buy.` },
       needs_you: bank
         ? { level: 'urgent', title: `🏦 Approve the payment in your bank's app: ${row.name}`, message: `${storeName}${total ? ` · ${money(total)}` : ''}\n${text}\nThe checkout's open in ${device ? device.name : 'your checkout browser'} — to finish it there from your phone: 🖥️ Open my computer (Chrome Remote Desktop).` }
         : { level: 'urgent', title: `⚠️ Auto-checkout needs you: ${row.name}`, message: `${storeName}\n${text}${pressed ? '' : ' Finish it in the tab that opened.'}` },

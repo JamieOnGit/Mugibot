@@ -137,7 +137,9 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
 
 // --- Delivery details ----------------------------------------------------------
 export const AU_STATES = { NSW: 'New South Wales', VIC: 'Victoria', QLD: 'Queensland', WA: 'Western Australia', SA: 'South Australia', TAS: 'Tasmania', ACT: 'Australian Capital Territory', NT: 'Northern Territory' };
-export const EMPTY_PROFILE = { id: '', label: 'Home', firstName: '', lastName: '', email: '', phone: '', address1: '', address2: '', suburb: '', state: '', postcode: '', country: 'AU' };
+// collect: Click & Collect when the store doesn't offer home delivery for an order (on unless you say home delivery
+// only); collectNear: the postcode or suburb to find the store near (blank: your postcode).
+export const EMPTY_PROFILE = { id: '', label: 'Home', firstName: '', lastName: '', email: '', phone: '', address1: '', address2: '', suburb: '', state: '', postcode: '', country: 'AU', collect: true, collectNear: '' };
 
 export function profile(input) {
   const p = { ...EMPTY_PROFILE, ...(input || {}) };
@@ -155,6 +157,8 @@ export function profile(input) {
     state: AU_STATES[state] ? state : Object.entries(AU_STATES).find(([, full]) => full.toUpperCase() === state)?.[0] || state,
     postcode: str(p.postcode, 10),
     country: 'AU',
+    collect: !(p.collect === false || p.collect === 'false' || p.collect === 0 || p.collect === '0'),
+    collectNear: str(p.collectNear, 60),
   };
   const where = out.label ? ` (${out.label})` : '';
   if (out.email && !EMAIL_RE.test(out.email)) throw bad(`Checkout email looks wrong${where}`);

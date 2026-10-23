@@ -542,7 +542,18 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
   Jones', say) is checked from a browser instead, once its extension may read
   that site (see **Refused by the server** below). Until then it shows
   **Blocked by site** or **Check failed**, and is asked again later.
-- **The words in its name**, and where to look:
+- **🔑 Key phrases: the words in its name**, and where to look. Paste
+  several at once, one a line ("Heavy Hitters Premium", "Ascended Heroes ETB"),
+  and each becomes a watch of its own. A phrase you have already, or one too
+  short, is said beside it and the rest are added. Where to look:
+  - **Every store Mugibot searches** (the default): the phrase is searched at
+    each store in its turn, at the same pace as one store's below. It's also
+    matched against **every product any of the store's searches read**, the
+    card keywords' included. A new listing with the phrase in its name is a drop
+    whichever search sees it first, once the card search has had its own first
+    read there, so you're told within seconds. Each store's first look is that
+    store's own "before". Auto-checkout works at whichever of them Mugibot checks
+    out at. Each watch keeps twice as many finds as a one-store watch.
   - **A store Mugibot searches** (JB Hi-Fi, Kmart, Target, EB Games…): the
     words are searched at that store as typed (no "tcg" added), in the live
     sweeps' turn — **one search in three at most**, each watch's words about
@@ -882,7 +893,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
 | Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
 | What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
-| 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find — `hasWords`, `room` — where they post, and your own finds' price drops: `priceDropped`); `drop_watches` (with `channel_id`, `role_id`: migration 12), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11), `items.price_alert_at`/`price_alert_price` (migration 13); `GET/POST /api/drops`, `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
+| 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find — `hasWords`, `room` — where they post, and your own finds' price drops: `priceDropped`); `drop_watches` (with `channel_id`, `role_id`: migration 12; `bases`, each store's first look for a key phrase at every store, `ALL_STORES`: migration 18), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11), `items.price_alert_at`/`price_alert_price` (migration 13); `GET/POST /api/drops` (`phrases`: several key phrases at once), `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |

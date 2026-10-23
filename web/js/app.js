@@ -854,6 +854,15 @@ function profileCard(p, index) {
     }
     grid.append(h('div', { class: key === 'address1' || key === 'address2' ? 'span2' : '' }, h('label', { for: id }, label), input));
   }
+  // Click & Collect when a store doesn't offer home delivery for an order (a pick-up-only pre-order): on unless
+  // you say home delivery only — near your postcode, or where you say.
+  const collect = h('input', { type: 'checkbox', name: 'collect', checked: p.collect !== false });
+  const near = h('input', { id: `p-${index}-collectNear`, name: 'collectNear', type: 'text', maxlength: '60', placeholder: 'Your postcode', autocomplete: 'off' });
+  near.value = p.collectNear || '';
+  grid.append(
+    h('div', { class: 'span2' }, h('label', { class: 'check' }, collect, h('span', {}, 'No home delivery for an order (a pick-up-only pre-order, say)? Click & Collect it from the nearest store instead'))),
+    h('div', {}, h('label', { for: near.id }, 'Collect near (postcode or suburb, optional)'), near),
+  );
   const remove = h('button', { class: 'btn small danger', type: 'button', onclick: () => { card.remove(); } }, 'Remove this address');
   card.append(legend, grid, h('div', { class: 'form-actions' }, h('label', { class: 'check' }, isDefault, h('span', {}, 'Use by default')), state.profiles.profiles.length > 1 || index > 0 ? remove : null));
   return card;
@@ -870,6 +879,8 @@ function readProfiles() {
   const profiles = cards.map((c) => {
     const out = { id: c.dataset.id };
     for (const [key] of PROFILE_FIELDS) out[key] = $(`[name="${key}"]`, c).value;
+    out.collect = $('[name="collect"]', c).checked;
+    out.collectNear = $('[name="collectNear"]', c).value;
     return out;
   });
   const def = $('#p-list input[name=defaultProfile]:checked');

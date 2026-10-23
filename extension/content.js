@@ -954,7 +954,7 @@
       if (run && !run.placing) await acoReport('checkout', '', `At ${retailer.name}'s checkout — filling it in`);
       if (run && run.placing) panel.setStatus(`🤖 ${retailer.name} came back to its checkout without taking the order — filling it in again to press "Pay" again…`);
       let fin = null;
-      const result = await MGBFill.assist({
+      const assistOpts = {
         values: MGBFill.fieldValues(data.profile, data.card),
         flow: checkoutFlow,
         storeName: retailer.name,
@@ -969,13 +969,17 @@
         // (An Auto-checkout run: a store slowed right down gets up to 30 minutes, your account told how it's going.)
         patientMs: run ? MGBChecks.RETRY_MS : 0,
         onBeat: run ? beat : null,
-      });
+        // Home delivery not offered for this order: Click & Collect, said on the run (and in the order's DM).
+        onCollect: run ? (c) => ask({ type: 'acoCollect', store: c.store || '', message: `🏬 Click & Collect${c.store ? ` from ${c.store}` : ''} — ${retailer.name} doesn't offer home delivery for this order` }) : null,
+      };
+      const result = await MGBFill.assist(assistOpts);
       if (result === 'final' && run && fin) {
         await acoFinish(run, fin, data);
         return;
       }
       if (run && result === 'done') await acoReport('placed', '', `Order confirmed at ${retailer.name}`);
-      if (run && (result === 'needs_you' || result === 'timeout')) await acoReport('needs_you', result === 'timeout' ? 'timeout' : 'needs_details', `Checkout got stuck at ${retailer.name} — finish it yourself in this tab.`);
+      if (run && result === 'needs_you' && assistOpts.stuck) await acoReport('needs_you', assistOpts.stuck.reason, assistOpts.stuck.message);
+      else if (run && (result === 'needs_you' || result === 'timeout')) await acoReport('needs_you', result === 'timeout' ? 'timeout' : 'needs_details', `Checkout got stuck at ${retailer.name} — finish it yourself in this tab.`);
       // (A ⚡ Buy at the final button, or stuck, for you: the store's next checkout goes in a few minutes. Auto-checkout's runs say so themselves.)
       if (!run && ['ready', 'needs_you', 'timeout'].includes(result)) ask({ type: 'turnEnd', parked: true });
       if (result !== 'ready' && result !== 'stopped') assistFlag.off();
