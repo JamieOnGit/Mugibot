@@ -2330,7 +2330,10 @@ test("🤖 Auto-checkout when the card is declined, or your bank wants you to co
 
 test("🏦 Your bank wanting you to approve the payment, as real checkouts show it — its page posted into a frame with no address (named for it, or not at all, in a pop-up), or the whole tab sent to the bank's site: you're told at once what to do, nothing's pressed again, and it's placed once you approve it", async () => {
   const it = (await browserApi('GET', '/api/items')).body.items.find((x) => x.name === 'ACO ETB');
+  // (Each a day of its own — the orders before it count as yesterday's — and the tests after it too.)
+  const yesterday = () => env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
   for (const mode of ['posted', 'popup', 'redirect']) {
+    yesterday();
     store.reset();
     store.state.account = KMART_ACCOUNT;
     store.shop('kmart').threeDS = mode;
@@ -2360,6 +2363,7 @@ test("🏦 Your bank wanting you to approve the payment, as real checkouts show 
     await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /Auto-checkout placed your order: ACO ETB/.test(m.body.embeds[0].title)), { message: `${mode}: the "placed" DM` });
     await closeStorePages('kmart');
   }
+  yesterday();
 });
 
 test("🤖 Auto-checkout at a Kmart that won't add it: no blind trip to checkout — it tries Add twice, then says so (with what the page said) and buys nothing", async () => {
