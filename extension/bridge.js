@@ -49,6 +49,8 @@
     else if (d.type === 'checkNow') reply = await ask({ type: 'checkNow' });
     else if (d.type === 'checkLogins') reply = await ask({ type: 'checkLogins' });
     else if (d.type === 'acoListen') reply = await ask({ type: 'acoListen' });
+    else if (d.type === 'clearStoreCache' && typeof d.store === 'string') reply = await ask({ type: 'clearStoreCache', store: d.store.slice(0, 40) });
+    else if (d.type === 'cardDefault' && typeof d.cardId === 'string') reply = await ask({ type: 'cardDefault', cardId: d.cardId.slice(0, 40) });
     else if (d.type === 'cardKey') reply = await ask({ type: 'cardKey', key: d.key || null, has: typeof d.has === 'boolean' ? d.has : undefined, off: !!d.off, host: location.host });
     else return;
     window.postMessage({ source: 'mugibot-ext', type: d.type, id: d.id, reply }, location.origin);

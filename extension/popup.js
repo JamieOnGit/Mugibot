@@ -9,7 +9,9 @@ function cardText(c, backup) {
   // A new install: the card in the account's backup, one passphrase away.
   if ((!c || !c.ready) && backup) return `${backup.brand} •••• ${backup.last4} is backed up in your account — restore it in Card settings`;
   if (!c || !c.saved) return 'Not saved yet: add it in Card settings';
-  return `${c.brand} •••• ${c.last4} — ${c.ready ? 'ready for checkout' : c.needsPassphrase ? 'open Card settings once' : 'save it again'}`;
+  // (Several cards: the default's the one checkouts use.)
+  const more = c.count > 1 ? ` (your default, of ${c.count} cards)` : '';
+  return `${c.brand} •••• ${c.last4} — ${c.ready ? `ready for checkout${more}` : c.needsPassphrase ? 'open Card settings once' : 'save it again'}`;
 }
 
 function checksText(l) {

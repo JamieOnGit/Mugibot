@@ -60,7 +60,7 @@ test('💳 the card backup: only a copy locked in the extension is kept (the ser
   }
   const r = await ashBrowser.call('PUT', '/api/ext/card-backup', locked);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(Object.keys(r.body.backup).sort(), ['brand', 'expMonth', 'expYear', 'hasCvc', 'last4', 'savedAt']);
+  assert.deepEqual(Object.keys(r.body.backup).sort(), ['brand', 'cards', 'count', 'expMonth', 'expYear', 'hasCvc', 'last4', 'savedAt']);
   // Nothing in it the server could read the card from: just the locked data and its label.
   const stored = env.app.repo.getData(ash.user.id, 'cardBackup');
   assert.ok(!JSON.stringify(stored).includes(CARD.number), 'the card number is not in it');

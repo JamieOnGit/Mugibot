@@ -130,6 +130,57 @@ test('Watchlist: add by link, add by store + SKU, how many (1 unless set), edit,
   await page.waitForFunction(() => document.querySelectorAll('#w-list li[data-id]').length === 8);
 });
 
+test('My watchlist: search, filter by store and status, and sort — kept for next time; ↑ ↓ only in your own order', async () => {
+  try {
+    await page.goto(`${env.url}/app#watch`);
+    await page.waitForFunction(() => document.querySelectorAll('#w-list li[data-id]').length === 8);
+    const items = env.app.repo.listItems(env.app.repo.userByUsername('owner').id).filter((it) => !it.cartLinks && !/\/cart\/\d+:\d+/.test(it.url || ''));
+    const names = async () => page.$$eval('#w-list li[data-id] .name', (els) => els.map((e) => e.textContent.replace(/^\d+\.\s*/, '').replace(/[📣🤖🎯].*$/u, '').trim()));
+    // Search: every word, in the name, SKU or store.
+    await page.fill('#w-tools .lt-q', 'zzz nothing');
+    await page.waitForFunction(() => /Nothing on your watchlist matches/.test(document.querySelector('#w-list').textContent));
+    assert.match(await page.textContent('#w-tools .lt-count'), /^0 of 8$/);
+    const one = items[0];
+    await page.fill('#w-tools .lt-q', one.sku);
+    await page.waitForFunction((sku) => document.querySelectorAll('#w-list li[data-id]').length >= 1 && [...document.querySelectorAll('#w-list li[data-id]')].every((li) => li.textContent.includes(sku)), one.sku);
+    assert.equal(await page.locator('#w-list li[data-id]').getByRole('button', { name: 'Move up' }).count(), 0, 'no ↑ ↓ while searching');
+    await page.click('#w-tools .lt-clear');
+    await page.waitForFunction(() => document.querySelectorAll('#w-list li[data-id]').length === 8);
+    // By store.
+    const store = items[0].store;
+    await page.selectOption('#w-tools select[data-filter="store"]', store);
+    await page.waitForFunction((n) => document.querySelectorAll('#w-list li[data-id]').length === n, items.filter((it) => it.store === store).length);
+    // By status: paused.
+    await page.selectOption('#w-tools select[data-filter="store"]', '');
+    env.app.db.run('UPDATE items SET monitor = 0 WHERE id = :id', { id: one.id });
+    await page.reload();
+    await page.waitForSelector('#w-list li[data-id]');
+    await page.selectOption('#w-tools select[data-filter="state"]', 'paused');
+    await page.waitForFunction((id) => document.querySelectorAll('#w-list li[data-id]').length === 1 && document.querySelector(`#w-list li[data-id="${id}"]`), one.id);
+    // Kept for next time (this browser), until Clear.
+    await page.reload();
+    await page.waitForFunction(() => document.querySelectorAll('#w-list li[data-id]').length === 1);
+    assert.equal(await page.inputValue('#w-tools select[data-filter="state"]'), 'paused');
+    await page.click('#w-tools .lt-clear');
+    await page.waitForFunction(() => document.querySelectorAll('#w-list li[data-id]').length === 8);
+    env.app.db.run('UPDATE items SET monitor = 1 WHERE id = :id', { id: one.id });
+    await page.reload();
+    await page.waitForFunction(() => document.querySelectorAll('#w-list li[data-id]').length === 8);
+    // Sort: name A–Z (no ↑ ↓: they're for your own order), and back to your own order.
+    await page.selectOption('#w-tools .lt-sort', 'name');
+    await page.waitForFunction(() => !document.querySelector('#w-list button[aria-label="Move up"]'));
+    const sorted = await names();
+    assert.deepEqual(sorted, [...sorted].sort((a, b) => a.localeCompare(b)));
+    await page.click('#w-tools .lt-clear');
+    await page.waitForFunction(() => !!document.querySelector('#w-list button[aria-label="Move up"]'));
+    assert.equal(await page.inputValue('#w-tools .lt-sort'), '');
+  } finally {
+    // (Whatever happened, the next tests see the whole list.)
+    await page.evaluate(() => localStorage.removeItem('mgb-list:watchlist')).catch(() => null);
+    env.app.db.run("UPDATE items SET monitor = 1 WHERE user_id = :u", { u: env.app.repo.userByUsername('owner').id });
+  }
+});
+
 test("🛍️ Shop checkout links: a section of their own under My watchlist — added by the link alone, listed there (not with the SKUs, no Open), with whether you're signed in to Shop", async () => {
   await page.click('#pt-watch');
   await page.waitForSelector('#sl-box');
@@ -971,35 +1022,53 @@ test('Auto-checkout: switched on only with the agreement; limits; arming (on the
   env.app.repo.setData(owner.id, 'aco', { ...env.app.aco.settings(owner.id), enabled: false });
 });
 
-test("Auto-checkout tab: ⚡ Buy from your phone — its switch, and the checkout browser (the one runs go to) with which of your browsers are open", async () => {
+test("Auto-checkout tab: 🖥️ the checkout browser — which of your browsers checks out, open now or not, Use for checkout, and the backup when it isn't open; ⚡ Buy from your phone's switch", async () => {
   const owner = env.app.repo.userByUsername('owner');
   await page.goto(`${env.url}/app#aco`);
-  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-remote');
+  await page.waitForSelector('[data-panel="aco"]:not([hidden]) #cb-card');
   // No browser connected yet.
-  await page.waitForFunction(() => /No browser connected/.test(document.querySelector('#aco-remote-state').textContent));
+  await page.waitForFunction(() => /None connected/.test(document.querySelector('#cb-state').textContent));
+  assert.match(await page.textContent('#cb-now'), /No browser with the extension is connected yet/);
+  assert.match(await page.textContent('#aco-remote-state'), /No browser connected/);
   assert.match(await page.textContent('#aco-device-note'), /Connect the extension in the browser on the computer you keep on/);
-  // Two browsers: the newest checks out; the other can be picked.
+  // Two browsers: the newest checks out, and it's open.
   const me = new Client(env.url);
   await me.post('/api/auth/login', { username: 'owner', password: PASSWORD });
   const work = await Device.pair(env.url, me, 'Chrome on Work PC');
   const home = await Device.pair(env.url, me, 'Chrome on Home PC');
   await home.call('GET', '/api/ext/aco/next'); // the home one is open (asking for runs)
   await page.reload();
-  await page.waitForFunction(() => document.querySelectorAll('#aco-device option').length === 2);
-  assert.equal(await page.locator('#aco-device option').count(), 2);
-  assert.match(await page.textContent('#aco-device option:checked'), /^Chrome on Home PC \(open now\)$/);
+  await page.waitForFunction(() => document.querySelectorAll('#cb-list li').length === 2);
+  assert.match(await page.textContent('#cb-state'), /^Open — ready$/);
+  assert.match(await page.textContent('#cb-now'), /✅ Checkouts open in Chrome on Home PC — open now\. Auto-checkout and Discord's ⚡ Buy go there\./);
+  assert.match(await page.textContent('#cb-list li.is-chosen'), /Chrome on Home PC.*Checkout browser.*🟢 open now/s);
+  assert.match(await page.textContent('#cb-list li:not(.is-chosen)'), /Chrome on Work PC.*⚪ not open/s);
   assert.match(await page.textContent('#aco-remote-state'), /^Ready$/);
-  assert.match(await page.textContent('#aco-device-note'), /go to this one browser — never to all of them/);
-  // Pick the work one: it checks out from now on (and isn't open, so the card says so).
+  assert.match(await page.textContent('#aco-device-note'), /Checks out in Chrome on Home PC \(open now\)/);
+  assert.match(await page.textContent('#cb-fallback-label'), /Backup on/);
+  if (shots) await page.locator('#cb-card').screenshot({ path: path.join(shots, 'checkout-browser.png') });
+  // Use the work one: it's chosen — but it isn't open, so the home one (open) checks out as its backup.
   const workId = (await me.get('/api/devices')).body.devices.find((d) => d.name === 'Chrome on Work PC').id;
-  await page.selectOption('#aco-device', workId);
+  await page.locator(`#cb-list li[data-device="${workId}"]`).getByRole('button', { name: 'Use for checkout' }).click();
   await page.waitForFunction(() => /Checkout browser changed/.test(document.querySelector('#toasts')?.textContent || ''));
   assert.equal(env.app.aco.settings(owner.id).deviceId, workId);
-  await page.waitForFunction(() => /Checkout browser not open/.test(document.querySelector('#aco-remote-state').textContent));
-  assert.match(await page.textContent('#aco-device-note'), /Chrome on Work PC isn't open right now: a ⚡ Buy waits 2 minutes for it/);
-  if (shots) await page.locator('#aco-remote').screenshot({ path: path.join(shots, 'aco-remote.png') });
+  await page.waitForFunction(() => /Backup checking out/.test(document.querySelector('#cb-state').textContent));
+  assert.match(await page.textContent('#cb-now'), /⚠️ Chrome on Work PC \(your checkout browser\) isn't open — so checkouts go to Chrome on Home PC \(open now\) until it is\./);
+  assert.match(await page.textContent('#cb-list'), /Checking out now \(backup\)/);
   assert.equal((await work.call('GET', '/api/ext/items')).body.aco.listen, true);
-  // The switch.
+  // The backup off: only the work one checks out — not open, so a ⚡ Buy waits for it.
+  await page.click('#cb-fallback');
+  await page.waitForFunction(() => document.querySelector('#cb-fallback').getAttribute('aria-checked') === 'false');
+  assert.equal(env.app.aco.settings(owner.id).fallback, false);
+  await page.waitForFunction(() => /^Not open$/.test(document.querySelector('#cb-state').textContent));
+  assert.match(await page.textContent('#cb-now'), /⚠️ Chrome on Work PC isn't open\. Open it \(minimised is fine\) — a ⚡ Buy waits 2 minutes for it\./);
+  assert.match(await page.textContent('#aco-remote-state'), /Checkout browser not open/);
+  assert.match(await page.textContent('#aco-device-note'), /Checks out in Chrome on Work PC — not open right now: a ⚡ Buy waits 2 minutes for it/);
+  assert.equal((await home.call('GET', '/api/ext/items')).body.aco.listen, false, 'the home one stops listening: the backup is off');
+  await page.click('#cb-fallback');
+  await page.waitForFunction(() => document.querySelector('#cb-fallback').getAttribute('aria-checked') === 'true');
+  assert.equal(env.app.aco.settings(owner.id).fallback, true);
+  // The phone's switch.
   await page.click('#aco-remote-on');
   await page.waitForFunction(() => document.querySelector('#aco-remote-on').getAttribute('aria-checked') === 'false');
   assert.equal(env.app.aco.settings(owner.id).remoteBuy, false);
@@ -1110,6 +1179,11 @@ test("Monitor page for a member: each store's switch (hidden just for them), ☆
   await sw.click();
   await fan.waitForFunction(() => document.querySelector('#sn-channels .sn-chan[data-store="kmart"] .st-sw').getAttribute('aria-checked') === 'false');
   assert.match(await fan.textContent('#sn-channels .sn-chan[data-store="kmart"]'), /Off for you/);
+  // (Off: moved down, with the stores switched off — the ones searched for you come first.)
+  const order = await fan.$$eval('#sn-channels .sn-chan', (els) => els.map((e) => [e.dataset.store, e.classList.contains('st-dim')]));
+  const firstOff = order.findIndex(([, off]) => off);
+  assert.ok(firstOff > 0 && order.slice(firstOff).every(([, off]) => off), JSON.stringify(order));
+  assert.ok(order.findIndex(([id]) => id === 'kmart') >= firstOff, 'Kmart, off for them, below every store that is on');
   await fan.waitForFunction(() => !/Switch Test Tin/.test(document.querySelector('#m-products').textContent));
   assert.match(await fan.textContent('#m-products'), /Switch Test Box/);
   assert.deepEqual(env.app.repo.getData(c.user.id, 'monitorPrefs').hiddenStores, ['kmart']);
@@ -1133,6 +1207,9 @@ test("Monitor page for a member: each store's switch (hidden just for them), ☆
   await waitFor(() => env.app.sweeper.modeFor(env.app.retailers.get('target')) === 'off', { message: 'Target off for everyone' });
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"] .st-sw[aria-checked="false"]', { timeout: 10000 });
   assert.match(await page.textContent('#sn-channels .sn-chan[data-store="target"]'), /Switched off: not searched/);
+  const ordered = await page.$$eval('#sn-channels .sn-chan', (els) => els.map((e) => [e.dataset.store, e.classList.contains('st-dim')]));
+  const offAt = ordered.findIndex(([, off]) => off);
+  assert.ok(ordered.slice(offAt).every(([, off]) => off) && ordered.findIndex(([id]) => id === 'target') >= offAt, `switched off: at the bottom — ${JSON.stringify(ordered)}`);
   await page.click('#sn-channels .sn-chan[data-store="target"] .st-sw');
   await waitFor(() => env.app.sweeper.modeFor(env.app.retailers.get('target')) === 'auto', { message: 'Target back on, server first (its default)' });
   await page.waitForSelector('#sn-channels .sn-chan[data-store="target"] .st-sw[aria-checked="true"]', { timeout: 10000 });

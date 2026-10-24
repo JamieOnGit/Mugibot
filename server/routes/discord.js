@@ -190,7 +190,10 @@ export function register(router, ctx) {
       ? `It places the order by itself, within your Auto-checkout limits (up to ${money(out.run.maxPrice)} for it, plus delivery).`
       : `It fills checkout in and stops at the final button — ${out.why}.`;
     ctx.aco.follow(out.run.id, i.token, out.device.name, how);
-    const asleep = out.listening ? '' : `\n⚠️ **${out.device.name}** isn't open right now — it starts as soon as it is (within 2 minutes).`;
+    // (Not open: it starts the moment it is — or, with the backup on, the moment any browser of yours is.
+    //  standIn: the checkout browser isn't open, so another of yours, open, checks out instead.)
+    const asleep = !out.listening ? `\n⚠️ **${out.device.name}** isn't open right now${out.fallback ? ', nor is any other browser of yours' : ''} — it starts as soon as ${out.fallback ? 'one is' : 'it is'} (within 2 minutes).`
+      : out.standIn ? `\nℹ️ **${out.standIn}** (your checkout browser) isn't open, so **${out.device.name}** checks out instead.` : '';
     // The store's checkpoint is up right now: the computer will stop at it for a human — say so, with
     // the two ways through from the phone (server/aco.js phoneButtons()).
     const gate = ctx.gates ? ctx.gates.get(item.store) : null;

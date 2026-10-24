@@ -69,21 +69,23 @@ test('no browser connected yet: pressing ⚡ Buy says to connect the one on your
 test('⚡ Buy pressed in Discord (Auto-checkout off): the checkout browser — the newest connected, alone — fills checkout in and stops at the final button; the reply follows it', async () => {
   laptop = await Device.pair(env.url, gary, 'Gary laptop');
   desktop = await Device.pair(env.url, gary, 'Gary desktop');
-  // The extension: only the checkout browser listens with nothing armed.
+  // The extension: the checkout browser listens with nothing armed — and, the backup on (the default), the
+  // member's other browsers too, so one that's open can stand in (only the one checking out is handed a run).
   assert.equal((await desktop.call('GET', '/api/ext/items')).body.aco.listen, true);
-  assert.equal((await laptop.call('GET', '/api/ext/items')).body.aco.listen, false);
+  assert.equal((await laptop.call('GET', '/api/ext/items')).body.aco.listen, true);
 
   const r = await press('d-gary', `buy:i:${etb.id}`);
   assert.match(r.content, /\*\*Elite Trainer Box\*\*\n⏳ Sent to \*\*Gary desktop\*\* — waiting for it to open Kmart/);
   assert.match(r.content, /It fills checkout in and stops at the final button — Auto-checkout is off, so it stops at the final button for you\./);
-  assert.match(r.content, /Gary desktop\*\* isn't open right now — it starts as soon as it is \(within 2 minutes\)/, 'not asked for runs yet');
+  assert.match(r.content, /Gary desktop\*\* isn't open right now, nor is any other browser of yours — it starts as soon as one is \(within 2 minutes\)/, 'not asked for runs yet');
   const row = runOf(etb.id);
   assert.deepEqual([row.trigger, row.mode, row.status, row.price], ['remote', 'fill', 'queued', 100]);
   assert.equal((await gary.get('/api/items')).body.items.find((x) => x.id === etb.id).aco, false, 'not armed by it');
 
-  // The laptop isn't the checkout browser: it never gets the run.
-  assert.deepEqual((await laptop.call('GET', '/api/ext/aco/next')).body.runs, []);
+  // The desktop (the checkout browser) asks: it gets the run. The laptop isn't the checkout browser, and the
+  // desktop's open: it never gets it.
   const next = (await desktop.call('GET', '/api/ext/aco/next')).body;
+  assert.deepEqual((await laptop.call('GET', '/api/ext/aco/next')).body.runs, []);
   assert.equal(next.runs.length, 1);
   assert.equal(next.runs[0].mode, 'fill');
   assert.equal(next.listen, true);
@@ -163,7 +165,8 @@ test('the checkout browser: picked on the dashboard (only your own), runs go to 
   assert.equal(r.body.browsers.find((b) => b.checkout).name, 'Gary laptop');
   assert.ok((await gary.get('/api/events')).body.events.some((e) => /Checkout browser: Gary laptop/.test(e.message)));
   assert.equal((await laptop.call('GET', '/api/ext/items')).body.aco.listen, true);
-  assert.equal((await desktop.call('GET', '/api/ext/items')).body.aco.listen, false);
+  assert.equal((await desktop.call('GET', '/api/ext/items')).body.aco.listen, true, 'the backup: listening, in case the laptop isn\'t open');
+  await laptop.call('GET', '/api/ext/aco/next'); // (the laptop's open)
   const p = await press('d-gary', `buy:i:${etb.id}`);
   assert.match(p.content, /Sent to \*\*Gary laptop\*\*/);
   assert.deepEqual((await desktop.call('GET', '/api/ext/aco/next')).body.runs, [], 'the desktop stays out of it');
@@ -188,6 +191,41 @@ test('the checkout browser: picked on the dashboard (only your own), runs go to 
   const off = await press('d-gary', `buy:i:${etb.id}`);
   assert.match(off.content, /⚡ Buy from Discord on your computer is switched off — switch it on at .*\/app#aco/);
   await gary.put('/api/aco', { remoteBuy: true });
+});
+
+test("the checkout browser isn't open: another of yours that is checks out instead (the backup, on by default) — and says so; backup off, it waits for the checkout browser alone", async () => {
+  finishRuns();
+  // A new browser: the newest, so the checkout browser (nothing chosen) — and never opened.
+  const tablet = await Device.pair(env.url, gary, 'Gary tablet');
+  assert.equal((await gary.get('/api/aco')).body.settings.fallback, true, 'on by default');
+  await desktop.call('GET', '/api/ext/aco/next'); // the desktop's open
+  let b = (await gary.get('/api/aco/browsers')).body.browsers;
+  assert.deepEqual(b.map((x) => [x.name, x.chosen, x.checkout, x.listening]), [['Gary tablet', true, false, false], ['Gary desktop', false, true, true]]);
+  let r = await press('d-gary', `buy:i:${etb.id}`);
+  assert.match(r.content, /Sent to \*\*Gary desktop\*\*/);
+  assert.match(r.content, /ℹ️ \*\*Gary tablet\*\* \(your checkout browser\) isn't open, so \*\*Gary desktop\*\* checks out instead\./);
+  assert.equal((await desktop.call('GET', '/api/ext/aco/next')).body.runs.length, 1, 'the desktop, open, takes it');
+  assert.equal(runOf(etb.id).device_id, b.find((x) => x.name === 'Gary desktop').id);
+  assert.deepEqual((await tablet.call('GET', '/api/ext/aco/next')).body.runs, [], 'never two browsers for one run');
+  finishRuns();
+  // Backup off: only the checkout browser — the desktop isn't handed runs, and stops listening with nothing armed.
+  let s = await gary.put('/api/aco', { fallback: false });
+  assert.equal(s.status, 200);
+  assert.ok((await gary.get('/api/events')).body.events.some((e) => /backup off: only your checkout browser checks out/.test(e.message)));
+  assert.equal((await desktop.call('GET', '/api/ext/items')).body.aco.listen, false);
+  // (The tablet closed for a while.)
+  env.app.aco.listening.delete((await gary.get('/api/aco/browsers')).body.browsers.find((x) => x.name === 'Gary tablet').id);
+  r = await press('d-gary', `buy:i:${etb.id}`);
+  assert.match(r.content, /Sent to \*\*Gary tablet\*\*/);
+  assert.match(r.content, /Gary tablet\*\* isn't open right now — it starts as soon as it is \(within 2 minutes\)/);
+  assert.deepEqual((await desktop.call('GET', '/api/ext/aco/next')).body.runs, [], 'the desktop stays out of it');
+  assert.equal((await tablet.call('GET', '/api/ext/aco/next')).body.runs.length, 1, 'the tablet, once open, takes it');
+  finishRuns();
+  // Back on, and the tablet gone again.
+  s = await gary.put('/api/aco', { fallback: true });
+  assert.equal(s.body.settings.fallback, true);
+  b = (await gary.get('/api/aco/browsers')).body.browsers;
+  assert.equal((await gary.del(`/api/devices/${b.find((x) => x.name === 'Gary tablet').id}`)).status, 200);
 });
 
 test('only the member who pressed it: someone else\'s DM button, an unconnected Discord, no membership, a store that sells signed in only, an old button', async () => {

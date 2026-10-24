@@ -97,7 +97,7 @@ async function cardBackupInfo() {
   const r = await api('GET', '/api/ext/card-backup');
   if (r.status !== 200) return undefined;
   const b = r.body && r.body.backup;
-  return b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, hasCvc: !!b.hasCvc, savedAt: b.savedAt } : null;
+  return b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, hasCvc: !!b.hasCvc, savedAt: b.savedAt, count: b.count || 1, cards: b.cards || null } : null;
 }
 
 // --- the card's copy for reinstalls (vault.js, from 1.20) ------------------------------
@@ -276,11 +276,14 @@ async function profileFor(chosen, fresh = false) {
 // --- checkout passes: which tab may receive your details, for how long -----
 const passKey = (tabId) => `fill:${tabId}`;
 
-/** aco: an Auto-checkout run this checkout is for (what it may do by itself), from the server. */
-async function savePass(tabId, host, userId, profileId = null, aco = null) {
+/**
+ * aco: an Auto-checkout run this checkout is for (what it may do by itself), from the server.
+ * cardId: which of your cards pays for it (the item's choice — its id here; null: your default).
+ */
+async function savePass(tabId, host, userId, profileId = null, aco = null, cardId = null) {
   if (tabId == null || !host) return;
   await clearCardFrames(tabId); // a new checkout
-  await chrome.storage.session.set({ [passKey(tabId)]: { host, userId, profileId, aco, expires: Date.now() + PASS_TTL } });
+  await chrome.storage.session.set({ [passKey(tabId)]: { host, userId, profileId, aco, cardId: typeof cardId === 'string' ? cardId.slice(0, 40) : null, expires: Date.now() + PASS_TTL } });
 }
 
 async function passFor(sender) {
@@ -348,8 +351,9 @@ async function fillData(sender, part, profileId) {
     const r = await storeForTab(sender);
     return { confirm: (r && r.flow && r.flow.checkout && r.flow.checkout.frameConfirm) || [] };
   }
-  const vault = await Vault.status(auth.user.id);
-  const card = vault.ready ? await Vault.card(auth.user.id) : null;
+  // The item's card (pass.cardId: one of yours chosen for it), else your default. (Only the card being filled in is opened.)
+  const card = await Vault.card(auth.user.id, pass.cardId || undefined).catch(() => null);
+  const vault = card ? null : await Vault.status(auth.user.id);
   // Why there's no card, for the panel: none saved, saved by an older version (passphrase), or unreadable.
   const cardIssue = card ? null : !vault.saved ? 'none' : vault.needsPassphrase ? 'passphrase' : 'unreadable';
   if (part === 'card') return { card, cardIssue };
@@ -1079,11 +1083,27 @@ async function askFromStorePage(t) {
 }
 
 /**
- * Reset by an admin (the live monitor's Reset): the store's tab in the sweep window is closed and
- * opened again at the store's front page, like coming back to the site later. Its sign-in and
- * cookies stay as they are.
+ * A store's cached files in this browser — its pages, scripts, images and service workers — cleared
+ * (↻ Reset), so the next visit gets everything from the store afresh, the way clearing a site's cache
+ * in Chrome's settings does. Never its cookies or your sign-ins there. true when cleared.
+ */
+async function clearStoreCache(urls) {
+  const origins = [...new Set(urls.map((u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.origin : null; } catch { return null; } }).filter(Boolean))];
+  if (!origins.length || !chrome.browsingData) return false;
+  await chrome.browsingData.remove({ origins }, { cache: true, cacheStorage: true, serviceWorkers: true });
+  return true;
+}
+
+/** Where a store's pages come from (its address, and each of its hosts). */
+const storeUrls = (r) => [r.base, ...(r.hosts || []).filter((x) => /^[a-z0-9.-]+(:\d+)?$/i.test(x)).map((x) => `https://${x}`)].filter(Boolean);
+
+/**
+ * Reset by an admin (the live monitor's Reset): the store's cached files here are cleared, and its
+ * tab in the sweep window is closed and opened again at the store's front page, like coming back to
+ * the site later. Its sign-in and cookies stay as they are.
  */
 async function freshStart(t) {
+  await clearStoreCache([t.frontUrl, t.storeBase, t.url, t.pageUrl].filter(Boolean)).catch(() => false);
   // (In turn with the other stores' tabs being opened: the list of them is changed one at a time.)
   const forget = sweepTabLock.then(async () => {
     const saved = await sweepWindow();
@@ -2081,7 +2101,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const res = await api('POST', '/api/ext/claim', { code: msg.code });
         if (res.status === 200 && res.body && res.body.ok) {
           // (An Auto-checkout run's code: the run's limits ride on this tab's pass, never on the page.)
-          await savePass(sender.tab.id, res.body.host === tabHost(sender) ? res.body.host : tabHost(sender), auth.user.id, res.body.profileId, res.body.aco || null);
+          await savePass(sender.tab.id, res.body.host === tabHost(sender) ? res.body.host : tabHost(sender), auth.user.id, res.body.profileId, res.body.aco || null, res.body.cardId || null);
           profileFor(res.body.profileId || '', true).catch(() => null); // for checkout, in a moment (as your details are now)
           // In the line for this store (one checkout at a time there: turns, above).
           const r = await storeForTab(sender);
@@ -2500,6 +2520,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
         await chrome.runtime.openOptionsPage();
         return { ok: true };
+      case 'clearStoreCache': {
+        // ↻ Reset pressed on the dashboard in this browser: the store's cached files here go too (never its
+        // cookies or your sign-in). (The browser searching it clears its own as it starts again: freshStart.)
+        if (!fromApp(sender)) return null;
+        const r = ((await getState()).flows || []).find((x) => x.id === msg.store);
+        if (!r) return { ok: false, error: 'That store isn\'t one this extension knows' };
+        return { ok: await clearStoreCache(storeUrls(r)).catch(() => false), store: r.id };
+      }
+      case 'cardDefault': {
+        // The dashboard's "Make default" on one of the cards saved in this browser (only which one: never a card's details).
+        if (!fromApp(sender)) return null;
+        const auth = await getAuth();
+        if (!auth) return { ok: false, error: 'Connect the extension to your account first' };
+        try {
+          const st = await Vault.setDefault(auth.user.id, msg.cardId);
+          cardState = null;
+          await refreshRestoreCopies(auth).catch(() => null);
+          return { ok: true, card: st };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      }
       case 'checkNow':
         if (!fromApp(sender) && !fromExtensionPage(sender)) return null;
         sweepLoop().catch(() => null);
@@ -2542,7 +2584,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!auth) return { error: 'Connect the extension to your account first' };
         try {
           if (msg.action === 'save') {
-            const saved = await Vault.save(auth.user.id, msg.card);
+            // (cardId: one of your cards replaced. makeDefault: this one's the default from now on. label: its name.)
+            const saved = await Vault.save(auth.user.id, msg.card, {
+              id: typeof msg.cardId === 'string' ? msg.cardId : undefined, makeDefault: !!msg.makeDefault, label: typeof msg.label === 'string' ? msg.label : undefined,
+            });
             cardState = null;
             // Backed up too (locked with the card passphrase): the backup in your account is the new card.
             let backupError = null;
@@ -2552,6 +2597,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             return { status: saved, backup: await cardBackupInfo(), backupError };
           }
           if (msg.action === 'upgrade') { cardState = null; const up = await Vault.upgrade(auth.user.id, msg.passphrase); await refreshRestoreCopies(auth).catch(() => null); return { status: up }; }
+          if (msg.action === 'setDefault' || msg.action === 'rename') {
+            const st = msg.action === 'setDefault' ? await Vault.setDefault(auth.user.id, String(msg.cardId || '')) : await Vault.rename(auth.user.id, String(msg.cardId || ''), String(msg.label || ''));
+            cardState = null;
+            await refreshRestoreCopies(auth).catch(() => null);
+            return { status: st, backup: await cardBackupInfo() };
+          }
+          if (msg.action === 'remove' && msg.cardId && (await Vault.status(auth.user.id)).count > 1) {
+            // One of your cards (the others stay): the copies kept for updates are of the ones left.
+            await Vault.remove(auth.user.id, String(msg.cardId));
+            cardState = null;
+            await refreshRestoreCopies(auth).catch(() => null);
+            return { status: await Vault.status(auth.user.id), backup: await cardBackupInfo() };
+          }
           if (msg.action === 'remove') {
             await Vault.remove(auth.user.id);
             cardState = null;

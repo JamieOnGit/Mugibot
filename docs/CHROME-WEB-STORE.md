@@ -69,6 +69,8 @@ Description:
 - **Permission justifications:**
   - `storage`: Keeps the connection to the user's Mugibot account, their watchlist and their encrypted card in this browser.
   - `alarms`: Runs the user's own restock checks about once a minute, the update check, and keeps listening for the items the user armed for Auto-checkout.
+  - `scripting`: Reads the search page of a supported store that an admin's browser opens for a live sweep (the products listed on it).
+  - `browsingData` (from 1.33.0): When an admin resets a supported store that keeps failing, clears that one store site's cached files (its cache, cache storage and service workers) in this browser, as clearing a site's cache in Chrome's settings does — never cookies, sign-ins, history or any other site's data. (Chrome shows no warning for this permission, so the update installs by itself; the Web Store dashboard asks for this justification on the Privacy tab — paste it there if the publish asks.)
   - Host permissions (the store sites): Fills in checkout on the supported stores' pages when the user presses ⚡ Buy (or an item they armed for Auto-checkout drops), and checks the user's own watchlist items there.
   - Host permissions (payment provider sites): The card boxes on those stores' checkout pages are hosted by payment providers (Adyen for Kmart, Shopify's card fields at checkout.pci.shopifyinc.com for JB Hi-Fi, Toys"R"Us and Gamerholic, Paydock and the Mastercard gateway for Target, Global-e for Premium Bandai); the extension types the user's saved card into them, only during a checkout the user started on that store.
   - Host permissions (mugibot.com): Connects the extension to the user's Mugibot account.

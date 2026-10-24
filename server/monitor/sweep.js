@@ -1253,15 +1253,18 @@ export class Sweeper {
    * back to a site later. Its backoff and errors are cleared, its next search is now, and it's
    * searched gently (at a third of the pace) for 10 minutes so it isn't refused straight away
    * again. From the server: fresh connections to the store. From an admin's browser: the store's
-   * tab in the sweep window is closed and opened again at the store's front page. Server first:
+   * cached files there are cleared (never its cookies or sign-in), and its tab in the sweep window is
+   * closed and opened again at the store's front page. Server first:
    * the server searches it again (an admin's browser stands in again only if it's still refused).
    * What a store asked for (Retry-After) is still waited for. Nothing here hides who's asking.
    */
   reset(storeId = null, user = null) {
     const now = this.now();
     const done = [];
+    let fromBrowser = false;
     for (const { retailer: r, mode } of this.stores()) {
       if (storeId ? r.id !== storeId : mode === 'off') continue;
+      if (mode === 'browser') fromBrowser = true;
       const st = this.stat(r.id);
       Object.assign(st, { fails: 0, lastError: '', browserNext: 0, nextAt: now, slowUntil: now + SLOW_MS, resetAt: now, needsUpdateAt: 0 });
       if (mode === 'auto') {
@@ -1283,8 +1286,10 @@ export class Sweeper {
     }
     if (!done.length) return [];
     const who = user ? user.username : 'An admin';
+    // (From an admin's browser: its tab there starts afresh, with the store's cached files cleared — cookies and sign-in kept.)
+    const browser = storeId && fromBrowser ? ` (its tab in the admin's browser starts afresh, its cached files cleared)` : '';
     this.sys(storeId
-      ? `${who} reset ${done[0].name}: searching it again now, gently for 10 minutes`
+      ? `${who} reset ${done[0].name}: searching it again now, gently for 10 minutes${browser}`
       : `${who} reset every store: searching them again now, gently for 10 minutes`, storeId ? { store: storeId } : {});
     if (user) this.repo.audit(user.id, null, 'sweep-reset', storeId || 'all stores');
     return done.map((r) => r.id);

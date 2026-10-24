@@ -551,6 +551,11 @@ const MIGRATIONS = [
   `
   ALTER TABLE drop_watches ADD COLUMN bases TEXT NOT NULL DEFAULT '{}';
   `,
+  // 19 — which of the member's cards an item is paid with (extension 1.33 keeps several, one the default):
+  //      the card's id in their extension — never the card ('' = their default).
+  `
+  ALTER TABLE items ADD COLUMN card_id TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 export class Db {

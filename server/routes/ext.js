@@ -69,7 +69,8 @@ export function register(router, ctx) {
     if (!limiter.hit(`cardbackup:${req.user.id}`, 20, 60 * 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     const fresh = !repo.getData(req.user.id, 'cardBackup', null);
     const backup = repo.setData(req.user.id, 'cardBackup', cardBackup(req.body, repo.now()));
-    repo.addEvent(req.user.id, { type: 'card', level: 'info', message: `${fresh ? 'Card backed up' : 'Card backup updated'}: ${backup.brand} •••• ${backup.last4}, locked with your card passphrase` });
+    const what = backup.count > 1 ? `${backup.count} cards (the default: ${backup.brand} •••• ${backup.last4})` : `${backup.brand} •••• ${backup.last4}`;
+    repo.addEvent(req.user.id, { type: 'card', level: 'info', message: `${fresh ? 'Card backed up' : 'Card backup updated'}: ${what}, locked with your card passphrase` });
     ctx.hub.publish(req.user.id, 'card', { backup: cardBackupInfo(backup) });
     return { backup: cardBackupInfo(backup) };
   }, { auth: 'device' });
@@ -170,7 +171,8 @@ export function register(router, ctx) {
     // (A Shop checkout link's code is only taken up on Shop's checkout: it opened signed in for that link.)
     if (item) ctx.aco.noteShopSeen(req.user.id, item, 'in', aco ? 'run' : 'buy');
     // (quantity: how many to put in the bag — the item's, or its Auto-checkout run's.)
-    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, quantity: row.quantity || 1, aco };
+    // (cardId: which of your cards pays for it — its id in your extension; null: your default.)
+    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, cardId: (item && item.cardId) || null, quantity: row.quantity || 1, aco };
   }, { auth: 'device', entitled: true });
 
   // Delivery details for checkout autofill (the chosen set, else the default).
