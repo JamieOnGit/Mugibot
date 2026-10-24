@@ -1243,7 +1243,12 @@ async function pageOne(t) {
       }
       if (page.challenge) return { ...base, ok: true, status: 200, ms: ms(), problem: 'blocked', products: [] };
       if (t.learn) {
-        for (const d of page.json || []) {
+        // (The store's own search data first — EB Games' /search/query — then anything else the page fetched with products.)
+        let want = '';
+        try { want = t.guess ? new URL(t.guess).pathname : ''; } catch { /* none */ }
+        const path = (d) => { try { return new URL(d.url).pathname; } catch { return ''; } };
+        const data = [...(page.json || [])].sort((a, b) => Number(path(b) === want) - Number(path(a) === want));
+        for (const d of data) {
           const parsed = parseListing(t.parser, d.text, opts(d.url));
           if (isList(parsed) && parsed.products.length) return answer(parsed, { how: 'data', learned: String(d.url || '').slice(0, 2000) });
         }

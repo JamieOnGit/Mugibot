@@ -827,7 +827,8 @@ a.ck:hover { border-color: currentColor; }
 .dw-every input[type=number] { width: 84px; }
 .dw-every .small, .dw-every label { flex-basis: 100%; }
 @media (min-width: 700px) { .dw-every .small, .dw-every label { flex-basis: auto; } }
-#ma-page-hint { margin: 8px 0 0; }
+#ma-page-hint, #w-page-hint { margin: 8px 0 0; }
+.dw-tip { margin: 8px 0 0; }
 .dw-aco input[type=number] { max-width: 140px; }
 .dw-h { margin: 16px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
 .dw-list { list-style: none; margin: 0; padding: 0; }

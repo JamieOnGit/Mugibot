@@ -1437,8 +1437,10 @@ test('📃 a store\'s search page in Drop watches: told apart from a product\'s 
   await ed.waitFor();
   assert.equal(await ed.locator('textarea').inputValue(), 'magic the gathering\none piece op 15');
   assert.equal(await ed.locator('select[aria-label$="post in"]').inputValue(), general);
+  assert.equal(await ed.locator('input[aria-label$="Auto-checkout what drops"]').isChecked(), true, 'its Auto-checkout, armed');
+  assert.equal(await ed.locator('input[aria-label$="max price for Auto-checkout"]').inputValue(), '250');
   await ed.locator('textarea').fill('Magic the Gathering\nLorcana');
-  await ed.locator('input[type=number]').fill('3');
+  await ed.locator('input[aria-label$="read the page every (seconds)"]').fill('3');
   await ed.locator('button[type=submit]').click();
   await page.waitForFunction(() => !document.querySelector('#dw-mine form.dw-edit'));
   assert.match(await row.textContent(), /every 3 s.*"magic the gathering", "lorcana"/s);
@@ -1472,6 +1474,19 @@ test('📃 a store\'s search page in Drop watches: told apart from a product\'s 
   assert.equal(await page.isChecked('#dw-kind-page'), true);
   await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'dw-phrases');
   assert.equal(await page.isVisible('#m-add'), false);
+  // My watchlist's "+ Add SKU" (members' own): the same — a search page is sent to Drop watches, never added as a SKU.
+  await page.click('#pt-watch');
+  await page.click('#w-add-toggle');
+  await page.fill('#w-url', 'https://www.jbhifi.com.au/collections/trading-cards');
+  await page.waitForSelector('#w-page-hint:not([hidden])');
+  const items = env.app.repo.listItems(env.app.repo.userByUsername('owner').id).length;
+  await page.click('#w-save');
+  assert.equal(await page.isVisible('#w-page-hint'), true);
+  assert.equal(env.app.repo.listItems(env.app.repo.userByUsername('owner').id).length, items, 'not added as a SKU');
+  await page.click('#w-page-go');
+  await page.waitForSelector('#pp-drops:not([hidden]) #dw-page-wrap:not([hidden])');
+  assert.equal(await page.inputValue('#dw-input'), 'https://www.jbhifi.com.au/collections/trading-cards');
+  assert.equal(await page.isVisible('#w-form'), false);
   if (shots) await page.screenshot({ path: path.join(shots, 'drops-search-page.png'), fullPage: true });
   await page.fill('#dw-input', '');
   assert.ok(env.app.drops.remove(w.id, env.app.repo.userByUsername('owner')));

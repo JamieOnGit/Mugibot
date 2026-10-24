@@ -253,7 +253,8 @@ export class PageWatches {
     for (const g of [...groups.values()].sort((a, b) => this.st(a.key).nextAt - this.st(b.key).nextAt)) {
       if (this.jobs.size >= MAX_JOBS) break;
       const st = this.st(g.key);
-      if (st.inFlight || st.nextAt > now) continue;
+      // (A read handed to a browser that never came back — closed mid-read: given up after JOB_MS, as the browser's own are.)
+      if ((st.inFlight && now - st.inFlight < JOB_MS) || st.nextAt > now) continue;
       const plan = this.plan(g);
       if (this.wayFor(g, plan) !== 'server') continue;
       let host = '';

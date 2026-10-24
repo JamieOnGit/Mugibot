@@ -143,6 +143,7 @@
                   <p class="muted small" id="w-form-help">Paste the product link — or pick the store and type the SKU (handy before it's listed: Mugibot finds the page when it goes up).</p>
                   <label for="w-url" id="w-url-label">Product link <span class="muted">(optional if you enter the SKU)</span></label>
                   <input id="w-url" name="url" type="url" placeholder="https://www.kmart.com.au/product/…-43818648/">
+                  <p class="small notice" id="w-page-hint" hidden>📃 That's a page of results, not one product — to have it read every few seconds for products with your key phrases (like "Magic the Gathering"), make it a drop watch. <button class="btn small primary" id="w-page-go" type="button">Watch this page for key phrases →</button></p>
                   <div class="grid2" id="w-store-row">
                     <div><label for="w-store">Store</label><select id="w-store" name="store"></select></div>
                     <div><label for="w-sku">SKU / keycode</label><input id="w-sku" name="sku" placeholder="e.g. 43818648" autocomplete="off"></div>
@@ -216,6 +217,7 @@
                     <label for="dw-phrases">Key phrases to look for on the page <span class="muted">(one a line — a product counts when its name has every word of one of them)</span></label>
                     <textarea id="dw-phrases" rows="2" autocomplete="off" maxlength="1500" placeholder="Magic the Gathering&#10;One Piece OP-15"></textarea>
                     <div class="dw-every"><label for="dw-every">Read the page every</label> <input id="dw-every" type="number" min="3" max="3600" step="1" value="5" inputmode="numeric"> <span>seconds</span> <span class="small muted" id="dw-every-note"></span></div>
+                    <p class="small muted dw-tip">Tip: the page's first page of results is what's read — sort it newest first (or put the words in the store's search) so a new listing lands on it.</p>
                   </div>
                   <p class="small dw-hint" id="dw-hint" aria-live="polite"></p>
                   <div class="grid2" id="dw-where" hidden>
