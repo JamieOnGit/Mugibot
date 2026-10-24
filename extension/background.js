@@ -912,14 +912,17 @@ async function keepTab(tabId) {
   await chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => null);
 }
 
-/** The store's sweep tab, closed — opened afresh for its next search — unless it's in the store's queue (never touched then). */
-async function dropSweepTab(store) {
+/**
+ * The store's sweep tab (key: the store, or a search page's tab — 'page:<store>'), closed — opened afresh for its
+ * next search — unless it's in the store's queue (never touched then).
+ */
+async function dropSweepTab(key, store = key) {
   const g = await gatesNow().catch(() => ({}));
   const forget = sweepTabLock.then(async () => {
     const saved = await sweepWindow();
-    const old = saved.tabs[store];
+    const old = saved.tabs[key];
     if (old === undefined || ((g[store] || {}).line || {})[old]) return;
-    delete saved.tabs[store];
+    delete saved.tabs[key];
     await chrome.storage.session.set({ [SWEEP_WINDOW]: saved });
     await chrome.tabs.remove(old).catch(() => null);
   });
@@ -996,12 +999,15 @@ function readSweepPage(path) {
   return { products, data, challenge, denied, next, said, ready: document.readyState === 'complete', url: location.href, title: document.title, html: document.documentElement.outerHTML };
 }
 
-/** Runs in the store's page: asks the store for something, the way the page itself does (with the headers its own code adds). */
-async function askInPage(urls, headers) {
+/**
+ * Runs in the store's page: asks the store for something, the way the page itself does (with the headers its own code
+ * adds). noCache: never this browser's copy of an earlier answer (a search page read every few seconds).
+ */
+async function askInPage(urls, headers, noCache) {
   const out = [];
   for (const url of urls) {
     try {
-      const r = await fetch(url, { credentials: 'include', headers: { accept: 'application/json, text/plain, */*', ...(headers || {}) } });
+      const r = await fetch(url, { credentials: 'include', ...(noCache ? { cache: 'no-store' } : {}), headers: { accept: 'application/json, text/plain, */*', ...(headers || {}) } });
       out.push({ url: r.url, status: r.status, type: r.headers.get('content-type') || '', text: (await r.text()).slice(0, 6000000) });
     } catch (e) {
       out.push({ url, status: 0, error: String(e && e.message || e) });
@@ -1014,7 +1020,8 @@ const inPage = (tabId, func, args) => chrome.scripting.executeScript({ target: {
   .then(([res]) => res && res.result);
 
 async function renderedPage(t) {
-  const { id: tabId, incognito } = await sweepTab(t.store, { privateWindow: !!t.privateWindow });
+  // (t.tab: a drop watch's search page reads in a tab of its own — 'page:<store>' — beside the store's searches.)
+  const { id: tabId, incognito } = await sweepTab(t.tab || t.store, { privateWindow: !!t.privateWindow });
   await openIn(tabId, t.url, t.gate);
   const path = t.productPath ? [t.productPath.re, t.productPath.f || ''] : null;
   // (Longer than the page needs: a store's bot check may hold it up for a few seconds first.)
@@ -1051,21 +1058,24 @@ async function renderedPage(t) {
   if (queued) throw new GateHeld(queued);
   // The product data the page downloaded, asked for again from inside it: JSON only.
   if (page.data.length) {
-    const got = (await inPage(tabId, askInPage, [page.data]).catch(() => null)) || [];
+    const got = (await inPage(tabId, askInPage, [page.data, t.headers || null, !!t.noCache]).catch(() => null)) || [];
     const json = got.filter((g) => g.status === 200 && /^\s*[[{]/.test(g.text || ''));
     page.html += json.map((g) => `<script type="application/json" data-mugibot-sweep>${g.text.replace(/<\//g, '<\\/')}</script>`).join('');
+    // (Which data was which: a search page's watch learns the one with its products — asked for straight away next time.)
+    page.json = json.map((g) => ({ url: g.url, text: g.text }));
   }
+  page.tabId = tabId;
   page.incognito = !!incognito;
   return page;
 }
 
 /** The store's own search JSON, asked for from inside a page of the store (opened first when needed). */
 async function askFromStorePage(t) {
-  const tab = await sweepTab(t.store, { privateWindow: !!t.privateWindow });
+  const tab = await sweepTab(t.tab || t.store, { privateWindow: !!t.privateWindow });
   const origin = new URL(t.url).origin;
   const onStore = () => chrome.tabs.get(tab.id).then((x) => String(x.url || '').startsWith(origin)).catch(() => false);
   if (!(await onStore())) await openIn(tab.id, t.pageUrl || origin, t.gate);
-  const ask = () => inPage(tab.id, askInPage, [[t.url], t.headers || null]).catch(() => null);
+  const ask = () => inPage(tab.id, askInPage, [[t.url], t.headers || null, !!t.noCache]).catch(() => null);
   let [res] = (await ask()) || [];
   // The store's queue where the JSON should be: it's up — the search waits, and the tab isn't touched.
   const queued = (x) => !!(t.gate && x && x.status === 200 && gateOnPage(t.gate, { url: x.url, html: x.text || '' }));
@@ -1193,9 +1203,86 @@ async function sweepOne(t) {
   return { ...base, ok: true, status: res.status, ms: Date.now() - started, problem: parsed.problem, products: parsed.products.slice(0, 300) };
 }
 
+const REFUSED = [401, 403, 429, 503];
+
+/**
+ * A drop watch's search page (server/monitor/pages.js), read in a tab of its own in the sweep window (t.tab: one for each
+ * store, beside its searches): the data the page fetches, asked for from inside it (t.dataUrl: learned from the page
+ * before) — else the page opened and read once its products are drawn, and (t.learn) the data it fetched that had them
+ * learned for next time; never this browser's copy of an earlier answer. Its store's queue is never touched.
+ */
+async function pageOne(t) {
+  const started = Date.now();
+  const base = { id: t.id };
+  const ms = () => Date.now() - started;
+  const opts = (url) => ({ base: url || t.url, storeBase: t.storeBase, productPath: revive(t.productPath), skuFromPath: revive(t.skuFromPath), storeName: t.storeName });
+  const u = new URL(t.url);
+  const allowed = await chrome.permissions.contains({ origins: [`${u.protocol}//${u.hostname}/*`] }).catch(() => true);
+  if (!allowed) return { ...base, ok: false, error: `This copy of Mugibot's extension (v${VERSION}) can't open ${u.hostname} — update the extension`, ms: 0 };
+  const job = { ...t, noCache: true };
+  // (What a page or its data had: its products — or, with none, what it said about them.)
+  const answer = (parsed, extra) => ({ ...base, ok: true, status: 200, ms: ms(), problem: parsed.problem, products: parsed.products.slice(0, 300), ...(parsed.products.length ? {} : { stated: parsed.stated ?? null, none: !!parsed.none }), ...extra });
+  // (Data that's the store's product list — its results, however few — and not something else the page fetched.)
+  const isList = (parsed) => !parsed.problem || parsed.problem === 'empty';
+  try {
+    if (t.dataUrl) {
+      const res = await askFromStorePage({ ...job, url: t.dataUrl, pageUrl: t.url });
+      if (res && REFUSED.includes(res.status)) return { ...base, ok: false, status: res.status, blocked: true, ms: ms() };
+      if (res && res.status === 200) {
+        const parsed = parseListing(t.parser, String(res.text || '').slice(0, 8_000_000), opts(res.url));
+        if (isList(parsed)) return answer(parsed, { how: 'data' });
+      }
+      // (Not the list it was: the page opened and read, and what it fetches learned again.)
+    }
+    if (t.render) {
+      const page = await renderedPage(job);
+      if (!page) return { ...base, ok: false, error: "This browser couldn't read the store's page", ms: ms() };
+      if (page.denied) {
+        await markDenied(t.store);
+        return { ...base, ok: false, blocked: true, status: 403, error: `${t.storeName || 'The store'} said "Access Denied" to this browser (its bot protection) — Mugibot asks it for nothing from here for 30 minutes, so it can lift`, ms: ms() };
+      }
+      if (page.challenge) return { ...base, ok: true, status: 200, ms: ms(), problem: 'blocked', products: [] };
+      if (t.learn) {
+        // (The store's own search data first — EB Games' /search/query — then anything else the page fetched with products.)
+        let want = '';
+        try { want = t.guess ? new URL(t.guess).pathname : ''; } catch { /* none */ }
+        const path = (d) => { try { return new URL(d.url).pathname; } catch { return ''; } };
+        const data = [...(page.json || [])].sort((a, b) => Number(path(b) === want) - Number(path(a) === want));
+        for (const d of data) {
+          const parsed = parseListing(t.parser, d.text, opts(d.url));
+          if (isList(parsed) && parsed.products.length) return answer(parsed, { how: 'data', learned: String(d.url || '').slice(0, 2000) });
+        }
+        // (Nothing it fetched had them: its filters asked of the store's own search data — if that's its list.)
+        if (t.guess) {
+          const [res] = (await inPage(page.tabId, askInPage, [[t.guess], t.headers || null, true]).catch(() => null)) || [];
+          if (res && res.status === 200) {
+            const parsed = parseListing(t.parser, String(res.text || '').slice(0, 8_000_000), opts(res.url));
+            if (isList(parsed) && parsed.products.length) return answer(parsed, { how: 'data', learned: String(res.url || t.guess).slice(0, 2000) });
+          }
+        }
+      }
+      // (Its products as drawn: the page's own tiles — a page whose data is JSON is read as any page is.)
+      const parsed = parseListing(t.learn ? 'generic' : t.parser, page.html.slice(0, 8_000_000), opts(page.url));
+      return answer(parsed, { how: 'page' });
+    }
+    if (t.inPage) {
+      const res = await askFromStorePage(job);
+      if (!res || !res.status) return { ...base, ok: false, error: "This browser couldn't reach the store", ms: ms() };
+      if (res.status !== 200) return { ...base, ok: false, status: res.status, blocked: REFUSED.includes(res.status), ms: ms() };
+      return answer(parseListing(t.parser, String(res.text || '').slice(0, 8_000_000), opts(res.url)), { how: 'page' });
+    }
+    const res = await fetch(t.url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
+    if (!res.ok) return { ...base, ok: false, status: res.status, blocked: REFUSED.includes(res.status), ms: ms() };
+    return answer(parseListing(t.parser, (await res.text()).slice(0, 8_000_000), opts(res.url)), { how: 'page' });
+  } catch (e) {
+    if (e instanceof GateHeld) return { ...base, ok: false, gate: { kind: e.gate.kind, wait: e.gate.wait }, ms: ms() };
+    return { ...base, ok: false, error: `This browser couldn't open the page${why(e)}`, ms: ms() };
+  }
+}
+
 /** A search ran into the store's queue: if its tab in the sweep window shows the queue, that tab's in line now. */
 async function sweepTabInLine(t) {
-  const tabId = (await sweepWindow()).tabs[t.store];
+  const tabId = (await sweepWindow()).tabs[t.tab || t.store];
   const now = tabId !== undefined ? await inPage(tabId, readGatePage, []).catch(() => null) : null;
   const seen = now && t.gate && gateOnPage(t.gate, now);
   await withGates((g) => {
@@ -1275,7 +1362,8 @@ async function sweepLoop() {
       // (And the stores it's still searching: none of theirs handed out again until that search is in.)
       // (And the stores turning this browser away just now — "Access Denied": left alone for half an hour.)
       const denied = await deniedStores();
-      const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}&through=${encodeURIComponent((await throughStores()).join(','))}&busy=${encodeURIComponent([...sweepsGoing.keys(), ...denied].join(','))}`);
+      // (And, apart, the stores turning it away: a store's search pages wait on that too, though not on its searches.)
+      const due = await api('GET', `/api/ext/sweeps?v=${encodeURIComponent(VERSION)}&through=${encodeURIComponent((await throughStores()).join(','))}&busy=${encodeURIComponent([...sweepsGoing.keys(), ...denied].join(','))}&denied=${encodeURIComponent([...denied].join(','))}`);
       if (gen !== sweepGen) return; // (started again by the alarm: that one goes on)
       if (due.status !== 200 || !due.body || due.body.waitMs === null || due.body.waitMs === undefined) {
         if (sweepAgain) continue;
@@ -1315,6 +1403,27 @@ async function sweepLoop() {
           if (wakeSweeps) wakeSweeps();
         });
         sweepsGoing.set(t.store, job);
+      }
+      // Drop watches' search pages (1.34.0): each store's in a tab of its own, one at a time there, beside its searches.
+      for (const t of due.body.pages || []) {
+        if (!t || !t.tab || held.has(t.store) || denied.has(t.store) || sweepsGoing.has(t.tab)) continue;
+        const job = (async () => {
+          const began = Date.now();
+          const result = await withinLimit(pageOne(t), SWEEP_LIMITS.jobMs).catch(async (e) => {
+            if (e instanceof SweepTooLong) {
+              await dropSweepTab(t.tab, t.store).catch(() => null);
+              return { id: t.id, ok: false, error: `This browser's read of the page took over ${Math.round(SWEEP_LIMITS.jobMs / 1000)} s — given up, and its tab opened afresh for the next one`, ms: Date.now() - began };
+            }
+            return { id: t.id, ok: false, error: `This browser's read of the page went wrong: ${String((e && e.message) || e).slice(0, 120)}`, ms: 0 };
+          });
+          if (result.gate) await sweepTabInLine(t).catch(() => null);
+          await api('POST', '/api/ext/sweeps', { pages: [result] });
+        })().catch(() => null).finally(() => {
+          if (sweepsGoing.get(t.tab) === job) sweepsGoing.delete(t.tab);
+          sweepAgain = true; // (its next read, at its pace: asked for now)
+          if (wakeSweeps) wakeSweeps();
+        });
+        sweepsGoing.set(t.tab, job);
       }
       // Waiting for the next search. Touching storage keeps this worker running meanwhile.
       await chrome.storage.session.set({ sweepBeat: Date.now() });

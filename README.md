@@ -74,6 +74,16 @@ community. Built on TCGCopBot's working Kmart flow.
   Auto-checkout work at every store Mugibot knows, the same way as for cards;
   other websites get the alert only. See
   [docs/MONITORING.md](docs/MONITORING.md#-drop-watches-anything-that-isnt-the-card-keywords).
+- **📃 Search pages, read every few seconds for your key phrases.** Paste any
+  store's search, category or collection page (EB Games' "Trading cards,
+  pre-order" search, a Shopify collection) with key phrases ("Magic the
+  Gathering", one a line), and it's read every 3 seconds or more, at the store's
+  own pace where that's slower. What's new on it with a phrase is posted in the
+  channel and role an admin picks (or DM'd to a member), and bought by
+  Auto-checkout within a max price at the stores Mugibot checks out at. Pages
+  that turn servers away (EB Games') are read from an admin's browser
+  (extension 1.34.0). See
+  [docs/MONITORING.md](docs/MONITORING.md#-search-pages-a-stores-page-read-every-few-seconds-for-your-key-phrases).
 - **📰 Release news.** What's coming out, when, and which stores are dropping
   it: trading cards, consoles, collectibles. It comes from the admins and from
   news sites' feeds (PokéBeach, Nintendo Life, Press Start…), read every 15
@@ -507,6 +517,29 @@ npm test
     at JB Hi-Fi bought by Auto-checkout; the 🎯 tab's ⚡ Buy;
   - the dashboard's 🎯 tab: link or words, where to look, Auto-checkout only
     where Mugibot checks out, for everyone or just for you.
+- **📃 Search pages** (`test/pages.test.js`, the dashboard and the real extension):
+  - how each store's page is read (server or admin's browser, what's read), and
+    the fastest each is read (3 s; BIG W 20 s);
+  - what can be added: key phrases, the pace, no product pages, no cart,
+    checkout or account links, Auto-checkout only where Mugibot checks out;
+  - Kmart's search from the server: the first look the scene, a new listing
+    with a phrase posted in the channel and role chosen with ⚡ Buy, and bought
+    once; one purchase per watch, then armed again with ✎;
+  - EB Games' "Trading cards, pre-order" page from an admin's browser: its data
+    learned from the page and asked for from inside it, a member's own watch
+    DM'd and bought within its max price, a refusal backed off;
+  - JB Hi-Fi's empty `products.json`, read from an admin's browser instead (its
+    first read the scene). A product known as sold out coming onto Trainer
+    Town's collection on sale (bought). Another website's page (alerts only).
+    Pacing, `Retry-After`, a switched-off store. A store's pages taking turns in
+    the admin's browser;
+  - with the real extension: EB Games' page read in a tab of its own, a new
+    Magic: The Gathering pre-order bought there (CONFIRM & PAY, placed once).
+    Kmart's page from the server: posted with its role pinged and bought
+    ("Checkout securely", placed once);
+  - the dashboard: a search link told apart from a product's; key phrases,
+    pace, Auto-checkout, channel and role; ✎; "Add a monitor" sending a search
+    page to Drop watches.
 - **Amazon sweeps from an admin's browser:** its search page asked for from inside
   an Amazon page (the dummy Amazon gives servers HTTP 503, like the real one).
 - **Dashboard round:** the card backup (only a locked copy reaches the server,

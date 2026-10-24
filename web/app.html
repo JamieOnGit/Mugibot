@@ -74,7 +74,8 @@
         <form class="card" id="m-add" hidden>
           <h3>Add a monitor</h3>
           <div class="grid2">
-            <div class="span2"><label for="ma-url">Product link</label><input id="ma-url" type="url" placeholder="https://www.kmart.com.au/product/…" autocomplete="off"></div>
+            <div class="span2"><label for="ma-url">Product link</label><input id="ma-url" type="url" placeholder="https://www.kmart.com.au/product/…" autocomplete="off">
+              <p class="small notice" id="ma-page-hint" hidden>📃 That's a page of results, not one product — to have it read every few seconds for products with your key phrases (like "Magic the Gathering"), make it a drop watch. <button class="btn small primary" id="ma-page-go" type="button">Watch this page for key phrases →</button></p></div>
             <div><label for="ma-store">…or store</label><select id="ma-store"><option value="">Choose…</option></select></div>
             <div><label for="ma-sku">and SKU</label><input id="ma-sku" autocomplete="off" placeholder="43818648"></div>
             <div><label for="ma-category">Category</label><select id="ma-category"><option value="">Guess from the name</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option><option value="nontcg">Non-TCG</option></select></div>
@@ -142,6 +143,7 @@
                   <p class="muted small" id="w-form-help">Paste the product link — or pick the store and type the SKU (handy before it's listed: Mugibot finds the page when it goes up).</p>
                   <label for="w-url" id="w-url-label">Product link <span class="muted">(optional if you enter the SKU)</span></label>
                   <input id="w-url" name="url" type="url" placeholder="https://www.kmart.com.au/product/…-43818648/">
+                  <p class="small notice" id="w-page-hint" hidden>📃 That's a page of results, not one product — to have it read every few seconds for products with your key phrases (like "Magic the Gathering"), make it a drop watch. <button class="btn small primary" id="w-page-go" type="button">Watch this page for key phrases →</button></p>
                   <div class="grid2" id="w-store-row">
                     <div><label for="w-store">Store</label><select id="w-store" name="store"></select></div>
                     <div><label for="w-sku">SKU / keycode</label><input id="w-sku" name="sku" placeholder="e.g. 43818648" autocomplete="off"></div>
@@ -204,8 +206,19 @@
               <div class="mon-ppanel" data-ppanel="drops" id="pp-drops" role="tabpanel" aria-labelledby="pt-drops" hidden>
                 <p class="muted small dw-lead">Watch for anything — a product the card keywords miss, a console, a collectible, a product at any shop (Garmin, a sneaker store…). Paste its link, or <b>key phrases</b> — the words in its name, one phrase a line ("Heavy Hitters Premium") — and choose where to look: <b>every store Mugibot searches</b>, one of them, or another website. You're told when it <b>drops</b>, comes <b>back in stock</b>, opens for <b>pre-order</b> or its <b>price drops</b>. <span id="dw-scope"></span></p>
                 <form class="card dw-form" id="dw-form" novalidate>
-                  <label for="dw-input">Product link, or key phrases (one a line)</label>
-                  <textarea id="dw-input" rows="2" autocomplete="off" maxlength="2000" placeholder="https://www.jbhifi.com.au/products/…   or key phrases, one a line:&#10;Heavy Hitters Premium"></textarea>
+                  <label for="dw-input">Product link, a store's search page, or key phrases (one a line)</label>
+                  <textarea id="dw-input" rows="2" autocomplete="off" maxlength="2000" placeholder="A product: https://www.jbhifi.com.au/products/…  ·  a search page: https://www.ebgames.com.au/search?…&#10;or key phrases, one a line: Heavy Hitters Premium"></textarea>
+                  <fieldset class="dw-kind" id="dw-kind-wrap" hidden>
+                    <legend class="sr-only">What the link is</legend>
+                    <label class="check inline"><input type="radio" name="dw-kind" id="dw-kind-product" value="product" checked> 🔗 One product — watch it</label>
+                    <label class="check inline"><input type="radio" name="dw-kind" id="dw-kind-page" value="page"> 📃 A search or category page — look for key phrases on it</label>
+                  </fieldset>
+                  <div class="dw-page" id="dw-page-wrap" hidden>
+                    <label for="dw-phrases">Key phrases to look for on the page <span class="muted">(one a line — a product counts when its name has every word of one of them)</span></label>
+                    <textarea id="dw-phrases" rows="2" autocomplete="off" maxlength="1500" placeholder="Magic the Gathering&#10;One Piece OP-15"></textarea>
+                    <div class="dw-every"><label for="dw-every">Read the page every</label> <input id="dw-every" type="number" min="3" max="3600" step="1" value="5" inputmode="numeric"> <span>seconds</span> <span class="small muted" id="dw-every-note"></span></div>
+                    <p class="small muted dw-tip">Tip: the page's first page of results is what's read — sort it newest first (or put the words in the store's search) so a new listing lands on it.</p>
+                  </div>
                   <p class="small dw-hint" id="dw-hint" aria-live="polite"></p>
                   <div class="grid2" id="dw-where" hidden>
                     <div><label for="dw-store">Where to look</label><select id="dw-store"></select></div>

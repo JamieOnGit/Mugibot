@@ -1,5 +1,5 @@
 // The dashboard. Everything here is the signed-in member's own data.
-import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, listTools, money, renderPager, setMsg, toast, when } from './common.js';
+import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, listTools, looksLikeListing, money, renderPager, setMsg, toast, when } from './common.js';
 import { setupDrops } from './drops.js';
 import { setupMonitor } from './monitor.js';
 import { setupNews } from './news.js';
@@ -82,6 +82,8 @@ const monitorUI = setupMonitor({
   watch: (p) => watchProduct(p),
   // (↻ Reset: the store's cached files in this browser are cleared too — its cookies and sign-in kept.)
   clearCache: (store) => (document.documentElement.dataset.mugibotExtension ? askExtension('clearStoreCache', { store }, 5000) : Promise.resolve(null)),
+  // (A search page pasted in "Add a monitor": made a drop watch on the page, for key phrases — the Drop watches list's form.)
+  openPageWatch: (url) => { history.replaceState(null, '', '#drops'); showList('drops').then(() => dropsUI.prefillPage(url)).catch(showError); },
 });
 // 🎯 Drop watches: anything outside the card keywords (drops.js).
 const dropsUI = setupDrops({
@@ -832,15 +834,33 @@ async function editItem(it, { shop = false } = {}) {
   $('#w-discount').value = (it && it.discount) || '';
   storeNote();
   setMsg($('#w-msg'), '');
+  $('#w-page-hint').hidden = true;
   if (link) $('#w-form').scrollIntoView({ block: 'nearest' });
   $('#w-url').focus();
 }
 
 $('#w-add-toggle').addEventListener('click', () => editItem(null));
+// A search or category page pasted where a product's link goes: a drop watch reads those, for key phrases (drops.js).
+const wPageHint = () => {
+  const url = $('#w-url').value.trim();
+  const page = $('#w-form').dataset.mode !== 'shop' && !state.editing && !!url && !!state.me && state.me.entitlement.active && looksLikeListing(url);
+  $('#w-page-hint').hidden = !page;
+  return page;
+};
+$('#w-url').addEventListener('input', wPageHint);
+$('#w-page-go').addEventListener('click', () => {
+  const url = $('#w-url').value.trim();
+  $('#w-form').hidden = true;
+  $('#w-page-hint').hidden = true;
+  state.editing = null;
+  history.replaceState(null, '', '#drops');
+  showList('drops').then(() => dropsUI.prefillPage(url)).catch(showError);
+});
 $('#sl-add').addEventListener('click', () => editItem(null, { shop: true }));
 $('#w-cancel').addEventListener('click', () => { $('#w-form').hidden = true; state.editing = null; });
 $('#w-form').addEventListener('submit', (e) => {
   e.preventDefault();
+  if (wPageHint()) { setMsg($('#w-msg'), ''); $('#w-page-go').focus(); return; }
   busy(e.target, async () => {
     const shop = $('#w-form').dataset.mode === 'shop';
     const body = {

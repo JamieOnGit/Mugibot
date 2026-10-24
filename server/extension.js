@@ -85,6 +85,11 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // that store's cached files there too (never its cookies or sign-in): the browsingData permission, which Chrome adds
 // without asking. And with the checkout browser's backup on, every browser of yours listens, so an open one checks
 // out while the checkout browser isn't (only one ever does).
+// 1.34.0: drop watches on a search page (monitor/pages.js) — an admin's browser reads a store's search, category or
+// collection page every few seconds in a tab of its own in the sweep window (one for each store, beside its
+// searches): the data the page fetches (EB Games' /search/query, with the page's own filters), learned from the
+// page and asked for from inside it — never the browser's cached copy — or the page itself once it's drawn.
+// Nothing else changed in how searches or checkouts go.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):

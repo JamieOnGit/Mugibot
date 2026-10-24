@@ -60,6 +60,20 @@ export function setMsg(el, text, ok = false) {
 
 export const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
 
+/**
+ * A link to a page of results — a search, a category, a collection — rather than one product's page (a drop watch
+ * reads those for key phrases). A product's own page (…/product/…, /products/…, /p/…, /dp/…, /item/…) never is.
+ */
+export function looksLikeListing(link) {
+  let u;
+  try { u = link instanceof URL ? link : new URL(/^https?:\/\//i.test(String(link).trim()) ? String(link).trim() : `https://${String(link).trim()}`); } catch { return false; }
+  const path = u.pathname.toLowerCase();
+  if (/\/products?\/search(\/|$)/.test(path)) return true; // (The Games Cube's search: /products/search?q=…)
+  if (/\/(products?|p|dp|gp\/product|item|items)\/[^/]+/.test(path) || /\/[^/]*-\d{6,10}\/?$/.test(path) || /\.html?$/.test(path)) return false;
+  if (/(^|\/)(search|collections?|category|categories|catalogsearch|product-category|browse|shop|c|s|b|deals|new-arrivals|pre-?orders?|trading-cards?)(\/|$)/.test(path)) return true;
+  return ['q', 'query', 'text', 'searchterm', 'keyword', 'k', 's', 'category', 'condition', 'filter'].some((k) => [...u.searchParams.keys()].some((x) => x.toLowerCase() === k || x.toLowerCase().startsWith('filter.')));
+}
+
 export function when(ts) {
   if (!ts) return '';
   const d = new Date(ts);

@@ -26,6 +26,7 @@ import { ENTITLED_SQL } from '../repo.js';
 import { bad, bool, httpUrl, item as checkItem, num, str } from '../schema.js';
 import { norm, siteAnswer, siteUrl } from './listing.js';
 import { MonitorAdmin } from './manage.js';
+import { PAGE_DEFAULT_SECONDS, PAGE_MAX_SECONDS, floorFor, isProductPage, pageLink, pageProblem, phrasesOf, planFor } from './pages.js';
 import { publicError } from './public.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
@@ -99,7 +100,14 @@ function toWatch(r) {
     baselineAt: r.baseline_at ?? null, bases: json(r.bases, {}), nextAt: r.next_at || 0, lastAt: r.last_at ?? null, lastOkAt: r.last_ok_at ?? null,
     fails: r.fails || 0, error: r.error || '', createdAt: r.created_at,
     channelId: r.channel_id || '', roleId: r.role_id || '',
+    // A search page's (monitor/pages.js): its link, the key phrases looked for on it, and how often it's read.
+    page: r.page || '', phrases: json(r.phrases, []), every: r.every_seconds || 0,
   };
+}
+
+/** What a watch is called in what it says: its name, its words, its key phrases, or its link. */
+export function nameOf(w) {
+  return w.label || w.words || (w.phrases && w.phrases.length ? w.phrases.join(', ') : '') || w.url || w.page;
 }
 
 export class Drops {
@@ -230,6 +238,12 @@ export class Drops {
     return this.wordsAt(storeId).find((w) => w.shared && (!words || w.words === words) && hasWords(name, w.words)) || null;
   }
 
+  /** A search page's key phrase in this name (the first of them that is), or null. */
+  phraseIn(w, title) {
+    const name = norm(title);
+    return (name && (w.phrases || []).find((ph) => hasWords(name, ph))) || null;
+  }
+
   /** Someone's own watches whose words are in this name. */
   ownFor(storeId, title) {
     const name = norm(title);
@@ -342,7 +356,7 @@ export class Drops {
     const day = Math.floor(this.now() / 86400000);
     if (this.roomDay && this.roomDay.get(w.id) === day) return;
     (this.roomDay ||= new Map()).set(w.id, day);
-    this.repo.addEvent(w.userId, { type: 'restock', level: 'warn', message: `Drop watch "${w.label || w.words || w.url}" has found ${MAX_FOUND_OWN} new products already, the most one watch keeps — take the ones you don't want off your watchlist (that makes room), or make its words narrower` });
+    this.repo.addEvent(w.userId, { type: 'restock', level: 'warn', message: `Drop watch "${nameOf(w)}" has found ${MAX_FOUND_OWN} new products already, the most one watch keeps — take the ones you don't want off your watchlist (that makes room), or make its words narrower` });
   }
 
   /** Someone's watchlist is full: said once a day. */
@@ -350,7 +364,7 @@ export class Drops {
     const day = Math.floor(this.now() / 86400000);
     if (this.fullDay && this.fullDay.get(w.id) === day) return;
     (this.fullDay ||= new Map()).set(w.id, day);
-    this.repo.addEvent(w.userId, { type: 'restock', level: 'warn', message: `Drop watch "${w.label || w.words || w.url}": your watchlist is full (${this.cfg.limits.items}), so what it finds can't go on it — remove something from your watchlist` });
+    this.repo.addEvent(w.userId, { type: 'restock', level: 'warn', message: `Drop watch "${nameOf(w)}": your watchlist is full (${this.cfg.limits.items}), so what it finds can't go on it — remove something from your watchlist` });
   }
 
   /** A product's page was read (monitor/index.js): a find waiting to see whether it's on sale yet is armed if it isn't. */
@@ -444,6 +458,13 @@ export class Drops {
   firstLook(w) {
     if (!w || w.shared || !w.found.length) return;
     const n = w.found.length;
+    if (w.page) {
+      this.repo.addEvent(w.userId, {
+        type: 'restock', level: 'info',
+        message: `🔎 Watching ${this.where(w)}'s page for ${w.phrases.map((x) => `"${x}"`).join(', ')}: ${n} product${n === 1 ? '' : 's'} with ${w.phrases.length === 1 ? 'it' : 'one of them'} ${n === 1 ? 'is' : 'are'} on it already — on your watchlist now, so you're told when ${n === 1 ? 'it comes' : 'any comes'} back in stock. Anything new on the page, you're told the moment it's there.`,
+      });
+      return;
+    }
     this.repo.addEvent(w.userId, {
       type: 'restock', level: 'info',
       message: `🎯 Watching "${w.words}" at ${this.where(w)}: ${n} product${n === 1 ? '' : 's'} with those words ${n === 1 ? 'is' : 'are'} listed already — on your watchlist now, so you're told when ${n === 1 ? 'it comes' : 'any comes'} back in stock. Anything new, you're told the moment it drops.`,
@@ -633,12 +654,12 @@ export class Drops {
 
   /** The watches with this one's site and words that this browser reads for (an admin's never reads for a member's own). */
   peersFor(w, user) {
-    return this.live().filter((x) => x.site === w.site && x.words === w.words && this.readsFor(x, user));
+    return this.live().filter((x) => (w.page ? x.page === w.page : x.site === w.site && x.words === w.words) && this.readsFor(x, user));
   }
 
   /** Whose browser may read for this watch: an admin's for one for everyone, its owner's for their own. */
   readsFor(w, user) {
-    return !!user && w.store === 'other' && !!w.words && (w.shared ? user.role === 'admin' : w.userId === user.id);
+    return !!user && w.store === 'other' && (!!w.words || !!w.page) && (w.shared ? user.role === 'admin' : w.userId === user.id);
   }
 
   /**
@@ -653,11 +674,14 @@ export class Drops {
     const out = [];
     for (const w of this.live()) {
       if (out.length >= 2) break;
-      if (!this.readsFor(w, user) || !(w.fails > 0 || this.viaBrowser(w)) || (this.browserNext.get(w.id) || 0) > now) continue;
-      if (!this.monitor.siteAllowed(w.site, sites, want)) continue;
-      // (One read for every watch with its site and words that this browser reads for.)
-      for (const x of this.peersFor(w, user)) this.browserNext.set(x.id, now + this.siteMs);
-      out.push({ id: `d:${w.id}`, store: 'other', kind: 'site', url: w.site, reads: (w.how ? [w.how] : this.ways(w.site)).map((way) => ({ way, url: siteUrl(w.site, w.words, way) })) });
+      // (A search page at another website (monitor/pages.js): while it refuses the server, as often as it's asked for — every 20 s at the most.)
+      const refused = w.page ? !!this.pages && this.pages.siteRefused(w) : w.fails > 0 || this.viaBrowser(w);
+      if (!this.readsFor(w, user) || !refused || (this.browserNext.get(w.id) || 0) > now) continue;
+      if (!this.monitor.siteAllowed(w.site || w.page, sites, want)) continue;
+      // (One read for every watch with its site and words — or its page — that this browser reads for.)
+      for (const x of this.peersFor(w, user)) this.browserNext.set(x.id, now + (w.page ? Math.max(20, w.every || 0) * 1000 : this.siteMs));
+      out.push(w.page ? { id: `d:${w.id}`, store: 'other', kind: 'site', url: w.page, reads: [{ way: 'page', url: w.page }] }
+        : { id: `d:${w.id}`, store: 'other', kind: 'site', url: w.site, reads: (w.how ? [w.how] : this.ways(w.site)).map((way) => ({ way, url: siteUrl(w.site, w.words, way) })) });
     }
     return out;
   }
@@ -683,6 +707,7 @@ export class Drops {
       price: typeof p.price === 'number' && Number.isFinite(p.price) && p.price >= 0 && p.price < 100000 ? p.price : null,
     }));
     for (const x of peers) { this.browserOkAt.set(x.id, this.now()); this.browserFails.delete(x.id); }
+    if (w.page) return !!this.pages && this.pages.siteResult(w, products);
     await this.settle(peers, { products, how: how || w.how || 'page' }, { browser: true });
     return true;
   }
@@ -732,9 +757,10 @@ export class Drops {
   // Adding, checking and removing watches
   // ---------------------------------------------------------------------------
   /**
-   * A new watch. input: { url } (a product link) or { words, store } — store: a store Mugibot
-   * searches, or 'other' with site (the website, or a page of it) — plus label, aco + maxPrice,
-   * and for admins shared (for everyone: default on) and category.
+   * A new watch. input: { url } (a product link), { words, store } — store: a store Mugibot
+   * searches, or 'other' with site (the website, or a page of it) — or { page, phrases, every } (a
+   * search page, read every few seconds for any of its key phrases: monitor/pages.js) — plus label,
+   * aco + maxPrice, and for admins shared (for everyone: default on), category, channelId and roleId.
    */
   async add(input, user) {
     const isAdmin = user.role === 'admin';
@@ -754,11 +780,34 @@ export class Drops {
     if (aco && maxPrice === null) throw bad('Set a max price to auto-checkout it: Mugibot never pays more than that');
     // (Where it posts: for everyone only — someone's own watch tells them alone.)
     const dest = shared ? await this.destination(input) : { channelId: '', roleId: '' };
-    const url = httpUrl(input.url, 'Product link', { required: false });
+    const url = input.page ? '' : httpUrl(input.url, 'Product link', { required: false });
     let store = '';
     let site = '';
     let words = '';
-    if (url) {
+    let page = '';
+    let phrases = [];
+    let every = 0;
+    if (input.page) {
+      // A search page (any store's search, category or collection — or another website's): its key phrases looked for on it.
+      page = pageLink(httpUrl(input.page, "The search page's link"));
+      const problem = pageProblem(page);
+      if (problem) throw bad(problem);
+      const r = this.retailers.forUrl(page);
+      store = r ? r.id : 'other';
+      if (r) {
+        if (!this.retailers.enabled(r)) throw bad(`${r.name} is switched off at the moment`);
+        if (isProductPage(r, page)) throw bad(`That's a product's own page at ${r.name} — paste it on its own to watch that product (a search page lists products)`);
+        if (!planFor(r, page)) throw bad(`Mugibot doesn't read ${r.name}'s pages for key phrases — paste a product's link instead`);
+        if (this.sweeper && this.sweeper.modeFor(r) === 'off') throw bad(`${r.name} isn't monitored at the moment (switched off in the Drops page's stores)`);
+      }
+      if (aco && !this.retailers.canBuy(store)) throw bad(NO_ACO);
+      phrases = phrasesOf(input.phrases ?? input.words, wordsOf);
+      if (!phrases.length) throw bad('Type a key phrase or two to look for on that page, one a line (e.g. "magic the gathering") — a product counts when its name has every word of one of them');
+      const floor = floorFor(r);
+      every = num(input.every, { min: 1, max: PAGE_MAX_SECONDS, int: true, def: Math.max(floor, PAGE_DEFAULT_SECONDS) });
+      if (every < floor) throw bad(floor > 3 && r ? `${r.name}'s pages can be read every ${floor} seconds at the fastest (it turns away anything quicker)` : `Every ${floor} seconds is the fastest a page is read`);
+      if (mine.some((w) => w.page === page)) throw bad("You're watching that page already — change its key phrases there");
+    } else if (url) {
       const r = this.retailers.forUrl(url);
       store = r ? r.id : 'other';
       if (r && !this.retailers.enabled(r)) throw bad(`${r.name} is switched off at the moment`);
@@ -786,9 +835,10 @@ export class Drops {
       if (mine.some((w) => w.words === words && w.store === store && w.site === site)) throw bad('You have that drop watch already');
     }
     const id = newId('drp');
-    this.db.run(`INSERT INTO drop_watches (id, user_id, shared, store, site, words, url, label, category, aco, max_price, channel_id, role_id, created_at)
-      VALUES (:id, :u, :shared, :store, :site, :words, :url, :label, :category, :aco, :max, :ch, :role, :t)`, {
-      id, u: user.id, shared: shared ? 1 : 0, store, site, words, url, label, category, aco: aco ? 1 : 0, max: maxPrice, ch: dest.channelId, role: dest.roleId, t: this.now(),
+    this.db.run(`INSERT INTO drop_watches (id, user_id, shared, store, site, words, url, label, category, aco, max_price, channel_id, role_id, page, phrases, every_seconds, created_at)
+      VALUES (:id, :u, :shared, :store, :site, :words, :url, :label, :category, :aco, :max, :ch, :role, :page, :phrases, :every, :t)`, {
+      id, u: user.id, shared: shared ? 1 : 0, store, site, words, url, label, category, aco: aco ? 1 : 0, max: maxPrice, ch: dest.channelId, role: dest.roleId,
+      page, phrases: JSON.stringify(phrases), every, t: this.now(),
     });
     this.changed();
     try {
@@ -798,7 +848,7 @@ export class Drops {
       this.changed();
       throw e;
     }
-    this.repo.audit(user.id, null, 'drop-add', `${shared ? 'shared' : 'own'}: ${url || `${words} @ ${site || store}`}`);
+    this.repo.audit(user.id, null, 'drop-add', `${shared ? 'shared' : 'own'}: ${url || (page ? `${phrases.join(' | ')} @ ${page}` : `${words} @ ${site || store}`)}`);
     // Looked for at the store's next search (its first look is what it compares drops with) — at the
     // store's own pace, never sooner (every store: each at its own). Another website: within a few seconds.
     if (words && store === ALL_STORES) for (const x of this.stores()) { if (x.words) this.urgent.add(`${x.id}|${words}`); }
@@ -842,7 +892,9 @@ export class Drops {
   checkNow(id, user) {
     const w = this.get(String(id || ''));
     if (!this.canChange(w, user)) return false;
-    if (w.url) {
+    if (w.page) {
+      if (this.pages) this.pages.checkNow(w);
+    } else if (w.url) {
       for (const f of w.found) {
         const p = f.productId ? this.catalog.productById(f.productId) : this.db.get('SELECT * FROM items WHERE id = :id', { id: f.itemId || '' });
         if (!p) continue;
@@ -871,7 +923,7 @@ export class Drops {
     this.db.run('DELETE FROM drop_watches WHERE id = :id', { id: w.id });
     this.changed();
     for (const it of items) this.hub.publish(w.userId, 'watch', { id: it.id, removed: true });
-    this.repo.audit(user.id, null, 'drop-remove', w.url || `${w.words} @ ${w.site || w.store}`);
+    this.repo.audit(user.id, null, 'drop-remove', w.url || (w.page ? `${w.phrases.join(' | ')} @ ${w.page}` : `${w.words} @ ${w.site || w.store}`));
     return true;
   }
 
@@ -884,6 +936,31 @@ export class Drops {
     if (!w || !this.canChange(w, user)) return null;
     const set = {};
     if (input.label !== undefined) set.label = str(input.label, 80);
+    // (A search page's key phrases, and how often it's read.)
+    if (input.phrases !== undefined || input.every !== undefined) {
+      if (!w.page) throw bad('Only a search page watch has key phrases to change — make a new watch for other words');
+      if (input.phrases !== undefined) {
+        const list = phrasesOf(input.phrases, wordsOf);
+        if (!list.length) throw bad('Keep at least one key phrase (3 letters or more) — or remove the watch');
+        set.phrases = JSON.stringify(list);
+      }
+      if (input.every !== undefined) {
+        const r = w.store === 'other' ? null : this.retailers.get(w.store);
+        const floor = floorFor(r);
+        const every = num(input.every, { min: 1, max: PAGE_MAX_SECONDS, int: true, def: w.every || PAGE_DEFAULT_SECONDS });
+        if (every < floor) throw bad(floor > 3 && r ? `${r.name}'s pages can be read every ${floor} seconds at the fastest (it turns away anything quicker)` : `Every ${floor} seconds is the fastest a page is read`);
+        set.every_seconds = every;
+      }
+    }
+    // (Its Auto-checkout, by its owner: armed again after the one purchase it makes — or its max price changed — or off.)
+    if (input.aco !== undefined) {
+      if (w.userId !== user.id) throw bad('Only its owner arms a drop watch\'s Auto-checkout');
+      const aco = bool(input.aco, false);
+      const max = aco ? num(input.maxPrice ?? w.maxPrice, { min: 1, max: 100000, def: null }) : w.maxPrice;
+      if (aco && w.store !== ALL_STORES && !this.retailers.canBuy(w.store)) throw bad(NO_ACO);
+      if (aco && max === null) throw bad('Set a max price to auto-checkout it: Mugibot never pays more than that');
+      Object.assign(set, { aco: aco ? 1 : 0, max_price: max });
+    }
     if (input.channelId !== undefined || input.roleId !== undefined) {
       if (!w.shared || user.role !== 'admin') throw bad('Only an admin\'s drop watch for everyone posts in a channel — your own tell you by DM');
       const dest = await this.destination({ channelId: input.channelId ?? w.channelId, roleId: input.roleId ?? w.roleId });
@@ -893,7 +970,7 @@ export class Drops {
     if (keys.length) {
       this.db.run(`UPDATE drop_watches SET ${keys.map((k) => `${k} = :${k}`).join(', ')} WHERE id = :id`, { ...set, id: w.id });
       this.changed();
-      this.repo.audit(user.id, null, 'drop-change', `${w.url || `${w.words} @ ${w.site || w.store}`}: ${keys.map((k) => `${k}=${set[k] || '(usual)'}`).join(' ')}`);
+      this.repo.audit(user.id, null, 'drop-change', `${w.url || w.page || `${w.words} @ ${w.site || w.store}`}: ${keys.map((k) => `${k}=${set[k] || '(usual)'}`).join(' ')}`);
     }
     return this.view(this.get(w.id), user);
   }
@@ -948,7 +1025,7 @@ export class Drops {
   routeFor(id) {
     const w = id ? this.get(String(id)) : null;
     if (!w || !w.shared || !w.channelId) return null;
-    return { id: `drop:${w.id}`, name: w.label || w.words || 'Drop watch', channelId: w.channelId, roleId: w.roleId, categories: [], stores: [], kinds: [...DROP_ROUTE_KINDS], keywords: '', drop: w.id };
+    return { id: `drop:${w.id}`, name: nameOf(w) || 'Drop watch', channelId: w.channelId, roleId: w.roleId, categories: [], stores: [], kinds: [...DROP_ROUTE_KINDS], keywords: '', drop: w.id };
   }
 
   // ---------------------------------------------------------------------------
@@ -959,6 +1036,9 @@ export class Drops {
     return this.retailers.list.filter((r) => r.id !== 'other' && this.retailers.enabled(r)).map((r) => ({
       id: r.id, name: r.name, hosts: r.hosts, pathPrefix: r.pathPrefix || null, aco: !!r.flow,
       words: !!r.sweep && (!this.sweeper || this.sweeper.modeFor(r) !== 'off'), demo: !!r.demo,
+      // (Its search pages read for key phrases (monitor/pages.js), every `floor` seconds at the fastest; its product pages' paths.)
+      pages: !!r.sweep && !!planFor(r, r.base) && (!this.sweeper || this.sweeper.modeFor(r) !== 'off'), floor: floorFor(r),
+      productPath: r.productPath ? [r.productPath.source, r.productPath.flags] : null,
     }));
   }
 
@@ -973,6 +1053,8 @@ export class Drops {
       used: list.filter((w) => w.userId === user.id).length,
       sweepSeconds: Math.round(this.sweepMs / 1000),
       siteSeconds: Math.round(this.siteMs / 1000),
+      // (A search page: read this often unless you choose, and never faster than every pageMin seconds.)
+      pageSeconds: PAGE_DEFAULT_SECONDS, pageMin: floorFor(null),
       route: route && { id: route.id, name: route.name, enabled: route.enabled },
       // (Admins: whether there's a Discord server to pick a watch's channel and role from.)
       ...(user.role === 'admin' ? { discord: { ready: !!(this.ctx && this.ctx.discord && this.ctx.discord.botReady) } } : {}),
@@ -982,15 +1064,25 @@ export class Drops {
   view(w, viewer) {
     const mine = w.userId === viewer.id;
     const admin = viewer.role === 'admin';
+    // (A search page's: how often it's read, and from where — Mugibot's server or an admin's browser, said to admins only.)
+    const pg = w.page && this.pages ? this.pages.viewOf(w) : null;
     return {
-      id: w.id, kind: w.url ? 'link' : 'words', shared: w.shared, mine, by: w.shared || admin ? w.username : '',
+      id: w.id, kind: w.url ? 'link' : w.page ? 'page' : 'words', shared: w.shared, mine, by: w.shared || admin ? w.username : '',
       store: w.store, storeName: this.where(w), site: w.site, words: w.words, url: w.url, label: w.label,
       category: w.category, aco: mine && w.aco, maxPrice: mine ? w.maxPrice : null, canBuy: w.store === ALL_STORES || this.retailers.canBuy(w.store),
-      lastAt: w.lastAt, lastOkAt: w.lastOkAt, fails: w.fails, error: admin ? w.error : publicError(w.error), seen: w.seen,
-      looked: !!w.baselineAt, nextAt: w.store === 'other' ? w.nextAt : null, createdAt: w.createdAt,
+      // (A search page's note on a read that went fine, saying where it's read from: admins only.)
+      lastAt: w.lastAt, lastOkAt: w.lastOkAt, fails: w.fails, error: admin ? w.error : pg && !w.fails && publicError(w.error) !== w.error ? '' : publicError(w.error), seen: w.seen,
+      looked: !!w.baselineAt, nextAt: pg ? pg.nextAt : w.store === 'other' ? w.nextAt : null, createdAt: w.createdAt,
       // (Read from a browser while the website refuses the server: an admin's, or your own for your own watch.)
-      via: (admin || mine) && w.store === 'other' && w.words && this.viaBrowser(w) ? 'browser' : '',
-      allow: w.fails > 0 && /refused|bot check/i.test(w.error) && !this.viaBrowser(w) && this.readsFor(w, viewer) ? this.allowFor(viewer, w.site) : '',
+      via: pg ? ((admin || (mine && w.store === 'other')) && pg.via === 'browser' ? 'browser' : '')
+        : (admin || mine) && w.store === 'other' && w.words && this.viaBrowser(w) ? 'browser' : '',
+      allow: w.fails > 0 && /refused|bot check/i.test(w.error) && !this.viaBrowser(w) && this.readsFor(w, viewer) ? this.allowFor(viewer, w.site || w.page) : '',
+      ...(pg ? {
+        page: w.page, phrases: w.phrases, every: pg.every, floor: pg.floor, readEvery: pg.readEvery,
+        // (What it's waiting on: 'browser' — an admin's browser to read it, 'update' — that browser's extension to update, 'off' — its store switched off.)
+        waiting: pg.waiting === 'browser' || pg.waiting === 'update' ? (admin ? pg.waiting : 'browser') : pg.waiting,
+        ...(admin && pg.needs ? { needs: pg.needs, has: pg.has } : {}),
+      } : {}),
       canChange: this.canChange(w, viewer),
       // (Where it posts, for an admin's watch for everyone: admins only.)
       ...(admin && w.shared ? { channelId: w.channelId, roleId: w.roleId } : {}),

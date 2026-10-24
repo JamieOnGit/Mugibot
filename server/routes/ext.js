@@ -17,7 +17,8 @@ const EVENT_TYPES = { add: 'info', basket: 'info', step: 'info', checkout: 'succ
 /** "ebgames,pokemoncenter" → the stores this browser has got through the queue of (it says, since 1.16.0). */
 // Other websites this browser may read (its extension allowed there: their addresses, '*' for any).
 const sitesFrom = (v) => new Set(String(v || '').split(',').map((x) => x.trim().toLowerCase()).filter((x) => x === '*' || /^[a-z0-9.-]{1,253}(:(\d{1,5}|\*))?$/.test(x)).slice(0, 200));
-const throughFrom = (v) => new Set(String(v || '').split(',').map((x) => x.trim()).filter((x) => /^[a-z0-9-]{1,40}$/.test(x)).slice(0, 20));
+// (A store's id — or a search page's tab, 'page:<store>' — in a list the extension sends.)
+const throughFrom = (v) => new Set(String(v || '').split(',').map((x) => x.trim()).filter((x) => /^[a-z0-9:-]{1,48}$/.test(x)).slice(0, 40));
 
 export function register(router, ctx) {
   const { cfg, repo, limiter, retailers } = ctx;
@@ -336,15 +337,25 @@ export function register(router, ctx) {
     // (Kept as this browser's version: its in-browser checks go by it too — an extension updated since it last
     //  opened its menu was taken for the old one, and left out of BIG W's checks.)
     if (version && version !== req.device.version) seen(req, version);
-    // (busy: the stores this browser is still searching — the same list as `through`.)
-    return ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through: throughFrom(req.query.get('through')), busy: throughFrom(req.query.get('busy')) });
+    // (busy: the stores this browser is still searching — the same list as `through` — and, since 1.34.0, its search
+    //  pages' tabs still reading; denied: the stores turning this browser away just now.)
+    const through = throughFrom(req.query.get('through'));
+    const busy = throughFrom(req.query.get('busy'));
+    const due = ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through, busy });
+    if (req.user.role !== 'admin') return due;
+    // Drop watches' search pages (monitor/pages.js): read in tabs of their own, beside the searches.
+    const pages = ctx.pages ? ctx.pages.browserDue(req.user, { version, busy, through, denied: throughFrom(req.query.get('denied')) }) : { pages: [], waitMs: null };
+    const waits = [due.waitMs, pages.waitMs].filter((x) => x !== null && x !== undefined);
+    return { ...due, pages: pages.pages, waitMs: waits.length ? Math.min(...waits) : null };
   }, { auth: 'device' });
 
   // …and what they found.
   router.post('/api/ext/sweeps', async (req) => {
     if (!limiter.hit(`sweeps-post:${req.device.id}`, 600, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
-    if (!Array.isArray(req.body.results)) throw bad('results must be a list');
+    const pages = Array.isArray(req.body.pages) ? req.body.pages : null;
+    if (!Array.isArray(req.body.results) && !pages) throw bad('results must be a list');
     if (req.user.role !== 'admin') return { ok: true, results: [] };
-    return { ok: true, results: await ctx.sweeper.browserResults(req.user, req.body.results) };
+    const results = Array.isArray(req.body.results) ? await ctx.sweeper.browserResults(req.user, req.body.results) : [];
+    return { ok: true, results, ...(pages ? { pages: ctx.pages ? await ctx.pages.browserResults(req.user, pages) : [] } : {}) };
   }, { auth: 'device', maxBody: 768 * 1024 });
 }

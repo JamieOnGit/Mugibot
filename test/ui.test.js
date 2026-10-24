@@ -1396,6 +1396,102 @@ test('🎯 Drop watches: one box for a link or words — the form shows where to
   }
 });
 
+test('📃 a store\'s search page in Drop watches: told apart from a product\'s link when pasted — its key phrases, how often it\'s read (3 s at the fastest; BIG W 20 s), Auto-checkout where Mugibot checks out, the channel and role; ✎ changes its phrases and pace; "Add a monitor" sends a search page there', async () => {
+  const EB = 'https://www.ebgames.com.au/search?category=trading-cards&condition=preorder';
+  const general = discord.state.channels.find((x) => x.name === 'general').id;
+  const PINGS = discord.state.roles.find((r) => r.name === 'Drop pings').id;
+  await page.goto(`${env.url}/app#drops`);
+  await page.waitForSelector('#pp-drops:not([hidden]) #dw-form');
+  await page.waitForFunction(() => document.querySelector('#dw-mine').textContent.trim() !== '');
+  await page.fill('#dw-input', EB);
+  await page.waitForSelector('#dw-page-wrap:not([hidden])');
+  assert.equal(await page.isChecked('#dw-kind-page'), true, 'a page of results, not one product');
+  assert.equal(await page.inputValue('#dw-every'), '5');
+  assert.equal(await page.getAttribute('#dw-every', 'min'), '3');
+  assert.match(await page.textContent('#dw-every-note'), /3 s at the fastest/);
+  assert.equal(await page.textContent('#dw-add'), 'Watch this page');
+  await page.fill('#dw-phrases', 'Magic the Gathering\nOne Piece OP-15');
+  await page.waitForFunction(() => /✓ EB Games' page, read every 5 seconds: anything on it whose name has one of "Magic the Gathering", "One Piece OP-15" — you're told the moment it's on the page .*⚡ Buy and Auto-checkout work here/.test(document.querySelector('#dw-hint').textContent));
+  assert.equal(await page.isVisible('#dw-where'), false, 'the page is where to look');
+  assert.equal(await page.isVisible('#dw-aco-wrap'), true);
+  await page.check('#dw-aco');
+  await page.waitForSelector('#dw-aco-note:not([hidden])');
+  assert.match(await page.textContent('#dw-aco-note'), /Bought only if it's new on the page after the watch's first look/);
+  await page.fill('#dw-max', '250');
+  await page.fill('#dw-label', 'EB pre-orders');
+  await page.waitForSelector('#dw-post-wrap:not([hidden]) #dw-post:not([disabled])');
+  await page.selectOption('#dw-post', general);
+  await page.selectOption('#dw-ping', PINGS);
+  await page.click('#dw-add');
+  await page.waitForFunction(() => /Watching — its page is read in a moment, then every 5 seconds/.test(document.querySelector('#dw-msg').textContent));
+  const row = page.locator('#dw-mine .dw-row', { hasText: 'EB pre-orders' });
+  await row.waitFor();
+  assert.match(await row.textContent(), /EB pre-orders.*Page · EB Games · every 5 s · 📣 for everyone in #general · pings @Drop pings · 🤖 auto-checkout up to \$250\.00 · for "magic the gathering", "one piece op 15"/s);
+  assert.match(await row.textContent(), /EB Games' page is read from an admin's browser — waiting for one/);
+  const w = env.app.drops.watches().find((x) => x.page === EB);
+  assert.deepEqual([w.phrases, w.every, w.channelId, w.roleId, w.aco, w.maxPrice, w.shared], [['magic the gathering', 'one piece op 15'], 5, general, PINGS, true, 250, true]);
+  assert.equal(await page.inputValue('#dw-phrases'), '', 'ready for the next one');
+  // ✎: its key phrases and pace (and, an admin's for everyone, where it posts).
+  await row.getByRole('button', { name: /^Change / }).click();
+  const ed = row.locator('form.dw-edit');
+  await ed.waitFor();
+  assert.equal(await ed.locator('textarea').inputValue(), 'magic the gathering\none piece op 15');
+  assert.equal(await ed.locator('select[aria-label$="post in"]').inputValue(), general);
+  assert.equal(await ed.locator('input[aria-label$="Auto-checkout what drops"]').isChecked(), true, 'its Auto-checkout, armed');
+  assert.equal(await ed.locator('input[aria-label$="max price for Auto-checkout"]').inputValue(), '250');
+  await ed.locator('textarea').fill('Magic the Gathering\nLorcana');
+  await ed.locator('input[aria-label$="read the page every (seconds)"]').fill('3');
+  await ed.locator('button[type=submit]').click();
+  await page.waitForFunction(() => !document.querySelector('#dw-mine form.dw-edit'));
+  assert.match(await row.textContent(), /every 3 s.*"magic the gathering", "lorcana"/s);
+  assert.deepEqual([env.app.drops.get(w.id).phrases, env.app.drops.get(w.id).every], [['magic the gathering', 'lorcana'], 3]);
+  // BIG W: every 20 s at the fastest.
+  await page.fill('#dw-input', 'https://www.bigw.com.au/search?text=lego%20star%20wars');
+  await page.waitForFunction(() => /BIG W: every 20 s at the fastest/.test(document.querySelector('#dw-every-note').textContent));
+  assert.equal(await page.inputValue('#dw-every'), '20');
+  assert.equal(await page.getAttribute('#dw-every', 'min'), '20');
+  // A product's own page: one product (its page isn't read for phrases) — unless you say it's a page.
+  await page.fill('#dw-input', 'https://www.ebgames.com.au/product/toys-and-collectibles/312346-pokemon-tcg-30th-celebration-elite-trainer-box');
+  await page.waitForSelector('#dw-page-wrap', { state: 'hidden' });
+  assert.equal(await page.isChecked('#dw-kind-product'), true);
+  assert.equal(await page.textContent('#dw-add'), 'Add drop watch');
+  await page.check('#dw-kind-page');
+  await page.waitForSelector('#dw-page-wrap:not([hidden])');
+  await page.check('#dw-kind-product');
+  await page.fill('#dw-input', '');
+  await page.waitForSelector('#dw-kind-wrap', { state: 'hidden' });
+  // "Add a monitor" with a search page in it: sent to Drop watches, the link in the form, its key phrases next.
+  await page.click('#m-add-toggle');
+  await page.fill('#ma-url', 'https://www.kmart.com.au/search/?searchTerm=magic%20the%20gathering');
+  await page.waitForSelector('#ma-page-hint:not([hidden])');
+  const before = env.app.catalog.listMonitors ? env.app.catalog.listMonitors().length : null;
+  await page.click('#m-add button[type=submit]');
+  assert.equal(await page.isVisible('#ma-page-hint'), true, 'not added as a product');
+  if (before !== null) assert.equal(env.app.catalog.listMonitors().length, before);
+  await page.click('#ma-page-go');
+  await page.waitForSelector('#pp-drops:not([hidden]) #dw-page-wrap:not([hidden])');
+  assert.equal(await page.inputValue('#dw-input'), 'https://www.kmart.com.au/search/?searchTerm=magic%20the%20gathering');
+  assert.equal(await page.isChecked('#dw-kind-page'), true);
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'dw-phrases');
+  assert.equal(await page.isVisible('#m-add'), false);
+  // My watchlist's "+ Add SKU" (members' own): the same — a search page is sent to Drop watches, never added as a SKU.
+  await page.click('#pt-watch');
+  await page.click('#w-add-toggle');
+  await page.fill('#w-url', 'https://www.jbhifi.com.au/collections/trading-cards');
+  await page.waitForSelector('#w-page-hint:not([hidden])');
+  const items = env.app.repo.listItems(env.app.repo.userByUsername('owner').id).length;
+  await page.click('#w-save');
+  assert.equal(await page.isVisible('#w-page-hint'), true);
+  assert.equal(env.app.repo.listItems(env.app.repo.userByUsername('owner').id).length, items, 'not added as a SKU');
+  await page.click('#w-page-go');
+  await page.waitForSelector('#pp-drops:not([hidden]) #dw-page-wrap:not([hidden])');
+  assert.equal(await page.inputValue('#dw-input'), 'https://www.jbhifi.com.au/collections/trading-cards');
+  assert.equal(await page.isVisible('#w-form'), false);
+  if (shots) await page.screenshot({ path: path.join(shots, 'drops-search-page.png'), fullPage: true });
+  await page.fill('#dw-input', '');
+  assert.ok(env.app.drops.remove(w.id, env.app.repo.userByUsername('owner')));
+});
+
 test('Auto-checkout run history in pages; the card backup on Checkout details', async () => {
   const owner = env.app.repo.userByUsername('owner');
   const it = env.app.repo.listItems(owner.id)[0];

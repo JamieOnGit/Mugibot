@@ -556,6 +556,14 @@ const MIGRATIONS = [
   `
   ALTER TABLE items ADD COLUMN card_id TEXT NOT NULL DEFAULT '';
   `,
+  // 20 — a drop watch on a search page (server/monitor/pages.js): any store's search, category or collection page,
+  //      read every few seconds for its key phrases — page: its link; phrases: what's looked for on it (any one of
+  //      them in a product's name); every_seconds: how often it's read (never faster than its store allows).
+  `
+  ALTER TABLE drop_watches ADD COLUMN page TEXT NOT NULL DEFAULT '';
+  ALTER TABLE drop_watches ADD COLUMN phrases TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE drop_watches ADD COLUMN every_seconds INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export class Db {
