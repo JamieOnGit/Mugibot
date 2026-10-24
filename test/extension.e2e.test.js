@@ -1927,6 +1927,10 @@ test("BIG W's search page builds its products once it's open: an admin's browser
     assert.match(await cachePage.evaluate(() => document.cookie), /mgbkeep=1/);
     await dash.close();
     await cachePage.close();
+    // (That reset's own search — its tab closed and opened afresh — done before this test ends: nothing of it
+    //  is left going when the next test looks at BIG W's tab.)
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => !sweeper.stat('demo-bigw').freshTab && (sweeper.stat('demo-bigw').lastOkAt || 0) > sweeper.stat('demo-bigw').resetAt, { timeout: 30000, message: 'searched afresh after the dashboard reset' });
   } finally {
     env.app.repo.updateUser(userId, { role: 'user' });
     store.shop('bigw').clientSearch = false;
