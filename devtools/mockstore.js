@@ -2474,6 +2474,12 @@ ${body}
     }
     // (Its pages under a Microsoft-style link too: /en-au/d/<name>/<code>.)
     const m = sub.match(/^\/products\/([a-z0-9-]+)(\.js)?$/) || sub.match(/^\/(?:[a-z]{2}-[a-z]{2}\/)?d\/([a-z0-9-]+)\/[a-z0-9]+()$/);
+    // (And the Riot Games Store's way: /en-us/product/<slug>/ — see riotPage.)
+    const riot = sub.match(/^\/[a-z]{2}-[a-z]{2}\/product\/([a-z0-9-]+)\/?$/);
+    if (riot) {
+      const y = A.products.find((z) => z.handle === riot[1] && z.riot);
+      return y ? html(200, riotPage(y)) : html(404, shell('Not found', '<h1>Page not found</h1>'));
+    }
     const x = m && A.products.find((y) => y.handle === m[1]);
     if (!x || !x.listed) return html(404, shell('Not found', '<h1>Page not found</h1>'));
     if (m[2]) {
@@ -2483,6 +2489,43 @@ ${body}
     const ld = { '@context': 'https://schema.org', '@type': 'Product', name: x.name, offers: { '@type': 'Offer', price: x.price.toFixed(2), priceCurrency: 'AUD', availability: `https://schema.org/${LD_AVAIL[x.status] || 'OutOfStock'}` } };
     const buy = x.status === 'in_stock' ? '<button type="button" name="add">Add to cart</button>' : x.status === 'preorder' ? '<button type="button" name="add">Pre-order now</button>' : '<button type="button" disabled>Sold out</button>';
     return html(200, shell(x.name, `<script type="application/ld+json">${JSON.stringify(ld)}</script><div class="product"><h1>${esc(x.name)}</h1><p class="price">$${x.price.toFixed(2)}</p>${buy}</div>`));
+  }
+
+  /**
+   * A product page the way the Riot Games Store's are (merch.riotgames.com, Next.js App Router, its products from
+   * Shopify): the whole page streamed inside a hidden <div> its own code moves into view, a "Notify Me" button in an
+   * overlay its code shows (aria-hidden) and no buy button at all in the HTML — its code draws "Add to Cart" — and
+   * the page's data streamed in self.__next_f.push([1, "…"]): another product's ("you may also like", in stock)
+   * first, then the page view's tracking (the page's product: its price and availability, "outOfStock" or
+   * "inStock") and the product itself (isPreorder, its options' availableForSale, its "Coming Soon" label).
+   * x.status: 'coming_soon' (Riftbound's drops, Oct 2026), 'in_stock', 'preorder' (on sale, isPreorder) or
+   * 'out_of_stock' (its "Retired" label, shown only while it's unavailable).
+   */
+  function riotPage(x) {
+    const onSale = x.status === 'in_stock' || x.status === 'preorder';
+    const product = {
+      size: '1x1', contentType: 'product', createdAt: '2026-10-23', dropAt: '$undefined', title: x.name, trackingTitle: x.name, sku: `RB${x.price}`, id: `RB${x.price}`, slug: x.handle,
+      price: '$7:props:children:1:0:props:children:props:trackingEvent:product:price', productType: 'simple',
+      productDisplayMessages: [
+        x.status === 'out_of_stock' ? { label: 'Retired', color: 'black', displayType: 'above-title', showOnlyWhenUnavailable: true, showOnProductDetails: true }
+          : { label: 'Coming Soon', color: 'blue', displayType: 'above-title', showOnlyWhenUnavailable: null, showOnProductDetails: true },
+        { label: 'Limited Edition', color: 'gold', displayType: 'above-title', showOnlyWhenUnavailable: null, showOnProductDetails: true },
+      ],
+      isPreorder: x.status === 'preorder' || !!x.preorderLater,
+      variants: x.shopify ? [{ availableForSale: onSale, id: 'gid://shopify/ProductVariant/1', sku: `RB${x.price}-00` }] : '$undefined',
+    };
+    const other = { product: { title: 'Riftbound: Origins Booster Display', slug: 'riftbound-origins-booster-display', isPreorder: false }, trackingEvent: { event: 'view_item', product: { availability: 'inStock' } } };
+    const rows = [
+      `5:["$","$L19",null,${JSON.stringify(other)}]\n`,
+      `7:["$","$L1b",null,{"theme":"riftbound","children":[["$","$L1d",null,{"index":0,"id":"page-tracker","trackingEvent":{"event":"pageview","product":${JSON.stringify({ name: x.name, sku: product.sku, price: { amount: x.price, currencyCode: 'USD' }, availability: onSale ? 'inStock' : 'outOfStock', category: '' })}}}],`,
+      `["$","$L1e",null,{"product":${JSON.stringify(product)}}]]}]\n`,
+    ];
+    const push = (row) => `<script>self.__next_f.push([1,${JSON.stringify(row).replace(/</g, '\\u003c')}])</script>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(x.name)} | Riot Games Store (dummy)</title></head><body>
+      <div hidden id="S:0"><section class="product-hero"><h1>${esc(x.name)}</h1><p class="price">$${x.price.toFixed(2)}</p>
+        <div class="add-to-cart-panel_panel" aria-hidden="false"><div class="add-to-cart-panel_overlay" aria-hidden="true"><div class="purchase-bar__actions">${onSale ? '' : '<button type="button" class="button_button--variant--primary">Notify Me</button>'}</div></div></div>
+      </section></div>
+      <script>self.__next_f = self.__next_f || []</script>${rows.map(push).join('')}</body></html>`;
   }
 
   // -------------------------------------------------------------------- Shop checkout links

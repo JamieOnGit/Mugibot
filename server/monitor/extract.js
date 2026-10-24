@@ -243,9 +243,9 @@ const NOT_FOUND_RE = /\b(page|product) (not found|cannot be found|could not be f
  * own code turns the button on from this: the button in the page's HTML says nothing either way.)
  * { status, detail } or null.
  */
-function storePageData(html) {
+function storePageData(html, url = '') {
   const m = String(html).match(/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
-  if (!m) return null;
+  if (!m) return flightProduct(html, url);
   let p = null;
   try { p = JSON.parse(m[1]).props.pageProps.product; } catch { return null; }
   const modes = p && p.deliveryModes;
@@ -254,6 +254,70 @@ function storePageData(html) {
   const collect = modes.clickAndCollect && modes.clickAndCollect.available;
   if (home === false && collect === false) return { status: STATUS.OUT_OF_STOCK, detail: 'no home delivery or click & collect (its Add button greyed out)' };
   return null;
+}
+
+/** The JSON object (or array) starting at s[start], as text — strings with braces in them taken as strings. */
+function balancedJson(s, start) {
+  const open = s[start];
+  const close = open === '{' ? '}' : open === '[' ? ']' : null;
+  if (!close) return null;
+  let depth = 0;
+  let inStr = false;
+  for (let i = start; i < s.length && i - start < 500000; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (c === '\\') i++;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === open) depth++;
+    else if (c === close && --depth === 0) return s.slice(start, i + 1);
+  }
+  return null;
+}
+
+/**
+ * A Next.js (App Router) store's own product data, streamed in its page (self.__next_f.push([1, "…"])): the Riot
+ * Games Store's (merch.riotgames.com). Its page arrives in a hidden <div> its own code moves into view, its buy
+ * button drawn by that code — so its HTML says nothing Mugibot can go by ("Checking…" for ever: a member's two
+ * Riftbound drops, Oct 2026). Its page view's tracking says the page's product's availability ("outOfStock",
+ * "inStock"); the product itself whether it's a pre-order (isPreorder), its options' availableForSale, and its
+ * "Coming Soon" label. On sale: a pre-order or in stock. Not on sale: coming soon (labelled so, or a drop time
+ * ahead), else sold out. { status, detail, price, currency } or null.
+ */
+function flightProduct(html, url = '') {
+  const s = String(html);
+  if (!s.includes('self.__next_f.push')) return null;
+  let text = '';
+  for (const m of s.matchAll(/self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g)) {
+    try { text += JSON.parse(m[1]); } catch { /* not a string after all */ }
+    if (text.length > 4_000_000) break;
+  }
+  // The page view's product: the page's own (the other products on it — "you may also like" — have their own).
+  const at = text.search(/"event":"pageview","product":\{/);
+  if (at < 0) return null;
+  let seen = null;
+  try { seen = JSON.parse(balancedJson(text, text.indexOf('{', text.indexOf('"product":', at))) || 'null'); } catch { return null; }
+  if (!seen || typeof seen !== 'object' || !seen.availability) return null;
+  // The product itself, by its link's last part (its slug).
+  let product = null;
+  const slug = (() => { try { return decodeURIComponent(new URL(url).pathname.replace(/\/+$/, '').split('/').pop() || ''); } catch { return ''; } })();
+  const bySlug = slug ? text.indexOf(`"slug":${JSON.stringify(slug)}`) : -1;
+  const from = bySlug >= 0 ? text.lastIndexOf('"product":{', bySlug) : -1;
+  if (from >= 0) { try { product = JSON.parse(balancedJson(text, text.indexOf('{', from)) || 'null'); } catch { product = null; } }
+  const said = mapAvailability(seen.availability);
+  const options = product && Array.isArray(product.variants) ? product.variants.filter((v) => v && typeof v.availableForSale === 'boolean') : [];
+  const onSale = said ? said === STATUS.IN_STOCK || said === STATUS.PREORDER : options.length ? options.some((v) => v.availableForSale) : null;
+  if (onSale === null) return null;
+  const preorder = !!product && product.isPreorder === true;
+  // (Its labels as they show: one shown only while it's unavailable — "Retired" — not while it's on sale.)
+  const labels = (product && Array.isArray(product.productDisplayMessages) ? product.productDisplayMessages : [])
+    .filter((x) => x && !(onSale && x.showOnlyWhenUnavailable === true)).map((x) => String(x.label || '')).filter(Boolean);
+  const dropAt = product && typeof product.dropAt === 'string' && /^\d{4}-\d\d-\d\d/.test(product.dropAt) ? product.dropAt : null;
+  const soon = said === STATUS.COMING_SOON || labels.some((l) => SOON_RE.test(l)) || (!!dropAt && Date.parse(dropAt) > Date.now());
+  const status = onSale ? (preorder || said === STATUS.PREORDER ? STATUS.PREORDER : STATUS.IN_STOCK) : soon ? STATUS.COMING_SOON : STATUS.OUT_OF_STOCK;
+  const price = seen.price && typeof seen.price === 'object' ? parsePrice(seen.price.amount) : parsePrice(seen.price);
+  const detail = [`its page data: "${String(seen.availability).slice(0, 30)}"`, preorder ? 'a pre-order' : '', labels.length ? `"${labels[0].slice(0, 30)}"` : '', dropAt ? `drops ${dropAt.slice(0, 16)}` : ''].filter(Boolean).join(', ');
+  return { status, detail, price, currency: (seen.price && seen.price.currencyCode) || null };
 }
 
 /**
@@ -279,9 +343,13 @@ export function extractProduct(html, { url = '', sku = '', hints = {} } = {}) {
     if (main.status) signals.push({ source: 'json-ld', status: main.status, detail: main.availabilityRaw });
   }
 
-  // (The store's own page data, where it can't be ordered online: before anything else.)
-  const own = storePageData(html);
-  if (own) signals.push({ source: 'store-data', status: own.status, detail: own.detail });
+  // (The store's own page data, where it can't be ordered online — or where it's all the page says: before anything else.)
+  const own = storePageData(html, url);
+  if (own) {
+    signals.push({ source: 'store-data', status: own.status, detail: own.detail });
+    if (out.price === null && own.price != null) out.price = own.price;
+    if (!out.currency && own.currency) out.currency = own.currency;
+  }
 
   // 2. Meta tags (OpenGraph / Facebook product tags).
   const meta = {};

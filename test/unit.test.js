@@ -476,6 +476,44 @@ test("Target's own page data beats its JSON-LD: a pre-order with neither home de
   assert.equal(extractProduct(page({ ...off, clickAndCollect: { available: true } }, 'C&C only')).status, 'in_stock');
 });
 
+test("the Riot Games Store's page (Next.js, its page streamed hidden and its buy button drawn by its code): read from its own page data — coming soon, then in stock or a pre-order the moment it's on sale, sold out once it's gone", () => {
+  // (As merch.riotgames.com's pages were, Oct 2026: the page in <div hidden id="S:0">, a "Notify Me" in an overlay its
+  //  code shows, no "Add to Cart" in the HTML; the data in self.__next_f.push([1, "…"]) — another product's first.)
+  const page = ({ availability, isPreorder = false, labels = [{ label: 'Coming Soon', showOnlyWhenUnavailable: null }], variants = '$undefined', dropAt = null, slug = 'riftbound-kda-couture-collection' }) => {
+    const rows = [
+      `5:["$","$L19",null,${JSON.stringify({ product: { title: 'Riftbound: Origins Booster Display', slug: 'riftbound-origins-booster-display', isPreorder: false }, trackingEvent: { event: 'view_item', product: { availability: 'inStock' } } })}]\n`,
+      `7:["$","$L1b",null,{"children":[["$","$L1d",null,{"id":"page-tracker","trackingEvent":{"event":"pageview","product":${JSON.stringify({ name: 'Riftbound: K/DA Premium Collection', sku: 'RB3865-00-00', price: { amount: 150, currencyCode: 'USD' }, availability, category: '' })}}}],`,
+      `["$","$L1e",null,{"product":${JSON.stringify({ title: 'Riftbound x K/DA: Couture Collection', sku: 'RB3865-00-00', slug, productType: 'simple', dropAt, isPreorder, variants, productDisplayMessages: labels.map((l) => ({ color: 'blue', displayType: 'above-title', showOnProductDetails: true, ...l })) })}}]]}]\n`,
+    ];
+    return `<html><head><title>Riftbound x K/DA: Couture Collection | Riot Games Store</title></head><body><div hidden id="S:0"><h1>Riftbound x K/DA: Couture Collection</h1>
+      <div class="add-to-cart-panel_overlay" aria-hidden="true"><button type="button">Notify Me</button></div></div>
+      ${rows.map((r) => `<script>self.__next_f.push([1,${JSON.stringify(r).replace(/</g, '\\u003c')}])</script>`).join('')}</body></html>`;
+  };
+  const url = 'https://merch.riotgames.com/en-us/product/riftbound-kda-couture-collection/';
+  const read = (o) => extractProduct(page(o), { url });
+  // Not on sale yet, labelled "Coming Soon": coming soon (not "Checking…" for ever), with its price.
+  const soon = read({ availability: 'outOfStock' });
+  assert.deepEqual([soon.status, soon.decidedBy, soon.price, soon.currency], ['coming_soon', 'store-data', 150, 'USD']);
+  assert.match(soon.signals[0].detail, /"outOfStock".*"Coming Soon"/);
+  // On sale: in stock — or a pre-order (T1's Signature Edition: isPreorder), however its tracking says it.
+  assert.equal(read({ availability: 'inStock' }).status, 'in_stock');
+  assert.equal(read({ availability: 'inStock', isPreorder: true }).status, 'preorder');
+  assert.equal(read({ availability: 'preOrder' }).status, 'preorder');
+  // Not on sale with no "Coming Soon" label (its "Retired", shown only while it's unavailable): sold out.
+  assert.equal(read({ availability: 'outOfStock', labels: [{ label: 'Retired', showOnlyWhenUnavailable: true }] }).status, 'out_of_stock');
+  // …and a drop time ahead: coming soon.
+  assert.equal(read({ availability: 'outOfStock', labels: [], dropAt: new Date(Date.now() + 86400000).toISOString() }).status, 'coming_soon');
+  // In stock, its "Retired" label (shown only when it's unavailable) isn't what it says.
+  assert.doesNotMatch(read({ availability: 'inStock', labels: [{ label: 'Retired', showOnlyWhenUnavailable: true }] }).signals[0].detail, /Retired/);
+  // No page view's availability: its options' availableForSale (Shopify's) instead.
+  const noTracker = (av) => page({ availability: 'x', variants: [{ availableForSale: av }] }).replace('"availability":"x"', '"avail":"x"');
+  assert.deepEqual([extractProduct(noTracker(true), { url }).status, extractProduct(noTracker(false), { url }).status], ['in_stock', 'coming_soon']);
+  // Another page of the store (its product's not there by its link): the page view's still the page's own.
+  assert.equal(extractProduct(page({ availability: 'inStock', slug: 'something-else' }), { url }).status, 'in_stock');
+  // The other product on the page (in stock) never counts for this one.
+  assert.equal(read({ availability: 'outOfStock' }).status, 'coming_soon');
+});
+
 test("another website's answer for a drop watch is read the same from the server and from a browser", () => {
   assert.equal(siteUrl('https://shop.example/', 'xbox series x', 'search'), 'https://shop.example/search?q=xbox%20series%20x');
   assert.match(siteUrl('https://shop.example', 'xbox', 'suggest'), /^https:\/\/shop\.example\/search\/suggest\.json\?q=xbox&resources%5Btype%5D=product/);

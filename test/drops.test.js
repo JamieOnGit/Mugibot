@@ -511,6 +511,46 @@ test("🎯 an admin's watch at another website, for everyone: its price drops ar
   assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
 });
 
+test("🎯 the Riot Games Store's Riftbound drops (its page streamed hidden, no buy button until it's on sale): an admin's links read as coming soon — not \"Checking…\" — then posted in #non-tcg-alerts the moment one's in stock and the other opens for pre-order, alerts only", async () => {
+  // (Like merch.riotgames.com's /en-us/product/<slug>/ pages: see riotPage in the dummy store.)
+  store.state.acme.products.push(
+    { handle: 'riftbound-kda-couture-collection', name: 'Riftbound x K/DA: Couture Collection', price: 150, status: 'coming_soon', riot: true, listed: false },
+    { handle: 'riftbound-t1-2025-worlds-signature-edition', name: 'Riftbound x T1 2025 Worlds Champion Signature Edition', price: 360, status: 'coming_soon', riot: true, preorderLater: true, listed: false },
+  );
+  const link = (h) => `${store.url}/acme/en-us/product/${h}/`;
+  const kda = link('riftbound-kda-couture-collection');
+  const t1 = link('riftbound-t1-2025-worlds-signature-edition');
+  const ws = [];
+  for (const url of [kda, t1]) {
+    const r = await boss.post('/api/drops', { url });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.watch.store, 'other');
+    ws.push(r.body.watch);
+  }
+  const p0 = posts(ch.nontcg).length;
+  for (const url of [kda, t1]) await env.app.monitor.checkPage(url);
+  const shown = async () => (await boss.get('/api/drops')).body.watches.filter((w) => ws.some((x) => x.id === w.id)).map((w) => w.found.map((f) => [f.name, f.status, f.price])).flat();
+  assert.deepEqual(await shown(), [['Riftbound x K/DA: Couture Collection', 'coming_soon', 150], ['Riftbound x T1 2025 Worlds Champion Signature Edition', 'coming_soon', 360]], 'coming soon, with their prices — read, not "Checking…"');
+  assert.equal(posts(ch.nontcg).length, p0, 'nothing to say yet');
+  await env.app.monitor.checkPage(kda);
+  assert.equal(posts(ch.nontcg).length, p0, 'still coming soon: quiet');
+  // K/DA goes on sale ("Add to Cart" drawn): 🟢, at once, alerts only.
+  store.setAcme('riftbound-kda-couture-collection', { status: 'in_stock' });
+  await env.app.monitor.checkPage(kda);
+  assert.equal(posts(ch.nontcg).length, p0 + 1);
+  const on = posts(ch.nontcg).at(-1);
+  assert.match(on.body.embeds[0].title, /^🟢 In stock: Riftbound x K\/DA: Couture Collection/);
+  assert.ok(!buttons(on).some((b) => /Buy/.test(b)), 'another website: no ⚡ Buy');
+  assert.ok(buttons(on).includes('Open product'));
+  // T1's opens for pre-order: 🟣.
+  store.setAcme('riftbound-t1-2025-worlds-signature-edition', { status: 'preorder' });
+  await env.app.monitor.checkPage(t1);
+  assert.equal(posts(ch.nontcg).length, p0 + 2);
+  assert.match(posts(ch.nontcg).at(-1).body.embeds[0].title, /^🟣 Pre-order open: Riftbound x T1 2025 Worlds Champion Signature Edition/);
+  assert.deepEqual((await shown()).map((x) => x[1]), ['in_stock', 'preorder']);
+  for (const w of ws) assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
+});
+
 test('🎯 drop watch words: short words and numbers are whole words ("xbox series x" isn\'t the Series S), longer ones count at a word\'s start — and Kmart\'s whole store is searched for them, not just its Trading Cards', async () => {
   assert.equal(hasWords('Xbox Series X Console 1TB', 'xbox series x'), true);
   assert.equal(hasWords('Xbox Series S 512GB Console', 'xbox series x'), false, 'not the Series S');

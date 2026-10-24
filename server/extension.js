@@ -77,6 +77,8 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // 1.32.0: a search page Mugibot couldn't see any products on (BIG W's) says what the page itself said — "No results
 // for …" (and it stops waiting there at once, not 15 s later) or "57 results" that hadn't been drawn yet when it was
 // read — so a search with none and a page not drawn yet are told apart. Nothing else changed in how checkouts go.
+// 1.32.1: a product page whose store streams it in hidden and draws its buy button with its own code (the Riot Games
+// Store's) is read from the store's own page data when a browser checks it: coming soon, then in stock or a pre-order.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):

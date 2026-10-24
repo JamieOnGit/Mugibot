@@ -566,6 +566,15 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
   Jones', say) is checked from a browser instead, once its extension may read
   that site (see **Refused by the server** below). Until then it shows
   **Blocked by site** or **Check failed**, and is asked again later.
+  Its page is read every minute. Its stock comes from the page's own data
+  where there's any: structured data for search engines, or the store's own
+  page data. The **Riot Games Store** (merch.riotgames.com, October 2026)
+  streams its whole page hidden and draws its buy button with its own code, so
+  its HTML says nothing either way, and its Riftbound drops showed
+  **Checking…** for ever. Now its page data is read: a product with
+  **Notify Me** and a "Coming Soon" label is **Coming soon**. The moment it's
+  on sale ("Add to Cart") it's **In stock**, or a **Pre-order** when it's one,
+  and that's the drop alert. With no "Coming Soon" label it's **Sold out**.
 - **🔑 Key phrases: the words in its name**, and where to look. Paste
   several at once, one a line ("Heavy Hitters Premium", "Ascended Heroes ETB"),
   and each becomes a watch of its own. A phrase you have already, or one too
