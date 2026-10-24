@@ -4614,6 +4614,131 @@ test("🚦 an admin's browser: a search that runs into EB's queue waits (its tab
   }
 });
 
+// 📃 Drop watches on a search page (server/monitor/pages.js): the page read every few seconds for key phrases — from this
+// admin's browser where the store turns servers away (EB Games: the data its page fetches, learned from the page and asked
+// for from inside it), or from the server (Kmart's search) — and what's new on it with a phrase bought by Auto-checkout.
+async function pageWatchAco() {
+  // (Auto-checkout on, placing orders, with room for this test's order today.)
+  const r = await browserApi('PUT', '/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 500, perDay: 20, spendPerDay: 5000 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
+}
+
+test("📃 a drop watch on EB Games' \"Trading cards, pre-order\" page (EB turns servers away; its page has no products in it until its own code fetches them): this admin's browser reads it in a tab of its own — learning the data the page fetches, then asking for just that from inside the page every few seconds — and a new Magic: The Gathering pre-order on it is DM'd and bought: added, checked out, \"CONFIRM & PAY\" — placed, once", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-ebgames': 'browser' } }, null);
+  store.state.blockNonBrowsers = true; // (like EB Games' Cloudflare)
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  await useItems([]);
+  await pageWatchAco();
+  store.addProduct('ebgames', { sku: '312400', name: 'Magic: The Gathering Avatar The Last Airbender Play Booster Box', price: 99, status: 'preorder' });
+  const page = `${store.url}/ebgames/search?category=trading-cards&condition=preorder`;
+  const data = `${store.url}/ebgames/search/query?category=trading-cards&condition=preorder`;
+  const added = await browserApi('POST', '/api/drops', { page, phrases: ['magic the gathering', 'one piece op 15'], every: 3, aco: true, maxPrice: 150, shared: false });
+  assert.equal(added.status, 200, JSON.stringify(added.body));
+  const w = added.body.watch;
+  const key = `demo-ebgames|${page}`;
+  const dmsBefore = discord.dmsTo('d-ash').length;
+  try {
+    await acoListen();
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    // Its first look: the page opened in its own tab, the data it fetched learned.
+    await waitFor(() => env.app.drops.get(w.id).baselineAt, { timeout: 40000, message: "the page's first read, from this browser" });
+    assert.ok(store.state.requests.some((x) => x.path === '/ebgames/search' && x.mode === 'navigate' && /Chrome/.test(x.ua)), 'the page opened, as a visitor would');
+    await waitFor(() => env.app.pages.st(key).dataUrl === data, { timeout: 20000, message: 'the data its page fetches, learned' });
+    const tab = await sw.evaluate(async () => (await chrome.storage.session.get('sweepWindow')).sweepWindow.tabs['page:demo-ebgames']);
+    assert.ok(Number.isInteger(tab), 'a tab of its own in the sweep window');
+    const first = env.app.repo.itemBySku(userId, 'demo-ebgames', '312400');
+    assert.ok(first, 'what was on the page already: on the watchlist');
+    assert.equal(first.aco, false, 'up for pre-order before the watch looked: not bought');
+    // Read again and again from inside the page — just its data, never the page loaded again.
+    const navs = () => store.state.requests.filter((x) => x.path === '/ebgames/search' && x.mode === 'navigate').length;
+    const asks = () => store.state.requests.filter((x) => x.path === '/ebgames/search/query').length;
+    const n0 = navs();
+    const a0 = asks();
+    await waitFor(() => asks() >= a0 + 2, { timeout: 30000, message: 'read again, every few seconds' });
+    assert.equal(navs(), n0, 'the page stays open: only its data asked for');
+    assert.equal(store.shop('ebgames').orders.length, 0);
+
+    // A new Magic: The Gathering pre-order on the page: DM'd, and bought — once.
+    store.addProduct('ebgames', { sku: '312401', name: 'Magic: The Gathering Lorwyn Eclipsed Collector Booster Box', price: 109, status: 'preorder' });
+    await waitFor(() => store.shop('ebgames').orders.length === 1, { timeout: 90000, message: 'the order placed at the dummy EB Games' });
+    const order = store.shop('ebgames').orders[0];
+    assert.deepEqual(order.cart.map((c) => [c.sku, c.qty]), [['312401', 1]], 'just that one');
+    await waitFor(async () => (await lastRun()).status === 'placed', { message: 'the run says placed' });
+    const item = env.app.repo.itemBySku(userId, 'demo-ebgames', '312401');
+    assert.equal(item.dropWatch, w.id);
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /Lorwyn Eclipsed Collector Booster Box/.test(m.body.embeds[0].title)), { message: "DM'd" });
+    // Read on: nothing bought twice.
+    const a1 = asks();
+    await waitFor(() => asks() >= a1 + 2, { timeout: 30000, message: 'read on' });
+    assert.equal(store.shop('ebgames').orders.length, 1, 'placed once');
+    assert.equal(env.app.repo.itemBySku(userId, 'demo-ebgames', '312400').aco, false);
+  } finally {
+    await browserApi('DELETE', `/api/drops/${w.id}`);
+    env.app.repo.updateUser(userId, { role: 'user' });
+    store.state.blockNonBrowsers = false;
+    sweeper.save({ stores: off }, null);
+    await useItems([]);
+    await closeStorePages('ebgames');
+  }
+});
+
+test("📃 an admin's drop watch for everyone on Kmart's search page, read from Mugibot's server (Kmart's search provider, as its page has it): a new Magic: The Gathering listing on it is posted in the channel chosen, pinging the role chosen, with ⚡ Buy — and this browser checks it out by itself: added, checkout filled in, \"Checkout securely\" — placed, once", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ stores: { ...off, 'demo-kmart': 'server' } }, null);
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  await useItems([]);
+  await pageWatchAco();
+  const ROLE = '800000000000000777';
+  discord.state.roles.push({ id: ROLE, name: 'MTG drops', position: 3, permissions: '0' });
+  const general = discord.state.channels.find((c) => c.name === 'general').id;
+  store.addProduct('kmart', { sku: '43900001', name: 'Magic: The Gathering Foundations Play Booster Box', price: 199, status: 'in_stock' });
+  const page = `${store.url}/kmart/search/?searchTerm=magic`;
+  const added = await browserApi('POST', '/api/drops', { page, phrases: ['Magic the Gathering'], every: 3, label: 'Kmart MTG', aco: true, maxPrice: 150, channelId: general, roleId: ROLE });
+  assert.equal(added.status, 200, JSON.stringify(added.body));
+  const w = added.body.watch;
+  const posted = () => discord.channelPosts(general);
+  const before = posted().length;
+  try {
+    await acoListen();
+    // Its first look (the server's read): the scene — on sale already, so not bought.
+    assert.equal(await env.app.pages.tick(), 1);
+    assert.equal(env.app.drops.get(w.id).found.length, 1);
+    assert.equal(posted().length, before);
+    // A new one on the page.
+    store.addProduct('kmart', { sku: '43900002', name: 'Magic: The Gathering Edge of Eternities Play Booster Bundle', price: 69, status: 'in_stock' });
+    await new Promise((res) => setTimeout(res, 3100));
+    assert.equal(await env.app.pages.tick(), 1);
+    await waitFor(() => posted().length === before + 1, { message: 'posted in #general' });
+    const post = posted().at(-1);
+    assert.match(post.body.embeds[0].title, /^🆕 New drop: Magic: The Gathering Edge of Eternities Play Booster Bundle/);
+    assert.equal(post.body.content, `<@&${ROLE}>`);
+    assert.ok(post.body.components[0].components.some((b) => b.label === '⚡ Buy with Mugibot'));
+    await waitFor(() => store.shop('kmart').orders.length === 1, { timeout: 60000, message: 'the order placed at the dummy Kmart' });
+    const order = store.shop('kmart').orders[0];
+    assert.deepEqual(order.cart.map((c) => [c.sku, c.qty]), [['43900002', 1]]);
+    assert.equal(order.form.cardNumber, '4242 4242 4242 4242', "the card from this browser's vault");
+    await waitFor(async () => (await lastRun()).status === 'placed', { message: 'the run says placed' });
+    // Read again: posted once, bought once.
+    await new Promise((res) => setTimeout(res, 3100));
+    await env.app.pages.tick();
+    await new Promise((res) => setTimeout(res, 1500));
+    assert.equal(posted().length, before + 1);
+    assert.equal(store.shop('kmart').orders.length, 1);
+  } finally {
+    await browserApi('DELETE', `/api/drops/${w.id}`);
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: off }, null);
+    await useItems([]);
+    await closeStorePages('kmart');
+  }
+});
+
 test("another account's ⚡ Buy link does nothing in this browser", async () => {
   const misty = await Client.signup(env.url, 'misty');
   env.app.repo.updateUser(misty.user.id, { plan: 'active' });

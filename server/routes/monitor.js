@@ -228,8 +228,9 @@ export function register(router, ctx) {
     if (!limiter.hit(`dropadd:${req.user.id}`, 30, 10 * 60 * 1000)) throw new HttpError(429, 'Slow down a little — try again in a few minutes');
     const body = req.body || {};
     // Several key phrases pasted at once (one a line): a watch each, where they're to be looked for — each one's
-    // own trouble (one you have already, your limit reached) said beside it, the rest added.
-    if (Array.isArray(body.phrases)) {
+    // own trouble (one you have already, your limit reached) said beside it, the rest added. (A search page's
+    // key phrases are one watch: the page read once for all of them — monitor/pages.js.)
+    if (Array.isArray(body.phrases) && !body.page) {
       const phrases = [...new Set(body.phrases.map((x) => str(x, 120)).filter(Boolean))].slice(0, 20);
       if (!phrases.length) throw bad('Paste a key phrase or two, one a line');
       const added = [];

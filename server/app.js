@@ -5,6 +5,7 @@ import http from 'node:http';
 import { Aco } from './aco.js';
 import { Bags } from './bags.js';
 import { Drops } from './monitor/drops.js';
+import { PageWatches } from './monitor/pages.js';
 import { Vip } from './monitor/vip.js';
 import { Catalog } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -78,9 +79,14 @@ export async function createApp(options = {}) {
   monitor.drops = drops;
   sweeper.drops = drops;
   feed.drops = drops;
+  // Search pages (drop watches on a store's search, category or collection page): read every few seconds for their key phrases.
+  const pages = new PageWatches({ cfg, db, retailers, drops, hub, fetchImpl: storeFetchImpl, now });
+  Object.assign(pages, { sweeper, monitor, gates });
+  drops.pages = pages;
+  sweeper.pages = pages;
   // Release news: admins' and the news feeds', posted in #news (and a digest each morning).
   const news = new News({ cfg, db, repo, retailers, discord, notifier, fetchImpl: storeFetchImpl, now });
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, news, limiter, pageCache: new Map() };
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, pages, news, limiter, pageCache: new Map() };
   drops.ctx = ctx;
   // Auto-checkout: started by the monitor when an armed item drops.
   const aco = new Aco({ ...ctx, now });
@@ -252,6 +258,7 @@ export async function createApp(options = {}) {
     sweeper,
     gates,
     drops,
+    pages,
     news,
     aco,
     bags,
@@ -275,6 +282,7 @@ export async function createApp(options = {}) {
       sweeper.start();
       gates.start();
       drops.start();
+      pages.start();
       news.start();
       aco.start();
       bags.start();
@@ -286,6 +294,7 @@ export async function createApp(options = {}) {
       sweeper.stop();
       gates.stop();
       drops.stop();
+      pages.stop();
       news.stop();
       aco.stop();
       bags.stop();

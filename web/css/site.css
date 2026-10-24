@@ -818,6 +818,16 @@ a.ck:hover { border-color: currentColor; }
 .dw-form > input { width: 100%; }
 .dw-hint { margin: 6px 0 2px; color: var(--muted); min-height: 1.2em; }
 .dw-aco { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; }
+/* 📃 A search page's watch: what the link is, its key phrases, how often it's read. */
+.dw-kind { border: 0; padding: 0; margin: 8px 0 2px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.dw-page { margin: 8px 0 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.dw-page textarea { width: 100%; }
+.dw-every { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 8px; }
+.dw-every label { margin: 0; }
+.dw-every input[type=number] { width: 84px; }
+.dw-every .small, .dw-every label { flex-basis: 100%; }
+@media (min-width: 700px) { .dw-every .small, .dw-every label { flex-basis: auto; } }
+#ma-page-hint { margin: 8px 0 0; }
 .dw-aco input[type=number] { max-width: 140px; }
 .dw-h { margin: 16px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
 .dw-list { list-style: none; margin: 0; padding: 0; }

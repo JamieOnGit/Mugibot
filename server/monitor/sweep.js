@@ -741,6 +741,69 @@ export class Sweeper {
   }
 
   /**
+   * What a drop watch's search page had on it (monitor/pages.js): each product whose name has one of a
+   * watch's key phrases is that watch's find. Members' own SKUs on the page are read as a search's are.
+   * An admin's watch for everyone: the product's in the catalogue (its alerts posted where the watch's go)
+   * and monitored, armed for the admin's Auto-checkout; anyone's own: on their watchlist, DM'd. A drop —
+   * bought at once when armed — is a product that's new on the page (fresh: what wasn't on it before this
+   * read; null when this read sets its scene) after the watch's first look: one this store's catalogue
+   * didn't have, or had as not on sale and is on sale now. Anything else with a phrase was there already.
+   */
+  async ingestPage(r, watches, products, { fresh = null, now = this.now() } = {}) {
+    const s = this.settings;
+    const counted = { found: products.length, kept: 0, new: 0, restock: 0, price: 0 };
+    const counts = this.filters(s);
+    const later = [];
+    const posting = [];
+    const log = (e) => this.cfg.log('[drops]', e.message);
+    try {
+      for (const p of products) {
+        const status = p.inStock === true ? (p.inStoreOnly ? STATUS.IN_STORE : p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
+        // Members' own SKUs, whatever they are (a page read is as good as a search's).
+        await this.members(r, p, status, later);
+        if (r.sweep.sellers && !p.marketplace) {
+          const known = this.catalog.productFor(r.id, p.sku);
+          if (known && known.seller) p.marketplace = true;
+        }
+        if ((s.skipMarketplace && p.marketplace) || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
+        const title = p.title || p.name;
+        const hits = watches.map((w) => ({ w, phrase: this.drops.phraseIn(w, title) })).filter((x) => x.phrase);
+        if (!hits.length) continue;
+        counted.kept += 1;
+        const codes = [p.sku, ...(p.aliases || [])];
+        const before = codes.map((k) => this.catalog.productFor(r.id, k)).find(Boolean) || null;
+        const isFresh = !!fresh && fresh.has(String(p.sku || '').toLowerCase());
+        const cameOnSale = !!before && !isOrderable(before.status) && isOrderable(status);
+        const dropFor = (w) => !!w.baselineAt && isFresh && (!before || cameOnSale);
+        // Someone's own watch: on their watchlist, theirs alone.
+        for (const { w } of hits.filter((x) => !x.w.shared)) {
+          await this.drops.foundOwn(w, r, p, status, { baseline: !dropFor(w) }).catch(log);
+        }
+        // An admin's watch for everyone: in the catalogue, its alerts where the watch's go (the first watch's channel).
+        const shared = hits.filter((x) => x.w.shared);
+        if (!shared.length) continue;
+        const lead = shared.find((x) => dropFor(x.w)) || shared[0];
+        // (A trading-card product the card keywords count too: its category from its name, as their searches give it.)
+        const cards = s.keywords.some((k) => counts(p, k));
+        const ev = await this.track(r, p, { status, keyword: lead.phrase, baseline: !shared.some((x) => dropFor(x.w)), now, drop: true, category: cards ? null : lead.w.category, dropWatch: lead.w.id, posting });
+        for (const k of ev) counted[k] += 1;
+        const product = codes.map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
+        for (const { w } of shared) {
+          const drop = dropFor(w);
+          // (Not a drop: armed by how it was before this read — on sale already, it isn't bought; not on sale yet, it's armed.)
+          await this.drops.foundShared(w, product, { baseline: !drop, status: drop || !before ? status : before.status }).catch(log);
+        }
+      }
+      await Promise.allSettled(posting);
+      return counted;
+    } finally {
+      // (Members' own alerts once the channel's are out.)
+      await Promise.allSettled(posting);
+      await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
+    }
+  }
+
+  /**
    * Stores that leave sold-out products out of their results (Target): a product that's been gone
    * from every page of its search for GONE_MS, while each page was read fine, is sold out.
    * Only when the pages read hold every result the store has; never in the first minutes after a start.

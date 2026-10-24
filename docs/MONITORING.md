@@ -694,6 +694,77 @@ watches, admins 30 (`MAX_DROP_WATCHES`).
 Settings (environment variables): `DROP_SWEEP_SECONDS` (30), `DROP_SITE_SECONDS`
 (120), `MAX_DROP_WATCHES` (10).
 
+### 📃 Search pages: a store's page read every few seconds for your key phrases
+
+Paste a store's **search, category or collection page** into the drop watches box
+(EB Games' `…/search?category=trading-cards&condition=preorder`, a Shopify
+collection, Kmart's search, any website's "new arrivals"). Mugibot tells it apart
+from a product's own link (**📃 A search or category page** is picked for you;
+switch it if it's wrong), and asks for:
+
+- **Key phrases to look for on the page**, one a line ("Magic the Gathering",
+  "One Piece OP-15"). A product counts when its name has every word of **one** of
+  them (the same matching as key phrases above), whatever the card keywords are.
+- **Read the page every … seconds**: **3 at the fastest**. At a store whose
+  searches go slower, its own pace is the fastest: BIG W 20 s, Pokémon Center and
+  Premium Bandai 30 s, Amazon 20 s, Gamesworld, Gamerholic and Trainer Town 15 s,
+  City Beach 10 s. Every store's pages together are read about once a second at
+  most, so a store with many pages watched never sees a burst.
+- **🤖 Auto-checkout** (stores Mugibot checks out at), up to a max price, and for
+  admins, **📣 for everyone** with the **Discord channel to post in and the role to
+  ping** (as for any drop watch). A member's own page watch tells them alone, by
+  DM, and puts what it finds on their watchlist.
+
+**What's a drop.** The watch's first look at the page is how things were: what's
+on it then goes on the watchlist quietly (and is armed only if it isn't on sale
+yet). After that, a product with a phrase is a **drop** (🆕 posted or DM'd, and
+bought at once when armed) when it wasn't on the page before **and** Mugibot
+didn't know it at that store, or knew it as not on sale and it's on sale now.
+A product coming back onto the page isn't a drop. Its restock is, the usual way.
+The first read after the page is read another way (the server, then an admin's
+browser) or after 6 hours without an answer sets the scene again: nothing in it
+is a drop. So does the first read after Mugibot restarts. (A product pushed onto
+the page from a later page of results can look new; at stores that sort newest
+first that's rare.) **One purchase per watch** (as every drop watch):
+once it's bought one, it's disarmed. **✎** on the watch arms it again, changes its max
+price, its key phrases and how often it's read.
+
+**How each store's page is read** (`server/monitor/pages.js`):
+
+| Store | Read from | What's read |
+|---|---|---|
+| EB Games, Zing | an admin's browser | The page opened in a tab of its own. The data it fetches (`/search/query`, with the page's own filters) is learned from it, then asked for from inside the page each time, never the browser's cached copy. |
+| Premium Bandai | an admin's browser | The same: its `/api/search`, with the region its code sends. |
+| BIG W, Pokémon Center, The Gamesmen | an admin's browser | The page opened and read once its products are drawn (BIG W's in its private window). |
+| Amazon | an admin's browser | Its own HTML, asked for from inside an Amazon page. |
+| Kmart | Mugibot's server | A search (`?searchTerm=`) through its search provider, the way its drop watches search it. Other Kmart pages are drawn in an admin's browser. |
+| Target, City Beach, The Games Cube | Mugibot's server | The page itself, with each store's own reader. |
+| JB Hi-Fi and the Shopify stores | Mugibot's server | A collection is its `products.json` (every product in it, with stock). A search uses its suggestions. Where those come back empty (JB Hi-Fi's collections), an admin's browser draws the page instead. |
+| Gamesworld (WooCommerce) | Mugibot's server | A search (`?s=`) through its product API. A category page is read as it is. |
+| Another website | Mugibot's server | The page as `Mugibot/1.0`. A website that refuses the server is read from a browser instead (an admin's for a watch for everyone, yours for your own), as other drop watches are. Alerts only. |
+
+- **From an admin's browser** (extension **1.34.0**): pages are read in the
+  sweep window, one tab for each store's pages, beside that store's searches.
+  They're read one at a time there and never while the store's queue is up
+  (unless that browser's through it). Nothing is read while the store is turning
+  that browser away ("Access Denied": half an hour). An older extension isn't
+  given any, and the watch says it's waiting for an admin's browser on 1.34.0.
+  With no admin's browser open, a page only a browser can read waits, and says so.
+- **Refused** (HTTP 401/403/429/503, a bot check): the read backs off from half a
+  minute, doubling to 10 minutes. It waits as long as the store's `Retry-After`
+  says. Where an admin's browser can read the page, it reads it meanwhile.
+  Mugibot never tries to get past a bot check.
+- **Only pages that list products.** A link that does something (a cart, a
+  checkout, an account page, signing in or out, an add-to-cart link) is refused:
+  an admin's browser opens a store's pages signed in as them. A store's own
+  product page is a product link watch instead.
+- **Add a monitor** (admins, top of the Drops page) is for one product. A search
+  page pasted there says so, with **Watch this page for key phrases →**, which
+  opens it in the drop watches form with the link filled in.
+- Each page watch's card says how it's going: when it was last read, how often
+  it's really read, how many products were on the page, and (admins) whether an
+  admin's browser read it. **↻** reads it now.
+
 ### 🚦 Checkpoints and virtual queues
 
 Before a big drop some stores put up a gate. Mugibot watches for each one going

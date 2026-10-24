@@ -750,6 +750,32 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     if (none && String(q || '').toLowerCase().includes(none)) return [];
     return shopOf(shop).products.filter((x) => x.listed && words.some((w) => slugify(x.name).includes(slugify(w)) || x.sku === w));
   };
+  // EB Games' search with its filters: words (q, optional), category ('trading-cards': trading-card products — by the
+  // product's own category, else its name) and condition ('preorder', or 'new' for what's out already).
+  const EB_CARDS = /\b(tcg|card game|trading cards?|booster|magic:? the gathering|elite trainer)\b/i;
+  function ebHits(params) {
+    const q = params.get('q');
+    let hits = q ? searchHits('ebgames', q) : shopOf('ebgames').products.filter((x) => x.listed);
+    const cat = params.get('category');
+    if (cat) hits = hits.filter((x) => (x.category ? x.category === cat : cat === 'trading-cards' && EB_CARDS.test(x.name)));
+    const cond = params.get('condition');
+    if (cond === 'preorder') hits = hits.filter((x) => x.status === 'preorder');
+    else if (cond === 'new') hits = hits.filter((x) => x.status !== 'preorder');
+    return hits;
+  }
+  function ebSearchPage(u) {
+    const title = u.searchParams.get('q') ? `Search results for "${esc(u.searchParams.get('q'))}"` : 'Trading Cards';
+    return page('ebgames', `${title} | EB Games`, `<h1>${title}</h1><p class="filters">${u.searchParams.get('condition') === 'preorder' ? 'Condition: Pre-order' : ''}</p><div id="results"><p>Loading…</p></div>
+      <script>
+        setTimeout(async () => {
+          const d = await (await fetch('/ebgames/search/query' + location.search)).json();
+          document.getElementById('results').innerHTML = d.results.length ? '<p class="result-count">' + d.totalResults + ' results</p>' + d.results.map((x) => '<div class="product-tile"><a href="/ebgames' + x.productUrl + '"><img src="' + x.imageUrl + '" alt="">' + x.title.replace(/</g, '&lt;') + '</a>'
+            + '<div class="price">$' + Number(x.promotionPrice || x.price).toFixed(2) + '</div>' + (x.isOutOfStock || x.isComingSoon ? '<button type="button" disabled>Sold Out</button>' : '<button type="button" class="add-to-cart">' + (new Date(x.releaseDate) > new Date() ? 'Pre-order' : 'Add to Cart') + '</button>') + '</div>').join('')
+            : '<p>Sorry, no results found.</p>';
+        }, 300);
+      </script>`);
+  }
+
   // Search results the way stores show them: a tile per product, with its price and an add / sold out button.
   function searchPage(shop, q, pageNo = 1) {
     const { hits, next } = paged(shop, q, pageNo);
@@ -3002,6 +3028,9 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
       });
     }
     if (shop === 'target' && sub === '/search') return html(200, targetSearchPage(u.searchParams.get('text') || ''));
+    // EB Games' search page: no products in it — its own script asks /search/query for them (with the page's own
+    // filters: ?category=trading-cards&condition=preorder) and draws them, like the real one.
+    if (shop === 'ebgames' && (sub === '/search' || sub === '/search/')) return html(200, ebSearchPage(u));
     if (shop === 'citybeach' && sub === '/search') return html(200, citybeachSearchPage(u.searchParams.get('q') || ''));
     if (sub === '/search' || sub === '/search/') {
       const q = u.searchParams.get('searchTerm') || u.searchParams.get('text') || u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('keyword') || '';
@@ -3023,9 +3052,10 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
         ${x.status === 'in_stock' || x.status === 'preorder' ? `<span class="a-price"><span class="a-offscreen">$${x.price.toFixed(2)}</span></span>` : '<span class="a-color-secondary">Currently unavailable.</span>'}
       </div>`).join('')}</div></body></html>`);
     }
-    // EB Games' search JSON (what its search page's own script asks for, and Mugibot's sweeps read).
+    // EB Games' search JSON (what its search page's own script asks for, and Mugibot's sweeps read) — with its
+    // search page's filters too: category (trading-cards) and condition (preorder, new), with or without words.
     if (shop === 'ebgames' && sub === '/search/query') {
-      const all = searchHits(shop, u.searchParams.get('q'));
+      const all = ebHits(u.searchParams);
       const day = 86400000;
       return json(200, {
         totalResults: all.length,
@@ -3069,6 +3099,10 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
         request: { term: decodeURIComponent(cio[1]), page: pg },
       });
     }
+    // JB Hi-Fi's collection pages: drawn by its own code once the page is open (none of its products in the page), and
+    // its products.json shut — an empty list, like the real one's.
+    const jbCol = shop === 'jbhifi' && sub.match(/^\/collections\/([^/]+)(\/products\.json)?$/);
+    if (jbCol) return jbCol[2] ? json(200, { products: [] }) : html(200, clientSearchPage(shop, jbCol[1].replace(/-/g, ' ')));
     // Shopify's search suggestions (what Mugibot's live sweeps read at JB Hi-Fi).
     if (SHOPIFY.has(shop) && sub === '/search/suggest.json') {
       const hits = searchHits(shop, u.searchParams.get('q')).slice(0, 10);

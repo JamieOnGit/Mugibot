@@ -63,8 +63,10 @@ is bought for an item until they **arm** it, and each arming buys **once**.
      store) and tick **🤖 Auto-checkout it when it drops, up to …**: what it
      finds goes on your watchlist, armed. A link is bought as soon as it's on
      sale; words buy only what drops after the watch has looked (never what was
-     on sale already). At other websites drop watches only alert you
-     (docs/MONITORING.md → Drop watches).
+     on sale already). A store's **search page** works too: paste it with key
+     phrases and it's read every few seconds, and what's new on it with a phrase
+     is bought (docs/MONITORING.md → Search pages). At other websites drop
+     watches only alert you (docs/MONITORING.md → Drop watches).
 5. **Keep Chrome open** with the extension connected. The "Ready to check out?"
    list shows what's missing:
    - an active membership;

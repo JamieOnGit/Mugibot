@@ -82,6 +82,8 @@ const monitorUI = setupMonitor({
   watch: (p) => watchProduct(p),
   // (↻ Reset: the store's cached files in this browser are cleared too — its cookies and sign-in kept.)
   clearCache: (store) => (document.documentElement.dataset.mugibotExtension ? askExtension('clearStoreCache', { store }, 5000) : Promise.resolve(null)),
+  // (A search page pasted in "Add a monitor": made a drop watch on the page, for key phrases — the Drop watches list's form.)
+  openPageWatch: (url) => { history.replaceState(null, '', '#drops'); showList('drops').then(() => dropsUI.prefillPage(url)).catch(showError); },
 });
 // 🎯 Drop watches: anything outside the card keywords (drops.js).
 const dropsUI = setupDrops({

@@ -3,7 +3,7 @@
 // with filters, and a product page with its price history. Admins also run
 // the live sweeps, add and change monitors, set up the Discord alert
 // channels, and see health and the check log here.
-import { $, $$, ago, api, busy, h, money, renderPager, setMsg, toast, when } from './common.js';
+import { $, $$, ago, api, busy, h, looksLikeListing, money, renderPager, setMsg, toast, when } from './common.js';
 import { setupLive, slotOf } from './live.js';
 
 const KINDS = {
@@ -23,7 +23,7 @@ const MODES = { auto: 'Server first', server: 'Server only', browser: "Admin's b
 const DAY = 86400000;
 const SVG = 'http://www.w3.org/2000/svg';
 
-export function setupMonitor({ showError, watching = () => null, watch: addToWatchlist = null, clearCache = async () => null }) {
+export function setupMonitor({ showError, watching = () => null, watch: addToWatchlist = null, clearCache = async () => null, openPageWatch = null }) {
   const m = { admin: false, stores: [], alerts: [], products: [], current: null, loaded: false, timer: null, sweep: null, page: 1, member: false };
   // The Monitor's pages: Live (everyone), Settings and Check log (admins).
   const panelOpen = () => !$('[data-panel="monitor"]').hidden;
@@ -666,8 +666,24 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
   $('#m-more').addEventListener('click', () => live.loadOlder().catch(showError));
   $('#m-add-toggle').addEventListener('click', () => { const f = $('#m-add'); f.hidden = !f.hidden; if (!f.hidden) $('#ma-url').focus(); });
 
+  // A search or category page pasted where a product's link goes: a drop watch reads those, for key phrases (drops.js).
+  const pageHint = () => {
+    const url = $('#ma-url').value.trim();
+    const page = !!url && !!openPageWatch && looksLikeListing(url);
+    $('#ma-page-hint').hidden = !page;
+    return page;
+  };
+  $('#ma-url').addEventListener('input', pageHint);
+  $('#ma-page-go').addEventListener('click', () => {
+    const url = $('#ma-url').value.trim();
+    $('#ma-url').value = '';
+    pageHint();
+    $('#m-add').hidden = true;
+    openPageWatch(url);
+  });
   $('#m-add').addEventListener('submit', (e) => {
     e.preventDefault();
+    if (pageHint()) { setMsg($('#ma-msg'), ''); $('#ma-page-go').focus(); return; }
     busy(e.target, async () => {
       const url = $('#ma-url').value.trim();
       const body = url ? { url } : { store: $('#ma-store').value, sku: $('#ma-sku').value.trim() };
