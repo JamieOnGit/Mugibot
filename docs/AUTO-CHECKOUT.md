@@ -153,8 +153,11 @@ There's nothing to sign in to on the phone, and no browser needed there.
   order placed, checkout ready, or what went wrong. You also get the usual DM.
 - **A channel alert for something you don't watch** adds it to your watchlist
   first (as its link always did). It isn't armed by it.
-- **Your checkout browser isn't open?** The reply says so. The run waits 2
-  minutes for it, then shows as "didn't start".
+- **Your checkout browser isn't open?** With the backup on (the default), another
+  of your browsers that is open checks out instead, and the reply says so ("Chrome
+  on Work PC (your checkout browser) isn't open, so Chrome on Home PC checks out
+  instead"). None open: the reply says so, and the run waits 2 minutes for one,
+  then shows as "didn't start".
 - **A store that only sells signed in** (Amazon): it starts all the same — if
   you really are signed out there, Amazon's own sign-in page stops it, buying
   nothing.
@@ -172,12 +175,34 @@ There's nothing to sign in to on the phone, and no browser needed there.
 
 Runs go to **one** browser: your checkout browser. Never to all of them, so two
 of your browsers never race for the same order. That covers armed items' drops,
-Trigger ACO and ⚡ Buy from your phone.
+Trigger ACO, ⚡ Buy from your phone and Clear cart.
 
-- It's the newest browser you connected, unless you pick another under
-  "⚡ Buy from your phone" (or press **Use this browser** there).
-- The list shows each connected browser, and whether it's open now (it asks
-  for runs about every 20 seconds while open).
+The **🖥️ Checkout browser** card at the top of the Checkout page says, in one
+line, where a checkout goes right now:
+
+- ✅ **Checkouts open in Chrome on Home PC — open now.** All's well.
+- ⚠️ **Chrome on Work PC (your checkout browser) isn't open — so checkouts go to
+  Chrome on Home PC (open now) until it is.** The backup at work (below), with a
+  button to make that one the checkout browser.
+- ⚠️ **Chrome on Work PC isn't open.** Nothing's open to check out: a ⚡ Buy
+  waits 2 minutes for a browser, then shows as "didn't start".
+
+Under it, each browser you've connected: whether it's open now (🟢, it asks for
+runs about every 20 seconds while open) or when it was last seen, whether its
+card is ready, its extension version, and which one is **this browser**. **Use for
+checkout** on any of them makes it the checkout browser. The card looks again
+every 20 seconds while the page is open.
+
+- It's the newest browser you connected, unless you choose another.
+- **Backup (on by default):** if your checkout browser isn't open — closed, or
+  you're using another computer — whichever of your other browsers with the
+  extension is open checks out instead (the one heard from most recently), and
+  goes back to the checkout browser the moment it's open again. Every browser of
+  yours listens for runs while the backup's on, but only the one checking out is
+  ever handed a run. Switch it off on the card to have only the checkout browser
+  check out (the others then stop listening when nothing's armed).
+- The browser that checks out opens the store in a tab of its window — or, if it
+  has no window open (Chrome running in the background), a new window.
 - Disconnect it, and the newest one left takes over.
 - Your other browsers still do everything else: ⚡ Buy pressed in them,
   in-browser checks, the store login monitor.
@@ -609,6 +634,26 @@ ending, and an email if "Email me when checkout is waiting for me" is on (Setup 
 | ⚠️ Needs you | Your bank's check (🏦: approve it in your bank's app — it turns ✅ Order placed once the store confirms), a bot check, the total over your limit, no confirmation after pressing |
 | ❌ Failed | Sold out by the time your browser got there, not added to the bag, couldn't reach checkout, card declined, the card didn't go in, another item in the bag, it took too long |
 | ⏭️ Didn't start | Over the item's max price, over your order or daily limits, 3 failures today, no browser with the extension open, membership not active |
+
+### Several cards, and your default
+
+From extension 1.33 you can keep up to **6 cards** in the extension (Card
+settings → **Add another card**), each with a name if you like ("Business",
+"Amex"), and choose your **default** (★): the one every ⚡ Buy and Auto-checkout
+fills in.
+
+- **Make default** in Card settings, or on Setup → Delivery & card, where every
+  card in this browser is listed (only which card is the default goes from the
+  dashboard to the extension — never a card's details, which stay in the
+  extension). Saving a card you already have, by its number, updates it.
+- **Pay with** on a watchlist item (Edit) picks another of your cards for that
+  item: its checkouts fill that one in, whatever the default. A card chosen that
+  isn't saved in the browser checking out (one from another computer): your
+  default there fills in instead, and the Armed tab's **Card** check says so.
+- Each card is encrypted on its own, like the single card was. A card saved by
+  1.32 or older is your first (and default) card, as it was.
+- The card backup and the copy kept for updates (below) hold **all** your cards.
+  An extension older than 1.33 restoring them gets the default one.
 
 ### Your card through extension updates: no passphrase, nothing to type
 

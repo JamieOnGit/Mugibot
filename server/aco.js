@@ -287,20 +287,38 @@ export class Aco {
     return this.db.get(`SELECT COUNT(*) AS n FROM aco_runs WHERE user_id = :u AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { u: userId }).n;
   }
 
-  /**
-   * The browser that checks out: Auto-checkout's runs and Discord's ⚡ Buy go there and nowhere else
-   * (two browsers never race for the same order). The one the member picked, or the newest connected.
-   */
-  checkoutDevice(userId) {
+  /** The browser the member chose to check out with (or, chosen none, the newest connected) — open or not. */
+  chosenDevice(userId) {
     const devices = this.repo.listDevices(userId); // newest first
     const want = this.settings(userId).deviceId;
     return devices.find((d) => d.id === want) || devices[0] || null;
   }
 
-  /** Should this browser keep asking for runs with nothing armed? The checkout browser, while Discord's ⚡ Buy is on. */
+  /**
+   * The browser that checks out now: Auto-checkout's runs and Discord's ⚡ Buy go there and nowhere else
+   * (two browsers never race for the same order). The one the member chose — or, while it isn't open and
+   * the backup's on (the default), whichever of their other browsers is open (the one heard from last).
+   * None open: still the one chosen (the run waits up to 2 minutes for a browser to open).
+   */
+  checkoutDevice(userId) {
+    const devices = this.repo.listDevices(userId);
+    const s = this.settings(userId);
+    const chosen = devices.find((d) => d.id === s.deviceId) || devices[0] || null;
+    if (!chosen || s.fallback === false || this.isListening(chosen.id)) return chosen;
+    const open = devices.filter((d) => d.id !== chosen.id && this.isListening(d.id)).sort((a, b) => this.listening.get(b.id) - this.listening.get(a.id));
+    return open[0] || chosen;
+  }
+
+  /**
+   * Should this browser keep asking for runs with nothing armed? While Discord's ⚡ Buy is on: the checkout
+   * browser — and, with the backup on, every other browser of the member's, so one that's open stands in
+   * the moment the checkout browser isn't (only the one checking out is ever handed a run).
+   */
   listens(user, device) {
-    const checkout = this.checkoutDevice(user.id);
-    return !!checkout && checkout.id === device.id && this.settings(user.id).remoteBuy && entitlement(user, this.now()).active;
+    const s = this.settings(user.id);
+    if (!s.remoteBuy || !entitlement(user, this.now()).active) return false;
+    const chosen = this.chosenDevice(user.id);
+    return !!chosen && (chosen.id === device.id || s.fallback !== false);
   }
 
   /** Is this browser open and asking for runs right now? */
@@ -321,12 +339,16 @@ export class Aco {
     return { state: c.state, ready: c.state === 'ready', saved: c.state !== 'none', at: c.at };
   }
 
-  /** The member's browsers for the Auto-checkout page: which one checks out, which are listening, and their cards. */
+  /**
+   * The member's browsers for the Auto-checkout page: the one chosen (chosen), the one a checkout goes to now
+   * (checkout — another while the chosen one isn't open and the backup's on), which are open, and their cards.
+   */
   browsers(userId) {
+    const chosen = this.chosenDevice(userId);
     const checkout = this.checkoutDevice(userId);
     return this.repo.listDevices(userId).map((d) => ({
-      id: d.id, name: d.name, version: d.version, lastSeenAt: d.lastSeenAt,
-      checkout: !!checkout && checkout.id === d.id, listening: this.isListening(d.id), card: this.cardOf(d.id),
+      id: d.id, name: d.name, version: d.version, lastSeenAt: d.lastSeenAt, source: d.source || '',
+      chosen: !!chosen && chosen.id === d.id, checkout: !!checkout && checkout.id === d.id, listening: this.isListening(d.id), card: this.cardOf(d.id),
     }));
   }
 
@@ -510,7 +532,9 @@ export class Aco {
       title: `⚡ Buy from Discord: ${item.name}`,
       message: `${r.name}${shown !== null ? ` · ${money(shown)}` : ''} — checking out in ${device.name}${mode === 'place' ? ', placing the order' : ', stopping at the final button'}.`,
     });
-    return { run: toRun(run), mode, why, device: { id: device.id, name: device.name }, listening: this.isListening(device.id) };
+    // (standIn: the checkout browser chosen isn't open, so this one — open — checks out instead.)
+    const chosen = this.chosenDevice(userId);
+    return { run: toRun(run), mode, why, device: { id: device.id, name: device.name }, listening: this.isListening(device.id), standIn: chosen && chosen.id !== device.id ? chosen.name : null, fallback: s.fallback !== false };
   }
 
   /**
@@ -574,7 +598,7 @@ export class Aco {
         ? `🏦 **Approve the payment in your bank's app** — the checkout's in **${deviceName}**: ${run.message || run.reasonText}`
         : `⚠️ **It needs you** in ${deviceName}: ${run.message || run.reasonText}`,
       failed: `❌ **Didn't buy it**: ${run.message || run.reasonText}`,
-      expired: `❌ **Didn't start**: ${run.reason === 'no_browser' ? `${deviceName} didn't pick it up within 2 minutes — is it open, with the extension connected?` : run.message || run.reasonText}`,
+      expired: `❌ **Didn't start**: ${run.reason === 'no_browser' ? `${deviceName} didn't pick it up within 2 minutes — is a browser of yours open, with the extension connected?` : run.message || run.reasonText}`,
       skipped: run.reason === 'phone' ? `📱 **Finishing it on your phone** — **${deviceName}** stopped. Pass ${where}'s check and pay there.` : `⏭️ **Didn't start**: ${run.message || run.reasonText}`,
     };
     return `**${run.name}**\n${lines[run.status] || run.statusText}`;
@@ -1159,7 +1183,9 @@ export class Aco {
     const f = this.follows.get(run.id);
     if (!f) return;
     if (this.now() > f.until) { this.follows.delete(run.id); return; }
-    const content = `${this.remoteText(run, f.deviceName)}${run.active && f.note ? `\n${f.note}` : ''}`;
+    // (The browser that took it up — another of yours, standing in for the checkout browser, maybe.)
+    const took = row && row.device_id ? this.repo.listDevices(row.user_id).find((d) => d.id === row.device_id) : null;
+    const content = `${this.remoteText(run, took ? took.name : f.deviceName)}${run.active && f.note ? `\n${f.note}` : ''}`;
     // (At the checkpoint: its two ways through from the phone, as buttons. Otherwise none.)
     const buttons = row && run.status === 'waiting' && run.reason === 'checkpoint' ? this.phoneButtons(row) : [];
     const key = `${content}|${buttons.map((b) => b.label).join(',')}`;

@@ -70,6 +70,9 @@ export function password(v) {
  * from it), or a store and SKU (the product page is found from the SKU).
  * opts: { retailers, existing, isAdmin }
  */
+// A card's id in the member's extension (vault.js newId: 'c' and 12 hex digits; a card saved before 1.33: 'c' and base 36).
+export const CARD_ID = /^c[0-9a-z]{1,20}$/;
+
 export function item(input, { retailers, existing = null, isAdmin = false }) {
   const src = { ...(existing || {}), ...(input || {}) };
   let url = httpUrl(src.url, 'Product link', { required: false });
@@ -120,6 +123,8 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
     maxPrice: num(src.maxPrice ?? src.max_price, { min: 0, max: 100000, def: null }),
     quantity,
     profileId: str(src.profileId ?? src.profile_id, 40) || null,
+    // Which of your cards pays for it (its id in your extension — never the card): '' for your default.
+    cardId: CARD_ID.test(String(src.cardId ?? src.card_id ?? '')) ? String(src.cardId ?? src.card_id) : '',
     monitor: bool(src.monitor, true),
     announce: isAdmin ? bool(src.announce, false) : !!(existing && existing.announce),
     // Auto-checkout (docs/AUTO-CHECKOUT.md): bought by itself when it drops, never above its max price.
@@ -195,6 +200,7 @@ export const DEFAULT_ACO = {
   signedInOnly: false, // (no longer used: a run starts signed in or not — aco.js)
   remoteBuy: true, // Discord's ⚡ Buy (pressed on your phone or anywhere) checks out in your checkout browser
   deviceId: '', // the checkout browser: the one browser runs go to ('' = the newest one connected)
+  fallback: true, // the checkout browser isn't open: whichever of your other browsers is open checks out instead
 };
 
 export function acoSettings(input, existing = DEFAULT_ACO, now = Date.now()) {
@@ -210,6 +216,7 @@ export function acoSettings(input, existing = DEFAULT_ACO, now = Date.now()) {
     signedInOnly: bool(a.signedInOnly, false),
     remoteBuy: bool(a.remoteBuy, true),
     deviceId: /^[\w-]{0,40}$/.test(String(a.deviceId || '')) ? String(a.deviceId || '') : '',
+    fallback: bool(a.fallback, true),
   };
   if (out.enabled && !out.agreedAt) {
     if (src.agree !== true) throw bad('Tick the box to agree that Mugibot may check out by itself with your saved card, within your limits');
@@ -258,6 +265,21 @@ export function alerts(input, existing = DEFAULT_ALERTS) {
 // shown in the dashboard (the brand, the last 4 digits and the expiry).
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 export const CARD_BRANDS = ['Visa', 'Mastercard', 'Amex', 'Card'];
+export const MAX_CARDS = 6;
+// (From extension 1.33: every card saved — up to 6 — with the default's details at the top. What's shown
+//  of each: its brand, last 4, expiry, its name, and which is the default.)
+function cardsMeta(list) {
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  for (const c of list.slice(0, MAX_CARDS)) {
+    const last4 = String((c && c.last4) ?? '');
+    const expMonth = String((c && c.expMonth) ?? '');
+    const expYear = String((c && c.expYear) ?? '');
+    if (!/^\d{4}$/.test(last4) || !/^(0[1-9]|1[0-2])$/.test(expMonth) || !/^20\d{2}$/.test(expYear)) continue;
+    out.push({ last4, brand: CARD_BRANDS.includes(c.brand) ? c.brand : 'Card', expMonth, expYear, hasCvc: !!c.hasCvc, label: String(c.label ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 30), isDefault: !!c.isDefault });
+  }
+  return out.length ? out : null;
+}
 export function cardBackup(input, now = Date.now()) {
   const b = input || {};
   const b64 = (v, min, max, label) => {
@@ -273,15 +295,17 @@ export function cardBackup(input, now = Date.now()) {
   const expMonth = String(b.expMonth ?? '');
   const expYear = String(b.expYear ?? '');
   if (!/^\d{4}$/.test(last4) || !/^(0[1-9]|1[0-2])$/.test(expMonth) || !/^20\d{2}$/.test(expYear)) throw bad("The card backup's details aren't right");
+  const cards = cardsMeta(b.cards);
   return {
     v: 1, kdf: 'PBKDF2-SHA256', iterations,
-    salt: b64(b.salt, 22, 88, 'salt'), iv: b64(b.iv, 16, 16, 'nonce'), ct: b64(b.ct, 24, 4096, 'data'),
+    salt: b64(b.salt, 22, 88, 'salt'), iv: b64(b.iv, 16, 16, 'nonce'), ct: b64(b.ct, 24, 8192, 'data'),
     last4, brand: CARD_BRANDS.includes(b.brand) ? b.brand : 'Card', expMonth, expYear, hasCvc: !!b.hasCvc, savedAt: now,
+    ...(cards ? { count: cards.length, cards } : {}),
   };
 }
 
-/** What the dashboard shows of a card backup (never the locked data). */
-export const cardBackupInfo = (b) => (b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, hasCvc: !!b.hasCvc, savedAt: b.savedAt } : null);
+/** What the dashboard shows of a card backup (never the locked data). count: how many cards are in it. */
+export const cardBackupInfo = (b) => (b ? { brand: b.brand, last4: b.last4, expMonth: b.expMonth, expYear: b.expYear, hasCvc: !!b.hasCvc, savedAt: b.savedAt, count: b.count || 1, cards: b.cards || null } : null);
 
 // --- The card's copy for reinstalls (from extension 1.20) ----------------------------------------
 // Locked in the extension with a key the member's dashboard keeps in their browser (its own storage):
@@ -294,18 +318,19 @@ export function cardRestoreCopy(input, now = Date.now()) {
   const b = input || {};
   const iv = String(b.iv ?? '');
   const ct = String(b.ct ?? '');
-  if (!B64.test(iv) || iv.length !== 16 || !B64.test(ct) || ct.length < 24 || ct.length > 4096) throw bad("The copy of your card isn't right");
+  if (!B64.test(iv) || iv.length !== 16 || !B64.test(ct) || ct.length < 24 || ct.length > 8192) throw bad("The copy of your card isn't right");
   const last4 = String(b.last4 ?? '');
   const expMonth = String(b.expMonth ?? '');
   const expYear = String(b.expYear ?? '');
   if (!/^\d{4}$/.test(last4) || !/^(0[1-9]|1[0-2])$/.test(expMonth) || !/^20\d{2}$/.test(expYear)) throw bad("The copy of your card's details aren't right");
   // (host: the dashboard's address the key belongs to — where the card comes back.)
   const host = String(b.host ?? '').toLowerCase().replace(/[^a-z0-9.:-]/g, '').slice(0, 100);
-  return { v: 1, iv, ct, last4, brand: CARD_BRANDS.includes(b.brand) ? b.brand : 'Card', expMonth, expYear, hasCvc: !!b.hasCvc, host, savedAt: now };
+  const cards = cardsMeta(b.cards);
+  return { v: 1, iv, ct, last4, brand: CARD_BRANDS.includes(b.brand) ? b.brand : 'Card', expMonth, expYear, hasCvc: !!b.hasCvc, host, savedAt: now, ...(cards ? { count: cards.length, cards } : {}) };
 }
 
 /** What the dashboard shows of the copies for reinstalls (never the locked data): switched on, and each copy's card. */
 export const cardRestoreInfo = (doc) => ({
   on: !(doc && doc.off),
-  copies: ((doc && doc.copies) || []).map((c) => ({ id: c.id, brand: c.brand, last4: c.last4, expMonth: c.expMonth, expYear: c.expYear, hasCvc: !!c.hasCvc, host: c.host || '', savedAt: c.savedAt })),
+  copies: ((doc && doc.copies) || []).map((c) => ({ id: c.id, brand: c.brand, last4: c.last4, expMonth: c.expMonth, expYear: c.expYear, hasCvc: !!c.hasCvc, host: c.host || '', savedAt: c.savedAt, count: c.count || 1 })),
 });

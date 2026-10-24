@@ -23,7 +23,7 @@ const MODES = { auto: 'Server first', server: 'Server only', browser: "Admin's b
 const DAY = 86400000;
 const SVG = 'http://www.w3.org/2000/svg';
 
-export function setupMonitor({ showError, watching = () => null, watch: addToWatchlist = null }) {
+export function setupMonitor({ showError, watching = () => null, watch: addToWatchlist = null, clearCache = async () => null }) {
   const m = { admin: false, stores: [], alerts: [], products: [], current: null, loaded: false, timer: null, sweep: null, page: 1, member: false };
   // The Monitor's pages: Live (everyone), Settings and Check log (admins).
   const panelOpen = () => !$('[data-panel="monitor"]').hidden;
@@ -494,8 +494,11 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
   async function resetStore(id, button) {
     if (button) button.disabled = true;
     try {
-      await api('POST', '/api/monitor/sweep/reset', id ? { store: id } : {});
-      toast(id ? `Reset ${storeName(id)}` : 'Reset every store', 'Searching again now, gently for 10 minutes. Anything the store asked to wait for is still waited for.', 'success');
+      const r = await api('POST', '/api/monitor/sweep/reset', id ? { store: id } : {});
+      // The store's cached files in this browser go too (its cookies and sign-in stay): a page the store kept
+      // refusing comes from the store afresh. (The admin's browser searching it clears its own as it starts again.)
+      const cleared = (await Promise.all((r.reset || []).map((s) => clearCache(s).catch(() => null)))).filter((x) => x && x.ok).length;
+      toast(id ? `Reset ${storeName(id)}` : 'Reset every store', `Searching again now, gently for 10 minutes${cleared ? ` — and ${id ? 'its' : 'their'} cached files in this browser are cleared (cookies and sign-ins kept)` : ''}. Anything the store asked to wait for is still waited for.`, 'success');
       setTimeout(() => { if (settingsOpen()) loadSweep({ form: false }).catch(() => null); }, 1500);
     } catch (err) {
       toast("Couldn't reset", err.message, 'warn');

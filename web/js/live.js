@@ -167,9 +167,11 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
   function renderChannels() {
     const box = $('#sn-channels');
     box.textContent = '';
-    const list = sortedStores();
+    // (Switched off — for everyone, or by you — at the bottom: the stores being searched come first.)
+    const offNow = (s) => s.status === 'off' || hiddenStore(s.id);
+    const list = sortedStores().sort((a, b) => offNow(a) - offNow(b));
     const trouble = list.filter((s) => !hiddenStore(s.id) && (s.status === 'retrying' || (s.status === 'waiting' && s.lastError)));
-    const off = list.filter((s) => s.status === 'off' || hiddenStore(s.id)).length;
+    const off = list.filter(offNow).length;
     $('#sn-stores-meta').textContent = trouble.length ? `${trouble.length} need${trouble.length === 1 ? 's' : ''} attention` : `${list.length - off} on${off ? ` · ${off} off` : ''}`;
     $('#sn-stores-meta').classList.toggle('warn', trouble.length > 0);
     $('#sn-reset-all').hidden = !L.admin || !list.length;

@@ -1,5 +1,5 @@
 // The dashboard. Everything here is the signed-in member's own data.
-import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, money, renderPager, setMsg, toast, when } from './common.js';
+import { $, $$, ApiError, ago, api, busy, h, initThemeToggle, listTools, money, renderPager, setMsg, toast, when } from './common.js';
 import { setupDrops } from './drops.js';
 import { setupMonitor } from './monitor.js';
 import { setupNews } from './news.js';
@@ -80,6 +80,8 @@ const monitorUI = setupMonitor({
   showError: (e) => showError(e),
   watching: onWatchlist,
   watch: (p) => watchProduct(p),
+  // (↻ Reset: the store's cached files in this browser are cleared too — its cookies and sign-in kept.)
+  clearCache: (store) => (document.documentElement.dataset.mugibotExtension ? askExtension('clearStoreCache', { store }, 5000) : Promise.resolve(null)),
 });
 // 🎯 Drop watches: anything outside the card keywords (drops.js).
 const dropsUI = setupDrops({
@@ -493,7 +495,7 @@ function statusOf(it) {
 }
 
 /** One watchlist item. i: its place in `list` (its own list: the watchlist, or the Shop checkout links). */
-function itemRow(it, i, list = state.items) {
+function itemRow(it, i, list = state.items, { movable = true } = {}) {
   const st = statusOf(it);
   // (Another website: no ⚡ Buy — Mugibot checks out at the stores it knows. Its page is the way in.)
   // (×2: ⚡ Buy puts that many in the bag.)
@@ -549,8 +551,8 @@ function itemRow(it, i, list = state.items) {
       // (A Shop checkout link opens Shop's checkout: Open would start one, so it isn't offered.)
       it.url && !it.shopLink ? h('a', { class: 'btn small', href: it.url, target: '_blank', rel: 'noopener' }, 'Open ↗') : null,
       h('button', { class: 'btn small', type: 'button', title: 'Check now', 'aria-label': `Check ${it.name} now`, onclick: () => checkNow(it) }, '↻'),
-      h('button', { class: 'btn small', type: 'button', title: 'Move up', 'aria-label': 'Move up', onclick: () => move(-1) }, '↑'),
-      h('button', { class: 'btn small', type: 'button', title: 'Move down', 'aria-label': 'Move down', onclick: () => move(1) }, '↓'),
+      movable ? h('button', { class: 'btn small', type: 'button', title: 'Move up', 'aria-label': 'Move up', onclick: () => move(-1) }, '↑') : null,
+      movable ? h('button', { class: 'btn small', type: 'button', title: 'Move down', 'aria-label': 'Move down', onclick: () => move(1) }, '↓') : null,
       h('button', { class: 'btn small', type: 'button', onclick: () => editItem(it) }, 'Edit'),
       h('button', { class: 'btn small', type: 'button', onclick: async () => { await api('PUT', `/api/items/${it.id}`, { monitor: !it.monitor }); loadItems(); } }, it.monitor ? 'Pause' : 'Resume'),
       isAdmin ? h('button', { class: 'btn small', type: 'button', title: 'Announce restocks in the members\' Discord channel', onclick: async () => { await api('PUT', `/api/items/${it.id}`, { announce: !it.announce }); loadItems(); } }, it.announce ? 'Stop announcing' : '📣 Announce') : null,
@@ -560,19 +562,60 @@ function itemRow(it, i, list = state.items) {
       }, '✕')));
 }
 
+// Search, filter and sort: My watchlist and Armed (kept in this browser).
+const BUYABLE = new Set(['in_stock', 'preorder']);
+const ITEM_STATES = [['buyable', 'In stock or pre-order'], ['out', 'Sold out'], ['soon', 'Coming soon / not listed yet'], ['problem', 'Blocked, gone or an error'], ['armed', '🤖 Armed'], ['paused', 'Paused']];
+const itemState = (it, v) => {
+  const st = statusOf(it);
+  return v === 'buyable' ? BUYABLE.has(st) : v === 'out' ? st === 'out_of_stock' || st === 'in_store' : v === 'soon' ? ['coming_soon', 'not_listed', 'pending', 'unknown'].includes(st)
+    : v === 'problem' ? ['blocked', 'error', 'not_found'].includes(st) || !!it.error : v === 'armed' ? !!it.aco : v === 'paused' ? !it.monitor : true;
+};
+const priceOf = (it) => (typeof (it.lastPrice ?? it.price) === 'number' ? it.lastPrice ?? it.price : null);
+const byPrice = (dir) => (a, b) => { const x = priceOf(a); const y = priceOf(b); return x === null ? (y === null ? 0 : 1) : y === null ? -1 : (x - y) * dir; };
+const ITEM_ORDER = {
+  name: (a, b) => a.name.localeCompare(b.name),
+  price: byPrice(1),
+  'price-desc': byPrice(-1),
+  // (In stock first, then pre-orders, coming soon… sold out last.)
+  status: (a, b) => STATE_RANK.indexOf(statusOf(a)) - STATE_RANK.indexOf(statusOf(b)),
+  changed: (a, b) => (b.statusAt || 0) - (a.statusAt || 0),
+  store: (a, b) => (a.storeName || '').localeCompare(b.storeName || ''),
+  armed: (a, b) => Number(!!b.aco) - Number(!!a.aco),
+};
+const STATE_RANK = ['in_stock', 'preorder', 'coming_soon', 'not_listed', 'pending', 'unknown', 'in_store', 'out_of_stock', 'blocked', 'error', 'not_found', 'paused'];
+const itemText = (it) => [it.name, it.sku, it.storeName, it.title, STATUS[statusOf(it)]].filter(Boolean).join(' ');
+const storeChoices = (items) => [...new Map(items.map((it) => [it.store, it.storeName || it.store])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+const wTools = listTools($('#w-tools'), {
+  key: 'watchlist', placeholder: 'Search your watchlist (name, SKU, store)',
+  filters: [{ id: 'store', label: 'Store', all: 'Every store' }, { id: 'state', label: 'Status', all: 'Any status', options: ITEM_STATES }],
+  sorts: [['', 'Your order'], ['status', 'In stock first'], ['changed', 'Recently changed'], ['name', 'Name A–Z'], ['price', 'Price: low to high'], ['price-desc', 'Price: high to low'], ['store', 'Store']],
+  onChange: () => { state.wPage = 1; renderItems(); },
+});
+const arTools = listTools($('#ar-tools'), {
+  key: 'armed', placeholder: 'Search (name, SKU, store)',
+  filters: [{ id: 'store', label: 'Store', all: 'Every store' }, { id: 'ready', label: 'Ready?', all: 'Ready or not', options: [['ready', 'Ready to check out'], ['fix', 'Something to fix']] }],
+  sorts: [['', 'Your order'], ['armed', 'Armed first'], ['status', 'In stock first'], ['name', 'Name A–Z'], ['price', 'Price: low to high'], ['price-desc', 'Price: high to low'], ['store', 'Store']],
+  onChange: () => { state.acoPage = 1; renderArmed(); },
+});
+
 // Your watchlist: 10 to a page (the page kept while things change).
 const W_PAGE_SIZE = 10;
 function renderItems() {
   const list = $('#w-list');
   list.textContent = '';
   // (Shop checkout links have a section of their own, below.)
-  const items = state.items.filter((it) => !it.shopLink);
+  const all = state.items.filter((it) => !it.shopLink);
+  wTools.setOptions('store', storeChoices(all));
+  const items = wTools.apply(all, { text: itemText, match: { store: (it, v) => it.store === v, state: itemState }, order: ITEM_ORDER });
+  // (↑ ↓ move an item in your own order: only while the list's in it, unsearched.)
+  const v = wTools.values();
+  const movable = !v.sort && !v.q && !v.store && !v.state;
   $('#w-count').textContent = state.items.length ? String(state.items.length) : '';
   const pages = Math.max(1, Math.ceil(items.length / W_PAGE_SIZE));
   state.wPage = Math.min(Math.max(1, state.wPage || 1), pages);
   renderPager($('#w-pager'), { page: state.wPage, size: W_PAGE_SIZE, total: items.length, label: 'Watchlist', onPage: (p) => { state.wPage = p; renderItems(); } });
   if (state.itemsInactive) list.append(h('li', { class: 'notice warn' }, 'Monitoring is paused while your account has no active membership.'));
-  if (!items.length) list.append(h('li', { class: 'empty' }, 'Nothing on your watchlist yet — press "+ Add SKU", or ☆ Watch a product in Tracked products.'));
+  if (!items.length) list.append(h('li', { class: 'empty' }, all.length ? 'Nothing on your watchlist matches — change the search or press Clear.' : 'Nothing on your watchlist yet — press "+ Add SKU", or ☆ Watch a product in Tracked products.'));
   // Signed out at a store you're watching: ⚡ Buy is faster signed in. (Shop: said in its own section.)
   const out = state.logins ? state.logins.stores.filter((s) => s.status === 'out' && !s.cartLinks && items.some((it) => it.store === s.id)) : [];
   // A store that only sells to signed-in customers (Amazon): ⚡ Buy and Auto-checkout can't buy there signed out.
@@ -589,7 +632,7 @@ function renderItems() {
       h('span', { class: 'acts' }, ...faster.slice(0, 3).map((s) => h('a', { class: 'btn small', href: s.signInUrl, target: '_blank', rel: 'noopener' }, `${s.name} ↗`)))));
   }
   const from = (state.wPage - 1) * W_PAGE_SIZE;
-  items.slice(from, from + W_PAGE_SIZE).forEach((it, i) => list.append(itemRow(it, from + i, items)));
+  items.slice(from, from + W_PAGE_SIZE).forEach((it, i) => list.append(itemRow(it, from + i, items, { movable })));
   renderShopLinks();
 }
 
@@ -729,6 +772,22 @@ function fillProfileSelect(selected) {
   for (const p of profiles) sel.append(h('option', { value: p.id, selected: p.id === selected }, p.label));
 }
 
+/**
+ * Pay with: your default card, or another of the cards saved in this browser's extension (only their
+ * names and last 4 come to this page). A card chosen in another browser stays chosen (it's kept as it is).
+ */
+async function fillCardSelect(selected) {
+  const sel = $('#w-card');
+  sel.textContent = '';
+  const st = document.documentElement.dataset.mugibotExtension ? await askExtension('cardStatus') : null;
+  const cards = (st && st.userId === state.me.user.id && st.card && st.card.cards) || [];
+  const d = cards.find((c) => c.isDefault);
+  sel.append(h('option', { value: '' }, d ? `Default card (${d.brand} •••• ${d.last4}${d.label ? ` · ${d.label}` : ''})` : 'Your default card'));
+  for (const c of cards) sel.append(h('option', { value: c.id, selected: c.id === selected }, `${c.brand} •••• ${c.last4}${c.label ? ` · ${c.label}` : ''}${c.isDefault ? ' (your default)' : ''}`));
+  if (selected && !cards.some((c) => c.id === selected)) sel.append(h('option', { value: selected, selected: true }, 'A card saved in another browser (your default here)'));
+  sel.disabled = !cards.length && !selected;
+}
+
 function storeNote() {
   const r = state.retailers.find((x) => x.id === $('#w-store').value);
   $('#w-store-note').textContent = r ? `${r.skuLabel || 'SKU'}: ${r.skuHint || ''}${r.searchable ? '' : ' — paste the product link for this store.'}` : '';
@@ -743,6 +802,7 @@ async function editItem(it, { shop = false } = {}) {
   await Promise.all([loadRetailers(), loadProfiles()]);
   fillStoreSelect();
   fillProfileSelect(it ? it.profileId : '');
+  await fillCardSelect(it ? it.cardId || '' : '').catch(() => null);
   state.editing = it ? it.id : null;
   const link = shop || !!(it && it.shopLink);
   $('#w-form').hidden = false;
@@ -786,6 +846,7 @@ $('#w-form').addEventListener('submit', (e) => {
     const body = {
       url: $('#w-url').value, store: shop ? '' : $('#w-store').value, sku: shop ? '' : $('#w-sku').value, name: $('#w-name').value,
       price: $('#w-price').value, maxPrice: $('#w-max').value, profileId: $('#w-profile').value, aco: $('#w-aco').checked,
+      cardId: $('#w-card').value,
     };
     // (A store's checkout link pasted in, …/cart/<number>:<quantity>: its own quantities, never the box's.)
     if (!$('#w-qty').disabled && !/\/cart\/\d+:\d+/.test(body.url)) body.quantity = $('#w-qty').value || 1;
@@ -1017,7 +1078,8 @@ function renderCardBackup() {
   const b = state.cardBackup;
   box.textContent = '';
   if (b) {
-    box.append(h('p', {}, h('span', { class: 'pill ok' }, 'Backed up'), ' ', `${cardLabel(b)} is backed up in your account, locked with your card passphrase. Another browser (or computer) restores it with that passphrase (Card settings). Mugibot can't open it.`),
+    const more = b.count > 1 ? ` (your default) and ${b.count - 1} more card${b.count === 2 ? '' : 's'} are` : ' is';
+    box.append(h('p', {}, h('span', { class: 'pill ok' }, 'Backed up'), ' ', `${cardLabel(b)}${more} backed up in your account, locked with your card passphrase. Another browser (or computer) restores ${b.count > 1 ? 'them' : 'it'} with that passphrase (Card settings). Mugibot can't open it.`),
       h('div', { class: 'form-actions' }, h('button', {
         class: 'btn small danger', type: 'button', id: 'card-unbackup',
         onclick: async () => {
@@ -1065,11 +1127,42 @@ async function renderCard() {
   const label = `${c.brand} •••• ${c.last4} · expires ${c.expMonth}/${String(c.expYear).slice(-2)}`;
   // Extensions from 1.3 keep the card ready ("ready"); older ones have to be unlocked after every browser restart.
   const ready = c.ready || (c.ready === undefined && c.unlocked);
-  box.className = `notice ${ready ? 'ok' : 'warn'}`;
-  box.textContent = ready ? `${label} — ready: ⚡ Buy fills it in at checkout${c.hasCvc === false ? ' (no CVV saved: you type that in)' : ''}.`
-    : c.needsPassphrase ? `${label} — saved by an older version. Press Card settings and enter its passphrase once, and it stays ready from then on.`
-      : c.unreadable ? `${label} — couldn't be read in this browser. Press Card settings and save it again.`
-        : `${label} — locked. Update the extension (Setup page) and the card stays ready without unlocking.`;
+  const several = (c.cards || []).length > 1;
+  box.className = `notice ${ready && !c.expired ? 'ok' : 'warn'}`;
+  box.textContent = ready && c.expired ? `${label} — your ${several ? 'default ' : ''}card has expired: add your new one in Card settings${several ? ' (or make another card the default, below)' : ''}.`
+    : ready ? `${label} — ready: ⚡ Buy fills it in at checkout${c.hasCvc === false ? ' (no CVV saved: you type that in)' : ''}.${several ? ` It's your default, of ${c.cards.length} cards saved in this browser.` : ''}`
+      : c.needsPassphrase ? `${label} — saved by an older version. Press Card settings and enter its passphrase once, and it stays ready from then on.`
+        : c.unreadable ? `${label} — couldn't be read in this browser. Press Card settings and save it again.`
+          : `${label} — locked. Update the extension (Setup page) and the card stays ready without unlocking.`;
+  renderCardList(c);
+}
+
+// Several cards in this browser (extension 1.33): each one, the default marked, and Make default on the others.
+// (Only which card is the default goes to the extension — never a card's details, which stay in it.)
+function renderCardList(c) {
+  const list = $('#card-list');
+  if (!list) return;
+  list.textContent = '';
+  const cards = (c && c.cards) || [];
+  list.hidden = cards.length < 2;
+  if (cards.length < 2) return;
+  for (const x of cards) {
+    const what = `${cardLabel(x)}${x.label ? ` · ${x.label}` : ''}`;
+    const state = !x.ready ? "couldn't be read here" : x.expired ? 'expired' : '';
+    list.append(h('li', { class: x.isDefault ? 'is-default' : '', dataset: { card: x.id } },
+      h('span', { class: 'what' }, x.isDefault ? '★ ' : '', what, state ? h('span', { class: 'muted' }, ` · ${state}`) : null),
+      x.isDefault ? h('span', { class: 'pill ok' }, 'Default — every checkout uses it')
+        : h('button', {
+          class: 'btn small', type: 'button',
+          onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            const r = await askExtension('cardDefault', { cardId: x.id }, 8000);
+            if (!r || !r.ok) toast("Couldn't change it", (r && r.error) || 'Update the extension to 1.33 or newer (Setup page), or change it in Card settings.', 'warn');
+            else toast('Default card changed', `${x.brand} •••• ${x.last4} is your default: every checkout uses it from now on.`, 'success');
+            renderCard().catch(() => null);
+          },
+        }, 'Make default')));
+  }
 }
 $('#card-open').addEventListener('click', async () => {
   const r = await askExtension('openCardSettings');
@@ -1204,7 +1297,13 @@ function readiness(it) {
   if (it.acoStops === 'paypal') out.push({ key: 'card', label: 'Card', tone: 'na', text: 'This store only takes PayPal: it stops there for you' });
   else if (it.shopLink) out.push({ key: 'card', label: 'Card', tone: 'na', text: 'Shop pays with the card saved in your Shop account' });
   else if (!browser) out.push({ key: 'card', label: 'Card', tone: 'no', text: 'Connect the extension in the browser you check out with', href: '#extension' });
-  else if (card && card.ready) out.push({ key: 'card', label: 'Card', tone: 'ok', text: card.last4 ? `${card.brand} •••• ${card.last4} ready in ${browser.name}` : `Card ready in ${browser.name}` });
+  else if (card && card.ready && it.cardId && here && Array.isArray(card.cards)) {
+    // (Its own card, chosen for it: that one — or, not saved in this browser, your default.)
+    const own = card.cards.find((c) => c.id === it.cardId);
+    out.push(own && own.ready && !own.expired ? { key: 'card', label: 'Card', tone: 'ok', text: `Pays with ${own.brand} •••• ${own.last4}${own.label ? ` (${own.label})` : ''}, ready in ${browser.name}` }
+      : own ? { key: 'card', label: 'Card', tone: 'no', text: `${own.brand} •••• ${own.last4}, chosen for it, ${own.expired ? 'has expired' : "can't be read"} in ${browser.name} — choose another (Edit)`, href: '#checkout' }
+        : { key: 'card', label: 'Card', tone: 'ok', text: `The card chosen for it isn't in ${browser.name}: it pays with your default, ${card.brand} •••• ${card.last4}` });
+  } else if (card && card.ready) out.push({ key: 'card', label: 'Card', tone: card.expired ? 'no' : 'ok', text: card.expired ? `${card.brand} •••• ${card.last4} has expired in ${browser.name} — add your new card (Card settings)` : card.last4 ? `${card.brand} •••• ${card.last4} ready in ${browser.name}` : `Card ready in ${browser.name}` });
   else if (card && (card.saved || card.state === 'saved')) out.push({ key: 'card', label: 'Card', tone: 'no', text: `Saved in ${browser.name}, but not ready — open Card settings there`, href: '#checkout' });
   else if (card) {
     // (A copy kept for updates comes back by itself once the dashboard's opened there; a passphrase backup, with its passphrase.)
@@ -1275,13 +1374,15 @@ function renderArmed() {
   $('#aco-armed-count').textContent = armedItems.length ? String(armedItems.length) : '';
   renderArmedState(armedItems.length, armedItems.filter(isReady).length);
   const show = $('#aco-show').value;
-  const items = state.items.filter((it) => show !== 'armed' || it.aco);
+  const shown = state.items.filter((it) => show !== 'armed' || it.aco);
+  arTools.setOptions('store', storeChoices(shown));
+  const items = arTools.apply(shown, { text: itemText, match: { store: (it, v) => it.store === v, ready: (it, v) => (v === 'ready') === isReady(it) }, order: ITEM_ORDER });
   const pages = Math.max(1, Math.ceil(items.length / ACO_PAGE_SIZE));
   state.acoPage = Math.min(Math.max(1, state.acoPage || 1), pages);
   renderPager($('#aco-pager'), { page: state.acoPage, size: ACO_PAGE_SIZE, total: items.length, label: 'Armed items', onPage: (p) => { state.acoPage = p; renderArmed(); } });
   $('#ar-ready').disabled = !armedItems.length;
   if (!items.length) {
-    list.append(h('li', { class: 'empty' }, show === 'armed'
+    list.append(h('li', { class: 'empty' }, shown.length ? 'Nothing here matches — change the search or press Clear.' : show === 'armed'
       ? 'Nothing armed yet — show every item and switch one on.'
       : ['Your watchlist is empty — add SKUs on ', h('a', { href: '#watch' }, 'My watchlist'), ' (or ☆ Watch a tracked product), then arm them here.']));
     return;
@@ -1568,25 +1669,81 @@ async function renderAcoChecks() {
 }
 
 /** ⚡ Buy from your phone: the switch, and the checkout browser (the one browser runs go to). */
-function renderAcoRemote() {
+/**
+ * 🖥️ Checkout browser: the one browser Auto-checkout's runs and Discord's ⚡ Buy go to — the one chosen
+ * while it's open; with the backup on, another of yours that's open while it isn't (server/aco.js
+ * checkoutDevice()). Every browser of yours: open now or not, its card, this browser — and Use for checkout.
+ */
+function renderCheckoutBrowser() {
   const s = state.aco.settings;
   const browsers = state.aco.browsers || [];
   const here = state.ext && state.ext.userId === state.me.user.id ? state.ext.deviceId : null;
+  const chosen = browsers.find((b) => b.chosen) || null;
+  const now = browsers.find((b) => b.checkout) || null;
+  const pill = $('#cb-state');
+  const box = $('#cb-now');
+  box.textContent = '';
+  const use = (b, label = 'Use for checkout', primary = false) => h('button', {
+    class: `btn small${primary ? ' primary' : ''}`, type: 'button', dataset: { use: b.id },
+    onclick: () => saveRemote({ deviceId: b.id }, ['Checkout browser changed', `${b.name} checks out from now on.`]),
+  }, label);
+  const hereB = browsers.find((b) => b.id === here) || null;
+  if (!browsers.length) {
+    pill.className = 'pill warn';
+    pill.textContent = 'None connected';
+    box.className = 'notice warn cb-now';
+    box.append(h('span', { class: 'grow' }, 'No browser with the extension is connected yet: install it and press Connect this browser in the browser on the computer you keep on (', h('a', { href: '#extension' }, 'Setup page'), ').'));
+  } else if (chosen && chosen.listening) {
+    pill.className = 'pill ok';
+    pill.textContent = 'Open — ready';
+    box.className = 'notice ok cb-now';
+    box.append(h('span', { class: 'grow' }, '✅ Checkouts open in ', h('b', {}, chosen.name), ` — open now${chosen.id === here ? ' (this browser)' : ''}. Auto-checkout and Discord's ⚡ Buy go there.`),
+      hereB && hereB.id !== chosen.id ? use(hereB, 'Use this browser instead') : null);
+  } else if (now && chosen && now.id !== chosen.id) {
+    pill.className = 'pill warn';
+    pill.textContent = 'Backup checking out';
+    box.className = 'notice warn cb-now';
+    box.append(h('span', { class: 'grow' }, '⚠️ ', h('b', {}, chosen.name), " (your checkout browser) isn't open — so checkouts go to ", h('b', {}, now.name), ` (open now${now.id === here ? ', this browser' : ''}) until it is.`),
+      use(now, `Make ${now.id === here ? 'this browser' : now.name} the checkout browser`, true));
+  } else {
+    pill.className = 'pill warn';
+    pill.textContent = 'Not open';
+    box.className = 'notice warn cb-now';
+    box.append(h('span', { class: 'grow' }, '⚠️ ', h('b', {}, chosen ? chosen.name : 'Your checkout browser'), ` isn't open${s.fallback !== false && browsers.length > 1 ? ', nor is any other browser of yours' : ''}. Open it (minimised is fine) — a ⚡ Buy waits 2 minutes for ${s.fallback !== false && browsers.length > 1 ? 'one' : 'it'}.`),
+      hereB && chosen && hereB.id !== chosen.id ? use(hereB, 'Use this browser', true) : null);
+  }
+  // You're in a browser without the extension connected: it can't check out here.
+  if (browsers.length && !hereB) box.append(h('span', { class: 'muted small' }, state.ext && state.ext.installed ? 'This browser\'s extension isn\'t connected to your account (Setup page), so it can\'t check out here.' : 'This browser has no Mugibot extension, so it can\'t check out here.'));
+  const list = $('#cb-list');
+  list.textContent = '';
+  for (const b of browsers) {
+    const old = versionBelow(b.version, state.aco.remoteVersion);
+    const card = !b.card ? 'card: not told yet' : b.card.ready ? '💳 card ready' : b.card.saved ? '💳 card saved, not ready' : '💳 no card saved';
+    list.append(h('li', { class: b.chosen ? 'is-chosen' : '', dataset: { device: b.id } },
+      h('span', { class: 'what' },
+        h('b', {}, b.name),
+        h('span', { class: 'tags' },
+          b.chosen ? h('span', { class: 'pill ok' }, 'Checkout browser') : null,
+          b.checkout && !b.chosen ? h('span', { class: 'pill warn' }, 'Checking out now (backup)') : null,
+          b.id === here ? h('span', { class: 'pill info' }, 'This browser') : null),
+        h('div', { class: 'muted small' }, [b.listening ? '🟢 open now' : `⚪ not open · seen ${ago(b.lastSeenAt)}`, card, b.version ? `v${b.version}${old ? ' — update it' : ''}` : ''].filter(Boolean).join(' · '))),
+      b.chosen ? null : use(b)));
+  }
+  const fb = s.fallback !== false;
+  $('#cb-fallback').setAttribute('aria-checked', fb ? 'true' : 'false');
+  $('#cb-fallback-label').textContent = fb ? 'Backup on: if it isn\'t open, another of your browsers that is checks out' : 'Backup off: only the checkout browser checks out (a ⚡ Buy waits 2 minutes for it)';
+}
+
+function renderAcoRemote() {
+  renderCheckoutBrowser();
+  const s = state.aco.settings;
+  const browsers = state.aco.browsers || [];
   const checkout = browsers.find((b) => b.checkout);
   $('#aco-remote-on').setAttribute('aria-checked', s.remoteBuy ? 'true' : 'false');
   $('#aco-remote-label').textContent = s.remoteBuy ? 'Discord\'s ⚡ Buy checks out on your computer' : 'Discord\'s ⚡ Buy is off for your computer';
   const pill = $('#aco-remote-state');
   pill.className = `pill ${!s.remoteBuy ? '' : checkout && checkout.listening ? 'ok' : 'warn'}`;
   pill.textContent = !s.remoteBuy ? 'Off' : !checkout ? 'No browser connected' : checkout.listening ? 'Ready' : 'Checkout browser not open';
-  const sel = $('#aco-device');
-  sel.textContent = '';
-  for (const b of browsers) {
-    const bits = [b.listening ? 'open now' : `seen ${ago(b.lastSeenAt)}`, b.id === here ? 'this browser' : ''].filter(Boolean).join(' · ');
-    sel.append(h('option', { value: b.id, selected: b.checkout }, `${b.name} (${bits})`));
-  }
-  if (!browsers.length) sel.append(h('option', { value: '' }, 'No browser connected yet'));
-  sel.disabled = browsers.length < 2;
-  $('#aco-device-here').hidden = !here || !checkout || checkout.id === here || !browsers.some((b) => b.id === here);
   const note = $('#aco-device-note');
   note.textContent = '';
   if (!browsers.length) {
@@ -1594,8 +1751,7 @@ function renderAcoRemote() {
     return;
   }
   const old = checkout && versionBelow(checkout.version, state.aco.remoteVersion);
-  note.append('Auto-checkout\'s runs and Discord\'s ⚡ Buy go to this one browser — never to all of them, so two of your browsers never race for the same order. Keep it open (minimised is fine).',
-    checkout && !checkout.listening ? ` ${checkout.name} isn't open right now: a ⚡ Buy waits 2 minutes for it.` : '',
+  note.append('Checks out in ', h('b', {}, checkout.name), checkout.listening ? ' (open now)' : ' — not open right now: a ⚡ Buy waits 2 minutes for it', '. Choose which browser in ', h('a', { href: '#cb-card' }, 'Checkout browser'), ' above.',
     old ? ` Update the extension there to ${state.aco.remoteVersion} so ⚡ Buy starts the moment you press it (it has ${checkout.version || 'an older one'}).` : '');
 }
 
@@ -1684,6 +1840,15 @@ function renderAco() {
   renderAcoRuns();
 }
 
+// (Which of your browsers are open changes by itself: looked at again every 20 seconds while the Checkout page is open.)
+setInterval(async () => {
+  if (document.hidden || !state.aco || $('[data-panel="aco"]').hidden) return;
+  try {
+    state.aco.browsers = (await api('GET', '/api/aco/browsers')).browsers;
+    renderAcoRemote();
+  } catch { /* offline for a moment */ }
+}, 20000);
+
 loaders.aco = async () => {
   await Promise.all([loadAco(), loadRetailers(), loadItems(), loadLogins().catch(() => null), loadBags().catch(() => null)]);
   renderAco();
@@ -1725,11 +1890,10 @@ $('#aco-form').addEventListener('submit', (e) => {
   });
 });
 $('#aco-remote-on').addEventListener('click', () => saveRemote({ remoteBuy: !state.aco.settings.remoteBuy }));
-$('#aco-device').addEventListener('change', (e) => {
-  const b = (state.aco.browsers || []).find((x) => x.id === e.target.value);
-  saveRemote({ deviceId: e.target.value }, b ? ['Checkout browser changed', `${b.name} checks out from now on.`] : null);
+$('#cb-fallback').addEventListener('click', () => {
+  const on = state.aco.settings.fallback === false;
+  saveRemote({ fallback: on }, [on ? 'Backup on' : 'Backup off', on ? "If your checkout browser isn't open, another of your browsers that is checks out." : 'Only your checkout browser checks out from now on.']);
 });
-$('#aco-device-here').addEventListener('click', () => saveRemote({ deviceId: state.ext.deviceId }, ['Checkout browser changed', 'This browser checks out from now on.']));
 $('#aco-filter').addEventListener('change', () => { state.runsPage = 1; renderAcoRuns(); });
 $('#aco-recheck').addEventListener('click', async () => {
   // (Which browsers are open now, too.)

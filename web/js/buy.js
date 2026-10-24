@@ -58,7 +58,9 @@ $('#b-remote').addEventListener('click', async () => {
     if (!item) item = await api('POST', '/api/items', { url: q.get('url'), store: q.get('store'), sku: q.get('sku'), name: q.get('name') || '' });
     const r = await api('POST', `/api/aco/remote/${item.id}`, {});
     const how = r.mode === 'place' ? 'It places the order by itself, within your Auto-checkout limits.' : `It fills checkout in and stops at the final button — ${r.why}.`;
-    setMsg($('#b-msg'), `Sent to ${r.device.name}: it's opening the store now. ${how}${r.listening ? '' : ` ${r.device.name} isn't open right now — it starts as soon as it is (within 2 minutes).`} You'll get a DM with how it went.`, true);
+    const asleep = !r.listening ? ` ${r.device.name} isn't open right now${r.fallback ? ', nor is any other browser of yours' : ''} — it starts as soon as ${r.fallback ? 'one is' : 'it is'} (within 2 minutes).`
+      : r.standIn ? ` (${r.standIn}, your checkout browser, isn't open — so ${r.device.name} checks out instead.)` : '';
+    setMsg($('#b-msg'), `Sent to ${r.device.name}: it's opening the store now. ${how}${asleep} You'll get a DM with how it went.`, true);
   } catch (e) {
     setMsg($('#b-msg'), e.status === 402 ? `${e.message}.` : e.message);
     btn.disabled = false;

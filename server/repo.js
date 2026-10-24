@@ -25,7 +25,7 @@ export const ENTITLED_SQL = "(u.role = 'admin' OR u.plan IN ('active', 'comped',
 
 const toItem = (r) => r && ({
   id: r.id, store: r.store, sku: r.sku, name: r.name, url: r.url, price: r.price, maxPrice: r.max_price, quantity: r.quantity,
-  profileId: r.profile_id, monitor: !!r.monitor, announce: !!r.announce, position: r.position,
+  profileId: r.profile_id, cardId: r.card_id || '', monitor: !!r.monitor, announce: !!r.announce, position: r.position,
   status: r.status, statusSource: r.status_source, statusAt: r.status_at, checkedAt: r.checked_at, title: r.title || '',
   lastPrice: r.last_price, error: r.error || '', lastAlertAt: r.last_alert_at, createdAt: r.created_at,
   // Auto-checkout: armed to be bought by itself when it drops (once; then armed again by you).
@@ -260,9 +260,9 @@ export class Repo {
     const t = this.now();
     const pos = this.db.get('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM items WHERE user_id = :u', { u: userId }).n;
     try {
-      this.db.run(`INSERT INTO items (id, user_id, position, store, sku, name, url, price, max_price, quantity, profile_id, monitor, announce, aco, aco_at, discount, created_at, updated_at)
-        VALUES (:id, :u, :pos, :store, :sku, :name, :url, :price, :max, :qty, :pf, :mon, :ann, :aco, :acoAt, :disc, :t, :t)`,
-      { id, u: userId, pos, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, acoAt: it.aco ? t : null, disc: it.discount || '', t });
+      this.db.run(`INSERT INTO items (id, user_id, position, store, sku, name, url, price, max_price, quantity, profile_id, card_id, monitor, announce, aco, aco_at, discount, created_at, updated_at)
+        VALUES (:id, :u, :pos, :store, :sku, :name, :url, :price, :max, :qty, :pf, :card, :mon, :ann, :aco, :acoAt, :disc, :t, :t)`,
+      { id, u: userId, pos, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, card: it.cardId || '', mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, acoAt: it.aco ? t : null, disc: it.discount || '', t });
     } catch (e) {
       if (isUniqueError(e)) throw new HttpError(409, `SKU ${it.sku} is already on your watchlist`);
       throw e;
@@ -278,10 +278,10 @@ export class Repo {
     const moved = before.url !== (it.url || '') || before.store !== it.store || before.sku !== it.sku;
     try {
       this.db.run(`UPDATE items SET store = :store, sku = :sku, name = :name, url = :url, price = :price, max_price = :max, quantity = :qty,
-          profile_id = :pf, monitor = :mon, announce = :ann, aco = :aco, aco_at = CASE WHEN :aco = 1 AND aco = 0 THEN :t WHEN :aco = 0 THEN NULL ELSE aco_at END, discount = :disc, updated_at = :t
+          profile_id = :pf, card_id = :card, monitor = :mon, announce = :ann, aco = :aco, aco_at = CASE WHEN :aco = 1 AND aco = 0 THEN :t WHEN :aco = 0 THEN NULL ELSE aco_at END, discount = :disc, updated_at = :t
           ${moved ? ", status = 'pending', status_source = NULL, status_at = NULL, checked_at = NULL, error = '', browser_next_at = 0, browser_fails = 0" : ''}
         WHERE user_id = :u AND id = :id`,
-      { id: before.id, u: userId, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, disc: it.discount || '', t: this.now() });
+      { id: before.id, u: userId, store: it.store, sku: it.sku, name: it.name, url: it.url || '', price: it.price, max: it.maxPrice, qty: it.quantity, pf: it.profileId, card: it.cardId || '', mon: it.monitor ? 1 : 0, ann: it.announce ? 1 : 0, aco: it.aco ? 1 : 0, disc: it.discount || '', t: this.now() });
     } catch (e) {
       if (isUniqueError(e)) throw new HttpError(409, `SKU ${it.sku} is already on your watchlist`);
       throw e;

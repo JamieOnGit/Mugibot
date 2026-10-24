@@ -193,8 +193,9 @@ test('card: saved once in the extension (no passphrase), encrypted, tied to this
 
   const userId = env.app.repo.userByUsername('ash').id;
   const local = await sw.evaluate(() => chrome.storage.local.get(null));
-  assert.equal(local[`vault:${userId}`].last4, '4242');
-  assert.equal(local[`vault:${userId}`].v, 2);
+  assert.equal(local[`vault:${userId}`].v, 3, 'kept as a list of cards (from 1.33)');
+  assert.deepEqual(local[`vault:${userId}`].cards.map((c) => c.last4), ['4242']);
+  assert.equal(local[`vault:${userId}`].defaultId, local[`vault:${userId}`].cards[0].id, 'the first card saved is the default');
   assert.doesNotMatch(JSON.stringify(local), /4242 ?4242 ?4242/, 'the card number is not stored in the clear');
   const session = await sw.evaluate(() => chrome.storage.session.get(null));
   assert.doesNotMatch(JSON.stringify(session), /4242 ?4242 ?4242/, 'nor kept in the clear while the browser runs');
@@ -249,7 +250,7 @@ test('a card saved with a passphrase by an older version: entering it once keeps
   assert.equal(await opts.isHidden('#upgrade-form'), true);
   await opts.close();
   const local = await sw.evaluate((id) => chrome.storage.local.get(`vault:${id}`), userId);
-  assert.equal(local[`vault:${userId}`].v, 2, 'moved over to the new kind');
+  assert.equal(local[`vault:${userId}`].v, 3, 'moved over to the new kind');
 });
 
 test("card backup: locked in the extension with a card passphrase and kept in your account; gone from this browser (like a new install), the passphrase brings it back — a wrong one doesn't", async () => {
@@ -310,7 +311,7 @@ test("card backup: locked in the extension with a card passphrase and kept in yo
   assert.match(await opts.textContent('#saved-msg'), /Restored/);
   assert.equal(await opts.isVisible('#backup-on'), true, 'and it says it is backed up');
   const local = await sw.evaluate((id) => chrome.storage.local.get(`vault:${id}`), userId);
-  assert.equal(local[`vault:${userId}`].v, 2, 'kept in this browser like any saved card');
+  assert.equal(local[`vault:${userId}`].v, 3, 'kept in this browser like any saved card');
   await dash.reload();
   await dash.waitForFunction(() => /ready: ⚡ Buy fills it in/.test(document.querySelector('#card-state').textContent));
   await dash.close();
@@ -352,8 +353,8 @@ test('🔁 an update loaded from a new folder (a new copy of the extension, its 
     await page.waitForFunction(() => /Your card is back/.test(document.querySelector('#toasts')?.textContent || ''));
     // In the new copy: the card, ready — encrypted with its own key, like any card saved there.
     const local = await sw.evaluate(() => chrome.storage.local.get(null));
-    assert.equal(local[`vault:${userId}`].v, 2);
-    assert.equal(local[`vault:${userId}`].last4, '4242');
+    assert.equal(local[`vault:${userId}`].v, 3);
+    assert.deepEqual(local[`vault:${userId}`].cards.map((c) => c.last4), ['4242']);
     assert.doesNotMatch(JSON.stringify(local[`vault:${userId}`]), /4242 ?4242 ?4242/);
     const opts = await ctx.newPage();
     await opts.goto(`chrome-extension://${extId}/options.html`);
@@ -407,6 +408,135 @@ test('Kmart flow (verified): ⚡ Buy → added → straight to checkout → deta
   await waitFor(() => env.app.repo.listEvents(userId).some((e) => /Kmart ETB: Clicked "Add to bag"$/.test(e.message)), { message: 'add event' });
   await waitFor(() => env.app.repo.listEvents(userId).some((e) => /Kmart \(dummy store\) — waiting for you to press "Checkout securely"/.test(e.message)), { message: 'ready event' });
   await shop.close();
+  await dash.close();
+});
+
+test('💳 several cards: a second one saved (named), made the default — ⚡ Buy fills it in; an item set to pay with the other fills that one; the dashboard lists both and changes the default; backed up and restored together; back to one', async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const vault = async () => (await sw.evaluate((id) => chrome.storage.local.get(`vault:${id}`), userId))[`vault:${userId}`];
+  const visaId = (await vault()).cards[0].id;
+  // A card saved by 1.32 or older (one card, v2): read as a list of one — what's added next goes beside it.
+  const opts = await ctx.newPage();
+  await opts.goto(`chrome-extension://${extId}/options.html`);
+  await opts.waitForSelector('#card-saved:not([hidden])');
+  assert.match(await opts.textContent('#card-form-title'), /Add another card/);
+  assert.equal(await opts.isVisible('#c-default-wrap'), true, '"Make it my default" offered once there is one');
+  await opts.fill('#c-number', '5555 5555 5555 4444');
+  await opts.fill('#c-name', 'Ash Ketchum');
+  await opts.fill('#c-label', 'Business');
+  await opts.fill('#c-exp', '01/30');
+  await opts.fill('#c-cvc', '456');
+  await opts.check('#c-default');
+  await opts.click('#card-form button[type=submit]');
+  await opts.waitForFunction(() => /Mastercard •••• 4444/.test(document.querySelector('#card-label').textContent));
+  assert.match(await opts.textContent('#card-label'), /Mastercard •••• 4444 · expires 01\/30 · Business/);
+  assert.equal(await opts.textContent('#card-state'), 'Ready for checkout');
+  assert.equal(await opts.isVisible('#card-default-pill'), true);
+  assert.match(await opts.textContent('#cards'), /Visa •••• 4242 · expires 07\/29/);
+  assert.match(await opts.textContent('#cards-count'), /2 cards saved here/);
+  assert.match(await opts.textContent('#card-msg'), /It's your default: every ⚡ Buy fills it in/);
+  let v = await vault();
+  assert.equal(v.cards.length, 2);
+  const mcId = v.cards.find((c) => c.last4 === '4444').id;
+  assert.equal(v.defaultId, mcId, 'the one ticked "Make it my default"');
+  assert.equal(v.cards.find((c) => c.id === visaId).last4, '4242', 'the first card kept its id');
+  assert.doesNotMatch(JSON.stringify(v), /5555 ?5555|4444 ?4444/, 'encrypted, like the first');
+  assert.doesNotMatch(JSON.stringify(env.app.db.all('SELECT * FROM user_data')) + JSON.stringify(env.app.db.all('SELECT * FROM events')), /5555 ?5555 ?5555/, 'never sent to the server in the clear');
+  // The same number again updates that card (no third card).
+  await opts.fill('#c-number', '5555555555554444');
+  await opts.fill('#c-exp', '02/31');
+  await opts.fill('#c-cvc', '456');
+  await opts.click('#card-form button[type=submit]');
+  await opts.waitForFunction(() => /expires 02\/31/.test(document.querySelector('#card-label').textContent));
+  assert.equal((await vault()).cards.length, 2, 'the same card, updated');
+
+  // ⚡ Buy: the default card.
+  await useItems([{ url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB', price: 100 }]);
+  const dash = await ctx.newPage();
+  let shop = await buyFromDashboard(dash, 'Kmart ETB');
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 20000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.equal(await shop.inputValue('input[name=cardNumber]'), '5555 5555 5555 4444', 'the default card');
+  assert.equal(await shop.inputValue('input[name=cardExpiry]'), '02/31');
+  assert.equal(await shop.inputValue('input[name=cardCvv]'), '456');
+  await shop.close();
+  // The item set to pay with the Visa (Edit → Pay with): that one, whatever the default.
+  const item = (await browserApi('GET', '/api/items')).body.items[0];
+  await dash.goto(`${env.url}/app#watch`);
+  await dash.locator('#w-list li', { hasText: 'Kmart ETB' }).getByRole('button', { name: 'Edit' }).click();
+  await dash.waitForFunction(() => document.querySelectorAll('#w-card option').length === 3);
+  assert.match(await dash.textContent('#w-card option[value=""]'), /Default card \(Mastercard •••• 4444 · Business\)/);
+  await dash.selectOption('#w-card', visaId);
+  await dash.click('#w-save');
+  await waitFor(async () => (await browserApi('GET', '/api/items')).body.items[0].cardId === visaId, { message: 'its card saved' });
+  store.reset();
+  shop = await buyFromDashboard(dash, 'Kmart ETB');
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 20000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.equal(await shop.inputValue('input[name=cardNumber]'), '4242 4242 4242 4242', "the item's own card");
+  assert.equal(await shop.inputValue('input[name=cardExpiry]'), '07/29');
+  await shop.close();
+  assert.equal(ordersPlaced(), 0);
+  // A card chosen that isn't in this browser (another browser's): your default fills in.
+  assert.equal((await browserApi('PUT', `/api/items/${item.id}`, { cardId: 'c0123456789ab' })).status, 200);
+  store.reset();
+  shop = await buyFromDashboard(dash, 'Kmart ETB');
+  await shop.waitForURL(/\/kmart\/checkout$/, { timeout: 20000 });
+  await waitReady(shop, 'Checkout securely');
+  assert.equal(await shop.inputValue('input[name=cardNumber]'), '5555 5555 5555 4444', 'not here: the default');
+  await shop.close();
+  assert.equal((await browserApi('PUT', `/api/items/${item.id}`, { cardId: '' })).status, 200);
+
+  // The dashboard: both cards, the default marked — Make default on the other changes it (only which one goes to the extension).
+  await dash.goto(`${env.url}/app#checkout`);
+  await dash.waitForFunction(() => document.querySelectorAll('#card-list li').length === 2, null, { timeout: 20000 });
+  assert.match(await dash.textContent('#card-state'), /Mastercard •••• 4444 · expires 02\/31 — ready: ⚡ Buy fills it in at checkout\. It's your default, of 2 cards saved in this browser\./);
+  assert.match(await dash.textContent('#card-list li.is-default'), /★ Mastercard •••• 4444 · expires 02\/31 · Business/);
+  await dash.locator(`#card-list li[data-card="${visaId}"]`).getByRole('button', { name: 'Make default' }).click();
+  await dash.waitForFunction(() => /Default card changed/.test(document.querySelector('#toasts')?.textContent || ''));
+  await waitFor(async () => (await vault()).defaultId === visaId, { message: 'the Visa is the default' });
+  await dash.waitForFunction(() => /^Visa •••• 4242/.test(document.querySelector('#card-state').textContent), null, { timeout: 20000 });
+
+  // Backed up with both: the backup in the account has 2 cards (only their brand, last 4 and expiry readable).
+  await opts.reload();
+  await opts.waitForSelector('#backup-form:not([hidden])');
+  assert.match(await opts.textContent('#backup-other'), /not the 2 saved here now/);
+  assert.equal(await opts.textContent('#backup-go'), 'Back up my 2 cards');
+  await opts.fill('#backup-pass', 'correct horse battery');
+  await opts.fill('#backup-pass2', 'correct horse battery');
+  await opts.click('#backup-form button[type=submit]');
+  await opts.waitForSelector('#backup-on:not([hidden])', { timeout: 20000 });
+  const backup = env.app.repo.getData(userId, 'cardBackup');
+  assert.equal(backup.count, 2);
+  assert.deepEqual(backup.cards.map((c) => [c.brand, c.last4, c.isDefault]), [['Visa', '4242', true], ['Mastercard', '4444', false]]);
+  assert.doesNotMatch(JSON.stringify(backup), /5555 ?5555|4242 ?4242 ?4242|"456"/);
+  // …and the copy kept for extension updates (no passphrase) is of both, too.
+  await waitFor(() => ((env.app.repo.getData(userId, 'cardRestore', null) || {}).copies || []).some((c) => c.count === 2), { message: 'a copy of both', timeout: 20000 });
+  // Gone from this browser (a new install), the passphrase brings both back — the Visa still the default.
+  await sw.evaluate((id) => chrome.storage.local.remove(`vault:${id}`), userId);
+  await opts.reload();
+  await opts.waitForSelector('#restore-form:not([hidden])');
+  assert.match(await opts.textContent('#restore-label'), /Visa •••• 4242 · expires 07\/29 · and 1 more/);
+  await opts.fill('#restore-pass', 'correct horse battery');
+  await opts.click('#restore-form button[type=submit]');
+  await opts.waitForSelector('#restore-form[hidden]', { state: 'attached', timeout: 20000 });
+  assert.match(await opts.textContent('#saved-msg'), /your 2 cards are ready/);
+  v = await vault();
+  assert.deepEqual(v.cards.map((c) => [c.last4, c.label]).sort(), [['4242', ''], ['4444', 'Business']]);
+  assert.equal(v.cards.find((c) => c.id === v.defaultId).last4, '4242', 'the default, as it was');
+  // Back to one card (the Visa) for the rest of the tests — and a backup of just it.
+  opts.once('dialog', (d) => d.accept());
+  await opts.locator('#cards li', { hasText: 'Mastercard' }).getByRole('button', { name: 'Remove' }).click();
+  await opts.waitForFunction(() => !document.querySelector('#cards').children.length);
+  assert.match(await opts.textContent('#card-label'), /Visa •••• 4242/);
+  assert.equal((await vault()).cards.length, 1);
+  await opts.waitForSelector('#backup-form:not([hidden])');
+  await opts.fill('#backup-pass', 'correct horse battery');
+  await opts.fill('#backup-pass2', 'correct horse battery');
+  await opts.click('#backup-form button[type=submit]');
+  await opts.waitForSelector('#backup-on:not([hidden])', { timeout: 20000 });
+  assert.equal(env.app.repo.getData(userId, 'cardBackup').count, 1);
+  await opts.close();
   await dash.close();
 });
 
@@ -1767,16 +1897,36 @@ test("BIG W's search page builds its products once it's open: an admin's browser
     };
     assert.equal(await panel(), false);
 
+    // ↻ Reset clears the store's cached files in this browser too — never its cookies (or sign-in). A page of the
+    // store's, with something in its cache and a cookie:
+    const cachePage = await ctx.newPage();
+    await cachePage.goto(store.productUrl('bigw', '6012345'));
+    const putCache = () => cachePage.evaluate(async () => { const c = await caches.open('mgb-test'); await c.put('/mgb-cached', new Response('x')); document.cookie = 'mgbkeep=1; path=/'; return (await caches.keys()).includes('mgb-test'); });
+    const hasCache = () => cachePage.evaluate(async () => (await caches.keys()).includes('mgb-test'));
+    assert.equal(await putCache(), true);
     // ↻ Reset: the store's tab is closed and opened again at its front page, then searched as before.
     const fronts = () => store.state.requests.filter((x) => x.path === '/bigw' || x.path === '/bigw/').length;
     const frontsBefore = fronts();
     sweeper.reset('demo-bigw');
     await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
     await waitFor(() => tabs[0].isClosed(), { timeout: 20000, message: 'the old tab closed' });
+    await waitFor(async () => !(await hasCache()), { timeout: 20000, message: "the store's cached files cleared by the browser searching it" });
+    assert.match(await cachePage.evaluate(() => document.cookie), /mgbkeep=1/, 'its cookies kept');
     await waitFor(() => fronts() > frontsBefore, { timeout: 20000, message: 'opened again at the front page' });
     await waitFor(() => ctx.pages().some((pg) => pg.url().includes('/bigw/search')), { timeout: 30000, message: 'searched again in the new tab' });
     await waitFor(() => sweeper.stat('demo-bigw').lastOkAt > sweeper.stat('demo-bigw').resetAt, { timeout: 30000, message: 'a search after the reset' });
-    assert.equal(ctx.pages().filter((pg) => pg.url().includes('/bigw/')).length, 1, 'still one tab for the store');
+    assert.equal(ctx.pages().filter((pg) => pg.url().includes('/bigw/search')).length, 1, 'still one sweep tab for the store');
+    // ↻ on the dashboard (an admin, in this browser): its cached files here cleared at once, and said so.
+    assert.equal(await putCache(), true);
+    const dash = await ctx.newPage();
+    await dash.goto(`${env.url}/app#monitor`);
+    await dash.waitForSelector('#sn-channels .sn-chan[data-store="demo-bigw"] .st-reset', { timeout: 20000 });
+    await dash.click('#sn-channels .sn-chan[data-store="demo-bigw"] .st-reset');
+    await dash.waitForFunction(() => /cached files in this browser are cleared \(cookies and sign-ins kept\)/.test(document.querySelector('#toasts')?.textContent || ''), null, { timeout: 15000 });
+    await waitFor(async () => !(await hasCache()), { timeout: 10000, message: 'cleared from the dashboard' });
+    assert.match(await cachePage.evaluate(() => document.cookie), /mgbkeep=1/);
+    await dash.close();
+    await cachePage.close();
   } finally {
     env.app.repo.updateUser(userId, { role: 'user' });
     store.shop('bigw').clientSearch = false;

@@ -224,6 +224,9 @@ export function register(router, ctx) {
     runs: ctx.aco.list(req.user.id, num(req.query.get('limit'), { min: 1, max: 200, def: 50, int: true })),
   }));
 
+  // Which of your browsers are open now, and the one that checks out (the Checkout page asks every 20 seconds).
+  router.get('/api/aco/browsers', async (req) => ({ browsers: ctx.aco.browsers(req.user.id) }));
+
   router.put('/api/aco', async (req) => {
     const current = ctx.aco.settings(req.user.id);
     const next = acoSettings(req.body, current, repo.now());
@@ -238,6 +241,9 @@ export function register(router, ctx) {
     }
     if (next.deviceId !== current.deviceId && next.deviceId) {
       repo.addEvent(req.user.id, { type: 'aco', level: 'info', message: `Checkout browser: ${devices.find((d) => d.id === next.deviceId).name} — Auto-checkout and Discord's ⚡ Buy check out there` });
+    }
+    if (next.fallback !== current.fallback) {
+      repo.addEvent(req.user.id, { type: 'aco', level: 'info', message: next.fallback ? "Checkout browser backup on: if it isn't open, another of your browsers that is checks out" : 'Checkout browser backup off: only your checkout browser checks out' });
     }
     ctx.hub.publish(req.user.id, 'aco', { settings: true });
     return { settings: next, today: ctx.aco.today(req.user.id), armed: ctx.aco.armedCount(req.user.id), browsers: ctx.aco.browsers(req.user.id) };

@@ -25,8 +25,8 @@
       </div>
     </div>
 
-    <h2>Card for checkout</h2>
-    <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close and reopen the browser. Nothing to unlock. It's saved in this browser, encrypted, and only for the account above. Mugibot's servers never get it in a form they can read. So that updating the extension never loses it, your account keeps a copy locked with a key that stays in this browser (your Mugibot dashboard keeps it): reconnect a new copy of the extension from the dashboard and your card is back, no passphrase (switch it off on the dashboard: Setup → Delivery &amp; card). For another computer, back it up below: a copy locked with your card passphrase. You still press the store's final button yourself. On a shared computer, remove it when you're done: anyone using this browser profile could check out with it.</p>
+    <h2>Cards for checkout</h2>
+    <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close and reopen the browser. Keep up to 6 cards and choose your <b>default</b> (★): the one every checkout uses. Nothing to unlock. It's saved in this browser, encrypted, and only for the account above. Mugibot's servers never get it in a form they can read. So that updating the extension never loses it, your account keeps a copy locked with a key that stays in this browser (your Mugibot dashboard keeps it): reconnect a new copy of the extension from the dashboard and your card is back, no passphrase (switch it off on the dashboard: Setup → Delivery &amp; card). For another computer, back it up below: a copy locked with your card passphrase. You still press the store's final button yourself. On a shared computer, remove it when you're done: anyone using this browser profile could check out with it.</p>
     <div class="card" id="card-none-acct" hidden><p class="muted">Connect your account first.</p></div>
 
     <form class="card" id="restore-form" hidden>
@@ -39,27 +39,29 @@
     </form>
 
     <div class="card" id="card-saved" hidden>
-      <p><b id="card-label"></b> <span id="card-state" class="pill"></span></p>
+      <p class="muted small" id="cards-count"></p>
+      <p><span class="pill ok" id="card-default-pill">★ Default</span> <b id="card-label"></b> <span id="card-state" class="pill"></span></p>
+      <p class="row" id="card-default-acts"><button type="button" id="rename">Name it</button> <button id="remove">Remove card from this browser</button></p>
+      <ul class="cards" id="cards"></ul>
       <form id="upgrade-form" hidden>
         <p class="muted">This card was saved by an older version of Mugibot, with a passphrase. Enter that passphrase once and the card stays ready from now on. Forgotten it? Just save the card again below.</p>
         <label for="upgrade-pass">Passphrase</label>
         <input id="upgrade-pass" type="password" autocomplete="current-password">
         <p><button class="primary" type="submit">Keep my card ready</button></p>
       </form>
-      <p class="row"><button id="remove">Remove card from this browser</button></p>
       <div id="saved-msg" class="msg"></div>
       <div class="backup" id="backup-on" hidden>
         <p><span class="pill ok">Backed up</span> <span class="muted">in your account, locked with your card passphrase. A new install or another browser restores it with that passphrase.</span></p>
         <p class="row"><button id="unbackup">Delete the backup</button></p>
       </div>
       <form class="backup" id="backup-form" hidden>
-        <p><b>Back it up to your account</b> <span class="muted">— so a new install of the extension, or another browser, doesn't need the card typed in again. It's locked here with a card passphrase only you know: Mugibot keeps the locked copy and can't open it. Forget the passphrase and nobody can open it (save the card again).</span></p>
+        <p><b>Back them up to your account</b> <span class="muted">— so a new install of the extension, or another browser, doesn't need your cards typed in again. It's locked here with a card passphrase only you know: Mugibot keeps the locked copy and can't open it. Forget the passphrase and nobody can open it (save the card again).</span></p>
         <p class="muted" id="backup-other"></p>
         <label for="backup-pass">Card passphrase (at least 10 characters)</label>
         <input id="backup-pass" type="password" autocomplete="new-password">
         <label for="backup-pass2">The same again</label>
         <input id="backup-pass2" type="password" autocomplete="new-password">
-        <p><button class="primary" type="submit">Back up my card</button></p>
+        <p><button class="primary" type="submit" id="backup-go">Back up my card</button></p>
       </form>
       <div id="backup-msg" class="msg"></div>
     </div>
@@ -70,11 +72,14 @@
       <input id="c-number" inputmode="numeric" autocomplete="cc-number">
       <label for="c-name">Name on card</label>
       <input id="c-name" autocomplete="cc-name">
+      <label for="c-label">Name it <span class="muted">(optional — "Personal", "Business"…)</span></label>
+      <input id="c-label" maxlength="30" autocomplete="off">
       <div class="row">
         <div><label for="c-exp">Expiry (MM/YY)</label><input id="c-exp" placeholder="MM/YY" autocomplete="cc-exp"></div>
         <div><label for="c-cvc">CVV</label><input id="c-cvc" inputmode="numeric" autocomplete="cc-csc" maxlength="4"></div>
       </div>
       <p class="muted" style="font-size:12px">With the CVV saved, checkout needs nothing typed. Leave it blank if you'd rather type it in yourself each time.</p>
+      <label class="check" id="c-default-wrap" hidden><input type="checkbox" id="c-default"> Make it my default card (the one every checkout uses)</label>
       <label class="check"><input type="checkbox" id="c-backup"> Also back it up to my account (locked with a card passphrase only I know)</label>
       <div id="c-backup-fields" hidden>
         <label for="c-pass">Card passphrase (at least 10 characters)</label>
@@ -82,7 +87,7 @@
         <label for="c-pass2">The same again</label>
         <input id="c-pass2" type="password" autocomplete="new-password">
       </div>
-      <p><button class="primary" type="submit">Save card</button></p>
+      <p><button class="primary" type="submit" id="c-save">Save card</button></p>
       <div id="card-msg" class="msg"></div>
     </form>
 

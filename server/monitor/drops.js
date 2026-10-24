@@ -1020,6 +1020,8 @@ export class Drops {
         ...(admin && p.status_source === 'browser' ? { via: 'browser' } : {}),
         ...(admin && p.store === 'other' && FAILED.has(p.status) && this.allowFor(viewer, p.url) ? { allow: this.allowFor(viewer, p.url) } : {}),
         store: p.store, sku: p.sku, storeName: this.retailers.siteName(p.store, p.url), canBuy: this.retailers.canBuy(p.store), arm: mine ? f.arm || '' : '',
+        // (When it was found, and when its stock last changed: the dashboard's "Latest finds first".)
+        at: f.at || null, statusAt: p.status_at ?? null,
       };
     }
     if (!mine || !f.itemId) return null;
@@ -1028,6 +1030,7 @@ export class Drops {
     return {
       id: it.id, itemId: it.id, name: it.name, url: it.url, image: '', status: it.monitor ? it.status : 'paused', price: it.lastPrice ?? it.price,
       store: it.store, sku: it.sku, storeName: this.retailers.siteName(it.store, it.url), canBuy: this.retailers.canBuy(it.store), aco: it.aco, arm: f.arm || '',
+      at: f.at || null, statusAt: it.statusAt ?? null,
       ...(it.statusSource === 'browser' ? { via: 'browser' } : {}),
       ...(it.store === 'other' && it.monitor && FAILED.has(it.status) && this.allowFor(viewer, it.url) ? { allow: this.allowFor(viewer, it.url) } : {}),
     };

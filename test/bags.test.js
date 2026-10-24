@@ -48,6 +48,8 @@ test('Clear cart at one store: handed to the checkout browser alone, once — it
   desktop = await Device.pair(env.url, gary, 'Gary desktop');
   await seenAs(desktop, '1.18.0');
   await seenAs(laptop, '1.18.0');
+  // (The desktop's open: the checkout browser — the laptop, open too, is only its backup.)
+  await desktop.call('GET', '/api/ext/aco/next');
   assert.equal((await gary.post('/api/bags/clear', { store: 'nowhere' })).status, 409, 'not a store Mugibot checks out at');
   const r = await gary.post('/api/bags/clear', { store: 'kmart' });
   assert.equal(r.status, 200, JSON.stringify(r.body));

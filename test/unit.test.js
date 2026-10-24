@@ -224,7 +224,7 @@ test('Auto-checkout: switched on only once agreed, limits within bounds; an arme
   assert.equal(acoSettings({}, DEFAULT_ACO).enabled, false, 'off until switched on');
   assert.throws(() => acoSettings({ enabled: true }, DEFAULT_ACO), /agree/i);
   const on = acoSettings({ enabled: true, agree: true, mode: 'fill', maxOrder: 'lots', perDay: 0, spendPerDay: 1e9 }, DEFAULT_ACO, 1000);
-  assert.deepEqual(on, { enabled: true, agreedAt: 1000, mode: 'fill', maxOrder: 400, perDay: 1, spendPerDay: 20000, signedInOnly: false, remoteBuy: true, deviceId: '' });
+  assert.deepEqual(on, { enabled: true, agreedAt: 1000, mode: 'fill', maxOrder: 400, perDay: 1, spendPerDay: 20000, signedInOnly: false, remoteBuy: true, deviceId: '', fallback: true });
   // Discord's ⚡ Buy on your computer: on unless switched off; the checkout browser, an ID or none.
   assert.equal(acoSettings({ remoteBuy: false }, on).remoteBuy, false);
   assert.equal(acoSettings({ deviceId: 'dev_abc-123' }, on).deviceId, 'dev_abc-123');
@@ -328,7 +328,7 @@ test('extension built for a live server: only that server and the stores; module
   const m = extensionManifest(cfg);
   assert.equal(m.manifest_version, 3);
   assert.equal(m.background.type, 'module');
-  assert.deepEqual(m.permissions, ['storage', 'alarms', 'scripting'], 'no tabs/history/cookies permissions (scripting: reading the page an admin\'s browser opens for a live sweep)');
+  assert.deepEqual(m.permissions, ['storage', 'alarms', 'scripting', 'browsingData'], 'no tabs/history/cookies permissions (scripting: reading the page an admin\'s browser opens for a live sweep; browsingData: a store\'s cached files cleared on ↻ Reset — Chrome shows no warning for it, so a Web Store update goes in by itself)');
   assert.ok(m.host_permissions.includes('https://ac.cnstrc.com/*'), "Kmart's search provider, for an admin's browser sweeping Kmart");
   assert.equal(m.host_permissions[0], 'https://app.mugibot.example/*');
   assert.ok(m.host_permissions.includes('https://www.kmart.com.au/*'), 'stores (for in-browser checks)');

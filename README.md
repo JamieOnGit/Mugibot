@@ -254,9 +254,9 @@ Discord and Whop are optional for this. Add them later with the guides.
 | Delivery addresses | Server, **encrypted with a key unique to that member** | The member and their connected extension |
 | Alert settings, Discord tokens | Server, encrypted per member | The member |
 | Watchlist, activity, connected browsers | Server, tied to the member | The member (admins see totals only) |
-| **Payment card** | **In the member's browser extension**, encrypted with a key that only that browser's extension has | The member. It's never sent to the server in readable form. |
-| Card copy for extension updates (on unless the member switches it off) | Server: only a copy **locked in the browser** (AES-256-GCM) with a random key the member's dashboard keeps in that browser, plus brand, last 4 and expiry | The member's extension, once connected from their dashboard in that browser: the key never leaves the browser, so the server can't open it by itself |
-| Card backup (optional, the member turns it on) | Server: only a copy **locked in the browser** with the member's card passphrase (PBKDF2-SHA256 600,000 rounds → AES-256-GCM), plus brand, last 4 and expiry | Nobody but the member: the passphrase never leaves their browser, so the server can't open it |
+| **Payment cards** (up to 6, one the default) | **In the member's browser extension**, each encrypted with a key that only that browser's extension has. The server keeps only which card an item pays with (its id in the extension) | The member. They're never sent to the server in readable form. |
+| Card copy for extension updates (on unless the member switches it off) | Server: only a copy of the cards **locked in the browser** (AES-256-GCM) with a random key the member's dashboard keeps in that browser, plus each card's brand, last 4 and expiry | The member's extension, once connected from their dashboard in that browser: the key never leaves the browser, so the server can't open it by itself |
+| Card backup (optional, the member turns it on) | Server: only a copy of the cards **locked in the browser** with the member's card passphrase (PBKDF2-SHA256 600,000 rounds → AES-256-GCM), plus each card's brand, last 4 and expiry | Nobody but the member: the passphrase never leaves their browser, so the server can't open it |
 | Membership payments | Whop | The member; you, on Whop |
 
 Card numbers are deliberately not stored on the server in readable form.

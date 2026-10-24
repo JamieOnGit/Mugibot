@@ -3,7 +3,7 @@
 // searches, or any other website). An admin's can be for everyone (#non-tcg-alerts, or the Discord
 // channel they pick for it, pinging the role they pick, and every dashboard); anyone's own are
 // theirs alone (their watchlist, their DMs).
-import { $, ago, api, busy, h, money, setMsg, toast } from './common.js';
+import { $, ago, api, busy, h, listTools, money, setMsg, toast } from './common.js';
 
 const STATUS = {
   in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', in_store: 'In store only', not_listed: 'Not listed yet',
@@ -168,11 +168,41 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     d.timer = setTimeout(() => load().catch(() => null), 500);
   }
 
+  // Search, filter and sort the watches (kept in this browser): what's found, where, and how it's going.
+  const BUYABLE = new Set(['in_stock', 'preorder']);
+  const titleOf = (w) => w.label || (w.kind === 'link' ? (w.found[0] && w.found[0].name) || w.url : w.words) || '';
+  const lastFind = (w) => Math.max(0, ...w.found.map((p) => p.statusAt || p.at || 0));
+  const tools = listTools($('#dw-tools'), {
+    key: 'drops', placeholder: 'Search drop watches (name, words, store, what they found)',
+    filters: [
+      { id: 'kind', label: 'Kind', all: 'Links and key phrases', options: [['link', '🔗 Links'], ['words', '🔎 Key phrases']] },
+      { id: 'store', label: 'Where', all: 'Everywhere' },
+      { id: 'found', label: 'Found', all: 'Found or not', options: [['buyable', 'Something in stock or pre-order'], ['some', 'Found something'], ['none', 'Nothing found yet'], ['problem', 'A problem looking']] },
+    ],
+    sorts: [['', 'As listed'], ['buyable', 'In stock first'], ['recent', 'Latest finds first'], ['name', 'Name A–Z'], ['store', 'Where']],
+    onChange: () => render(),
+  });
+  const MATCH = {
+    kind: (w, v) => (v === 'link' ? w.kind === 'link' : w.kind !== 'link'),
+    store: (w, v) => w.store === v,
+    found: (w, v) => (v === 'buyable' ? w.found.some((p) => BUYABLE.has(p.status)) : v === 'some' ? w.found.length > 0 : v === 'none' ? !w.found.length : !!w.error),
+  };
+  const ORDER = {
+    buyable: (a, b) => Number(b.found.some((p) => BUYABLE.has(p.status))) - Number(a.found.some((p) => BUYABLE.has(p.status))),
+    recent: (a, b) => lastFind(b) - lastFind(a),
+    name: (a, b) => titleOf(a).localeCompare(titleOf(b)),
+    store: (a, b) => (a.storeName || '').localeCompare(b.storeName || ''),
+  };
+  const watchText = (w) => [titleOf(w), w.words, w.url, w.storeName, w.by, ...w.found.map((p) => `${p.name} ${p.storeName || ''}`)].filter(Boolean).join(' ');
+
   function render() {
     const { watches, limit, used, route } = d.data;
     const admin = isAdmin();
-    const mine = watches.filter((w) => w.mine);
-    const others = watches.filter((w) => !w.mine);
+    tools.setOptions('store', [...new Map(watches.map((w) => [w.store, w.storeName || w.store])).entries()].sort((a, b) => a[1].localeCompare(b[1])));
+    const shown = tools.apply(watches, { text: watchText, match: MATCH, order: ORDER });
+    const mine = shown.filter((w) => w.mine);
+    const others = shown.filter((w) => !w.mine);
+    const narrowed = shown.length !== watches.length;
     $('#dw-count').textContent = watches.length ? String(watches.length) : '';
     $('#dw-used').textContent = `${used} of ${limit}`;
     $('#dw-scope').textContent = admin
@@ -192,7 +222,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     }
     const list = $('#dw-mine');
     list.textContent = '';
-    if (!mine.length) list.append(h('li', { class: 'empty' }, 'No drop watches yet — paste a product\'s link above, or type the words in its name.'));
+    if (!mine.length) list.append(h('li', { class: 'empty' }, narrowed && watches.some((w) => w.mine) ? 'None of yours match — change the search or press Clear.' : 'No drop watches yet — paste a product\'s link above, or type the words in its name.'));
     for (const w of mine) list.append(row(w));
     $('#dw-shared-box').hidden = !others.length;
     const sl = $('#dw-shared');

@@ -156,8 +156,9 @@
                   <div id="w-discount-row" hidden><label for="w-discount">Discount code <span class="muted">(optional — Auto-checkout types it in and presses Apply before "Pay now"; if the store won't take it, it's cleared and "Pay now" pressed anyway)</span></label><input id="w-discount" name="discount" maxlength="60" autocomplete="off" spellcheck="false" placeholder="Leave empty for none"></div>
                   <div class="grid2">
                     <div><label for="w-profile">Deliver to</label><select id="w-profile" name="profileId"></select></div>
-                    <div id="w-announce-wrap" hidden><label class="check mt"><input type="checkbox" id="w-announce"> <span>📣 Announce restocks in the members' Discord channel</span></label></div>
+                    <div><label for="w-card">Pay with</label><select id="w-card" name="cardId" title="Which of the cards saved in your extension checkout fills in for this item — your default unless you choose another"></select></div>
                   </div>
+                  <div id="w-announce-wrap" hidden><label class="check"><input type="checkbox" id="w-announce"> <span>📣 Announce restocks in the members' Discord channel</span></label></div>
                   <label class="check"><input type="checkbox" id="w-aco"> <span>🤖 Auto-checkout this item when it drops (once — then arm it again). Needs a max price. <a href="#aco">Auto-checkout settings</a></span></label>
                   <div class="form-actions">
                     <button class="btn primary" type="submit" id="w-save">Add SKU</button>
@@ -166,6 +167,7 @@
                   </div>
                 </form>
                 <p class="muted small">Your own SKUs, checked about every <span id="w-interval">60</span> seconds. In stock (or pre-orders open): a Discord DM with <b>⚡ Buy</b>, which opens the product and fills in checkout for you. Armed for 🤖 Auto-checkout (the <a href="#armed">Armed</a> tab), it's bought by itself.</p>
+                <div class="lt-bar" id="w-tools" role="search" aria-label="Search and sort your watchlist"></div>
                 <ul class="items" id="w-list"></ul>
                 <nav class="pager" id="w-pager" aria-label="Watchlist pages"></nav>
                 <div class="form-actions">
@@ -192,6 +194,7 @@
                   </div>
                 </div>
                 <p class="msg" id="ar-msg"></p>
+                <div class="lt-bar" id="ar-tools" role="search" aria-label="Search and sort armed items"></div>
                 <div class="ar-head" aria-hidden="true"><span>Armed</span><span>Item · ready to check out?</span><span>Max price</span><span></span></div>
                 <ul class="ar-list" id="aco-items"></ul>
                 <nav class="pager" id="aco-pager" aria-label="Armed items pages"></nav>
@@ -223,6 +226,7 @@
                   <div class="form-actions"><button class="btn primary" type="submit" id="dw-add">Add drop watch</button><span class="msg" id="dw-msg"></span></div>
                 </form>
                 <div class="notice" id="dw-channel" hidden></div>
+                <div class="lt-bar" id="dw-tools" role="search" aria-label="Search and sort drop watches"></div>
                 <h4 class="dw-h">Yours <span class="mon-meta" id="dw-used"></span></h4>
                 <ul class="dw-list" id="dw-mine"></ul>
                 <div id="dw-shared-box" hidden><h4 class="dw-h">From the admins — for everyone</h4><ul class="dw-list" id="dw-shared"></ul></div>
@@ -428,6 +432,18 @@
 
         <div class="aco-stats" id="aco-stats"></div>
 
+        <!-- 🖥️ The checkout browser: the one browser that checks out (Auto-checkout and Discord's ⚡ Buy), and the backup -->
+        <div class="card" id="cb-card">
+          <div class="card-head"><h3>🖥️ Checkout browser</h3><span class="pill" id="cb-state"></span></div>
+          <div class="notice cb-now" id="cb-now" role="status">Checking your browsers…</div>
+          <ul class="cb-list" id="cb-list"></ul>
+          <div class="aco-switch-row cb-backup">
+            <button type="button" class="sn-sw" id="cb-fallback" role="switch" aria-checked="true" aria-label="Backup: if the checkout browser isn't open, another of my browsers that is checks out"></button>
+            <div><b id="cb-fallback-label">Backup on</b>
+              <div class="muted small">If the checkout browser isn't open (or isn't the one you're using), whichever of your other browsers with the extension is open checks out instead — the one used most recently. Only ever one browser checks out an order. None open: a ⚡ Buy waits up to 2 minutes for one, and opens a new window for the checkout if that browser has none.</div></div>
+          </div>
+        </div>
+
         <div class="aco-grid">
           <form class="card" id="aco-form">
             <div class="card-head"><h3>Your switch and limits</h3></div>
@@ -462,11 +478,7 @@
             <div><b id="aco-remote-label">Discord's ⚡ Buy checks out on your computer</b>
               <div class="muted small">Press ⚡ Buy on an alert or a DM in Discord — on your phone, anywhere — and your checkout browser opens the store and checks out. With Auto-checkout on it places the order within your limits (up to the price you were shown, or the item's max price); otherwise it fills checkout in and stops at the final button for you. Nothing to sign in to on your phone, and Discord's reply says how it's going.</div></div>
           </div>
-          <div class="aco-device-row">
-            <label for="aco-device">Checkout browser</label>
-            <div class="aco-device-pick"><select id="aco-device"></select><button class="btn small" type="button" id="aco-device-here" hidden>Use this browser</button></div>
-            <p class="muted small" id="aco-device-note"></p>
-          </div>
+          <p class="muted small aco-device-line" id="aco-device-note"></p>
           <p class="muted small" id="aco-checkpoint-help">🛡️ <b>A store's checkpoint</b> (JB Hi-Fi's hCaptcha) is a check for the browser that's buying, so solving it on your phone can't let your computer through — and Mugibot never solves it. When your computer stops at one, Discord's reply and your DM give you two buttons: <b>🖥️ Solve it on my computer</b> opens <a href="https://remotedesktop.google.com/access" rel="noopener">Chrome Remote Desktop</a>, where the checkout's tab is in front, waiting (set it up once: install it on your computer from that page and sign in to the app on your phone with the same Google account); <b>📱 Finish on this phone</b> stops your computer's checkout and opens the store on your phone, with the product, for you to pass the check and pay there.</p>
         </div>
 
@@ -582,9 +594,10 @@
         </form>
         <div class="card mt">
           <h3>Payment card</h3>
-          <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close the browser. It's typed into the {{APP_NAME}} extension's own card page (not this website), saved in this browser, encrypted and tied to your account. Your card is <b>never sent to our servers in a form we can read</b>.</p>
+          <p class="muted">Save your card once, and every ⚡ Buy fills it in at the store's checkout, even after you close the browser. Keep several and choose your default. It's typed into the {{APP_NAME}} extension's own card page (not this website), saved in this browser, encrypted and tied to your account. Your card is <b>never sent to our servers in a form we can read</b>.</p>
           <p id="card-state" class="notice">Checking this browser…</p>
-          <div class="form-actions"><button class="btn primary" type="button" id="card-open">Add your card</button></div>
+          <ul class="card-list" id="card-list" hidden></ul>
+          <div class="form-actions"><button class="btn primary" type="button" id="card-open">Add your card</button><span class="muted small">Card settings: add another card (up to 6), name them, and choose your default — the one every checkout uses.</span></div>
           <!-- 🔁 Your card through extension updates: a copy locked with a key kept in this browser -->
           <div id="card-restore" class="card-restore"></div>
           <div id="card-backup" class="card-backup"></div>

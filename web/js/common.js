@@ -132,3 +132,64 @@ export function renderPager(nav, { page, size, total, onPage, label = '' }) {
     h('span', { class: 'muted small pg-sum' }, `${from}–${Math.min(from + size - 1, total)} of ${total}`),
   );
 }
+
+/**
+ * A list's search, filters and order (My watchlist, Armed, Drop watches): a bar of controls above it,
+ * kept in this browser for next time. filters: [{ id, label, all, options: [[value, text]] }] (all: the
+ * "every one" choice's words); sorts: [[value, text]] — the first is the list's own order.
+ * Returns { values(), setOptions(id, options), apply(list, { text, match, order }) }: apply searches
+ * (every word, in text(x)), filters (match[id](x, value) for each one chosen) and orders the list
+ * (order[sort](a, b); ties keep their places), and says "3 of 12" while it's narrowed.
+ */
+export function listTools(box, { key, placeholder = 'Search', filters = [], sorts = [], onChange }) {
+  const name = `mgb-list:${key}`;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(name) || '{}') || {}; } catch { /* storage blocked */ }
+  const q = h('input', { type: 'search', class: 'lt-q', placeholder, 'aria-label': placeholder, autocomplete: 'off' });
+  q.value = typeof saved.q === 'string' ? saved.q : '';
+  const sels = {};
+  for (const f of filters) sels[f.id] = h('select', { class: 'lt-f', 'aria-label': f.label, dataset: { filter: f.id } });
+  const sort = h('select', { class: 'lt-sort', 'aria-label': 'Sort by' }, ...sorts.map(([v, t]) => h('option', { value: v }, t)));
+  sort.value = sorts.some(([v]) => v === saved.sort) ? saved.sort : (sorts[0] ? sorts[0][0] : '');
+  const count = h('span', { class: 'lt-count muted small', 'aria-live': 'polite' });
+  const clear = h('button', { type: 'button', class: 'btn small ghost lt-clear', hidden: true }, 'Clear');
+  const values = () => ({ q: q.value.trim(), sort: sort.value, ...Object.fromEntries(Object.entries(sels).map(([k, s]) => [k, s.value])) });
+  const keep = () => { try { localStorage.setItem(name, JSON.stringify(values())); } catch { /* storage blocked */ } };
+  const changed = () => { keep(); onChange(); };
+  function setOptions(id, options) {
+    const s = sels[id];
+    const f = filters.find((x) => x.id === id);
+    if (!s || !f) return;
+    const was = s.value || (typeof saved[id] === 'string' ? saved[id] : '');
+    s.textContent = '';
+    s.append(h('option', { value: '' }, f.all || 'All'), ...options.map(([v, t]) => h('option', { value: v }, t)));
+    s.value = options.some(([v]) => v === was) ? was : '';
+  }
+  for (const f of filters) setOptions(f.id, f.options || []);
+  let timer = null;
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(changed, 150); });
+  for (const s of [...Object.values(sels), sort]) s.addEventListener('change', changed);
+  clear.addEventListener('click', () => {
+    q.value = '';
+    for (const s of Object.values(sels)) s.value = '';
+    sort.value = sorts[0] ? sorts[0][0] : '';
+    saved = {};
+    changed();
+  });
+  box.append(q, ...Object.values(sels), sort, clear, count);
+  return {
+    values,
+    setOptions,
+    apply(list, { text = () => '', match = {}, order = {} } = {}) {
+      const v = values();
+      const words = v.q.toLowerCase().split(/\s+/).filter(Boolean);
+      let out = words.length ? list.filter((x) => { const hay = String(text(x) || '').toLowerCase(); return words.every((w) => hay.includes(w)); }) : list.slice();
+      for (const [id, fn] of Object.entries(match)) if (v[id]) out = out.filter((x) => fn(x, v[id]));
+      const cmp = order[v.sort];
+      if (cmp) out = out.map((x, i) => [x, i]).sort((a, b) => cmp(a[0], b[0]) || a[1] - b[1]).map(([x]) => x);
+      count.textContent = out.length !== list.length ? `${out.length} of ${list.length}` : '';
+      clear.hidden = !(v.q || Object.values(sels).some((s) => s.value) || (sorts[0] && v.sort !== sorts[0][0]));
+      return out;
+    },
+  };
+}

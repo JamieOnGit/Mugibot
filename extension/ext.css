@@ -35,3 +35,11 @@ img.logo { width: 20px; height: 20px; }
 label.check { display: flex; gap: 6px; align-items: center; font-weight: 400; font-size: 13px; margin: 10px 0 4px; }
 label.check input { width: auto; }
 .backup { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; }
+/* Your cards (from 1.33): the default first, then each other card with its own buttons. */
+.small { font-size: 12px; }
+.cards { list-style: none; padding: 0; margin: 8px 0 0; }
+.cards li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 0; border-top: 1px solid var(--line); }
+.cards li .what { flex: 1 1 200px; }
+.cards li button { padding: 3px 8px; font-size: 12px; }
+.pill.warn { background: #fef3c7; color: var(--warn); }
+.pill.ok { background: #dcfce7; color: var(--ok); }
