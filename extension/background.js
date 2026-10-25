@@ -638,16 +638,29 @@ async function renderCheck(c, gate) {
     if (e instanceof GateHeld) return { id: c.id, gate: e.gate };
     return { id: c.id, status: 'error', error: "Your browser couldn't open the store's page" };
   }
-  let page = null;
-  // (The buy box is drawn by the page's own code: a few seconds for it.)
-  for (const until = Date.now() + 10000; Date.now() < until;) {
-    page = (await inPage(tab.id, readSweepPage, [c.productPath ? [c.productPath.re, c.productPath.f || ''] : null]).catch(() => null)) || page;
-    if (page && (page.denied || page.challenge)) break;
-    if (page && /add to (cart|bag|basket|trolley)|pre-?order|sold out|out of stock|unavailable|notify me/i.test(page.html.slice(0, 2000000))) break;
-    await new Promise((r) => setTimeout(r, 800));
-  }
+  const page = await readOpened(tab.id, c);
   // (Done with it: the tab's left on a blank page, so the store's page isn't kept running.)
   chrome.tabs.update(tab.id, { url: 'about:blank' }).catch(() => null);
+  return openedResult(c, page);
+}
+
+/**
+ * The store's page opened in the tab, read once it's drawn (the buy box is drawn by the page's own code: a few seconds
+ * for it). patient: a bot check's page waited on a while (it may let the page through by itself — never answered).
+ */
+async function readOpened(tabId, c, { patient = false } = {}) {
+  let page = null;
+  for (const until = Date.now() + (patient ? 15000 : 10000); Date.now() < until;) {
+    page = (await inPage(tabId, readSweepPage, [c.productPath ? [c.productPath.re, c.productPath.f || ''] : null]).catch(() => null)) || page;
+    if (page && (page.denied || (page.challenge && !patient))) break;
+    if (page && !page.challenge && /add to (cart|bag|basket|trolley)|pre-?order|sold out|out of stock|unavailable|notify me/i.test(page.html.slice(0, 2000000))) break;
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  return page;
+}
+
+/** What a store's page opened in a tab says about the item (readOpened). */
+async function openedResult(c, page) {
   if (!page) return { id: c.id, status: 'error', error: "Your browser couldn't read the store's page" };
   if (page.denied) {
     await markDenied(c.store);
@@ -668,8 +681,94 @@ async function renderCheck(c, gate) {
   return { id: c.id, status: ex.status, price: ex.price, title: ex.title, image: ex.image && /^https:\/\//.test(ex.image) ? ex.image : null };
 }
 
+// Stores that refused what was asked from inside their page lately (store → until): their pages opened instead meanwhile.
+const askRefused = new Map();
+const ASK_REFUSED_MS = 30 * 60 * 1000;
+
+/**
+ * A store whose bot protection refuses what the extension asks for in the background (EB Games' Cloudflare: "HTTP 403"
+ * on every watchlist item — while your own visits, ⚡ Buy and Auto-checkout go through): the item's page asked for from
+ * inside a tab of the store kept in the extension's window, the way the store's own pages ask it for things — never this
+ * browser's copy of an earlier answer. Not on the store yet (the first check), or refused there too: the page opened in
+ * that tab, as you'd open it, and read once it's drawn (a bot check's page waited on a moment, never answered). A SKU
+ * with no link yet: looked up in the store's own search data (c.data: EB Games' /search/query). Its queue is never
+ * touched: a tab showing it is left exactly as it is.
+ */
+async function pageCheck(c, gate) {
+  let tab;
+  try {
+    tab = await sweepTab(`check:${c.store}`, { privateWindow: !!c.privateWindow });
+  } catch {
+    return { id: c.id, status: 'error', error: "Your browser couldn't open the store's page" };
+  }
+  const want = c.data || c.url;
+  const ask = async () => {
+    const [res] = (await inPage(tab.id, askInPage, [[want], c.data ? null : { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' }, true]).catch(() => null)) || [];
+    return res || null;
+  };
+  // (What came back, read: null for a bot check's page where the store's should be.)
+  const read = (res) => {
+    const text = String(res.text || '').slice(0, 3_000_000);
+    const finalUrl = res.url || want;
+    if (c.data) {
+      const parsed = parseListing(c.parser, text, { base: finalUrl, storeBase: c.storeBase, productPath: revive(c.productPath) });
+      if (parsed.problem) return null;
+      const hit = parsed.products.find((x) => String(x.sku) === String(c.sku) && x.url);
+      return hit ? { id: c.id, status: 'not_listed', foundUrl: hit.url } : { id: c.id, status: 'not_listed' };
+    }
+    const ex = extractProduct(text, { url: finalUrl, sku: c.sku });
+    if (ex.blocked) return null;
+    if (c.kind === 'search') {
+      // (A search page with its results in it: the SKU's link among them.)
+      const hit = extractProductLinks(text, finalUrl, revive(c.productPath) || /\/(product|products|p)\//i).find((l) => hasSku(l.url, c.sku));
+      return hit ? { id: c.id, status: 'not_listed', foundUrl: hit.url } : { id: c.id, status: 'not_listed' };
+    }
+    return { id: c.id, status: ex.status, price: ex.price, title: ex.title, image: ex.image && /^https:\/\//.test(ex.image) ? ex.image : null };
+  };
+  const queueIn = (res) => (gate && res && res.status === 200 ? gateOnPage(gate, { url: res.url || want, html: res.text || '' }) : null);
+  let refused = 0;
+  try {
+    const shown = await chrome.tabs.get(tab.id).catch(() => null);
+    const onStore = !!shown && shown.status === 'complete' && String(shown.url || '').startsWith(new URL(c.url).origin);
+    if (onStore && !(askRefused.get(c.store) > Date.now())) {
+      // (The tab showing the store's queue: left as it is — nothing asked from it.)
+      const now = gate ? await inPage(tab.id, readGatePage, []).catch(() => null) : null;
+      const up = now && gateOnPage(gate, now);
+      if (up) return { id: c.id, gate: up };
+      const res = await ask();
+      const queued = queueIn(res);
+      if (queued && queued.kind === 'queue') return { id: c.id, gate: queued };
+      if (res && (res.status === 404 || res.status === 410)) return { id: c.id, status: c.kind === 'search' ? 'not_listed' : 'not_found' };
+      const got = res && res.status === 200 ? read(res) : null;
+      if (got) return got;
+      refused = res ? res.status || 0 : 0;
+      if (REFUSED.includes(refused) || (res && res.status === 200)) askRefused.set(c.store, Date.now() + ASK_REFUSED_MS);
+    }
+    // The page opened, as you'd open it (for a SKU with no link yet, the store's search page).
+    await openIn(tab.id, c.url, gate || null);
+  } catch (e) {
+    if (e instanceof GateHeld) return { id: c.id, gate: e.gate };
+    return { id: c.id, status: 'error', error: "Your browser couldn't open the store's page" };
+  }
+  const page = await readOpened(tab.id, c, { patient: true });
+  if (c.data && page && !page.denied && !page.challenge) {
+    // (The store's search page open now: its search data asked for from inside it.)
+    const res = await ask();
+    const queued = queueIn(res);
+    if (queued && queued.kind === 'queue') return { id: c.id, gate: queued };
+    const got = res && res.status === 200 ? read(res) : null;
+    if (got) return got;
+    return { id: c.id, status: 'blocked', error: `The store refused your browser's check${res && res.status ? ` (HTTP ${res.status})` : ''} — backing off` };
+  }
+  const out = await openedResult(c, page);
+  // (Refused from inside its page, then let in on opening it: said on the item only if the page wasn't read either.)
+  if (out.status === 'blocked' && refused && !page.denied) out.error = `The store refused your browser's check (HTTP ${refused}), and showed a bot check on its page — backing off`;
+  return out;
+}
+
 async function checkOne(c, gate) {
   if (c.render) return renderCheck(c, gate);
+  if (c.inPage) return pageCheck(c, gate);
   let res;
   try {
     res = await fetch(c.url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
@@ -2869,6 +2968,7 @@ async function bankAway(tabId) {
 // For tests and the "Check now" button.
 globalThis.mugibotGates = async () => ({ gates: await gatesNow(), held: [...(await heldStores())], through: await throughStores() });
 globalThis.mugibotRunChecks = runChecks;
+globalThis.mugibotAskRefused = askRefused;
 globalThis.mugibotSweepLoop = sweepLoop;
 globalThis.mugibotAcoLoop = acoLoop;
 globalThis.mugibotTurns = async () => (await chrome.storage.session.get(TURNS))[TURNS] || {};

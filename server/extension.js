@@ -90,6 +90,11 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // searches): the data the page fetches (EB Games' /search/query, with the page's own filters), learned from the
 // page and asked for from inside it — never the browser's cached copy — or the page itself once it's drawn.
 // Nothing else changed in how searches or checkouts go.
+// 1.35.0: EB Games' watchlist items checked from inside a tab of EB Games' in the extension's window (its Cloudflare
+// refused the background checks: "Blocked by site", HTTP 403, on every item — while your own visits, ⚡ Buy and
+// Auto-checkout went through): each item's page asked for there the way EB's own pages ask it for things, or opened
+// there as you'd open it when that's refused too; a product code with no link yet looked up in EB's own search data.
+// Nothing else changed in how searches or checkouts go.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):

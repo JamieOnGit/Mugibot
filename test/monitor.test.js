@@ -285,6 +285,40 @@ test("BIG W (its bot protection resets every server's connection): the server ne
   }
 });
 
+test("EB Games (its Cloudflare refuses the server and the extension's background checks alike): browsers are asked to check its items from inside a tab of EB's — the product page; a product code with no link yet, in EB's own search data — and other stores' checks are asked for as before", async () => {
+  const real = env.app.retailers.get('ebgames');
+  assert.equal(real.monitor.inPage, true);
+  assert.equal(env.app.retailers.get('demo-ebgames').monitor.inPage, true, "the dummy store's copy too");
+  assert.ok(!env.app.retailers.get('kmart').monitor.inPage);
+  const c = await member('ebcf');
+  const S = store.shop('ebgames');
+  S.refuseBackground = true;
+  store.state.blockNonBrowsers = true;
+  try {
+    const page = (await c.post('/api/items', { url: store.productUrl('ebgames', '312346'), name: 'EB ETB' })).body;
+    const code = (await c.post('/api/items', { store: 'demo-ebgames', sku: '312345', name: 'EB OP-18' })).body;
+    const kmart = (await c.post('/api/items', { url: store.productUrl('kmart', '43818587'), name: 'Kmart ETB' })).body;
+    await advance();
+    const search = env.app.db.get('SELECT status, error FROM page_checks WHERE url = :u', { u: env.app.retailers.searchUrl(env.app.retailers.get('demo-ebgames'), '312345') });
+    assert.deepEqual(search, { status: 'blocked', error: 'The store refused the server check (HTTP 403)' });
+    const device = await Device.pair(env.url, c);
+    const due = (await device.call('GET', '/api/ext/checks')).body.checks;
+    const of = (id) => due.find((x) => x.id === id);
+    const base = env.app.retailers.get('demo-ebgames').base;
+    assert.deepEqual([of(page.id).kind, of(page.id).inPage, of(page.id).storeBase, of(page.id).data], ['product', true, base, undefined]);
+    assert.equal(of(code.id).kind, 'search');
+    assert.equal(of(code.id).inPage, true);
+    assert.equal(of(code.id).data, `${base}/search/query?q=312345&sort=releasedate&order=desc`);
+    assert.equal(of(code.id).parser, 'ebgames');
+    assert.ok(of(kmart.id), 'Kmart (refusing the server) checked too…');
+    assert.equal(of(kmart.id).inPage, undefined, '…asked for as before');
+  } finally {
+    S.refuseBackground = false;
+    store.state.blockNonBrowsers = false;
+    for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  }
+});
+
 test('announced SKUs (an admin\'s): restocks are posted in the Discord channel once', async () => {
   const boss = new Client(env.url);
   await boss.post('/api/auth/login', { username: 'boss', password: 'correct horse battery staple' });

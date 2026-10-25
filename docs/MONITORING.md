@@ -85,6 +85,31 @@ read their own BIG W items instead, and admins' browsers the shared monitors:
 - **Older extensions** (before 1.27.0) aren't given BIG W pages: they'd fetch them
   in the background.
 
+**EB Games' product pages: from inside an EB tab** (extension **1.35.0**). In
+October 2026 every EB Games item on a watchlist said **Blocked by site**: EB's
+Cloudflare refuses the server ("The store refused the server check (HTTP 403)")
+and, since then, the extension's background checks too ("The store refused your
+browser's check (HTTP 403) — backing off"), while your own visits, ⚡ Buy and
+Auto-checkout go through. Its restocks were only seen when a live search
+happened to list the product. Now (`monitor.inPage`):
+
+- **Asked from inside EB's page.** Each item's page is asked for from inside a
+  tab of EB Games' kept in the extension's minimised window (`check:<store>`,
+  apart from the live searches' tab), the way EB's own pages ask it for things,
+  never from this browser's cache. The first check opens the item's page there,
+  as you'd open it.
+- **Refused there too:** the page is opened in that tab instead and read once
+  it's drawn. A bot check's page is waited on for a few seconds, in case it lets
+  the page through by itself, and never answered. The tab then stops asking from
+  inside the page for 30 minutes and opens each page instead.
+- **A product code with no link yet** is looked up in EB's own search data
+  (`/search/query?q=<code>`, what its search page asks for). Its link is kept
+  once found.
+- **Same pace as before:** each item about once a minute, up to 5 checks a
+  round, 4 s apart per store. A tab showing EB's queue is never touched.
+- **Older extensions** (before 1.35.0) ask in the background as before, and are
+  still refused. Press **Update** in the extension.
+
 **BIG W's drops** (October 2026, extension **1.28.0**). A member's Pokémon TCG
 30th Celebration Ultra-Premium Collection went on sale at BIG W at 7 am without
 an alert. BIG W can only be read from browsers, so:

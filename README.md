@@ -233,7 +233,10 @@ Discord and Whop are optional for this. Add them later with the guides.
   this off on the Setup page. BIG W, which resets every server's connection, is
   only ever read by browsers: each product's page opened in the extension's
   window, at most every 15 minutes, and left alone for 30 minutes after an
-  "Access Denied" (docs/MONITORING.md).
+  "Access Denied" (docs/MONITORING.md). EB Games, whose Cloudflare refuses the
+  extension's background checks too, has each item's page asked for from inside
+  an EB Games tab in the extension's window (extension 1.35.0). If that's refused,
+  the page is opened there instead.
 - **Not listed yet.** A SKU without a product link is looked for on the store's
   search page. When the page goes up, members get a "Listed" ping.
 - **Never evades bot protection.** If a store shows a bot check, Mugibot backs
