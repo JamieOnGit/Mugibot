@@ -139,6 +139,9 @@ export default {
   //   server: 'never' — a store that refuses every server (BIG W): never asked by it, whatever an admin saved.
   //   render: true — in-browser checks open the product's page in the extension's window (extension 1.27.0),
   //   one page a round, each product every browserSeconds at most (BIG W: 900) — never fetched in the background.
+  //   inPage: true — in-browser checks ask for the product's page from inside a tab of the store in the extension's
+  //   window (extension 1.35.0; EB Games, whose Cloudflare refuses background requests), the page opened there when
+  //   that's refused too; a SKU with no link is looked up in the store's sweep.path search data.
   flow: {
     product: {
       add: ADD_WORDS,               // the add button's label(s) — the shared words (server/monitor/words.js), below

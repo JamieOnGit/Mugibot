@@ -504,6 +504,14 @@ export class Monitor {
     const render = (r) => !!(r && r.monitor && r.monitor.render);
     // (…in a private window of its own, where the browser allows it: BIG W's — apart from your own visits there.)
     const privateOf = (r) => (r && r.monitor && r.monitor.privateWindow ? { privateWindow: true } : {});
+    // (A store whose bot protection refuses the extension's background requests — EB Games' Cloudflare — while its own
+    //  pages' requests go through: asked for from inside a tab of the store, by an extension that does: 1.35.0 — an older
+    //  one asks in the background, as before. A SKU with no link yet: looked up in the store's own search data there.)
+    const askedIn = (r, sku, url) => {
+      if (!(r && r.monitor && r.monitor.inPage)) return {};
+      const data = !url && r.sweep && r.sweep.inPage && r.sweep.path ? `${r.base}${r.sweep.path.replace('{q}', encodeURIComponent(sku))}` : null;
+      return { inPage: true, storeBase: r.base, ...(data ? { data, parser: r.sweep.parser } : {}) };
+    };
     const cantRender = !version || olderVersion(version, RENDER_EXTENSION_VERSION);
     const unopened = cantRender ? this.retailers.list.filter(render).map((r) => r.id) : [];
     const notThese = unopened.length ? `AND i.store NOT IN (${unopened.map((_, n) => `:r${n}`).join(', ')})` : '';
@@ -541,7 +549,7 @@ export class Monitor {
       }
       const url = it.url || this.retailers.searchUrl(r, it.sku);
       if (!url) continue;
-      out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}) }));
+      out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, it.sku, it.url) }));
       this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
       if (out.length >= 5) break;
     }
@@ -575,7 +583,7 @@ export class Monitor {
         if (render(r)) rendering.add(r.id);
         const url = p.url || this.retailers.searchUrl(r, p.sku);
         this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.productPace(p), id: p.id });
-        if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}) }));
+        if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, p.sku, p.url) }));
       }
     }
     return out;

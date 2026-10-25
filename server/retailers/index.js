@@ -100,6 +100,8 @@ function demoCopy(def, demoUrl) {
       ...(def.monitor && def.monitor.intervalSeconds ? { intervalSeconds: def.monitor.intervalSeconds, floorSeconds: def.monitor.floorSeconds, hostGapSeconds: def.monitor.hostGapSeconds } : {}),
       // (Its pages opened in the extension's window for in-browser checks, at its pace: the dummy store's copy too.)
       ...(def.monitor && def.monitor.render ? { render: true, browserSeconds: def.monitor.browserSeconds, ...(def.monitor.privateWindow ? { privateWindow: true } : {}) } : {}),
+      // (…or asked for from inside a tab of the store: the dummy store's copy too.)
+      ...(def.monitor && def.monitor.inPage ? { inPage: true } : {}),
     },
   };
 }

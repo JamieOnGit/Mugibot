@@ -1719,6 +1719,78 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
   }
 });
 
+test("🧭 EB Games, whose Cloudflare refuses the extension's background checks and the server's (\"Blocked by site\", HTTP 403, on every watchlist item — while your own visits go through): your EB items are checked from inside a tab of EB's in the extension's window, the way its own pages ask it for things (its page opened there first), and a restock pings you; refused there too, each page is opened as you'd open it; a product code with no link yet is found in EB's own search data", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const S = store.shop('ebgames');
+  const due = () => env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
+  const fromBrowser = (since) => store.state.requests.slice(since).filter((x) => x.path.startsWith('/ebgames/product/') && /Chrome|Mozilla/.test(x.ua));
+  const items = () => env.app.repo.listItems(userId).map((i) => [i.name, i.status, i.statusSource, i.error || '']).sort();
+  S.refuseBackground = true;
+  try {
+    await useItems([{ url: store.productUrl('ebgames', '312345'), name: 'EB OP-18' }, { url: store.productUrl('ebgames', '312346'), name: 'EB ETB' }]);
+    store.set('ebgames', '312345', { status: 'out_of_stock' });
+    store.set('ebgames', '312346', { status: 'in_stock' });
+    // As at the real EB Games: the server refused, and so is this browser asking in the background (what it did till 1.35.0).
+    await env.app.monitor.tick();
+    assert.ok(env.app.repo.listItems(userId).every((i) => /refused the server check \(HTTP 403\)/.test(i.error || '')), JSON.stringify(items()));
+    assert.equal(await sw.evaluate(async (u) => (await fetch(u, { credentials: 'include', cache: 'no-store' })).status, store.productUrl('ebgames', '312345')), 403, "the dummy EB refuses the extension's background requests");
+
+    let since = store.state.requests.length;
+    let r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.deepEqual([r.checked, r.blocked], [2, 0], JSON.stringify(r));
+    assert.deepEqual(items(), [['EB ETB', 'in_stock', 'browser', ''], ['EB OP-18', 'out_of_stock', 'browser', '']], 'read by this browser: no "Blocked by site"');
+    let asked = fromBrowser(since);
+    // The first one's page opened in EB's tab (a visit); the next asked for from inside it — never in the background.
+    assert.ok(asked.every((x) => x.mode === 'navigate' || x.site === 'same-origin'), JSON.stringify(asked));
+    assert.equal(asked.filter((x) => x.mode === 'navigate').length, 1, JSON.stringify(asked));
+    assert.equal(asked.filter((x) => x.site === 'same-origin' && x.mode !== 'navigate').length, 1, JSON.stringify(asked));
+    // The server refused again meanwhile: what this browser saw stays.
+    await env.app.monitor.tick();
+    assert.deepEqual(items(), [['EB ETB', 'in_stock', 'browser', ''], ['EB OP-18', 'out_of_stock', 'browser', '']]);
+
+    // Back in stock: seen from inside EB's tab, and you're pinged.
+    store.set('ebgames', '312345', { status: 'in_stock' });
+    due();
+    const dmsBefore = discord.dmsTo('d-ash').length;
+    since = store.state.requests.length;
+    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.deepEqual([r.checked, r.blocked], [2, 0], JSON.stringify(r));
+    assert.equal(env.app.repo.listItems(userId).find((i) => i.name === 'EB OP-18').status, 'in_stock');
+    asked = fromBrowser(since);
+    assert.ok(asked.length === 2 && asked.every((x) => x.site === 'same-origin' && x.mode !== 'navigate'), `both asked for from inside EB's tab: ${JSON.stringify(asked)}`);
+    await waitFor(() => discord.dmsTo('d-ash').length > dmsBefore, { message: 'restock DM' });
+    assert.match(discord.dmsTo('d-ash').at(-1).body.embeds[0].description, /Seen by your browser/);
+
+    // Its own pages' requests refused too: each page opened in EB's tab instead — asked from inside it only once.
+    S.refuseAsks = true;
+    store.set('ebgames', '312346', { status: 'out_of_stock' });
+    due();
+    since = store.state.requests.length;
+    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    assert.deepEqual([r.checked, r.blocked], [2, 0], JSON.stringify(r));
+    assert.deepEqual(items(), [['EB ETB', 'out_of_stock', 'browser', ''], ['EB OP-18', 'in_stock', 'browser', '']]);
+    asked = fromBrowser(since);
+    assert.equal(asked.filter((x) => x.mode === 'navigate').length, 2, `each page opened: ${JSON.stringify(asked)}`);
+    assert.equal(asked.filter((x) => x.mode !== 'navigate').length, 1, 'refused once, then left alone for a while');
+    S.refuseAsks = false;
+    await sw.evaluate(() => globalThis.mugibotAskRefused.clear());
+
+    // A product code with no link yet: found in EB's own search data (asked for from inside its tab), its link kept.
+    await useItems([{ store: 'demo-ebgames', sku: '312345', name: 'EB OP-18 by code' }]);
+    await env.app.monitor.tick();
+    const check = (await sw.evaluate(() => globalThis.mugibotRunChecks()));
+    assert.equal(check.checked, 1, JSON.stringify(check));
+    const found = env.app.repo.listItems(userId)[0];
+    assert.match(found.url || '', /\/ebgames\/product\/toys-and-collectibles\/312345-/, JSON.stringify(found));
+    assert.ok(store.state.requests.some((x) => x.path === '/ebgames/search/query' && x.site === 'same-origin' && /Chrome|Mozilla/.test(x.ua)), "EB's search data, from inside its tab");
+  } finally {
+    S.refuseBackground = false;
+    S.refuseAsks = false;
+    await sw.evaluate(() => globalThis.mugibotAskRefused.clear()).catch(() => null);
+    await useItems([]);
+  }
+});
+
 test('🧭 a drop watch at another website that refuses the server: your browser reads its search and its find\'s page instead (as a visitor), and what it finds counts', async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const ash = env.app.repo.userById(userId);

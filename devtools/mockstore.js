@@ -179,6 +179,12 @@ export function defaultShops() {
       placeBusy: 0, placeTries: 0, placeSlowMs: 0, finalGreyedMs: 0, placeKeepsError: false, placeBusyText: '',
       // denied: its bot protection (BIG W's Akamai) answers every page "Access Denied" (deniedServed counts them).
       denied: false, deniedServed: 0,
+      // refuseBackground: its bot protection (EB Games' Cloudflare, as members saw it in Oct 2026) answers 403 to anything
+      // but a page opened (a visit) or a request one of its own pages makes (same-origin) — the extension's background
+      // requests and servers alike (refusedBackground counts them).
+      refuseBackground: false, refusedBackground: 0,
+      // refuseAsks: …and its own pages' requests too (refusedAsks counts them): only a page opened gets through.
+      refuseAsks: false, refusedAsks: 0,
       // savedCard (EB Games signed in): how it shows the card it has for you — a member's showed "...2387 08/27".
       savedCard: '',
       // addNeedsLoad: the cart turns an add away (HTTP 403) until the product page has finished
@@ -2732,7 +2738,8 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     const p = u.pathname;
     // (mode: how the browser asked — 'navigate' for a page opened, 'cors' / 'no-cors' / 'same-origin' for a request from code.)
     // (cookie: what the browser sent — a private window's requests carry none of your own.)
-    state.requests.push({ method: req.method, path: p, ua: req.headers['user-agent'] || '', mode: req.headers['sec-fetch-mode'] || '', cookie: req.headers.cookie || '' });
+    // (site: whose page asked — 'same-origin' for one of the store's own pages, 'none' for a page opened or the extension's background.)
+    state.requests.push({ method: req.method, path: p, ua: req.headers['user-agent'] || '', mode: req.headers['sec-fetch-mode'] || '', site: req.headers['sec-fetch-site'] || '', cookie: req.headers.cookie || '' });
     if (state.requests.length > 4000) state.requests.splice(0, 2000);
     const html = (status, body) => {
       const sm = p.match(SHOP_RE);
@@ -2822,6 +2829,13 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     if (S.denied && !sub.startsWith('/img/')) {
       S.deniedServed += 1;
       return html(403, `<!DOCTYPE html><html><head><title>Access Denied</title></head><body><h1>Access Denied</h1>You don't have permission to access "http&#58;&#47;&#47;www&#46;${shop}&#46;com&#46;au&#47;" on this server.<p>Reference&#32;&#35;18&#46;5e0d0217&#46;1760943212&#46;3c1f9a2</p><p>https&#58;&#47;&#47;errors&#46;edgesuite&#46;net&#47;18&#46;5e0d0217&#46;1760943212&#46;3c1f9a2</p></body></html>`);
+    }
+    // Its bot protection taking anything but a visit for a bot (refuseBackground, EB Games' Cloudflare): a page opened, or a
+    // request one of its own pages makes, gets through; the extension's background requests, and servers, get its 403.
+    const asked = !sub.startsWith('/img/') && req.headers['sec-fetch-mode'] !== 'navigate';
+    if ((S.refuseBackground && asked && req.headers['sec-fetch-site'] !== 'same-origin') || (S.refuseAsks && asked)) {
+      if (req.headers['sec-fetch-site'] === 'same-origin') S.refusedAsks += 1; else S.refusedBackground += 1;
+      return html(403, `<!DOCTYPE html><html><head><title>Attention Required! | Cloudflare</title></head><body><div id="cf-wrapper"><h1 data-translate="block_headline">Sorry, you have been blocked</h1><h2 class="cf-subheadline">You are unable to access ${shop}.com.au</h2></div></body></html>`);
     }
     // Its virtual queue, when it's on: every page (its search JSON too) for a visitor not let in yet.
     if (S.queue.on && !sub.startsWith('/img/') && inQueue(shop, S, req, res, u, html, redirect)) return undefined;
