@@ -1235,6 +1235,19 @@
   // (The extension keeps track of which tabs are in a queue: it never refreshes them, and nothing
   // else of yours asks that store for anything until you're through.)
   if (retailer.gate) ask({ type: 'gate', store: retailer.id, on: !!gate, kind: retailer.gate.kind, wait: gate ? gate.wait : null });
+  // A queue page drawn by its own code a moment after it opens (EB Games' can be): looked for as the page changes, for a
+  // few seconds — the tab's in line from the moment it shows, so nothing else of Mugibot's asks the store for anything.
+  // (Watched as it changes, not on a timer: a tab in the background gets its timers only about once a second.)
+  if (retailer.gate && retailer.gate.kind === 'queue' && !gate && typeof MutationObserver !== 'undefined') {
+    const lateWatch = new MutationObserver(() => {
+      const g = seenGate();
+      if (!g) return;
+      lateWatch.disconnect();
+      ask({ type: 'gate', store: retailer.id, on: true, kind: g.kind, wait: g.wait });
+    });
+    lateWatch.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    setTimeout(() => lateWatch.disconnect(), 8000);
+  }
 
   /** What the panel says on the gate's page. */
   function gateStatus(g, running) {

@@ -385,8 +385,16 @@ const GATES_UP = 'gatesUp';
 const THROUGH_MS = 30 * 60 * 1000;
 // A queue seen in this browser lately counts as up, whatever the server knows yet.
 const SEEN_UP_MS = 10 * 60 * 1000;
+// A tab in line whose page isn't the queue — yet: still in line for this long, its page looked at again and again,
+// before it counts as through. (A queue page drawn by its own code a moment after it opens — and refreshing itself
+// every few seconds, as EB Games' does — looks like the store for that moment: anything of Mugibot's asking the store
+// then would be "asked again too soon", and cost the place in line.)
+const LEAVE_CONFIRM_MS = 3000;
+// (A page with this many links is the store's own — as flows.js gateHere has it: a queue page never does.)
+const STORE_PAGE_LINKS = 40;
 let gateLock = Promise.resolve();
 const lastGateReport = new Map();
+const leaving = new Map(); // 'store tab' → a token: the tab's page being looked at before it counts as through
 
 /** One change at a time (messages from several tabs at once). */
 function withGates(fn) {
@@ -453,6 +461,8 @@ async function reportGate(store, seen) {
  * any more got through: runs held for it go now.
  */
 function noteGate(tabId, store, on, info) {
+  const key = `${store} ${tabId}`;
+  if (on) leaving.delete(key);
   return withGates(async (g) => {
     const s = g[store] || (g[store] = { line: {}, runs: [] });
     s.line = s.line || {};
@@ -464,7 +474,16 @@ function noteGate(tabId, store, on, info) {
       s.line[tabId] = Date.now();
       s.upAt = Date.now();
       if (info.wait !== null && info.wait !== undefined) s.wait = info.wait;
+    } else if (was && !info.confirmed && (s.kind || 'queue') === 'queue') {
+      // (Not the queue on this page — yet: still in line, its page looked at again for a moment first.)
+      if (!leaving.has(key)) {
+        const token = {};
+        leaving.set(key, token);
+        setTimeout(() => confirmLeft(tabId, store, info, token).catch(() => null), 0);
+      }
+      return { ok: true, through: false, pending: true };
     } else if (was) {
+      leaving.delete(key);
       delete s.line[tabId];
       if (!inLine(s)) { s.throughAt = Date.now(); release = s.runs.length > 0; }
     }
@@ -481,6 +500,31 @@ function noteGate(tabId, store, on, info) {
     if (release) setTimeout(() => releaseRuns(store).catch(() => null), 0);
     return { ok: true, through: was && !on };
   });
+}
+
+/**
+ * A tab that was in line, its page not the queue just now: looked at every few hundred ms for a moment. The queue drawn
+ * on it after all (its own code drawing it late, or the page refreshing itself) — still in line. The store still
+ * there once the moment's up — through. (Closed meanwhile: chrome.tabs.onRemoved has it.)
+ */
+async function confirmLeft(tabId, store, info, token) {
+  const until = Date.now() + LEAVE_CONFIRM_MS;
+  for (let first = true; Date.now() < until; first = false) {
+    if (!first) await new Promise((r) => setTimeout(r, 300));
+    if (leaving.get(`${store} ${tabId}`) !== token) return; // (said to be the queue again meanwhile)
+    if (!(await chrome.tabs.get(tabId).catch(() => null))) { leaving.delete(`${store} ${tabId}`); return; }
+    const r = ((await getState()).flows || []).find((x) => x.id === store);
+    const page = await inPage(tabId, readGatePage, []).catch(() => null);
+    const seen = page && r && r.gate ? gateOnPage(r.gate, page) : null;
+    if (seen) {
+      await noteGate(tabId, store, true, { kind: r.gate.kind, wait: seen.wait ?? null });
+      return;
+    }
+    // (The store's own page, plainly — its header and menus' links: a queue page never has them. Through, now.)
+    if (page && page.links >= STORE_PAGE_LINKS) break;
+  }
+  if (leaving.get(`${store} ${tabId}`) !== token) return;
+  await noteGate(tabId, store, false, { ...info, confirmed: true });
 }
 
 /** Through the queue: the runs that waited for it open the store now, each with a fresh link. */
@@ -513,7 +557,7 @@ async function joinLobby(l) {
 
 /** Runs in a page: what it shows (for reading whether it's a store's queue — nothing on it is touched). */
 function readGatePage() {
-  return { url: location.href, text: String((document.body && document.body.innerText) || '').slice(0, 20000), html: document.documentElement.outerHTML.slice(0, 600000) };
+  return { url: location.href, text: String((document.body && document.body.innerText) || '').slice(0, 20000), html: document.documentElement.outerHTML.slice(0, 600000), links: document.querySelectorAll('a[href]').length };
 }
 
 /**

@@ -433,6 +433,14 @@ like you would.
   checks, no second tab. A drop at that store while you're in line **waits for
   the tab in line** to get through, then opens the store from there with a
   fresh link.
+- **A queue page that draws its words a moment after it opens** (EB Games'
+  can, and it refreshes itself every few seconds): the tab counts as in line
+  from the moment the words show, and through every refresh, including the
+  moment after each one before the words come back. It counts as through once
+  its page is the store's: at once on a page with the store's menus, otherwise
+  after 3 seconds without the queue. Before extension **1.37.0**, Mugibot's
+  own checks of your items there could ask the store for a page in that
+  moment, and the place in line was lost.
 - **Getting in line before the drop:**
   - **By itself**: when a store's queue goes up and you have Auto-checkout on
     with something armed there, your checkout browser opens the store in a tab
