@@ -5192,14 +5192,17 @@ test("🔒 BIG W in a private window of its own: allowed in Incognito, an admin'
 
     // Your BIG W items' pages, read by this browser: in the private window too.
     env.app.repo.setSetting('retailer:demo-bigw', { ...(prev || {}), serverChecks: false });
-    await useItems([{ url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle' }]);
+    // (One BIG W's searches never return: searched every few seconds now, one landing just after the page's read
+    //  would say it was seen by the live monitor last — which it would have been, rightly.)
+    const own = store.addProduct('bigw', { sku: '6099202', name: 'Garden Hose Reel', price: 39, status: 'in_stock' });
+    await useItems([{ url: own, name: 'BIG W Bundle' }]);
     env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
     since = store.state.requests.length;
     const r = await sw.evaluate(() => globalThis.mugibotRunChecks());
     // (Your item — and, in its private window, the products its searches found too: as many a round as there's room for.)
     assert.ok(r.checked >= 1, JSON.stringify(r));
     const pages = asked(since, /^\/bigw\/product\//);
-    assert.ok(pages.some((x) => x.path.includes('6012346')), 'your item\'s page among them');
+    assert.ok(pages.some((x) => x.path.includes('6099202')), 'your item\'s page among them');
     assert.ok(pages.length >= 1 && pages.every((x) => !/bigw_mine/.test(x.cookie)), `its page read without your cookies: ${JSON.stringify(pages.map((x) => x.cookie))}`);
     assert.equal((await sweepTabOf('check:demo-bigw')).incognito, true);
     assert.equal(env.app.repo.listItems(userId).find((i) => i.name === 'BIG W Bundle').statusSource, 'browser');

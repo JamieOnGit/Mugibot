@@ -761,7 +761,10 @@ export class Aco {
     for (const row of rows) {
       if (!alive()) break;
       const item = row.item_id ? this.repo.getItem(user.id, row.item_id) : null;
-      if (!item || (!item.aco && !['test', 'remote', 'queue'].includes(row.trigger)) || !item.url) {
+      // (Started by hand — Trigger ACO, ⚡ Buy, Wait for queue — it goes armed or not. A pool's, started by its leader:
+      //  the same, for the member's copy of the leader's item — unless they skipped it meanwhile.)
+      const started = ['test', 'remote', 'queue'].includes(row.trigger) || (row.trigger === 'pool' && !!item && !!item.pool && !item.pool.hold);
+      if (!item || (!item.aco && !started) || !item.url) {
         // Switched off (or removed) before a browser picked it up: it didn't start, and isn't a failure.
         this.finish(user.id, row, 'expired', 'disarmed', '').catch(() => null);
         continue;

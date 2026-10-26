@@ -237,6 +237,10 @@ test('🤝 boss starting a checkout themselves — Trigger ACO, Discord\'s ⚡ B
   let run = runs(ash.user.id).find((r) => r.itemId === copy.id);
   assert.deepEqual([run.trigger, run.status, run.maxPrice], ['pool', 'queued', 60]);
   assert.match(run.message, /boss started it \(your pool\)/);
+  // Ash's checkout browser takes it up — not armed on ash's, and it goes all the same (boss started it).
+  const taken = (await ashBrowser.call('GET', '/api/ext/aco/next')).body.runs;
+  assert.deepEqual(taken.map((x) => x.id), [run.id], JSON.stringify(taken));
+  assert.equal(env.app.aco.get(ash.user.id, run.id).status, 'sent');
   // Again while it's going: no second run for ash.
   await env.app.aco.finish(boss.user.id, env.app.aco.get(boss.user.id, runs(boss.user.id).at(-1).id), 'failed', 'stopped', 'stopped');
   assert.equal((await boss.post(`/api/aco/test/${d.id}`, {})).status, 200);
@@ -254,11 +258,21 @@ test('🤝 boss starting a checkout themselves — Trigger ACO, Discord\'s ⚡ B
   await env.app.aco.finish(ash.user.id, env.app.aco.get(ash.user.id, run.id), 'failed', 'stopped', 'stopped');
   await env.app.aco.finish(boss.user.id, env.app.aco.get(boss.user.id, runs(boss.user.id).at(-1).id), 'failed', 'stopped', 'stopped');
 
+  // Skipped after boss started it, before ash's browser took it up: it doesn't start.
+  assert.equal((await boss.post(`/api/aco/test/${d.id}`, {})).status, 200);
+  await waitFor(() => runs(ash.user.id).filter((r) => r.itemId === copy.id).length === 3, { message: "ash's third run" });
+  run = runs(ash.user.id).filter((r) => r.itemId === copy.id).at(-1);
+  await ash.post(`/api/items/${copy.id}/pool-hold`, { hold: true });
+  assert.deepEqual((await ashBrowser.call('GET', '/api/ext/aco/next')).body.runs, []);
+  assert.deepEqual([env.app.aco.get(ash.user.id, run.id).status, env.app.aco.get(ash.user.id, run.id).reason], ['expired', 'disarmed']);
+  await env.app.aco.finish(boss.user.id, env.app.aco.get(boss.user.id, runs(boss.user.id).at(-1).id), 'failed', 'stopped', 'stopped');
+  await ash.post(`/api/items/${copy.id}/pool-hold`, { hold: false });
+
   // Ash skips it: boss's checkouts don't start ash's.
   await ash.post(`/api/items/${copy.id}/pool-hold`, { hold: true });
   await boss.post(`/api/aco/test/${d.id}`, {});
   await settle();
-  assert.equal(runs(ash.user.id).filter((r) => r.itemId === copy.id).length, 2, 'skipped: nothing started');
+  assert.equal(runs(ash.user.id).filter((r) => r.itemId === copy.id).length, 3, 'skipped: nothing started');
   await env.app.aco.finish(boss.user.id, env.app.aco.get(boss.user.id, runs(boss.user.id).at(-1).id), 'failed', 'stopped', 'stopped');
   await ash.post(`/api/items/${copy.id}/pool-hold`, { hold: false });
 
@@ -266,7 +280,7 @@ test('🤝 boss starting a checkout themselves — Trigger ACO, Discord\'s ⚡ B
   await ash.put('/api/aco', { enabled: false });
   await boss.post(`/api/aco/test/${d.id}`, {});
   await settle();
-  assert.equal(runs(ash.user.id).filter((r) => r.itemId === copy.id).length, 2);
+  assert.equal(runs(ash.user.id).filter((r) => r.itemId === copy.id).length, 3);
   assert.ok((await events(ash)).some((e) => /boss started Auto-checkout on Booster Bundle, but yours is switched off/.test(e.message)));
   await env.app.aco.finish(boss.user.id, env.app.aco.get(boss.user.id, runs(boss.user.id).at(-1).id), 'failed', 'stopped', 'stopped');
   await ash.put('/api/aco', { enabled: true });
@@ -275,7 +289,7 @@ test('🤝 boss starting a checkout themselves — Trigger ACO, Discord\'s ⚡ B
   await boss.put(`/api/items/${d.id}`, { maxPrice: 500 });
   await ash.put('/api/pool/follow', { on: true, cap: 40 });
   assert.equal((await boss.post(`/api/aco/remote/${d.id}`, { price: 55 })).status, 200);
-  await waitFor(() => runs(ash.user.id).filter((r) => r.itemId === copy.id).length === 3, { message: "ash's run for it" });
+  await waitFor(() => runs(ash.user.id).filter((r) => r.itemId === copy.id).length === 4, { message: "ash's run for it" });
   run = runs(ash.user.id).filter((r) => r.itemId === copy.id).at(-1);
   assert.deepEqual([run.status, run.reason], ['skipped', 'over_max']);
   assert.match(run.message, /\$55\.00 is over your max of \$40\.00/);
