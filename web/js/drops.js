@@ -57,7 +57,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
   /** "EB Games' page", "BIG W's page". */
   const whose = (name) => `${name}'${/s$/i.test(name) ? '' : 's'}`;
 
-  /** The fastest a page can be read: every 3 s — or its store's own pace, where it's slower (BIG W's 20 s). */
+  /** The fastest a page can be read: every 3 s — or its store's own pace, where it's slower (Pokémon Center's 30 s). */
   const floorOf = (s) => (s && s.floor) || (d.data && d.data.pageMin) || 3;
 
   function fillStores() {

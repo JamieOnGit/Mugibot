@@ -72,11 +72,19 @@ read their own BIG W items instead, and admins' browsers the shared monitors:
   minimised window, the way you'd open it, and read once its buy box is drawn
   (up to 10 s), then the tab's left blank. Requests from the extension's
   background are what got browsers turned away.
-- **Gently.** One BIG W page a round (every 30 s) per browser, and each product
-  at most every **3 minutes** (`browserSeconds: 180`; 15 before October 2026,
-  though a slip read members' items every minute). One a live search saw in
-  the last few minutes isn't opened at all. The live searches run one every
-  20 s (was 10).
+- **At the usual pace in a private window** (extension **1.36.0**). In a
+  browser that opens BIG W in a private window of its own (Mugibot allowed in
+  Incognito), each product's page is read every minute, as the other stores'
+  are, as many a round as the round has room for. The live searches there go
+  at the admin's-browser pace set, like EB Games' and The Gamesmen's. Search
+  pages watched there go down to every 3 s.
+- **Gently in an ordinary window.** Without that private window: one BIG W page a
+  round (every 30 s) per browser, each product at most every **3 minutes**
+  (`browserSeconds: 180`; 15 before October 2026, though a slip read members'
+  items every minute), one live search every 20 s (`sharedWindowSeconds`; was
+  10), and search pages watched every 20 s at the fastest. Until an admin's
+  browser has said it's in its private window, the ordinary-window pace applies.
+- One product a live search saw in the last few minutes isn't opened at all.
 - **"Access Denied".** When BIG W turns a browser away — a check, a live search,
   or a page you open yourself — that browser leaves BIG W alone for 30 minutes (no
   checks, no searches), the item says why, and the store panel on the page says
@@ -123,8 +131,8 @@ an alert. BIG W can only be read from browsers, so:
 - **The pages of what the searches found.** Admins' browsers also open the page
   of each BIG W product the live searches found in the last 3 days that nobody
   monitors: its tile may not say when it's on sale, its page does. The ones that
-  can't be bought yet come first. Each is read at most every 3 minutes, and every
-  30 minutes once it's buyable (to see it sell out, so its next restock alerts).
+  can't be bought yet come first. Each is read at most every 3 minutes (every
+  minute in a private window), and every 30 minutes once it's buyable (to see it sell out, so its next restock alerts).
   On sale there after sold out, coming soon, or 10 minutes with no buy button on
   that page: a restock alert (once a day), and everyone watching it is updated,
   armed Auto-checkouts first. In stock the first time its page is read, when its
@@ -414,10 +422,10 @@ isn't searched any less often (at least half a second between two searches):
 - Amazon AU: each keyword every ~60 s (page 1), page 2 now and then.
 - The Games Cube: each keyword every ~10 s (page 1), the later pages now and then.
 - Gamerholic: its newest products every ~15 s.
-- BIG W (admin's browser): one search every 20 s at the quickest, so each
-  keyword every ~100 s with four keywords and a later page; EB Games and The Gamesmen: one search
-  as often as the admin's-browser seconds set (from 2 s); Pokémon Center and
-  Premium Bandai: one every 30 s.
+- BIG W, EB Games and The Gamesmen (admin's browser): one search as often as the
+  admin's-browser seconds set (from 2 s), each waiting for the last (a BIG W page
+  takes ~5 s to build). BIG W only in its private window: in an ordinary window,
+  one every 20 s at the quickest. Pokémon Center and Premium Bandai: one every 30 s.
 - Pokébox, Good Games, Collectible Madness, Cherry Collectables, Gameology: each
   keyword every ~20–30 s, and their newest products as often.
 - From The Deep Games: each game's collection every ~20–30 s, and its Preorders
@@ -731,8 +739,9 @@ switch it if it's wrong), and asks for:
   "One Piece OP-15"). A product counts when its name has every word of **one** of
   them (the same matching as key phrases above), whatever the card keywords are.
 - **Read the page every … seconds**: **3 at the fastest**. At a store whose
-  searches go slower, its own pace is the fastest: BIG W 20 s, Pokémon Center and
-  Premium Bandai 30 s, Amazon 20 s, Gamesworld, Gamerholic and Trainer Town 15 s,
+  searches go slower, its own pace is the fastest: Pokémon Center and
+  Premium Bandai 30 s, BIG W 20 s while it's read in an ordinary window (3 s in its
+  private window), Amazon 20 s, Gamesworld, Gamerholic and Trainer Town 15 s,
   City Beach 10 s. Every store's pages together are read about once a second at
   most, so a store with many pages watched never sees a burst.
 - **🤖 Auto-checkout** (stores Mugibot checks out at), up to a max price, and for

@@ -95,6 +95,10 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // Auto-checkout went through): each item's page asked for there the way EB's own pages ask it for things, or opened
 // there as you'd open it when that's refused too; a product code with no link yet looked up in EB's own search data.
 // Nothing else changed in how searches or checkouts go.
+// 1.36.0: BIG W at the usual pace where Mugibot reads it in a private window of its own (allowed in Incognito): each
+// watchlist item's page every minute, as many a round as there's room for — the browser says it opens them there,
+// and each read says where it was read. (Its live searches already said so: they go at the set pace too now.)
+// Elsewhere, as before: one BIG W page a round, each every 3 minutes. Nothing else changed in how checkouts go.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):

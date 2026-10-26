@@ -1445,11 +1445,11 @@ test('📃 a store\'s search page in Drop watches: told apart from a product\'s 
   await page.waitForFunction(() => !document.querySelector('#dw-mine form.dw-edit'));
   assert.match(await row.textContent(), /every 3 s.*"magic the gathering", "lorcana"/s);
   assert.deepEqual([env.app.drops.get(w.id).phrases, env.app.drops.get(w.id).every], [['magic the gathering', 'lorcana'], 3]);
-  // BIG W: every 20 s at the fastest.
-  await page.fill('#dw-input', 'https://www.bigw.com.au/search?text=lego%20star%20wars');
-  await page.waitForFunction(() => /BIG W: every 20 s at the fastest/.test(document.querySelector('#dw-every-note').textContent));
-  assert.equal(await page.inputValue('#dw-every'), '20');
-  assert.equal(await page.getAttribute('#dw-every', 'min'), '20');
+  // City Beach: every 10 s at the fastest (its searches' own pace).
+  await page.fill('#dw-input', 'https://www.citybeach.com/au/search?q=pokemon');
+  await page.waitForFunction(() => /City Beach: every 10 s at the fastest/.test(document.querySelector('#dw-every-note').textContent));
+  assert.equal(await page.inputValue('#dw-every'), '10');
+  assert.equal(await page.getAttribute('#dw-every', 'min'), '10');
   // A product's own page: one product (its page isn't read for phrases) — unless you say it's a page.
   await page.fill('#dw-input', 'https://www.ebgames.com.au/product/toys-and-collectibles/312346-pokemon-tcg-30th-celebration-elite-trainer-box');
   await page.waitForSelector('#dw-page-wrap', { state: 'hidden' });

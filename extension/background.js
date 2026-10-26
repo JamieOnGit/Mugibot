@@ -641,7 +641,10 @@ async function renderCheck(c, gate) {
   const page = await readOpened(tab.id, c);
   // (Done with it: the tab's left on a blank page, so the store's page isn't kept running.)
   chrome.tabs.update(tab.id, { url: 'about:blank' }).catch(() => null);
-  return openedResult(c, page);
+  const out = await openedResult(c, page);
+  // (Read in its private window, or the ordinary one: the server paces the store's pages by it.)
+  if (c.privateWindow) out.privateWindow = !!tab.incognito;
+  return out;
 }
 
 /**
@@ -856,8 +859,10 @@ async function runChecks() {
   try {
     // (Stores whose queue this browser got through: it may check them; the others' queues are left alone.)
     const sites = await otherSites();
-    // (v: this copy's version — BIG W's pages go only to one that opens them, 1.27.0 and later.)
-    const due = await api('GET', `/api/ext/checks?through=${encodeURIComponent((await throughStores()).join(','))}&sites=${encodeURIComponent(sites.join(','))}&v=${encodeURIComponent(VERSION)}`);
+    // (v: this copy's version — BIG W's pages go only to one that opens them, 1.27.0 and later. priv: it opens them in a
+    //  private window of its own — Mugibot allowed in Incognito here — so they're asked for at the usual pace.)
+    const priv = (await privateAllowed()) ? 1 : 0;
+    const due = await api('GET', `/api/ext/checks?through=${encodeURIComponent((await throughStores()).join(','))}&sites=${encodeURIComponent(sites.join(','))}&v=${encodeURIComponent(VERSION)}&priv=${priv}`);
     if (due.status !== 200 || !due.body) return { status: due.status };
     // (Websites refusing the server that this browser could read, once allowed: offered in the menu.)
     await chrome.storage.local.set({ needSites: Array.isArray(due.body.sites) ? due.body.sites.slice(0, 20) : [] });

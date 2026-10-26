@@ -490,8 +490,9 @@ export class Monitor {
    * through: stores whose virtual queue this browser has got through. A store whose queue is up is left alone
    * otherwise: a request there could cost the member their place in line (monitor/gates.js).
    * version: the extension's (a store read by opening its page — BIG W's — only by one that does: 1.27.0).
+   * priv: it opens such a store's pages in a private window of its own (extension 1.36.0, allowed in Incognito).
    */
-  browserDue(user, { through = new Set(), sites = new Set(), want = new Set(), version = null } = {}) {
+  browserDue(user, { through = new Set(), sites = new Set(), want = new Set(), version = null, priv = false } = {}) {
     const held = (store) => !!this.gates && this.gates.queueUp(store) && !through.has(store);
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(user.id, 'alerts', {}) || {}) };
     if (!settings.browserChecks) return [];
@@ -500,7 +501,10 @@ export class Monitor {
     //  and only by an extension that does: 1.27.0; an older one would ask for the page in the background, what
     //  got browsers turned away there. A browser that hasn't said its version is taken for an older one, and
     //  that store's items left out of its list altogether, for a browser that can.)
-    const pace = (r) => (r && r.monitor && r.monitor.browserSeconds ? r.monitor.browserSeconds * 1000 : this.browserInterval);
+    // (…at the usual pace, and as many a round as there's room for, in a browser that opens them in its private window:
+    //  apart from your own visits there, its bot protection taking Mugibot's reading for a bot never turns you away.)
+    const fast = (r) => !!(priv && r && r.monitor && r.monitor.privateWindow);
+    const pace = (r) => (r && r.monitor && r.monitor.browserSeconds && !fast(r) ? r.monitor.browserSeconds * 1000 : this.browserInterval);
     const render = (r) => !!(r && r.monitor && r.monitor.render);
     // (…in a private window of its own, where the browser allows it: BIG W's — apart from your own visits there.)
     const privateOf = (r) => (r && r.monitor && r.monitor.privateWindow ? { privateWindow: true } : {});
@@ -539,7 +543,7 @@ export class Monitor {
       if (other && !this.siteAllowed(it.url, sites, want)) continue;
       if (render(r)) {
         if (cantRender) continue;
-        if (rendering.has(r.id)) { later('items', it.id); continue; }
+        if (rendering.has(r.id) && !fast(r)) { later('items', it.id); continue; }
         // (Seen by a live search just now: nothing more to open.)
         if (it.status_source === 'sweep' && it.checked_at && now - it.checked_at < SWEEP_FRESH_MS) {
           this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
@@ -575,14 +579,14 @@ export class Monitor {
         if (out.length >= 5) break;
         const r = this.retailers.get(p.store);
         if (render(r) && cantRender) continue;
-        if (render(r) && rendering.has(r.id)) { later('products', p.id); continue; }
+        if (render(r) && rendering.has(r.id) && !fast(r)) { later('products', p.id); continue; }
         if (render(r) && p.status_source === 'sweep' && p.sweep_seen_at && now - p.sweep_seen_at < SWEEP_FRESH_MS) {
           this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: p.id });
           continue;
         }
         if (render(r)) rendering.add(r.id);
         const url = p.url || this.retailers.searchUrl(r, p.sku);
-        this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.productPace(p), id: p.id });
+        this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.productPace(p, { priv }), id: p.id });
         if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, p.sku, p.url) }));
       }
     }
@@ -593,10 +597,11 @@ export class Monitor {
    * How soon a product's page is read again in an admin's browser: a store read by opening its pages (BIG W's) at
    * its pace (retailer monitor.browserSeconds) — one its searches found that nobody monitors at that pace while it
    * can't be bought (it's what drops), every half hour once it can (to see it sell out, so its next restock alerts).
+   * priv: read in the browser's private window — at the usual pace then.
    */
-  productPace(product) {
+  productPace(product, { priv = false } = {}) {
     const r = this.retailers.get(product.store);
-    const pace = r && r.monitor && r.monitor.browserSeconds ? r.monitor.browserSeconds * 1000 : this.browserInterval;
+    const pace = r && r.monitor && r.monitor.browserSeconds && !(priv && r.monitor.privateWindow) ? r.monitor.browserSeconds * 1000 : this.browserInterval;
     if (r && r.monitor && r.monitor.render && isOrderable(product.status) && !this.catalog.monitorForProduct(product.id)) return Math.max(pace, 30 * 60 * 1000);
     return pace;
   }
@@ -680,7 +685,7 @@ export class Monitor {
     // (Read fine: again at its own pace — BIG W's pages every few minutes, not every round: what its bot
     //  protection turns a browser away for.)
     this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id',
-      { n: now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails + 1, 5)) : this.productPace({ ...product, status })), id: product.id });
+      { n: now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails + 1, 5)) : this.productPace({ ...product, status }, { priv: res.privateWindow === true })), id: product.id });
     const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';
     if (!product.url && found) {
       let ok = false;
@@ -729,9 +734,11 @@ export class Monitor {
       const status = KNOWN.has(res.status) ? res.status : STATUS.ERROR;
       const failed = FAILED.has(status);
       const fails = failed ? row.browser_fails + 1 : 0;
-      // (Read fine: again at its store's pace — BIG W's every few minutes, not every round.)
+      // (Read fine: again at its store's pace — BIG W's every few minutes, not every round; read in the browser's private
+      //  window, the usual pace.)
       const storeOf = this.retailers.get(row.store);
-      const pace = storeOf && storeOf.monitor && storeOf.monitor.browserSeconds ? storeOf.monitor.browserSeconds * 1000 : this.browserInterval;
+      const priv = res.privateWindow === true && !!(storeOf && storeOf.monitor && storeOf.monitor.privateWindow);
+      const pace = storeOf && storeOf.monitor && storeOf.monitor.browserSeconds && !priv ? storeOf.monitor.browserSeconds * 1000 : this.browserInterval;
       const next = now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails, 5)) : pace);
       this.db.run('UPDATE items SET browser_checked_at = :now, browser_fails = :f, browser_next_at = :n WHERE id = :id', { now, f: fails, n: next, id: row.id });
       const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';

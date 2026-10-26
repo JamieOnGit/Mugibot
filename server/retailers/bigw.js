@@ -27,9 +27,11 @@ export default {
   // Live sweeps: BIG W refuses servers (its search API too), so an admin's browser (the
   // extension) reads its search page. The page builds its product list once it's open, so the
   // extension opens it (in a minimised window of its own), waits for the products, then reads them.
-  // At most one search every 20 s (Oct 2026: every 10 s — and with watchlist checks fetched in the background
-  // besides, BIG W's bot protection took a member's browser for a bot and turned it away, "Access Denied", on
-  // their own visits too). The page takes ~5 s to build.
+  // Searched at the set pace, as the other stores are, while an admin's browser reads it in its private window
+  // (privateWindow, below); at most one search every 20 s while it's read in an ordinary window instead
+  // (sharedWindowSeconds — Oct 2026: every 10 s there, with watchlist checks fetched in the background besides, BIG W's
+  // bot protection took a member's browser for a bot and turned it away, "Access Denied", on their own visits too).
+  // The page takes ~5 s to build, and each search waits for the last.
   // Its search shows 48 products a page, by relevance (as its own search box gives it): a new listing can be further down
   // than the first page. So after each round of keywords, one later page (2 or 3) — opened by the page's own link
   // to it (followNext: its "Next", rel="next"; nothing guessed about BIG W's addresses), only where it has one.
@@ -37,15 +39,17 @@ export default {
   //  checkouts, so its Akamai taking Mugibot's reading for a bot never turns you away. extension 1.30.0.)
   // (mode: searched from an admin's browser by default — not server first: the server can never draw BIG W's products,
   //  so its tries only ever handed over to the browser, and the store showed "Waiting" each time. Oct 2026.)
-  sweep: { from: 'browser', mode: 'browser', parser: 'generic', render: true, privateWindow: true, path: '/search?text={q}', addWord: 'tcg', minSeconds: 20, pages: 3, followNext: true },
+  sweep: { from: 'browser', mode: 'browser', parser: 'generic', render: true, privateWindow: true, path: '/search?text={q}', addWord: 'tcg', sharedWindowSeconds: 20, pages: 3, followNext: true },
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
   account: { signIn: '' },
   // Its product pages: BIG W's bot protection (Akamai) resets every server's connection, so the server never
   // asks (server: 'never'). Browsers do, by opening its page in the extension's window the way you'd open it
-  // (render): background requests are what got a member's browser turned away. One BIG W page a round (30 s)
-  // per browser at most, and each product every 3 minutes at most (browserSeconds; 15 before Oct 2026 — though
-  // a slip read them every minute). Members' browsers read their own watchlist's; admins' browsers also read
+  // (render): background requests are what got a member's browser turned away. In a browser that opens them in
+  // its private window (extension 1.36.0, Mugibot allowed in Incognito), at the usual pace — each product every
+  // minute, as many a round as there's room for; otherwise one BIG W page a round (30 s) per browser at most, and
+  // each product every 3 minutes at most (browserSeconds; 15 before Oct 2026 — though a slip read them every
+  // minute). Members' browsers read their own watchlist's; admins' browsers also read
   // every product its live searches found that nobody monitors — its search tiles show no buy button on a drop
   // it lists ahead of time, its page says the moment it's on sale (a member's 30th Celebration UPC, Oct 2026).
   monitor: { server: 'never', browser: true, render: true, privateWindow: true, browserSeconds: 180 },

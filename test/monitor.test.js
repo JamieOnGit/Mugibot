@@ -285,6 +285,36 @@ test("BIG W (its bot protection resets every server's connection): the server ne
   }
 });
 
+test("BIG W in a browser that opens its pages in a private window of its own (1.36.0, allowed in Incognito): its items are read at the usual pace — every minute, as many a round as there's room for — and a read there keeps that pace; one in an ordinary window, every 3 minutes as before", async () => {
+  const c = await member('bigwpriv');
+  env.app.repo.setSetting('retailer:demo-bigw', { serverChecks: false });
+  try {
+    const a = (await c.post('/api/items', { url: store.productUrl('bigw', '6012345'), name: 'BIG W UPC' })).body;
+    const b = (await c.post('/api/items', { url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle' })).body;
+    await advance();
+    const device = await Device.pair(env.url, c, 'Private copy');
+    await device.call('GET', '/api/ext/me?v=1.36.0');
+    const round = async (priv) => (await device.call('GET', `/api/ext/checks?priv=${priv}`)).body.checks.filter((x) => x.store === 'demo-bigw');
+    const first = await round(1);
+    assert.deepEqual(first.map((x) => x.id).sort(), [a.id, b.id].sort(), 'both in one round');
+    assert.ok(first.every((x) => x.render && x.privateWindow));
+    assert.equal((await round(1)).length, 0, 'not again straight away');
+    clock.offset += 61 * 1000;
+    assert.equal((await round(1)).length, 2, 'due again after a minute');
+    // Read in its private window: again in a minute. In an ordinary window: in 3.
+    const next = (id) => env.app.db.get('SELECT browser_next_at FROM items WHERE id = :id', { id }).browser_next_at - env.app.repo.now();
+    await device.call('POST', '/api/ext/checks', { results: [{ id: a.id, status: 'out_of_stock', privateWindow: true }, { id: b.id, status: 'out_of_stock', privateWindow: false }] });
+    assert.ok(next(a.id) <= 60 * 1000 && next(a.id) > 50 * 1000, String(next(a.id)));
+    assert.ok(next(b.id) > 170 * 1000, String(next(b.id)));
+    // A browser that can't open a private window: one BIG W page a round, as before.
+    env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: c.user.id });
+    assert.equal((await round(0)).length, 1, 'one BIG W page a round');
+  } finally {
+    env.app.repo.setSetting('retailer:demo-bigw', {});
+    for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
+  }
+});
+
 test("EB Games (its Cloudflare refuses the server and the extension's background checks alike): browsers are asked to check its items from inside a tab of EB's — the product page; a product code with no link yet, in EB's own search data — and other stores' checks are asked for as before", async () => {
   const real = env.app.retailers.get('ebgames');
   assert.equal(real.monitor.inPage, true);

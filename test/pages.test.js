@@ -93,13 +93,27 @@ test('🔎 how each store\'s search page is read: from the server where the stor
   // Another website: its page as it is.
   assert.deepEqual(planFor(null, 'https://www.example.com/collections/new#top').server, { url: 'https://www.example.com/collections/new', parser: 'site' });
   // How fast: 3 s — a store whose searches go slower, at its pace.
-  assert.deepEqual(['ebgames', 'jbhifi', 'bigw', 'pokemoncenter', 'citybeach'].map((id) => floorFor(get(id))), [3, 3, 20, 30, 10]);
+  assert.deepEqual(['ebgames', 'jbhifi', 'bigw', 'pokemoncenter', 'citybeach'].map((id) => floorFor(get(id))), [3, 3, 3, 30, 10]);
+  // (BIG W: 20 s while it's read in an ordinary window — till an admin's browser says it's in its private window.)
+  const st = env.app.sweeper.stat('bigw');
+  const was = st.privateWindow;
+  try {
+    st.privateWindow = false;
+    assert.equal(pages().floorNow(get('bigw')), 20);
+    assert.equal(pages().everyFor({ store: 'bigw', every: 5 }), 20);
+    st.privateWindow = true;
+    assert.equal(pages().floorNow(get('bigw')), 3);
+    assert.equal(pages().everyFor({ store: 'bigw', every: 5 }), 5);
+    assert.equal(pages().floorNow(get('pokemoncenter')), 30);
+  } finally {
+    st.privateWindow = was;
+  }
   assert.equal(floorFor(null), 3);
   // Key phrases: one a line (or ;), as drop watch words, 3 letters or more, each once.
   assert.deepEqual(phrasesOf('Magic: The Gathering\n\nx\nmagic the gathering; One Piece OP-15', wordsOf), ['magic the gathering', 'one piece op 15']);
 });
 
-test('🔎 what can be added: a page and a key phrase or more, every 3 s at the fastest (BIG W every 20 s), not a product\'s own page, Auto-checkout only where Mugibot checks out, each page once', async () => {
+test('🔎 what can be added: a page and a key phrase or more, every 3 s at the fastest (Pokémon Center every 30 s), not a product\'s own page, Auto-checkout only where Mugibot checks out, each page once', async () => {
   const eb = `${store.url}/ebgames/search?category=trading-cards&condition=preorder`;
   let r = await boss.post('/api/drops', { page: eb, phrases: ['x'] });
   assert.equal(r.status, 400);
@@ -107,9 +121,9 @@ test('🔎 what can be added: a page and a key phrase or more, every 3 s at the 
   r = await boss.post('/api/drops', { page: eb, phrases: ['Magic the Gathering'], every: 2 });
   assert.equal(r.status, 400);
   assert.match(r.body.error, /Every 3 seconds is the fastest/);
-  r = await boss.post('/api/drops', { page: `${store.url}/bigw/search?text=lego`, phrases: ['lego'], every: 5 });
+  r = await boss.post('/api/drops', { page: 'https://www.pokemoncenter.com/en-au/search/lego', phrases: ['lego'], every: 5 });
   assert.equal(r.status, 400);
-  assert.match(r.body.error, /every 20 seconds at the fastest/);
+  assert.match(r.body.error, /every 30 seconds at the fastest/);
   r = await boss.post('/api/drops', { page: `${store.url}/ebgames/product/toys-and-collectibles/312346-pokemon-tcg-30th-celebration-elite-trainer-box`, phrases: ['pokemon'] });
   assert.equal(r.status, 400);
   assert.match(r.body.error, /product's own page/);
