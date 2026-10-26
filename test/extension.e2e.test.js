@@ -5330,7 +5330,7 @@ test("🔒 BIG W in a private window of its own: allowed in Incognito, an admin'
     assert.equal((await sweepTabOf('check:demo-bigw')).incognito, true);
     assert.equal(env.app.repo.listItems(userId).find((i) => i.name === 'BIG W Bundle').statusSource, 'browser');
     // …and at the usual pace there (1.36.0): read again in a minute, not 3 — the read said it was in its private window.
-    const nextIn = env.app.db.get('SELECT browser_next_at FROM items WHERE user_id = :u', { u: userId }).browser_next_at - env.app.repo.now();
+    const nextIn = env.app.db.get("SELECT browser_next_at FROM items WHERE user_id = :u AND name = 'BIG W Bundle'", { u: userId }).browser_next_at - env.app.repo.now();
     assert.ok(nextIn > 0 && nextIn <= 60 * 1000, `read again in ${nextIn} ms`);
     // (Its live searches too: the set pace, now that it's searched in its private window.)
     assert.equal(sweeper.paceFor(env.app.retailers.get('demo-bigw'), true), 5000);

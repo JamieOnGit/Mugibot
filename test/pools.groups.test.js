@@ -320,7 +320,7 @@ test('🤝 Group Checkpoint while the checkpoint is down, at a store without one
 });
 
 test("🤝 Group Buy from the phone while boss's own computer can't check out (no checkout browser connected, or Discord's ⚡ Buy switched off for it): boss is told why — and the group's checkouts start all the same", async () => {
-  const d = (await boss.post('/api/items', { url: store.productUrl('kmart', '43818649'), name: 'Phone Group Buy', maxPrice: 200 })).body;
+  const d = (await boss.post('/api/items', { url: store.productUrl('kmart', '43818587'), name: 'Phone Group Buy', maxPrice: 200 })).body;
   await waitFor(() => env.app.db.get('SELECT id FROM items WHERE user_id = :u AND pool_src = :s', { u: ash.user.id, s: d.id }), { message: "ash's copy" });
   const copy = env.app.db.get('SELECT id FROM items WHERE user_id = :u AND pool_src = :s', { u: ash.user.id, s: d.id });
   const ashRuns = () => env.app.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE user_id = :u AND item_id = :i AND trigger = 'pool'", { u: ash.user.id, i: copy.id }).n;
