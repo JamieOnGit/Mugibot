@@ -103,6 +103,8 @@ export async function createApp(options = {}) {
   ctx.pools = pools;
   aco.ctx.pools = pools;
   drops.pools = pools;
+  notifier.pools = pools; // (a leader's ⚡ Buy on their own DMs: 🤝 Group Buy)
+  gates.pools = pools; // (a leader's DM when a queue or checkpoint goes up: 🤝 Group Queue / 🤝 Group Checkpoint)
 
   const router = new Router();
   auth.register(router, ctx);

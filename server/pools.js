@@ -23,8 +23,23 @@
 //     the order, or stop at the final button), one run at a time for an item, and they're told as it starts (DM).
 //   - Bought once, the member's copy isn't armed again until the leader arms theirs again (pool_aco_at): never bought
 //     twice for one arming. One purchase per drop watch, the same (pool_watch).
+//
+// The leader's group (the members who check out with them) and the stores' gates (monitor/gates.js):
+//   - A virtual queue (EB Games, Pokémon Center): the leader getting in line — Discord's "📥 Join the queue" or the
+//     🤝 Group Queue button on their own DM — gets each member's checkout browser in line too: a tab of its own,
+//     waiting its turn like anyone's, never refreshed (groupQueue). Armed at a store whose queue goes up, a member's
+//     browser gets in line by itself anyway (aco.js queueUp), as for anyone armed there.
+//   - A checkpoint (JB Hi-Fi's hCaptcha): a human check, for each person in their own browser — Mugibot never solves
+//     one, and passing it in one browser passes nobody else's. So it's opened for them ahead of the drop and they're
+//     told to solve it: when it goes up where they're armed with the leader (checkpointUp), when the leader arms
+//     something there while it's up, and when the leader presses 🤝 Group Checkpoint (groupCheckpoint).
+//   - 🤝 Group Buy: the leader's ⚡ Buy, as their own DMs name it (notifier.buyLabel) — it starts the group's
+//     checkouts (fanOut). The 🤝 buttons are on the leader's own DMs, so only they see them; pressed by anyone who
+//     doesn't lead a group, they do nothing but say so (routes/discord.js).
 
 import { newId } from './crypto.js';
+import { entitlement } from './entitlement.js';
+import { REMOTE_DESKTOP_URL } from './aco.js';
 import { HttpError, bad, num, str } from './schema.js';
 
 const SYNC_MS = 30 * 1000;
@@ -40,6 +55,7 @@ export class Pools {
     this.pending = new Set(); // leaders whose members' copies are brought in step on the next turn
     this.timer = null;
     this.leaders = null; // (cached: who leads a pool with members in it)
+    this.headsUp = new Map(); // 'userId:store' → the checkpoint's `since` they were told to solve it for (once each time)
     // Every change to someone's watchlist — the dashboard's, Discord's, Auto-checkout's (armed, bought), a drop
     // watch's finds — and their Auto-checkout switch: their pool's copies brought in step straight away.
     repo.onItems = (userId) => this.touch(userId);
@@ -85,6 +101,17 @@ export class Pools {
   followers(leaderId) {
     return this.db.all(`SELECT m.*, u.username, p.name AS pool_name FROM pool_members m JOIN pools p ON p.id = m.pool_id JOIN users u ON u.id = m.user_id
       WHERE p.owner_id = :l AND m.status = 'active' AND u.disabled = 0 ORDER BY m.joined_at`, { l: leaderId });
+  }
+
+  /** The leader's group: the members who check out with them (follow_aco). */
+  group(leaderId) {
+    if (!leaderId || !this.leaderIds().has(leaderId)) return [];
+    return this.followers(leaderId).filter((m) => m.follow_aco);
+  }
+
+  /** Does this person lead a group — a pool with someone in it who checks out with them? (Their 🤝 buttons.) */
+  leadsGroup(userId) {
+    return this.group(userId).length > 0;
   }
 
   /** The pool someone's in (joined), with its leader — or null. */
@@ -340,6 +367,7 @@ export class Pools {
     const bySrc = new Map(mine.map((r) => [r.pool_src, r]));
     const cap = m.follow_aco && m.aco_cap !== null && m.aco_cap !== undefined ? m.aco_cap : null;
     let changed = 0;
+    const armedAt = new Set(); // (stores where a copy was armed just now: a checkpoint up there is opened for them)
     for (const s of src) {
       const row = bySrc.get(s.id);
       // (Never more than the member's own most for the pool, when they check out with the leader.)
@@ -364,6 +392,7 @@ export class Pools {
           src: s.id, at: want ? s.aco_at : null, w: s.drop_watch || null, st: s.status, ss: s.status_source, sat: s.status_at, ca: s.checked_at,
           ti: s.title, lp: s.last_price, id: added.id,
         });
+        if (want) armedAt.add(s.store);
         changed += 1;
         continue;
       }
@@ -387,6 +416,7 @@ export class Pools {
       const armed = want && !row.pool_hold;
       if (armed && !row.aco && !same(row.pool_aco_at, s.aco_at)) {
         this.db.run('UPDATE items SET aco = 1, aco_at = :t, pool_aco_at = :at WHERE id = :id', { t: this.now(), at: s.aco_at, id: row.id });
+        armedAt.add(s.store);
         changed += 1;
       } else if (!armed && row.aco) {
         this.db.run('UPDATE items SET aco = 0, aco_at = NULL, pool_aco_at = NULL WHERE id = :id', { id: row.id });
@@ -401,6 +431,11 @@ export class Pools {
       changed += 1;
     }
     if (changed) this.hub.publish(userId, 'watch', { pool: true });
+    // (Armed just now where a checkpoint's up: its check page opened for them to solve before the drop.)
+    for (const store of armedAt) {
+      const r = this.ctx.retailers && this.ctx.retailers.get(store);
+      if (r && r.gate && r.gate.kind === 'checkpoint' && this.ctx.gates && this.ctx.gates.isUp(store)) this.checkpointFor(m, r, 'armed');
+    }
     return changed;
   }
 
@@ -420,6 +455,122 @@ export class Pools {
   relayDrops(userId) {
     if (!this.leaderIds().has(userId)) return;
     for (const m of this.followers(userId)) this.hub.publish(m.user_id, 'drop', { pool: true });
+  }
+
+  // ---------------------------------------------------------------------------
+  // The leader's group at a store's gate: its virtual queue, its checkpoint
+  // ---------------------------------------------------------------------------
+  /**
+   * A member of the group, ready for something to open in their checkout browser: their account in good standing, their
+   * own Auto-checkout on (checking out with the leader is theirs to keep on), a checkout browser connected. Else null —
+   * and, when it's theirs to fix, they're told what the leader started and why nothing opened on theirs.
+   */
+  ready(m, leaderName, what) {
+    const u = this.repo.userById(m.user_id);
+    if (!u || u.disabled || !entitlement(u, this.now()).active || !this.ctx.aco) return null;
+    if (!this.ctx.aco.settings(u.id).enabled) {
+      this.repo.addEvent(u.id, { type: 'aco', level: 'warn', message: `🤝 ${leaderName} ${what}, but your Auto-checkout is switched off — nothing opened on yours` });
+      return null;
+    }
+    const device = this.ctx.aco.checkoutDevice(u.id);
+    if (!device) {
+      this.repo.addEvent(u.id, { type: 'aco', level: 'warn', message: `🤝 ${leaderName} ${what}, but no browser with the extension is connected to your account — connect your checkout browser (Setup → Extension)` });
+      return null;
+    }
+    return { user: u, device, listening: this.ctx.aco.isListening(device.id) };
+  }
+
+  leaderName(leaderId) {
+    const u = this.repo.userById(leaderId);
+    return u ? u.username : "Your pool's leader";
+  }
+
+  /**
+   * The leader got in line at a store's virtual queue (Discord's "📥 Join the queue on my computer", or 🤝 Group Queue):
+   * each member who checks out with them gets their own checkout browser in line there too — a tab of its own, its own
+   * place, waiting its turn (never refreshed). Told by DM (not waited for: Discord wants its answer in 3 seconds).
+   * Returns { put, of }: how many got in line, of the group.
+   */
+  groupQueue(leaderId, r) {
+    const group = this.group(leaderId);
+    if (!group.length || !r || !r.gate || r.gate.kind !== 'queue') return { put: 0, of: group.length };
+    const name = this.leaderName(leaderId);
+    const link = this.ctx.gates ? this.ctx.gates.link(r) : r.base;
+    let put = 0;
+    for (const m of group) {
+      const ok = this.ready(m, name, `got in line at ${r.name}'s virtual queue`);
+      if (!ok) continue;
+      const had = this.ctx.aco.inLobby(m.user_id, r.id);
+      this.ctx.aco.lobby(m.user_id, r, 'pool');
+      put += 1;
+      if (had) continue; // (in line there already: said then)
+      this.notifier.notify(m.user_id, {
+        type: 'aco', level: 'urgent', channel: 'aco',
+        title: `🚦 Getting in line at ${r.name} with ${name}`,
+        message: `${name} got in line at ${r.name}'s virtual queue, and you check out with them (your pool): your checkout browser (${ok.device.name}) is getting in line too — a tab of its own, waiting its turn.\nLeave that tab alone: the queue page refreshes itself, and refreshing it yourself can lose your place. Your ⚡ Buy and Auto-checkout at ${r.name} carry on from there once you're through.${ok.listening ? '' : `\n⚠️ ${ok.device.name} isn't open right now — it gets in line as soon as it is.`}`,
+        url: link, buttons: [{ label: '🖥️ Open my computer', url: REMOTE_DESKTOP_URL }, { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
+      }).catch((e) => this.cfg.log('[pools]', e.message));
+    }
+    return { put, of: group.length };
+  }
+
+  /**
+   * A checkpoint's check page opened in a member's checkout browser, ahead of the drop, and them told to solve it there:
+   * once for each time it goes up. why: 'up' (it went up where they're armed with the leader), 'armed' (the leader armed
+   * something there while it's up), 'group' (the leader's 🤝 Group Checkpoint). Returns true if it opened (or was open).
+   */
+  checkpointFor(m, r, why) {
+    const name = this.leaderName(m.owner_id || this.leaderOf(m.user_id));
+    const ok = this.ready(m, name, why === 'group' ? `asked the pool to get through ${r.name}'s checkpoint` : `has something armed at ${r.name}, where the checkpoint is up`);
+    if (!ok) return false;
+    const gate = this.ctx.gates ? this.ctx.gates.get(r.id) : null;
+    const key = `${m.user_id}:${r.id}`;
+    const since = gate ? gate.since : null;
+    this.ctx.aco.lobby(m.user_id, r, 'pool');
+    if (this.headsUp.get(key) === since) return true; // (told already, this time it's up)
+    this.headsUp.set(key, since);
+    const reason = why === 'group' ? `${name} asked the pool to get through it (🤝 Group Checkpoint)` : `${name} has something armed there, and you check out with them (your pool)`;
+    this.notifier.notify(m.user_id, {
+      type: 'aco', level: 'urgent', channel: 'aco',
+      title: `🛡️ Solve ${r.name}'s check now — before the drop`,
+      message: `${r.name}'s checkpoint is up: ${reason}.\nYour checkout browser (${ok.device.name}) has opened ${r.name}'s check page in a tab — solve the human check there now, and your checkout goes straight through when it drops. It has to be solved in that browser: away from the computer, 🖥️ Open my computer (Chrome Remote Desktop).${ok.listening ? '' : `\n⚠️ ${ok.device.name} isn't open right now — the page opens as soon as it is.`}`,
+      url: this.ctx.gates ? this.ctx.gates.link(r) : r.base,
+      buttons: [{ label: '🖥️ Open my computer', url: REMOTE_DESKTOP_URL }, { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
+    }).catch((e) => this.cfg.log('[pools]', e.message));
+    return true;
+  }
+
+  /**
+   * A store's checkpoint went up (monitor/gates.js → aco.js): the members with something armed there with their pool's
+   * leader (their copy armed, not skipped) get its check page opened and are told to solve it. Returns the ids told —
+   * their DM says it all, so the store's usual "checkpoint is up" DM isn't sent them as well.
+   */
+  checkpointUp(r) {
+    const told = new Set();
+    if (!r || !r.gate || r.gate.kind !== 'checkpoint') return told;
+    const rows = this.db.all(`SELECT DISTINCT i.user_id FROM items i JOIN pool_members m ON m.user_id = i.user_id AND m.status = 'active' AND m.follow_aco = 1
+      WHERE i.store = :s AND i.aco = 1 AND i.pool_src IS NOT NULL AND i.pool_hold = 0`, { s: r.id });
+    for (const { user_id: userId } of rows) {
+      const m = this.membership(userId);
+      if (m && this.checkpointFor(m, r, 'up')) told.add(userId);
+    }
+    return told;
+  }
+
+  /**
+   * 🤝 Group Checkpoint (the leader's DM): the check page opened in the leader's own checkout browser and in each group
+   * member's, each told to solve it themselves. { device, listening, opened, of } — or { error }.
+   */
+  groupCheckpoint(leaderId, storeId) {
+    const r = this.ctx.retailers && this.ctx.retailers.get(String(storeId || ''));
+    if (!r || !r.gate || r.gate.kind !== 'checkpoint') return { error: "That store doesn't have a checkpoint Mugibot knows." };
+    if (!this.ctx.gates || !this.ctx.gates.isUp(r.id)) return { error: `${r.name}'s checkpoint isn't up right now — nothing to solve. Mugibot posts in #virtual-queue-detection when it is.` };
+    const device = this.ctx.aco.checkoutDevice(leaderId);
+    if (device) this.ctx.aco.lobby(leaderId, r, 'pool');
+    const group = this.group(leaderId);
+    let opened = 0;
+    for (const m of group) if (this.checkpointFor(m, r, 'group')) opened += 1;
+    return { store: r, device: device ? { id: device.id, name: device.name } : null, listening: device ? this.ctx.aco.isListening(device.id) : false, opened, of: group.length };
   }
 
   // ---------------------------------------------------------------------------

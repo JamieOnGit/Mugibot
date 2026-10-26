@@ -50,7 +50,11 @@ community. Built on TCGCopBot's working Kmart flow.
   out with the leader** (agreed to, with the most it may cost them an item).
   Then the admin's ⚡ Buy (dashboard or Discord), Trigger ACO or armed drop
   starts the same checkout for each of them at once, on their own account: their
-  checkout browser, card, details and limits. See [docs/POOLS.md](docs/POOLS.md).
+  checkout browser, card, details and limits. On the leader's own Discord DMs,
+  **🤝 Group Buy**, **🤝 Group Queue** and **🤝 Group Checkpoint** start a
+  checkout, a place in a store's virtual queue, or a checkpoint's check page
+  (each member solves their own) for the whole group at once. See
+  [docs/POOLS.md](docs/POOLS.md).
 - **🚦 Checkpoints and virtual queues.** Mugibot watches for JB Hi-Fi's hCaptcha
   checkpoint (`/checkpoint`) and EB Games' and Pokémon Center's virtual queues
   going up before a drop and coming down after. Each is posted in

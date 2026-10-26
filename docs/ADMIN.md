@@ -35,7 +35,9 @@ their own dashboard. Each row shows whether they joined, and whether they
 **check out with the leader**. That switch is the member's alone: once it's on,
 your ⚡ Buy, Trigger ACO and armed drops start their checkouts too, on their own
 account and within their own limits. You never see what they'd spend. **Take
-out**, **Rename** and **Close pool** are there too. See [POOLS.md](POOLS.md).
+out**, **Rename** and **Close pool** are there too. Once someone checks out with
+you, your own Discord DMs carry **🤝 Group Buy**, **🤝 Group Queue** and **🤝
+Group Checkpoint** buttons, which only you see. See [POOLS.md](POOLS.md).
 
 **SKUs & restock pings.**
 - **What members are watching:** every SKU, how many members watch it, their

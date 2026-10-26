@@ -99,6 +99,42 @@ check, a declined card, another item in the bag, or a total over the member's
 limits. Mugibot never gets past a CAPTCHA, a queue or a store's purchase limit
 for anyone, and it never makes or runs other accounts.
 
+## The leader's 🤝 buttons in Discord
+
+Your **group** is the members who check out with you. While you have one, three
+buttons appear on your own Discord DMs. Only you see them, because DMs are
+private. A button in a public channel would show to everyone, so the 🤝 buttons
+are never posted there. Anyone else who presses one (a forwarded DM, say) is
+told it's the leader's, and nothing happens.
+
+| Button | Where it is | What it does |
+|---|---|---|
+| **🤝 Group Buy** | On your restock and drop DMs, in place of ⚡ Buy | Your checkout starts, and so does each group member's, at once. Each one runs on the member's own account: their checkout browser, card and limits. The reply says how many. (Your ⚡ Buy in a channel does the same.) |
+| **🤝 Group Queue** | On the DM you get when a virtual queue (EB Games, Pokémon Center) goes up | Your checkout browser gets in line, and so does each member's: a tab of its own, its own place, never refreshed. Each member gets a DM saying you started it. Their ⚡ Buy and Auto-checkout at that store carry on from there once they're through. (The channel's **📥 Join the queue on my computer**, pressed by you, does the same.) |
+| **🤝 Group Checkpoint** | On the DM you get when a checkpoint (JB Hi-Fi's) goes up | The check page opens in your checkout browser and in each member's, and each gets a DM to solve it there before the drop. |
+
+A checkpoint is a human check. Each person solves their own, in the browser that
+checks out. Mugibot never solves one, and passing it in one browser doesn't pass
+anyone else's. If a member is away from the computer, the DM's **🖥️ Open my
+computer** button (Chrome Remote Desktop) lets them solve it there from their
+phone. Once they've solved it, their checkout goes straight through when it
+drops.
+
+These things happen without anyone pressing anything:
+
+- **A queue goes up where a member has your item armed:** their browser gets in
+  line by itself, as it does for anyone armed there.
+- **A checkpoint goes up where a member has your item armed:** its check page
+  opens in their browser, with a DM to solve it before the drop.
+- **You arm something at a store while its checkpoint is up:** the same.
+
+Each member is told once each time a checkpoint goes up. They don't also get the
+usual "checkpoint is up" DM.
+
+A member whose Auto-checkout is off, or who has no checkout browser connected,
+isn't put in line and gets no check page opened. They're told what you started
+and why nothing opened for them. Your reply counts them.
+
 ## For admins
 
 - **Make a pool:** Members → 🤝 Pools → name it → **+ Make a pool**.
