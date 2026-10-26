@@ -5113,8 +5113,10 @@ test("🔒 BIG W in a private window of its own: allowed in Incognito, an admin'
     env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
     since = store.state.requests.length;
     const r = await sw.evaluate(() => globalThis.mugibotRunChecks());
-    assert.equal(r.checked, 1);
+    // (Your item — and, in its private window, the products its searches found too: as many a round as there's room for.)
+    assert.ok(r.checked >= 1, JSON.stringify(r));
     const pages = asked(since, /^\/bigw\/product\//);
+    assert.ok(pages.some((x) => x.path.includes('6012346')), 'your item\'s page among them');
     assert.ok(pages.length >= 1 && pages.every((x) => !/bigw_mine/.test(x.cookie)), `its page read without your cookies: ${JSON.stringify(pages.map((x) => x.cookie))}`);
     assert.equal((await sweepTabOf('check:demo-bigw')).incognito, true);
     assert.equal(env.app.repo.listItems(userId).find((i) => i.name === 'BIG W Bundle').statusSource, 'browser');
