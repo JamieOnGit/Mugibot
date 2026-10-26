@@ -4,6 +4,7 @@
 export class Hub {
   constructor() {
     this.clients = new Map(); // userId -> Set<res>
+    this.taps = []; // (type, userId, data) — told of every event published, open dashboard or not (server/pools.js)
     this.timer = setInterval(() => this.broadcastComment('ping'), 25000);
     this.timer.unref?.();
   }
@@ -27,7 +28,15 @@ export class Hub {
     res.on('error', drop);
   }
 
+  /** Be told of every event published (whoever it's for, open dashboard or not). */
+  tap(fn) {
+    this.taps.push(fn);
+  }
+
   publish(userId, type, data) {
+    for (const fn of this.taps) {
+      try { fn(type, userId, data); } catch { /* a tap never stops the event */ }
+    }
     const set = this.clients.get(userId);
     if (!set) return 0;
     const msg = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;

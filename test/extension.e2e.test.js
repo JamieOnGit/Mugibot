@@ -18,7 +18,7 @@ import { EXTENSION_VERSION, writeExtension } from '../server/extension.js';
 import { RETAILER_DEFS } from '../server/retailers/index.js';
 import { startMockStore } from '../devtools/mockstore.js';
 import { otherSku } from '../server/monitor/drops.js';
-import { Client, PASSWORD, discordOpts, interactionKeys, startApp, startFakeDiscord, waitFor } from './helpers.js';
+import { Client, PASSWORD, discordOpts, interactionKeys, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 
 const PROFILE_A = { label: 'Home', firstName: 'Ash', lastName: 'Ketchum', email: 'ash.orders@example.com', phone: '0412345678', address1: '1 Pallet Town Rd', address2: 'Unit 2', suburb: 'Sydney', state: 'NSW', postcode: '2000' };
 const PROFILE_B = { label: 'Home', firstName: 'Misty', lastName: 'Waterflower', email: 'misty@example.com', phone: '0498765432', address1: '9 Cerulean Ave', suburb: 'Brisbane', state: 'QLD', postcode: '4000' };
@@ -4019,6 +4019,89 @@ test("🤖 Trigger ACO on the Armed list (Drops page): a test run now, for an it
   await dash.close();
   await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
   await useItems([]);
+});
+
+// --- 🤝 a pool (server/pools.js, docs/POOLS.md): the leader's checkouts start the member's, in the member's own browser --
+test("🤝 a pool: Ash joins an admin's pool and switches on checking out with them on the dashboard (agreed to, with the most an item) — the leader's Trigger ACO, the leader's ⚡ Buy in Discord and the leader's armed item dropping each check out for Ash in this browser, with Ash's own details and card: placed, once each", async () => {
+  freshDay();
+  assert.equal((await browserApi('PUT', '/api/aco', { enabled: true, mode: 'place', maxOrder: 2000, perDay: 10, spendPerDay: 20000 })).status, 200);
+  await useItems([]);
+  // The leader: an account of their own, their own Auto-checkout and checkout browser (not this one — it never answers here).
+  const boss = await Client.signup(env.url, 'poolboss');
+  makeMember(env, boss);
+  for (const it of (await boss.get('/api/items')).body.items) await boss.del(`/api/items/${it.id}`);
+  assert.equal((await boss.put('/api/aco', { enabled: true, agree: true, mode: 'place', remoteBuy: true, maxOrder: 2000, perDay: 10, spendPerDay: 20000 })).status, 200);
+  env.app.repo.addDevice(boss.user.id, 'Boss PC', EXTENSION_VERSION);
+  env.app.db.run('UPDATE users SET discord_id = :d WHERE id = :u', { d: 'd-poolboss', u: boss.user.id });
+  // (The leader's own runs wait for Boss PC, which isn't on here: ended after each, so the next can start.)
+  const endBoss = async () => {
+    for (const r of env.app.db.all("SELECT id FROM aco_runs WHERE user_id = :u AND status IN ('queued', 'sent', 'started', 'waiting', 'checkout')", { u: boss.user.id })) {
+      await env.app.aco.finish(boss.user.id, env.app.aco.get(boss.user.id, r.id), 'failed', 'stopped', 'stopped');
+    }
+  };
+  const pool = env.app.pools.create(env.app.repo.userById(boss.user.id), 'E2E crew');
+  await env.app.pools.invite(pool.id, 'ash', null);
+
+  // Ash says yes on the dashboard, and switches on checking out with the leader.
+  const dash = await ctx.newPage();
+  await dash.goto(`${env.url}/app#pool`);
+  await dash.click('#pool-invites button:has-text("Join")');
+  await dash.waitForSelector('#pool-mine:not([hidden])');
+  await dash.fill('#pool-cap', '150');
+  await dash.check('#pool-agree');
+  await dash.click('#pool-follow');
+  await dash.waitForSelector('#pool-follow[aria-checked="true"]');
+  await dash.close();
+
+  // The leader's item: on Ash's watchlist straight away (🤝).
+  const src = (await boss.post('/api/items', { url: store.productUrl('kmart', '43818587'), name: 'Pool ETB', maxPrice: 120 })).body;
+  await waitFor(async () => (await browserApi('GET', '/api/items')).body.items.some((x) => x.pool && x.pool.src === src.id), { message: "the leader's item on Ash's watchlist" });
+  await acoListen();
+  const S = store.shop('kmart');
+  const placed = async (n, message) => {
+    try {
+      await waitFor(async () => (await acoRuns()).filter((r) => r.name === 'Pool ETB' && r.status === 'placed').length >= n, { timeout: 60000, message });
+    } catch (e) {
+      const runs = (await acoRuns()).filter((r) => r.name === 'Pool ETB');
+      throw new Error(`${message}: ${runs.map((r) => `${r.trigger} "${r.status}" ${JSON.stringify(r.steps.at(-1))}`).join(', ')}`);
+    }
+    await lineEmpty();
+    await closeStorePages('kmart');
+    await endBoss();
+  };
+
+  // 1. The leader's Trigger ACO: Ash's starts too — placed in this browser.
+  assert.equal((await boss.post(`/api/aco/test/${src.id}`, {})).status, 200);
+  await placed(1, "Ash's checkout, started by the leader's Trigger ACO");
+  const first = (await acoRuns()).find((r) => r.name === 'Pool ETB');
+  assert.equal(first.trigger, 'pool');
+  assert.match(first.message, /poolboss started it \(your pool\)/);
+  assert.deepEqual(S.orders.map((o) => o.cart.map((c) => [c.sku, c.qty])), [[['43818587', 1]]], 'one order, its item');
+  assert.match(JSON.stringify(S.orders[0]), /Pallet Town/, "Ash's own delivery details");
+
+  // 2. The leader's ⚡ Buy on a channel alert, pressed in Discord: Ash's starts too.
+  const alert = env.app.catalog.addAlert({ product_id: null, kind: 'restock', store: 'demo-kmart', sku: '43818587', name: 'Pool ETB', url: store.productUrl('kmart', '43818587'), category: 'pokemon', status: 'in_stock', price: 100 });
+  const reply = await pressInDiscord('d-poolboss', `buy:a:${alert.id}`);
+  assert.match(reply.content, /Boss PC/, "the leader's reply: their own checkout browser");
+  await placed(2, "Ash's checkout, started by the leader's ⚡ Buy in Discord");
+  assert.equal(S.orders.length, 2);
+
+  // 3. The leader arms theirs: armed on Ash's (at the leader's max, never over Ash's most) — and it drops: Ash's
+  //    places once (not twice: Ash's own restock and the leader's are the same checkout), and isn't armed again.
+  assert.equal((await boss.put(`/api/items/${src.id}`, { aco: true, maxPrice: 120 })).status, 200);
+  await waitFor(async () => (await browserApi('GET', '/api/items')).body.items.find((x) => x.pool && x.pool.src === src.id).aco, { message: 'armed on Ash\'s' });
+  await drop('kmart', '43818587');
+  await placed(3, "Ash's checkout, on the leader's armed item's drop");
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(S.orders.length, 3, 'placed once for the drop');
+  assert.equal((await acoRuns()).filter((r) => r.name === 'Pool ETB').length, 3, 'one run each');
+  env.app.pools.syncAll();
+  assert.equal((await browserApi('GET', '/api/items')).body.items.find((x) => x.pool && x.pool.src === src.id).aco, false, 'bought: not armed again until the leader arms it again');
+
+  // Out of the pool: the leader's item is off Ash's watchlist.
+  assert.equal((await browserApi('POST', '/api/pool/leave')).status, 200);
+  assert.equal((await browserApi('GET', '/api/items')).body.items.some((x) => x.pool), false);
+  await browserApi('PUT', '/api/aco', { enabled: false, mode: 'place' });
 });
 
 // --- 🧹 Clear cart (server/bags.js, extension/bag.js): each store's bag, emptied from the dashboard -------

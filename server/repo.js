@@ -36,6 +36,8 @@ const toItem = (r) => r && ({
   discount: r.discount || '',
   // 🚦 Wait for queue, then ACO, starting by itself then (a time you picked), or null.
   queueAt: r.queue_at || null,
+  // From your pool (server/pools.js): the leader's item it mirrors, kept in step with it — and whether you skip it.
+  pool: r.pool_src ? { src: r.pool_src, hold: !!r.pool_hold } : null,
 });
 const parseLogins = (v) => { try { const o = JSON.parse(v || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
 const toDevice = (r) => r && ({
@@ -56,6 +58,11 @@ export class Repo {
     this.keys = new Map();
     this.settingsCache = new Map();
     this.retailers = null; // set by app.js (needs this repo for its settings)
+    this.onItems = null; // (userId) — someone's watchlist changed (server/pools.js keeps their pool's in step)
+  }
+
+  itemsChanged(userId) {
+    if (this.onItems) this.onItems(userId);
   }
 
   // ---------------------------------------------------------------------------
@@ -130,7 +137,7 @@ export class Repo {
     const params = { q, like: `%${q}%`, plan };
     const rows = this.db.all(`SELECT u.id, u.username, u.email, u.name, u.role, u.plan, u.trial_ends_at, u.current_period_end, u.cancel_at_period_end,
         u.whop_membership_id, u.discord_id, u.discord_username, u.discord_in_guild, u.discord_role, u.discord_error, u.disabled, u.created_at, u.last_login_at,
-        (SELECT COUNT(*) FROM items i WHERE i.user_id = u.id) AS items,
+        (SELECT COUNT(*) FROM items i WHERE i.user_id = u.id AND i.pool_src IS NULL) AS items,
         (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id) AS devices
       FROM users u WHERE ${where} ORDER BY u.created_at DESC LIMIT :limit OFFSET :offset`, { ...params, limit, offset });
     const total = this.db.get(`SELECT COUNT(*) AS n FROM users u WHERE ${where}`, params).n;
@@ -251,8 +258,9 @@ export class Repo {
     return toItem(this.db.get('SELECT * FROM items WHERE user_id = :u AND store = :s AND sku = :k COLLATE NOCASE', { u: userId, s: store, k: String(sku || '') }));
   }
 
+  /** How many SKUs of their own someone watches (what their pool shares with them isn't counted). */
   countItems(userId) {
-    return this.db.get('SELECT COUNT(*) AS n FROM items WHERE user_id = :u', { u: userId }).n;
+    return this.db.get('SELECT COUNT(*) AS n FROM items WHERE user_id = :u AND pool_src IS NULL', { u: userId }).n;
   }
 
   addItem(userId, it) {
@@ -269,6 +277,7 @@ export class Repo {
     }
     const saved = this.getItem(userId, id);
     this.ensurePageFor(saved);
+    this.itemsChanged(userId);
     return saved;
   }
 
@@ -288,11 +297,14 @@ export class Repo {
     }
     const saved = this.getItem(userId, before.id);
     this.ensurePageFor(saved);
+    this.itemsChanged(userId);
     return saved;
   }
 
   deleteItem(userId, id) {
-    return this.db.run('DELETE FROM items WHERE user_id = :u AND id = :id', { u: userId, id: String(id || '') }).changes > 0;
+    const gone = this.db.run('DELETE FROM items WHERE user_id = :u AND id = :id', { u: userId, id: String(id || '') }).changes > 0;
+    if (gone) this.itemsChanged(userId);
+    return gone;
   }
 
   /** Put the given ids first, in that order; the rest keep their order after them. */
@@ -302,6 +314,7 @@ export class Repo {
     const first = [...new Set(ids.map(String))].filter((id) => known.has(id));
     const order = [...first, ...current.map((p) => p.id).filter((id) => !first.includes(id))];
     this.db.tx(() => order.forEach((id, i) => this.db.run('UPDATE items SET position = :i WHERE user_id = :u AND id = :id', { i, u: userId, id })));
+    this.itemsChanged(userId);
     return this.listItems(userId);
   }
 

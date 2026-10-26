@@ -52,6 +52,16 @@
         </div>
         <div class="form-actions"><button class="btn small" id="prev" type="button">← Previous</button><span class="muted small" id="page-info"></span><button class="btn small" id="next" type="button">Next →</button></div>
       </div>
+      <div class="card" id="pools-card">
+        <div class="tab-head"><h2>🤝 Pools</h2>
+          <form id="pool-new" class="status-row">
+            <input id="pool-name" maxlength="60" placeholder="New pool's name" aria-label="New pool's name">
+            <button class="btn small primary" type="submit">+ Make a pool</button>
+          </form>
+        </div>
+        <p class="muted small">A pool shares its leader's watchlist, armed items and drop watches with the members who join it — on their own watchlists, kept in step the moment the leader changes theirs. You lead the pools you make. Members join by accepting on their own dashboard, and only they can switch on <b>checking out with the leader</b>: then the leader's Auto-checkouts start theirs too, on their own account — their checkout browser, their card, their delivery details, their limits — up to the most they set. You see who joined and who checks out with the leader, never what they'd spend.</p>
+        <div id="pools" class="pools"></div>
+      </div>
     </section>
 
     <section data-panel="skus" hidden>

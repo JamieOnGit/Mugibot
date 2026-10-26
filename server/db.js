@@ -564,6 +564,41 @@ const MIGRATIONS = [
   ALTER TABLE drop_watches ADD COLUMN phrases TEXT NOT NULL DEFAULT '[]';
   ALTER TABLE drop_watches ADD COLUMN every_seconds INTEGER NOT NULL DEFAULT 0;
   `,
+  // 21 — pools (server/pools.js): an admin's watchlist, armed items and drop watches shared with the members who join
+  //      their pool, kept in step on each member's own watchlist as they change — and, for each member who agrees to it
+  //      themselves, the admin's Auto-checkouts run for them too, in their own browser, with their own card, details
+  //      and limits. pool_members.status: 'invited' (asked, not answered) or 'active' (joined: one pool at a time);
+  //      follow_aco/aco_cap/aco_agreed_at: the member's own say over checking out with the pool's leader.
+  //      items.pool_src: the leader's item this one mirrors; pool_aco_at: the leader's arming it was armed for (bought
+  //      once, it isn't armed again till the leader arms theirs again); pool_hold: the member skips this one;
+  //      pool_watch: the leader's drop watch that found it (one purchase per watch, for the member too).
+  `
+  CREATE TABLE pools (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX pools_owner ON pools(owner_id);
+  CREATE TABLE pool_members (
+    pool_id TEXT NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'invited',
+    invited_by TEXT,
+    invited_at INTEGER NOT NULL,
+    joined_at INTEGER,
+    follow_aco INTEGER NOT NULL DEFAULT 0,
+    aco_cap REAL,
+    aco_agreed_at INTEGER,
+    PRIMARY KEY (pool_id, user_id)
+  );
+  CREATE UNIQUE INDEX pool_members_one_active ON pool_members(user_id) WHERE status = 'active';
+  ALTER TABLE items ADD COLUMN pool_src TEXT;
+  ALTER TABLE items ADD COLUMN pool_aco_at INTEGER;
+  ALTER TABLE items ADD COLUMN pool_hold INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE items ADD COLUMN pool_watch TEXT;
+  CREATE INDEX items_pool_src ON items(pool_src);
+  `,
 ];
 
 export class Db {
