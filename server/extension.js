@@ -99,6 +99,11 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // watchlist item's page every minute, as many a round as there's room for — the browser says it opens them there,
 // and each read says where it was read. (Its live searches already said so: they go at the set pace too now.)
 // Elsewhere, as before: one BIG W page a round, each every 3 minutes. Nothing else changed in how checkouts go.
+// 1.37.0: a store's virtual queue whose page draws its words a moment after it opens, and refreshes itself every few
+// seconds (EB Games'): the tab counts as in line from the moment the words show, and through every refresh — it's
+// through only once its page has been the store's for a moment (at once, a page with the store's menus on it). Before,
+// in that moment the extension's own checks of your items there could ask the store for a page, and the place in line
+// was lost. Nothing else changed in how searches or checkouts go.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):
