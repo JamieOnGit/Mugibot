@@ -853,6 +853,8 @@ export class Drops {
     // store's own pace, never sooner (every store: each at its own). Another website: within a few seconds.
     if (words && store === ALL_STORES) for (const x of this.stores()) { if (x.words) this.urgent.add(`${x.id}|${words}`); }
     else if (words && store !== 'other') this.urgent.add(`${store}|${words}`);
+    // (Their dashboards — and their pool's members', who see an admin's own watches: server/pools.js — look again.)
+    this.hub.publish(user.id, 'drop', { id });
     return this.view(this.get(id), user);
   }
 
@@ -923,6 +925,7 @@ export class Drops {
     this.db.run('DELETE FROM drop_watches WHERE id = :id', { id: w.id });
     this.changed();
     for (const it of items) this.hub.publish(w.userId, 'watch', { id: it.id, removed: true });
+    this.hub.publish(w.userId, 'drop', { id: w.id, removed: true });
     this.repo.audit(user.id, null, 'drop-remove', w.url || (w.page ? `${w.phrases.join(' | ')} @ ${w.page}` : `${w.words} @ ${w.site || w.store}`));
     return true;
   }
@@ -970,6 +973,7 @@ export class Drops {
     if (keys.length) {
       this.db.run(`UPDATE drop_watches SET ${keys.map((k) => `${k} = :${k}`).join(', ')} WHERE id = :id`, { ...set, id: w.id });
       this.changed();
+      this.hub.publish(w.userId, 'drop', { id: w.id });
       this.repo.audit(user.id, null, 'drop-change', `${w.url || w.page || `${w.words} @ ${w.site || w.store}`}: ${keys.map((k) => `${k}=${set[k] || '(usual)'}`).join(' ')}`);
     }
     return this.view(this.get(w.id), user);
@@ -1042,12 +1046,13 @@ export class Drops {
     }));
   }
 
-  /** What someone sees: their own watches, and the admins' for everyone. */
+  /** What someone sees: their own watches, the admins' for everyone, and their pool's leader's (server/pools.js). */
   viewFor(user) {
-    const list = this.watches().filter((w) => w.userId === user.id || w.shared);
+    const leader = this.pools ? this.pools.leaderOf(user.id) : null;
+    const list = this.watches().filter((w) => w.userId === user.id || w.shared || (leader && w.userId === leader));
     const route = user.role === 'admin' ? this.catalog.listRoutes().find((r) => r.categories.includes('nontcg')) || null : null;
     return {
-      watches: list.map((w) => this.view(w, user)),
+      watches: list.map((w) => this.view(w, user, { pooled: !!leader && w.userId === leader && !w.shared })),
       stores: this.stores(),
       limit: this.limitFor(user),
       used: list.filter((w) => w.userId === user.id).length,
@@ -1061,13 +1066,15 @@ export class Drops {
     };
   }
 
-  view(w, viewer) {
+  /** pooled: the viewer's pool's leader's own watch — shown to them as it is, what it found as their copies of it. */
+  view(w, viewer, { pooled = false } = {}) {
     const mine = w.userId === viewer.id;
     const admin = viewer.role === 'admin';
     // (A search page's: how often it's read, and from where — Mugibot's server or an admin's browser, said to admins only.)
     const pg = w.page && this.pages ? this.pages.viewOf(w) : null;
     return {
-      id: w.id, kind: w.url ? 'link' : w.page ? 'page' : 'words', shared: w.shared, mine, by: w.shared || admin ? w.username : '',
+      id: w.id, kind: w.url ? 'link' : w.page ? 'page' : 'words', shared: w.shared, mine, by: w.shared || admin || pooled ? w.username : '',
+      ...(pooled ? { pool: w.username } : {}),
       store: w.store, storeName: this.where(w), site: w.site, words: w.words, url: w.url, label: w.label,
       category: w.category, aco: mine && w.aco, maxPrice: mine ? w.maxPrice : null, canBuy: w.store === ALL_STORES || this.retailers.canBuy(w.store),
       // (A search page's note on a read that went fine, saying where it's read from: admins only.)
@@ -1086,7 +1093,7 @@ export class Drops {
       canChange: this.canChange(w, viewer),
       // (Where it posts, for an admin's watch for everyone: admins only.)
       ...(admin && w.shared ? { channelId: w.channelId, roleId: w.roleId } : {}),
-      found: w.found.map((f) => this.foundView(w, f, mine, viewer)).filter(Boolean),
+      found: w.found.map((f) => this.foundView(w, f, mine, viewer, pooled)).filter(Boolean),
     };
   }
 
@@ -1101,7 +1108,7 @@ export class Drops {
     return host && viewer && this.monitor && this.monitor.siteGranted(viewer.id, url) === false ? host : '';
   }
 
-  foundView(w, f, mine, viewer = null) {
+  foundView(w, f, mine, viewer = null, pooled = false) {
     const admin = !!viewer && viewer.role === 'admin';
     if (f.productId) {
       const p = this.catalog.productById(f.productId);
@@ -1116,12 +1123,15 @@ export class Drops {
         at: f.at || null, statusAt: p.status_at ?? null,
       };
     }
-    if (!mine || !f.itemId) return null;
-    const it = this.repo.getItem(w.userId, f.itemId);
+    if (!f.itemId || (!mine && !(pooled && viewer))) return null;
+    // (The pool's leader's watch: what it found is on the viewer's watchlist as their own copy of the leader's.)
+    const copy = mine ? null : this.db.get('SELECT id FROM items WHERE user_id = :v AND pool_src = :s', { v: viewer.id, s: f.itemId });
+    if (!mine && !copy) return null;
+    const it = mine ? this.repo.getItem(w.userId, f.itemId) : this.repo.getItem(viewer.id, copy.id);
     if (!it) return null;
     return {
       id: it.id, itemId: it.id, name: it.name, url: it.url, image: '', status: it.monitor ? it.status : 'paused', price: it.lastPrice ?? it.price,
-      store: it.store, sku: it.sku, storeName: this.retailers.siteName(it.store, it.url), canBuy: this.retailers.canBuy(it.store), aco: it.aco, arm: f.arm || '',
+      store: it.store, sku: it.sku, storeName: this.retailers.siteName(it.store, it.url), canBuy: this.retailers.canBuy(it.store), aco: it.aco, arm: mine ? f.arm || '' : '',
       at: f.at || null, statusAt: it.statusAt ?? null,
       ...(it.statusSource === 'browser' ? { via: 'browser' } : {}),
       ...(it.store === 'other' && it.monitor && FAILED.has(it.status) && this.allowFor(viewer, it.url) ? { allow: this.allowFor(viewer, it.url) } : {}),

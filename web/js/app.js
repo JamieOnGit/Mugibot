@@ -27,8 +27,9 @@ const PAGES = {
   aco: ['aco'], setup: ['extension', 'checkout', 'discord'], account: ['membership', 'account'],
 };
 // Addresses from before (in DMs, emails, the extension's Update button): the page each is on now, and where on it.
-const MOVED = { checkout: 'setup', extension: 'setup', discord: 'setup', update: 'setup', membership: 'account' };
-const SCROLL_TO = { checkout: '[data-panel="checkout"]', discord: '[data-panel="discord"]', update: '#ext-update', membership: '[data-panel="membership"]' };
+// (#pool, from a pool invitation's DM: the 🤝 Pool card on Checkout.)
+const MOVED = { checkout: 'setup', extension: 'setup', discord: 'setup', update: 'setup', membership: 'account', pool: 'aco' };
+const SCROLL_TO = { checkout: '[data-panel="checkout"]', discord: '[data-panel="discord"]', update: '#ext-update', membership: '[data-panel="membership"]', pool: '#pool-card' };
 // The Monitor's own pages (Settings and Check log are for admins): the sidebar's Drops stays lit.
 const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
 // The lists on the Drops page (tracked products, your watchlist, your armed items, your drop watches,
@@ -145,6 +146,8 @@ $('.mon-ptabs').addEventListener('keydown', (e) => {
 loaders.monitor = async () => {
   // Your watchlist first: the tracked products show which ones are on it.
   await Promise.all([loadItems(), loadRetailers()]);
+  // (Your pool, if you're in one: its leader's name on the 🤝 items it shares.)
+  loadPool().then(() => { if (state.items.some((it) => it.pool)) renderItems(); }).catch(() => null);
   $('#pt-tracked').hidden = !state.me.entitlement.active;
   $('#pt-armed').hidden = !state.me.entitlement.active;
   $('#pt-drops').hidden = !state.me.entitlement.active;
@@ -536,9 +539,12 @@ function itemRow(it, i, list = state.items, { movable = true } = {}) {
   const what = it.shopLink ? (it.title || `${it.sku.split(',').length} option${it.sku.includes(',') ? 's' : ''} in the link`) : it.acoCan ? `SKU ${it.sku}` : '';
   const meta = [it.storeName, what, money(price), it.quantity > 1 && !(it.shopLink && it.sku.includes(',')) ? `× ${it.quantity}` : '', it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}${it.quantity > 1 && !it.shopLink ? ' each' : ''}` : '', it.discount ? `🏷️ code ${it.discount}` : '', it.queueAt ? `⏰ 🚦 starts ${whenAt(it.queueAt)}` : '', checked].filter(Boolean).join(' · ');
   const isAdmin = state.me.user.role === 'admin';
-  return h('li', { class: it.monitor ? '' : 'off', dataset: { id: it.id } },
+  // (One of your pool's leader's: theirs, kept in step — changed, paused or removed by them. Yours to skip.)
+  const pooled = !!it.pool;
+  return h('li', { class: `${it.monitor ? '' : 'off'}${pooled ? ' pooled' : ''}`, dataset: { id: it.id } },
     h('div', { class: 'info' },
       h('div', { class: 'name' }, `${i + 1}. ${it.name}`, it.announce ? h('span', { class: 'pill info', title: 'Restocks are posted in the members\' Discord channel' }, '📣') : null,
+        pooled ? poolPill(it) : null,
         it.aco ? h('a', { class: 'pill aco-pill', href: '#aco', title: 'Bought by itself when it drops (Auto-checkout)' }, '🤖 Armed') : null,
         it.dropWatch ? h('a', { class: 'pill info', href: '#drops', title: 'Found by one of your drop watches (it goes when the watch does)' }, '🎯') : null),
       h('div', { class: 'meta' }, meta, ' ', h('span', { class: `flow flow-${it.flowStatus}` }, FLOW[it.flowStatus] || '')),
@@ -555,13 +561,49 @@ function itemRow(it, i, list = state.items, { movable = true } = {}) {
       h('button', { class: 'btn small', type: 'button', title: 'Check now', 'aria-label': `Check ${it.name} now`, onclick: () => checkNow(it) }, '↻'),
       movable ? h('button', { class: 'btn small', type: 'button', title: 'Move up', 'aria-label': 'Move up', onclick: () => move(-1) }, '↑') : null,
       movable ? h('button', { class: 'btn small', type: 'button', title: 'Move down', 'aria-label': 'Move down', onclick: () => move(1) }, '↓') : null,
-      h('button', { class: 'btn small', type: 'button', onclick: () => editItem(it) }, 'Edit'),
-      h('button', { class: 'btn small', type: 'button', onclick: async () => { await api('PUT', `/api/items/${it.id}`, { monitor: !it.monitor }); loadItems(); } }, it.monitor ? 'Pause' : 'Resume'),
-      isAdmin ? h('button', { class: 'btn small', type: 'button', title: 'Announce restocks in the members\' Discord channel', onclick: async () => { await api('PUT', `/api/items/${it.id}`, { announce: !it.announce }); loadItems(); } }, it.announce ? 'Stop announcing' : '📣 Announce') : null,
-      h('button', {
+      pooled ? poolSkip(it) : null,
+      pooled ? null : h('button', { class: 'btn small', type: 'button', onclick: () => editItem(it) }, 'Edit'),
+      pooled ? null : h('button', { class: 'btn small', type: 'button', onclick: async () => { await api('PUT', `/api/items/${it.id}`, { monitor: !it.monitor }); loadItems(); } }, it.monitor ? 'Pause' : 'Resume'),
+      isAdmin && !pooled ? h('button', { class: 'btn small', type: 'button', title: 'Announce restocks in the members\' Discord channel', onclick: async () => { await api('PUT', `/api/items/${it.id}`, { announce: !it.announce }); loadItems(); } }, it.announce ? 'Stop announcing' : '📣 Announce') : null,
+      pooled ? null : h('button', {
         class: 'btn small danger', type: 'button', 'aria-label': `Delete ${it.name}`,
         onclick: async () => { if (confirm(`Stop watching ${it.name}?`)) { await api('DELETE', `/api/items/${it.id}`); loadItems(); } },
       }, '✕')));
+}
+
+// 🤝 Your pool's items on your watchlist and Armed (server/pools.js).
+const poolLeader = () => (state.pool && state.pool.pool ? state.pool.pool.leader : '');
+const poolWhose = () => (poolLeader() ? `${poolLeader()}'s` : "Your pool's");
+
+function poolPill(it) {
+  const who = poolWhose();
+  return h('a', {
+    class: `pill pool-pill${it.pool.hold ? ' held' : ''}`, href: '#pool',
+    title: it.pool.hold ? `${who} — skipped: never armed on yours, never started by their checkouts`
+      : `${who}: on your watchlist as it is on theirs, kept in step as they change it${state.pool && state.pool.pool && state.pool.pool.followAco ? ' — armed when theirs is, and started by their checkouts' : ''}`,
+  }, it.pool.hold ? `🤝 ${who} · skipped` : `🤝 ${who}`);
+}
+
+/** 🤝 Skip (never armed on yours, never started by the leader's checkouts — still on your watchlist), or follow it again. */
+function poolSkip(it) {
+  const who = poolLeader() || 'the leader';
+  const b = h('button', {
+    class: 'btn small', type: 'button', 'aria-label': `${it.pool.hold ? 'Follow again' : 'Skip'}: ${it.name}`,
+    title: it.pool.hold ? `Follow ${who} on this one again: armed when theirs is, and started by their checkouts (if you check out with them)`
+      : `Skip this one: never armed on yours and never started by ${who}'s checkouts — it stays on your watchlist`,
+  }, it.pool.hold ? '🤝 Follow again' : '🤝 Skip');
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await api('POST', `/api/items/${it.id}/pool-hold`, { hold: !it.pool.hold });
+      await loadItems();
+      if (state.pool) loadPool().then(renderPool).catch(() => null);
+    } catch (e) {
+      toast("Couldn't change it", e.message, 'warn');
+      b.disabled = false;
+    }
+  });
+  return b;
 }
 
 // Search, filter and sort: My watchlist and Armed (kept in this browser).
@@ -1207,7 +1249,7 @@ const ACO_STEP = {
   placed: 'Order placed', ready: 'Filled in', needs_you: 'Needs you', failed: 'Failed', skipped: "Didn't start", expired: "Didn't start",
 };
 const ACO_FILTER = { placed: ['placed'], needs: ['needs_you', 'ready'], failed: ['failed', 'expired'], skipped: ['skipped'] };
-const TRIGGER = { sweep: 'seen by the live monitor', server: 'seen by the monitor', browser: 'seen by your browser', manual: 'reported by an admin', test: 'test run (Trigger ACO)', queue: '🚦 Wait for queue, then ACO', remote: '⚡ Buy pressed in Discord' };
+const TRIGGER = { sweep: 'seen by the live monitor', server: 'seen by the monitor', browser: 'seen by your browser', manual: 'reported by an admin', test: 'test run (Trigger ACO)', queue: '🚦 Wait for queue, then ACO', remote: '⚡ Buy pressed in Discord', pool: '🤝 with your pool' };
 const versionBelow = (a, b) => {
   const pa = String(a || '0').split('.').map(Number);
   const pb = String(b || '0').split('.').map(Number);
@@ -1413,8 +1455,13 @@ function renderArmed() {
   const from = (state.acoPage - 1) * ACO_PAGE_SIZE;
   for (const it of items.slice(from, from + ACO_PAGE_SIZE)) {
     const can = it.acoCan;
-    const toggle = h('button', { type: 'button', class: 'sn-sw', role: 'switch', 'aria-checked': it.aco ? 'true' : 'false', 'aria-label': `Auto-checkout ${it.name}`, disabled: !can });
-    const max = h('input', { type: 'number', min: '0', step: '0.01', value: it.maxPrice ?? '', placeholder: 'Max', 'aria-label': `Max price for ${it.name}`, class: 'aco-max' });
+    // (Your pool's: armed when the leader's is — if you check out with them — at their max, never over yours for the pool.)
+    const pooled = !!it.pool;
+    const toggle = h('button', {
+      type: 'button', class: 'sn-sw', role: 'switch', 'aria-checked': it.aco ? 'true' : 'false', 'aria-label': `Auto-checkout ${it.name}`, disabled: !can || pooled,
+      title: pooled ? `${poolWhose()}: armed when theirs is, if you check out with them (🤝 Pool, on Checkout) — or 🤝 Skip it` : '',
+    });
+    const max = h('input', { type: 'number', min: '0', step: '0.01', value: it.maxPrice ?? '', placeholder: 'Max', 'aria-label': `Max price for ${it.name}`, class: 'aco-max', disabled: pooled, title: pooled ? `${poolWhose()} max — never over the most you set for the pool` : '' });
     const save = async (patch) => {
       try {
         await api('PUT', `/api/items/${it.id}`, patch);
@@ -1449,7 +1496,7 @@ function renderArmed() {
     list.append(h('li', { class: `ar-row${it.aco ? ' armed' : ''}${it.aco && !ready ? ' unready' : ''}`, dataset: { id: it.id } },
       h('div', { class: 'sw' }, toggle),
       h('div', { class: 'info' },
-        h('div', { class: 'name' }, h('span', { class: 'nm', title: it.name }, it.name),
+        h('div', { class: 'name' }, h('span', { class: 'nm', title: it.name }, it.name), pooled ? poolPill(it) : null,
           it.aco ? h('span', { class: `pill ${ready && s.enabled ? 'ok' : 'warn'}` }, !s.enabled ? 'Armed · Auto-checkout off' : ready ? 'Armed · ready' : `Armed · ${fix.length} to fix`) : null),
         h('div', { class: 'meta' }, meta),
         h('div', { class: 'ar-checks', role: 'list', 'aria-label': `Ready to check out ${it.name}?` }, ...checks.map((c) => {
@@ -1461,7 +1508,7 @@ function renderArmed() {
         it.aco && fix.length ? h('div', { class: 'ar-fix' }, `To fix: ${fix.join(' · ')}`) : null,
         run ? h('div', { class: `meta aco-last ${ACO_TONE[run.status] || ''}` }, `Last: ${ACO_ICON[run.status] || '⏳'} ${run.statusText}${run.reasonText ? ` — ${run.reasonText}` : ''}${typeof run.tookMs === 'number' ? ` · ⏱ ${secs(run.tookMs)}` : ''} · ${ago(run.createdAt)}`) : null),
       h('div', { class: 'max' }, h('label', { class: 'aco-max-wrap' }, h('span', { 'aria-hidden': 'true' }, '$'), max)),
-      h('div', { class: 'acts' }, test, clear)));
+      h('div', { class: 'acts' }, test, pooled ? poolSkip(it) : null, clear)));
   }
 }
 
@@ -1789,6 +1836,132 @@ async function saveRemote(patch, done) {
   }
 }
 
+// --- 🤝 Pool: an admin's watchlist, armed items and drop watches, shared with you and kept in step (server/pools.js) --
+// Checking out with them is yours alone to switch on — agreeing to it, with the most it may cost you an item: then their
+// Auto-checkouts (their ⚡ Buy, Trigger ACO, an armed item dropping) start yours for the same item, in your own checkout
+// browser, with your card and details, within your own limits.
+async function loadPool() {
+  state.pool = await api('GET', '/api/pool');
+  return state.pool;
+}
+
+const poolAgreement = (leader) => `I agree that when ${leader} starts an Auto-checkout — or one of their armed items drops — Mugibot checks out the same item for me, by itself, in my checkout browser, with my saved card and delivery details, up to the most I set here an item and within my Auto-checkout limits. I can switch this off at any time.`;
+
+function renderPool() {
+  const d = state.pool;
+  const card = $('#pool-card');
+  if (!d || !card) return;
+  const show = !!(d.invites.length || d.pool || d.leads.length);
+  card.hidden = !show;
+  $('#pool-jump').hidden = !show;
+  if (!show) return;
+  const p = d.pool;
+  const pill = $('#pool-state');
+  pill.className = `pill ${p ? (p.followAco ? 'ok' : '') : d.invites.length ? 'warn' : ''}`;
+  pill.textContent = p ? (p.followAco ? `Checking out with ${p.leader}` : 'Watchlist shared') : d.invites.length ? `${d.invites.length} invitation${d.invites.length === 1 ? '' : 's'}` : 'You lead';
+  // Invitations: an admin asked you to join (yours to say yes to).
+  const inv = $('#pool-invites');
+  inv.textContent = '';
+  for (const i of d.invites) {
+    const yes = h('button', { class: 'btn small primary', type: 'button', 'aria-label': `Join ${i.leader}'s pool` }, 'Join');
+    const no = h('button', { class: 'btn small', type: 'button', 'aria-label': `Decline ${i.leader}'s pool` }, 'No thanks');
+    yes.addEventListener('click', () => poolCall('POST', `/api/pool/${encodeURIComponent(i.poolId)}/accept`, undefined, ['🤝 You joined the pool', `${i.leader}'s watchlist, armed items and drop watches show on yours now. Checking out with them stays off until you switch it on here.`]));
+    no.addEventListener('click', () => poolCall('POST', `/api/pool/${encodeURIComponent(i.poolId)}/decline`));
+    inv.append(h('div', { class: 'notice pool-invite', dataset: { pool: i.poolId } },
+      h('div', { class: 'pool-invite-tx' }, h('b', {}, `🤝 ${i.leader} asks you to join their pool "${i.name}"`),
+        h('div', { class: 'muted small' }, `Their watchlist, armed items and drop watches show on yours, kept in step as they change them (one pool at a time). Nothing is bought for you unless you switch on checking out with them — that's yours to decide, and to switch off.`)),
+      h('div', { class: 'pool-invite-acts' }, yes, no)));
+  }
+  // Your pool.
+  $('#pool-mine').hidden = !p;
+  if (p) {
+    const line = $('#pool-line');
+    line.textContent = '';
+    line.append(h('b', {}, `${p.leader}'s pool "${p.name}"`), ` — you joined ${ago(p.joinedAt)} · ${p.members} member${p.members === 1 ? '' : 's'}. `,
+      `${p.shared} of their items ${p.shared === 1 ? 'is' : 'are'} on your `, h('a', { href: '#watch' }, 'watchlist'), ' (🤝)',
+      p.followAco ? `, ${p.armed} armed` : '', p.skipped ? `, ${p.skipped} skipped` : '', ', and their ', h('a', { href: '#drops' }, 'drop watches'), ' are on yours.');
+    const sw = $('#pool-follow');
+    sw.setAttribute('aria-checked', p.followAco ? 'true' : 'false');
+    $('#pool-follow-label').textContent = p.followAco ? `Checking out with ${p.leader}` : `Checking out with ${p.leader} is off`;
+    const note = $('#pool-follow-note');
+    note.textContent = '';
+    if (p.followAco) {
+      note.append(`When ${p.leader}'s Auto-checkout starts — their ⚡ Buy (here or in Discord), Trigger ACO, or one of their armed items dropping — yours starts for the same item at once, in your checkout browser, with your card and details, up to ${money(p.cap)} an item and within your limits above.`,
+        !d.acoOn ? h('b', { class: 'warn-text' }, ' Your own Auto-checkout is off, so nothing starts on yours — switch it on above.') : '');
+    } else {
+      note.append(`Their items are on your watchlist, but nothing is bought for you. Switch this on to check out with them at the same time${d.acoOn ? '' : ' (switch your own Auto-checkout on above first)'}.`);
+    }
+    const cap = $('#pool-cap');
+    if (document.activeElement !== cap) cap.value = p.cap ?? '';
+    $('#pool-save').disabled = !p.followAco;
+    $('#pool-save').title = p.followAco ? 'Save the most it may cost you an item' : 'Set it, then switch checking out on';
+    $('#pool-agree-text').textContent = poolAgreement(p.leader);
+    $('#pool-agree-wrap').hidden = p.agreed;
+  }
+  // The pools you lead (an admin's): who's in, who checks out with you.
+  const leads = $('#pool-leads');
+  leads.textContent = '';
+  for (const l of d.leads) {
+    const joined = l.members.filter((m) => m.status === 'active');
+    const asked = l.members.filter((m) => m.status !== 'active');
+    const with_ = joined.filter((m) => m.followAco);
+    leads.append(h('div', { class: 'pool-lead', dataset: { pool: l.id } },
+      h('div', {}, h('b', {}, `You lead "${l.name}"`), ` — ${joined.length} member${joined.length === 1 ? '' : 's'}, ${with_.length} checking out with you${asked.length ? `, ${asked.length} asked` : ''}.`),
+      h('ul', { class: 'pool-members' }, ...l.members.map((m) => h('li', { class: m.status === 'active' ? (m.followAco ? 'on' : '') : 'asked' },
+        h('b', {}, m.username), ' ', m.status !== 'active' ? 'asked' : m.followAco ? '🤖 checks out with you' : 'watchlist only'))),
+      h('div', { class: 'muted small' }, 'Your watchlist, what you arm and your drop watches show on theirs as you change them. Your ⚡ Buy (here or in Discord), Trigger ACO and your armed items\' drops start a checkout for each one who checks out with you — in their own browser, with their own card, details and limits.',
+        state.me.user.role === 'admin' ? [' Add or take out members in the ', h('a', { href: '/admin#members' }, 'admin console'), ' (Members → Pools).'] : '')));
+  }
+}
+
+/** A pool call from the card: its answer is the card again (and your watchlist changes with it). */
+async function poolCall(method, path, body, done, msg = $('#pool-msg')) {
+  try {
+    state.pool = await api(method, path, body);
+    renderPool();
+    if (done) toast(done[0], done[1], 'success');
+    loadItems().catch(() => null);
+    return true;
+  } catch (e) {
+    if (msg && !$('#pool-mine').hidden) setMsg(msg, e.message); else toast("Couldn't do that", e.message, 'warn');
+    return false;
+  }
+}
+
+$('#pool-follow').addEventListener('click', async () => {
+  const p = state.pool && state.pool.pool;
+  if (!p) return;
+  const next = !p.followAco;
+  const msg = $('#pool-msg');
+  const cap = Number($('#pool-cap').value);
+  if (next && !p.agreed && !$('#pool-agree').checked) {
+    $('#pool-agree-wrap').hidden = false;
+    $('#pool-agree').focus();
+    setMsg(msg, 'Tick the box to agree first, then switch it on.');
+    return;
+  }
+  if (next && !(cap >= 1)) {
+    $('#pool-cap').focus();
+    setMsg(msg, 'Set the most it may cost you an item first ($1 or more).');
+    return;
+  }
+  setMsg(msg, '');
+  const ok = await poolCall('PUT', '/api/pool/follow', { on: next, cap: next ? cap : undefined, agree: next && !p.agreed ? true : undefined },
+    next ? [`🤝 Checking out with ${p.leader}`, `Their Auto-checkouts start yours for the same item, up to ${money(cap)} an item.`] : ['🤝 Checking out with the leader is off', 'Their items stay on your watchlist; nothing is bought for you.']);
+  // (Your checkout browser listens for what starts there.)
+  if (ok && next) askExtension('acoListen', {}, 4000);
+});
+$('#pool-save').addEventListener('click', () => {
+  const cap = Number($('#pool-cap').value);
+  if (!(cap >= 1)) { setMsg($('#pool-msg'), 'The most it may cost you an item is $1 or more.'); return; }
+  poolCall('PUT', '/api/pool/follow', { on: true, cap }, ['Saved', `Up to ${money(cap)} an item.`]);
+});
+$('#pool-leave').addEventListener('click', () => {
+  const p = state.pool && state.pool.pool;
+  if (!p || !confirm(`Leave ${p.leader}'s pool "${p.name}"?\n\nTheir items come off your watchlist (one checking out right now finishes first), and their checkouts don't start yours.`)) return;
+  poolCall('POST', '/api/pool/leave', undefined, ['🤝 You left the pool', `${p.leader}'s items are off your watchlist.`]);
+});
+
 // --- Clear cart: your bag at each store, emptied in your checkout browser (server/bags.js) ----------
 async function loadBags() {
   state.bags = await api('GET', '/api/bags');
@@ -1856,6 +2029,7 @@ function renderAco() {
   renderAcoStats();
   renderAcoSettings();
   renderAcoRemote();
+  renderPool();
   renderBags();
   renderAcoRuns();
 }
@@ -1870,7 +2044,7 @@ setInterval(async () => {
 }, 20000);
 
 loaders.aco = async () => {
-  await Promise.all([loadAco(), loadRetailers(), loadItems(), loadLogins().catch(() => null), loadBags().catch(() => null)]);
+  await Promise.all([loadAco(), loadRetailers(), loadItems(), loadLogins().catch(() => null), loadBags().catch(() => null), loadPool().catch(() => null)]);
   renderAco();
   renderAcoChecks().catch(() => null);
 };
@@ -2160,6 +2334,12 @@ function connectStream() {
     if ($('[data-panel="aco"]').hidden && !listOpen('armed')) return;
     clearTimeout(acoTimer);
     acoTimer = setTimeout(() => Promise.all([loadAco(), loadItems()]).then(() => { renderAco(); if (listOpen('armed')) renderArmed(); }).catch(() => null), 250);
+  });
+  // 🤝 Your pool: an invitation, someone joining or leaving, checking out with the leader switched on or off.
+  let poolTimer = null;
+  es.addEventListener('pool', () => {
+    clearTimeout(poolTimer);
+    poolTimer = setTimeout(() => loadPool().then(() => { renderPool(); if (state.items.some((it) => it.pool)) renderItems(); }).catch(() => null), 200);
   });
   // Clear cart: a bag being emptied, or done.
   let bagsTimer = null;

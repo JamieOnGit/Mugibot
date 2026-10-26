@@ -28,6 +28,17 @@ yet. Also lists anything still to set up.
 | Sign out | Ends their sessions and disconnects their extensions. |
 | Delete | Deletes the account and all its data, cancels their Whop membership and removes their Discord role. You type their username to confirm. |
 
+**🤝 Pools** (under the member list). Make a pool and you lead it: members who
+join get your watchlist, armed items and drop watches on theirs, kept in step as
+you change them. Type a username and press **Ask to join**; they answer on
+their own dashboard. Each row shows whether they joined, and whether they
+**check out with the leader**. That switch is the member's alone: once it's on,
+your ⚡ Buy, Trigger ACO and armed drops start their checkouts too, on their own
+account and within their own limits. You never see what they'd spend. **Take
+out**, **Rename** and **Close pool** are there too. Once someone checks out with
+you, your own Discord DMs carry **🤝 Group Buy**, **🤝 Group Queue** and **🤝
+Group Checkpoint** buttons, which only you see. See [POOLS.md](POOLS.md).
+
 **SKUs & restock pings.**
 - **What members are watching:** every SKU, how many members watch it, their
   statuses, and what the server check last saw. Totals only, not who.

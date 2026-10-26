@@ -73,16 +73,41 @@ export function register(router, ctx) {
     return withStore(repo.addItem(req.user.id, checkItem(req.body, { retailers, isAdmin: isAdmin(req) })));
   });
 
+  // (One of your pool's leader's items: theirs to change — skip it for you instead, or leave the pool.)
+  const notFromPool = (userId, it) => {
+    if (!it || !it.pool) return;
+    const m = ctx.pools && ctx.pools.membership(userId);
+    throw new HttpError(409, `This one's from ${m ? `${m.leader}'s pool` : 'your pool'}, and kept in step with theirs — skip it for you instead (🤝 Skip), or leave the pool`);
+  };
+
   router.put('/api/items/:id', async (req) => {
     const existing = repo.getItem(req.user.id, req.params.id);
     if (!existing) throw notFound('SKU');
+    notFromPool(req.user.id, existing);
     return withStore(repo.updateItem(req.user.id, existing.id, checkItem(req.body, { retailers, existing, isAdmin: isAdmin(req) })));
   });
 
   router.delete('/api/items/:id', async (req) => {
+    notFromPool(req.user.id, repo.getItem(req.user.id, req.params.id));
     if (!repo.deleteItem(req.user.id, req.params.id)) throw notFound('SKU');
     return { ok: true };
   });
+
+  // --- Pools (server/pools.js): invitations, your pool, checking out with its leader — your say alone -------------
+  router.get('/api/pool', async (req) => ctx.pools.viewFor(req.user));
+  router.post('/api/pool/:id/accept', async (req) => {
+    if (!limiter.hit(`pool:${req.user.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    return ctx.pools.accept(req.user, str(req.params.id, 40));
+  });
+  router.post('/api/pool/:id/decline', async (req) => ctx.pools.decline(req.user, str(req.params.id, 40)));
+  router.post('/api/pool/leave', async (req) => ctx.pools.leave(req.user));
+  router.put('/api/pool/follow', async (req) => {
+    if (!limiter.hit(`pool:${req.user.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
+    const b = req.body || {};
+    return ctx.pools.follow(req.user, { on: b.on === true, cap: b.cap, agree: b.agree === true });
+  });
+  // 🤝 Skip one of your pool's items (never armed on yours, never started by the leader's checkouts) — or follow it again.
+  router.post('/api/items/:id/pool-hold', async (req) => ({ item: withStore(ctx.pools.hold(req.user, str(req.params.id, 40), !!(req.body && req.body.hold))) }));
 
   router.post('/api/items/reorder', async (req) => {
     if (!Array.isArray(req.body.ids)) throw bad('ids must be a list');

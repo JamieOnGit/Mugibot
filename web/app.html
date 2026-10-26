@@ -40,7 +40,7 @@
       <div id="gates-banner" aria-live="polite"></div>
       <!-- On a page with several parts: a row to jump to each -->
       <nav class="jump" data-for="aco" aria-label="On this page" hidden>
-        <button type="button" data-jump="#aco-form">🤖 Auto-checkout</button><button type="button" data-jump="#aco-remote">📱 Phone ⚡ Buy</button><button type="button" data-jump="#bags-card">🧹 Bags</button><button type="button" data-jump="#aco-runs-card">📜 Run history</button><a class="jump-link" href="#armed">🎯 Armed items ↗</a>
+        <button type="button" data-jump="#aco-form">🤖 Auto-checkout</button><button type="button" data-jump="#aco-remote">📱 Phone ⚡ Buy</button><button type="button" data-jump="#pool-card" id="pool-jump" hidden>🤝 Pool</button><button type="button" data-jump="#bags-card">🧹 Bags</button><button type="button" data-jump="#aco-runs-card">📜 Run history</button><a class="jump-link" href="#armed">🎯 Armed items ↗</a>
       </nav>
       <nav class="jump" data-for="setup" aria-label="On this page" hidden>
         <button type="button" data-jump="[data-panel=&quot;extension&quot;]">🧩 Extension</button><button type="button" data-jump="#logins-card">🔑 Store sign-ins</button><button type="button" data-jump="#devices-card">💻 Browsers</button><button type="button" data-jump="[data-panel=&quot;checkout&quot;]">📦 Delivery &amp; card</button><button type="button" data-jump="[data-panel=&quot;discord&quot;]">💬 Discord &amp; pings</button>
@@ -243,6 +243,7 @@
                 <h4 class="dw-h">Yours <span class="mon-meta" id="dw-used"></span></h4>
                 <ul class="dw-list" id="dw-mine"></ul>
                 <div id="dw-shared-box" hidden><h4 class="dw-h">From the admins — for everyone</h4><ul class="dw-list" id="dw-shared"></ul></div>
+                <div id="dw-pool-box" hidden><h4 class="dw-h" id="dw-pool-h">🤝 From your pool</h4><ul class="dw-list" id="dw-pool"></ul></div>
               </div>
               <!-- 📰 News: what's being released, when, and which stores are dropping it (docs/NEWS.md) -->
               <div class="mon-ppanel" data-ppanel="news" id="pp-news" role="tabpanel" aria-labelledby="pt-news" hidden>
@@ -493,6 +494,27 @@
           </div>
           <p class="muted small aco-device-line" id="aco-device-note"></p>
           <p class="muted small" id="aco-checkpoint-help">🛡️ <b>A store's checkpoint</b> (JB Hi-Fi's hCaptcha) is a check for the browser that's buying, so solving it on your phone can't let your computer through — and Mugibot never solves it. When your computer stops at one, Discord's reply and your DM give you two buttons: <b>🖥️ Solve it on my computer</b> opens <a href="https://remotedesktop.google.com/access" rel="noopener">Chrome Remote Desktop</a>, where the checkout's tab is in front, waiting (set it up once: install it on your computer from that page and sign in to the app on your phone with the same Google account); <b>📱 Finish on this phone</b> stops your computer's checkout and opens the store on your phone, with the product, for you to pass the check and pay there.</p>
+        </div>
+
+        <!-- 🤝 Pool (server/pools.js): an admin's watchlist shared with you, and — your switch alone — checking out with them -->
+        <div class="card" id="pool-card" hidden>
+          <div class="card-head"><h3>🤝 Pool</h3><span class="pill" id="pool-state"></span></div>
+          <div id="pool-invites"></div>
+          <div id="pool-mine" hidden>
+            <p class="pool-line" id="pool-line"></p>
+            <div class="aco-switch-row">
+              <button type="button" class="sn-sw" id="pool-follow" role="switch" aria-checked="false" aria-label="Check out with the pool's leader"></button>
+              <div><b id="pool-follow-label">Checking out with the leader is off</b>
+                <div class="muted small" id="pool-follow-note"></div></div>
+            </div>
+            <div class="grid2 pool-cap-row">
+              <div><label for="pool-cap">Most it may cost you an item ($)</label><input id="pool-cap" type="number" min="1" max="100000" step="1" inputmode="decimal"></div>
+              <div class="pool-cap-save"><button class="btn small" type="button" id="pool-save">Save</button></div>
+            </div>
+            <label class="check pool-agree" id="pool-agree-wrap" hidden><input type="checkbox" id="pool-agree"> <span id="pool-agree-text"></span></label>
+            <div class="form-actions"><button class="btn small danger" type="button" id="pool-leave">Leave the pool</button><span class="msg" id="pool-msg"></span></div>
+          </div>
+          <div id="pool-leads"></div>
         </div>
 
         <div class="card" id="bags-card">

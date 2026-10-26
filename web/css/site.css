@@ -982,3 +982,25 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 .cb-list li.is-chosen .what b::before { content: '✓ '; color: var(--ok, #15803d); }
 .cb-list .tags { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 4px; vertical-align: middle; }
 .cb-backup { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; align-items: flex-start; }
+
+/* 🤝 Pool (Checkout page, and the pool's items on your watchlist and Armed) */
+.pill.pool-pill { background: var(--info-bg); color: var(--info); margin-left: 6px; text-decoration: none; }
+.pill.pool-pill.held { background: var(--surface-2); color: var(--muted); }
+#pool-card .pool-invite { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+#pool-card .pool-invite-tx { flex: 1 1 260px; min-width: 0; }
+#pool-card .pool-invite-acts { display: flex; gap: 8px; }
+#pool-card .pool-line { margin: 0 0 12px; }
+#pool-card .pool-cap-row { margin-top: 12px; align-items: end; }
+#pool-card .pool-cap-save { padding-bottom: 2px; }
+#pool-card .pool-agree { margin-top: 10px; font-size: 13px; }
+#pool-card .pool-lead { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+#pool-card .pool-lead:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.pool-members { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.pool-members li { border: 1px solid var(--line); border-radius: 99px; padding: 2px 10px; font-size: 13px; background: var(--surface-2); }
+.pool-members li.on { border-color: var(--ok); background: var(--ok-bg); }
+.pool-members li.asked { color: var(--muted); border-style: dashed; }
+/* (The admin console's Members → Pools.) */
+.pools .pool { padding: 14px 0 4px; border-top: 1px solid var(--line); }
+.pools .pool:first-child { border-top: 0; padding-top: 4px; }
+.pools .pool .card-head { flex-wrap: wrap; gap: 6px 12px; }
+.pools .pool .pool-invite { margin-top: 8px; }

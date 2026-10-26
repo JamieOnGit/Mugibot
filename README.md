@@ -44,6 +44,17 @@ community. Built on TCGCopBot's working Kmart flow.
   their limits; otherwise it stops at the final button for them. Discord's
   reply, seen only by them, follows it to the end. Runs only ever go to one of a
   member's browsers (the one they pick, or the newest), never to all of them.
+- **🤝 Pools.** An admin makes a pool and asks members to join. Members who join
+  get the admin's watchlist, armed items and drop watches on their own, kept in
+  step live as the admin changes them. A member can also switch on **checking
+  out with the leader** (agreed to, with the most it may cost them an item).
+  Then the admin's ⚡ Buy (dashboard or Discord), Trigger ACO or armed drop
+  starts the same checkout for each of them at once, on their own account: their
+  checkout browser, card, details and limits. On the leader's own Discord DMs,
+  **🤝 Group Buy**, **🤝 Group Queue** and **🤝 Group Checkpoint** start a
+  checkout, a place in a store's virtual queue, or a checkpoint's check page
+  (each member solves their own) for the whole group at once. See
+  [docs/POOLS.md](docs/POOLS.md).
 - **🚦 Checkpoints and virtual queues.** Mugibot watches for JB Hi-Fi's hCaptcha
   checkpoint (`/checkpoint`) and EB Games' and Pokémon Center's virtual queues
   going up before a drop and coming down after. Each is posted in
@@ -165,6 +176,7 @@ community. Built on TCGCopBot's working Kmart flow.
 | Set up the Whop product, A$19.99 plan, API key and webhook | [docs/WHOP.md](docs/WHOP.md) |
 | Send a retailer's checkout flow (BIG W, Target…) or change one | [docs/RETAILER-FLOWS.md](docs/RETAILER-FLOWS.md) |
 | Understand Auto-checkout: arming, limits, what it checks, the run history, card backup | [docs/AUTO-CHECKOUT.md](docs/AUTO-CHECKOUT.md) |
+| Share a watchlist with a group, and check out together (🤝 Pools) | [docs/POOLS.md](docs/POOLS.md) |
 | Run the community day to day (admin console) | [docs/ADMIN.md](docs/ADMIN.md) |
 | Set up the Monitor feed: products, alert channels, schedules | [docs/MONITORING.md](docs/MONITORING.md) |
 | Release news: #news, the news feeds, the morning digest | [docs/NEWS.md](docs/NEWS.md) |
@@ -266,7 +278,7 @@ Discord and Whop are optional for this. Add them later with the guides.
 | Password | scrypt hash only | Nobody |
 | Delivery addresses | Server, **encrypted with a key unique to that member** | The member and their connected extension |
 | Alert settings, Discord tokens | Server, encrypted per member | The member |
-| Watchlist, activity, connected browsers | Server, tied to the member | The member (admins see totals only) |
+| Watchlist, activity, connected browsers | Server, tied to the member | The member (admins see totals only). A pool's leader's own watchlist and drop watches are also seen by the members who joined their pool; a leader never sees their members' |
 | **Payment cards** (up to 6, one the default) | **In the member's browser extension**, each encrypted with a key that only that browser's extension has. The server keeps only which card an item pays with (its id in the extension) | The member. They're never sent to the server in readable form. |
 | Card copy for extension updates (on unless the member switches it off) | Server: only a copy of the cards **locked in the browser** (AES-256-GCM) with a random key the member's dashboard keeps in that browser, plus each card's brand, last 4 and expiry | The member's extension, once connected from their dashboard in that browser: the key never leaves the browser, so the server can't open it by itself |
 | Card backup (optional, the member turns it on) | Server: only a copy of the cards **locked in the browser** with the member's card passphrase (PBKDF2-SHA256 600,000 rounds → AES-256-GCM), plus each card's brand, last 4 and expiry | Nobody but the member: the passphrase never leaves their browser, so the server can't open it |

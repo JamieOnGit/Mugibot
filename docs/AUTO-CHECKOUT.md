@@ -321,6 +321,21 @@ browser:
   never go over them ("2 of 2 today (2 checking out now)"). One that stops
   short frees its place again.
 
+### 🤝 Checking out with your pool's leader
+
+If an admin asked you to join their pool and you joined, their watchlist,
+armed items and drop watches show on yours (🤝). On the 🤝 Pool card (Checkout
+page) you can also switch on **checking out with the leader**. You agree to it
+the first time and set the most it may cost you an item. Then, when their
+Auto-checkout starts — their ⚡ Buy, their Trigger ACO, or one of their armed
+items dropping — yours starts for the same item at once, in your checkout
+browser, with your card and details.
+
+It's an ordinary run of yours, within your limits, labelled **🤝 with your pool**
+in your Run history. Their armed items are armed on yours at their max, never
+over yours. **🤝 Skip** takes one of their items out of it, and you can switch
+the whole thing off or leave the pool at any time. See [POOLS.md](POOLS.md).
+
 ### Clear cart: your bags, emptied before a drop
 
 (EB Games' cart opens as a pop-up over its home page — "Oh no! currently your cart
@@ -1053,7 +1068,9 @@ Tests:
 ## Fair play
 
 - It runs only for members who switched it on and agreed, and only for items
-  they armed, each with a max price and buying once.
+  they armed, each with a max price and buying once. A pool's checkouts start a
+  member's only if that member switched on checking out with the leader
+  themselves, with the most it may cost them an item ([POOLS.md](POOLS.md)).
 - It uses the member's own browser, signed in as them, at a person's pace. There
   are no proxies, no extra accounts and no hidden identity.
 - It never solves CAPTCHAs, skips queues or gets past bot protection or a bank's

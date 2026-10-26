@@ -27,6 +27,15 @@ export class Notifier {
     Object.assign(this, { cfg, repo, retailers, hub, mailer, discord, fetch: fetchImpl, now });
     this.buyKey = purposeKey(cfg.dataKey, 'buy-link');
     this.alertBuyKey = purposeKey(cfg.dataKey, 'alert-buy-link');
+    this.pools = null; // set by app.js (server/pools.js): a pool's leader's ⚡ Buy is their 🤝 Group Buy
+  }
+
+  /**
+   * What the ⚡ Buy button on someone's own DM says: "🤝 Group Buy" for a pool's leader with members who check out with
+   * them (theirs start with it — server/pools.js), else "⚡ Buy". Only the leader sees it: it's on their own DMs.
+   */
+  buyLabel(userId) {
+    return this.pools && this.pools.leadsGroup(userId) ? '🤝 Group Buy' : '⚡ Buy';
   }
 
   /** A ⚡ Buy link for a member's own item: opens the product with the extension ready to go — as many as it says. */
@@ -147,6 +156,12 @@ export class Notifier {
     }
   }
 
+  /** "Press ⚡ Buy…" — or, for a pool's leader, what their 🤝 Group Buy does. */
+  pressText(label) {
+    return label === '⚡ Buy' ? 'Press ⚡ Buy to go straight to checkout.'
+      : 'Press 🤝 Group Buy: your checkout starts, and so do those of your pool\'s members who check out with you — each in their own checkout browser, within their own limits.';
+  }
+
   /**
    * One of a member's SKUs changed: kind 'restock' (in stock / pre-order) or 'listed'.
    * info: { status, price, source, manual, note }
@@ -164,8 +179,9 @@ export class Notifier {
     const qty = Math.max(1, Math.min(10, Number(item.quantity) || 1));
     const meta = [storeName, what, money(price), buyable && qty > 1 && !(r && r.cartLinks) ? `Quantity ${qty}` : ''].filter(Boolean).join(' · ');
     const buttons = [];
-    // ⚡ Buy where Mugibot checks out; at another website, the product page is the way in.
-    if (item.url && buyable) buttons.push({ label: '⚡ Buy', url: this.buyLink(userId, item), action: buyAction('i', item.id) });
+    // ⚡ Buy where Mugibot checks out (🤝 Group Buy, for a pool's leader); at another website, the product page is the way in.
+    const buy = this.buyLabel(userId);
+    if (item.url && buyable) buttons.push({ label: buy, url: this.buyLink(userId, item), action: buyAction('i', item.id) });
     if (item.url) buttons.push({ label: 'Open product', url: item.url });
     buttons.push({ label: 'Watchlist', url: `${this.cfg.baseUrl}/app#watch` });
     if (kind === 'listed') {
@@ -181,7 +197,7 @@ export class Notifier {
       return this.notify(userId, {
         type: 'restock', level: 'success', color: 'price', channel: 'restock',
         title: `📉 Price drop: ${item.name}`,
-        message: `${meta}${stock}\nWas ${money(info.previous)} — now ${money(price)}${typeof info.pct === 'number' ? ` (${info.pct.toFixed(info.pct < 10 ? 1 : 0)}% lower)` : ''}. ${buyable ? 'Press ⚡ Buy to go straight to checkout.' : 'Open the product to buy it there.'}`,
+        message: `${meta}${stock}\nWas ${money(info.previous)} — now ${money(price)}${typeof info.pct === 'number' ? ` (${info.pct.toFixed(info.pct < 10 ? 1 : 0)}% lower)` : ''}. ${buyable ? this.pressText(buy) : 'Open the product to buy it there.'}`,
         name: item.name, sku: item.sku, url: item.url || null, buttons,
       });
     }
@@ -189,7 +205,7 @@ export class Notifier {
     return this.notify(userId, {
       type: 'restock', level: 'urgent', channel: 'restock',
       title: `${info.status === 'preorder' ? '🟣' : '🟢'} ${label}: ${item.name}`,
-      message: `${meta}${info.note ? `\n${info.note}` : ''}\n${who}. ${buyable ? 'Press ⚡ Buy to go straight to checkout.' : 'Open the product to buy it there.'}`,
+      message: `${meta}${info.note ? `\n${info.note}` : ''}\n${who}. ${buyable ? this.pressText(buy) : 'Open the product to buy it there.'}`,
       name: item.name, sku: item.sku, url: item.url || null, buttons,
     });
   }

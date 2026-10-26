@@ -164,6 +164,9 @@ export function register(router, ctx) {
   async function press(i, discordId) {
     const q = String((i.data && i.data.custom_id) || '').match(/^queue:([\w-]{1,40})$/);
     if (q) return joinQueue(q[1], discordId);
+    // 🤝 Group Queue / 🤝 Group Checkpoint: on a pool's leader's own DM (server/monitor/gates.js tellMembers).
+    const g = String((i.data && i.data.custom_id) || '').match(/^g(q|c):([\w-]{1,40})$/);
+    if (g) return groupGate(g[1] === 'q' ? 'queue' : 'checkpoint', g[2], discordId);
     const m = String((i.data && i.data.custom_id) || '').match(/^buy:(a|i):([\w-]{1,60})$/);
     if (!m) return reply('That button is from an older message — use a newer one.');
     const alert = m[1] === 'a' ? ctx.catalog.alertById(m[2]) : null;
@@ -185,10 +188,14 @@ export function register(router, ctx) {
       price = alert.price;
     }
     const out = await ctx.aco.remote(user.id, item.id, { price });
-    if (out.error) return reply(`⚠️ ${out.error}`);
-    const how = out.mode === 'place'
+    // (A pool's leader's own checkout couldn't start — their group's did all the same: aco.js remote().)
+    if (out.error) return reply(`⚠️ ${out.error}${out.group ? `\n🤝 **Group Buy**: the ${out.group} member${out.group === 1 ? '' : 's'} of your pool who check out with you ${out.group === 1 ? 'starts theirs' : 'start theirs'} all the same — each in their own checkout browser, with their own card and within their own limits.` : ''}`);
+    // (A pool's leader: their ⚡ Buy — 🤝 Group Buy on their own DMs — starts their group's checkouts too: aco.js remote().)
+    const group = ctx.pools ? ctx.pools.group(user.id).length : 0;
+    const how = (out.mode === 'place'
       ? `It places the order by itself, within your Auto-checkout limits (up to ${money(out.run.maxPrice)} for it, plus delivery).`
-      : `It fills checkout in and stops at the final button — ${out.why}.`;
+      : `It fills checkout in and stops at the final button — ${out.why}.`)
+      + (group ? `\n🤝 **Group Buy**: the ${group} member${group === 1 ? '' : 's'} of your pool who check out with you ${group === 1 ? 'starts theirs' : 'start theirs'} too — each in their own checkout browser, with their own card and within their own limits.` : '');
     ctx.aco.follow(out.run.id, i.token, out.device.name, how);
     // (Not open: it starts the moment it is — or, with the backup on, the moment any browser of yours is.
     //  standIn: the checkout browser isn't open, so another of yours, open, checks out instead.)
@@ -216,10 +223,44 @@ export function register(router, ctx) {
     const user = repo.userByDiscordId(discordId);
     if (!user) return reply(`Your Discord isn't connected to a ${cfg.appName} account yet. Log in at ${cfg.baseUrl}/app#discord and press **Connect Discord** — then this puts your computer's browser in line.`);
     const out = ctx.aco.joinQueue(user.id, store);
-    if (out.error) return reply(`⚠️ ${out.error}`);
+    // (A pool's leader: the members who check out with them got in line too — aco.js joinQueue → pools.js groupQueue.)
+    const pool = out.pool && out.pool.of ? `\n🤝 **Group Queue**: ${groupLine(out.pool.put, out.pool.of, ['is getting in line too', 'are getting in line too'], ' — each a tab of its own in their own checkout browser, their own place in line')}` : '';
+    if (out.error) return reply(`⚠️ ${out.error}${pool}`);
     const name = out.lobby.storeName;
     const asleep = out.listening ? '' : `\n⚠️ **${out.device.name}** isn't open right now — it gets in line as soon as it is (Discord's ⚡ Buy from your phone needs to be on: ${cfg.baseUrl}/app#aco).`;
-    return reply(`🚦 **${out.device.name}** is getting in line at ${name}: a tab of its own opens there and waits its turn. Leave it alone — the queue page refreshes itself, and refreshing it yourself can lose your place. ⚡ Buy and Auto-checkout at ${name} carry on from there once you're through.${asleep}`);
+    return reply(`🚦 **${out.device.name}** is getting in line at ${name}: a tab of its own opens there and waits its turn. Leave it alone — the queue page refreshes itself, and refreshing it yourself can lose your place. ⚡ Buy and Auto-checkout at ${name} carry on from there once you're through.${asleep}${pool}`);
+  }
+
+  /**
+   * "All 3 members of your pool who check out with you are getting in line too…" — or "2 of the 3 … ; 1 couldn't".
+   * verbs: [one, many] (put === 1 takes the first).
+   */
+  function groupLine(put, of, [one, many], rest = '') {
+    if (!put) return `none of the ${of === 1 ? 'member' : `${of} members`} of your pool who check out with you could — their Auto-checkout is off, or no checkout browser is connected to their account (they're told).`;
+    const who = put === of ? (of === 1 ? 'the member' : `all ${of} members`) : `${put} of the ${of} members`;
+    const left = of - put;
+    return `${who} of your pool who check out with you ${put === 1 ? one : many}${rest}.`
+      + (left ? ` ${left} couldn't (their Auto-checkout is off, or no checkout browser is connected to their account) — they're told.` : '');
+  }
+
+  /**
+   * 🤝 Group Queue / 🤝 Group Checkpoint, on a pool's leader's own DM: for the leader and the members who check out
+   * with them. Anyone else pressing one (a forwarded DM, an old one) is told it's the leader's.
+   */
+  async function groupGate(kind, store, discordId) {
+    const user = repo.userByDiscordId(discordId);
+    if (!user) return reply(`Your Discord isn't connected to a ${cfg.appName} account yet. Log in at ${cfg.baseUrl}/app#discord and press **Connect Discord**.`);
+    if (user.disabled) return reply('Your account is suspended — contact support.');
+    if (!entitlement(user, repo.now()).active) return reply(`This needs an active membership: ${cfg.baseUrl}/app#membership`);
+    if (!ctx.pools || !ctx.pools.leadsGroup(user.id)) return reply("🤝 That button is for a pool's leader — one whose pool has members who check out with them.");
+    if (kind === 'queue') return joinQueue(store, discordId);
+    const out = ctx.pools.groupCheckpoint(user.id, store);
+    if (out.error) return reply(`⚠️ ${out.error}`);
+    const name = out.store.name;
+    const own = !out.device
+      ? `⚠️ No browser with the ${cfg.appName} extension is connected to your account — connect your checkout browser at ${cfg.baseUrl}/app#extension.`
+      : `🛡️ **${out.device.name}** is opening ${name}'s check page in a tab: solve it there — it has to be solved in that browser (from your phone: 🖥️ Chrome Remote Desktop).${out.listening ? '' : ` ⚠️ It isn't open right now — the page opens as soon as it is.`}`;
+    return reply(`${own}\n🤝 **Group Checkpoint**: ${groupLine(out.opened, out.of, ['has it opened in their checkout browser too', 'have it opened in their checkout browsers too'], ', and told to solve it there before the drop — a human check: each solves their own')}`);
   }
 
   async function command(i, discordId) {

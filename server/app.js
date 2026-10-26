@@ -4,6 +4,7 @@
 import http from 'node:http';
 import { Aco } from './aco.js';
 import { Bags } from './bags.js';
+import { Pools } from './pools.js';
 import { Drops } from './monitor/drops.js';
 import { PageWatches } from './monitor/pages.js';
 import { Vip } from './monitor/vip.js';
@@ -96,6 +97,14 @@ export async function createApp(options = {}) {
   // Clear cart: the member's bags, emptied in their checkout browser (from the dashboard, anywhere).
   const bags = new Bags({ ...ctx, now });
   ctx.bags = bags;
+  // Pools: an admin's watchlist shared with the members who join it, kept in step — and, for those who agree, their
+  // Auto-checkouts started with the admin's (server/pools.js).
+  const pools = new Pools({ ...ctx, now });
+  ctx.pools = pools;
+  aco.ctx.pools = pools;
+  drops.pools = pools;
+  notifier.pools = pools; // (a leader's ⚡ Buy on their own DMs: 🤝 Group Buy)
+  gates.pools = pools; // (a leader's DM when a queue or checkpoint goes up: 🤝 Group Queue / 🤝 Group Checkpoint)
 
   const router = new Router();
   auth.register(router, ctx);
@@ -262,6 +271,7 @@ export async function createApp(options = {}) {
     news,
     aco,
     bags,
+    pools,
     catalog,
     feed,
     discord,
@@ -286,6 +296,7 @@ export async function createApp(options = {}) {
       news.start();
       aco.start();
       bags.start();
+      pools.start();
       startJobs();
       return app.url;
     },
@@ -298,6 +309,7 @@ export async function createApp(options = {}) {
       news.stop();
       aco.stop();
       bags.stop();
+      pools.stop();
       timers.forEach(clearInterval);
       hub.close();
       await new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections?.(); });

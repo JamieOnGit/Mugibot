@@ -381,6 +381,20 @@ export class Aco {
    * same limits and checks; its failures don't count towards the 3 a day).
    */
   async trigger(row, info = {}) {
+    const run = await this.triggerOne(row, info);
+    // (A pool's leader's: the members who check out with them get runs of their own, straight after — server/pools.js.
+    //  Their Auto-checkout off, or the item not theirs to start: nothing.)
+    if (run !== null && !info.pool && this.ctx.pools) {
+      await this.ctx.pools.fanOut(row.user_id, row.id, {
+        explicit: !!(info.test || info.queue), price: typeof info.price === 'number' ? info.price : null,
+        later: Array.isArray(info.later) ? info.later : null, variantId: info.variantId || null, queue: !!info.queue,
+      }).catch((e) => this.cfg.log('[pools]', e.message));
+    }
+    return run;
+  }
+
+  /** info.pool: { leader, explicit } — a run of a pool member's, started by their leader's (fanOut). */
+  async triggerOne(row, info = {}) {
     if (!row || (!row.aco && !info.test)) return null;
     const userId = row.user_id;
     const s = this.settings(userId);
@@ -397,7 +411,7 @@ export class Aco {
     const linked = this.retailers.get(item.store);
     const qty = linked && linked.cartLinks ? 1 : quantityOf(item.quantity);
     const cap = item.maxPrice === null || item.maxPrice === undefined ? null : Math.round(item.maxPrice * qty * 100) / 100;
-    const base = { userId, item, price, quantity: qty, ...(cap !== null ? { maxPrice: cap } : {}), mode: s.mode, trigger: info.queue ? 'queue' : info.test ? 'test' : info.manual ? 'manual' : info.source || '' };
+    const base = { userId, item, price, quantity: qty, ...(cap !== null ? { maxPrice: cap } : {}), mode: s.mode, trigger: info.pool ? 'pool' : info.queue ? 'queue' : info.test ? 'test' : info.manual ? 'manual' : info.source || '' };
     // (info.later: the monitor's list of alerts to send once every member's run is made — monitor/index.js applyAll.)
     const later = Array.isArray(info.later) ? info.later : null;
     const skip = (reason, message) => this.skip(base, reason, message, later);
@@ -412,7 +426,7 @@ export class Aco {
     if (price !== null && price > item.maxPrice) return skip('over_max', `${money(price)} is over your max of ${money(item.maxPrice)}.`);
     if (price !== null && price * qty > s.maxOrder) return skip('over_limit', `${qty > 1 ? `${qty} × ${money(price)} = ${money(price * qty)}` : money(price)} is over your limit of ${money(s.maxOrder)} an order.`);
     // (A drop's failures count — not Trigger ACO's, nor a ⚡ Buy pressed in Discord or by you.)
-    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND reason <> 'stopped' AND trigger NOT IN ('test', 'remote', 'buy', 'queue') AND created_at > :since", { i: item.id, since: now - DAY }).n;
+    const fails = this.db.get("SELECT COUNT(*) AS n FROM aco_runs WHERE item_id = :i AND status = 'failed' AND reason <> 'stopped' AND trigger NOT IN ('test', 'remote', 'buy', 'queue', 'pool') AND created_at > :since", { i: item.id, since: now - DAY }).n;
     if (fails >= MAX_FAILS && !info.test) {
       this.disarm(userId, item.id);
       return skip('too_many_failures', 'Arm it again to keep trying.');
@@ -435,7 +449,8 @@ export class Aco {
     // (More than one: an older copy would put just one in the bag.)
     if (qty > 1 && device && olderVersion(device.version, QTY_EXTENSION_VERSION)) return skip('old_extension', `${device.name} has ${device.version || 'an older version'}, which buys one at a time — update it to ${QTY_EXTENSION_VERSION} to buy ${qty} (Setup → Extension).`);
 
-    const run = this.create(base, 'queued', '', info.queue ? `Wait for queue, then ACO — waiting for your browser to open ${r.name}.` : `Dropped at ${r.name}${price !== null ? ` for ${money(price)}` : ''} — waiting for your browser to check out.`);
+    const pooled = info.pool ? `🤝 ${info.pool.leader || 'Your pool'}${info.pool.explicit ? ' started it' : "'s drop"} (your pool) — ` : '';
+    const run = this.create(base, 'queued', '', info.queue ? `${pooled}Wait for queue, then ACO — waiting for your browser to open ${r.name}.` : `${pooled}${info.pool && info.pool.explicit ? `checking out at ${r.name}` : `Dropped at ${r.name}`}${price !== null ? ` for ${money(price)}` : ''} — waiting for your browser to check out.`);
     // (Wait for queue, then ACO: the tab's pass says so — its checkout looks again until the store's queue is up.)
     if (info.queue) {
       this.queueRuns.add(run.id);
@@ -451,10 +466,10 @@ export class Aco {
     const queued = this.ctx.gates && this.ctx.gates.queueUp(item.store);
     const tell = () => this.notifier.notify(userId, {
       type: 'aco', level: 'urgent', channel: 'aco',
-      title: info.queue ? `🚦 Waiting for the queue, then Auto-checkout: ${item.name}` : `🤖 Auto-checkout ${info.test ? 'test ' : ''}started: ${item.name}`,
+      title: info.queue ? `🚦 Waiting for the queue, then Auto-checkout: ${item.name}` : info.pool ? `🤝 Auto-checkout started with ${info.pool.leader || 'your pool'}: ${item.name}` : `🤖 Auto-checkout ${info.test ? 'test ' : ''}started: ${item.name}`,
       message: info.queue
         ? `${r.name}${price !== null ? ` · ${money(price)}` : ''}\nYour browser opens the link and, while the checkout says it isn't on sale yet, opens it again every 90 seconds until the store's queue is up. In the queue it waits its turn (never refreshing it), then presses "Pay now" every 6 seconds until the store takes the order.`
-        : `${r.name}${price !== null ? ` · ${money(price)}` : ''}\n${s.mode === 'place' ? 'Your browser is checking out now, and will place the order.' : 'Your browser is filling in checkout now, and will stop at the final button for you.'}${queued ? `\n🚦 ${r.name}'s virtual queue is up: your browser waits its turn in line first (don't refresh the queue page).` : ''}`,
+        : `${r.name}${price !== null ? ` · ${money(price)}` : ''}\n${info.pool ? `${info.pool.leader || 'Your pool\'s leader'} ${info.pool.explicit ? 'started Auto-checkout on it' : 'armed it, and it dropped'} — you check out with them (your pool): on your account, with your card and details, up to ${money(item.maxPrice)} an item and within your limits.\n` : ''}${s.mode === 'place' ? 'Your browser is checking out now, and will place the order.' : 'Your browser is filling in checkout now, and will stop at the final button for you.'}${queued ? `\n🚦 ${r.name}'s virtual queue is up: your browser waits its turn in line first (don't refresh the queue page).` : ''}`,
       name: item.name, sku: item.sku, url: item.url, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
     });
     if (later) later.push(tell);
@@ -499,17 +514,24 @@ export class Aco {
     const r = this.retailers.get(item.store);
     if (!r || !r.flow) return { error: `Mugibot doesn't have a checkout for ${r ? r.name : 'that store'} yet.` };
     if (!item.url) return { error: `The product page for SKU ${item.sku} hasn't been found yet.` };
-    const s = this.settings(userId);
-    if (!s.remoteBuy) return { error: `⚡ Buy from Discord on your computer is switched off — switch it on at ${this.cfg.baseUrl}/app#aco, or open the product in the browser with the extension.` };
-    const device = this.checkoutDevice(userId);
-    if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension, and ⚡ Buy runs there from anywhere.` };
-    if (this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return { error: `It's already checking out in ${device.name}.` };
-    if (r.acoVersion && olderVersion(device.version, r.acoVersion)) return { error: `${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}) — update it to ${r.acoVersion} to buy from ${r.name} (${this.cfg.baseUrl}/app#update).` };
-    if (!r.cartLinks && quantityOf(item.quantity) > 1 && olderVersion(device.version, QTY_EXTENSION_VERSION)) return { error: `${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}), which buys one at a time — update it to ${QTY_EXTENSION_VERSION} to buy ${quantityOf(item.quantity)} (${this.cfg.baseUrl}/app#update).` };
-
-    // Place the order, or fill checkout in and stop at the final button (and why).
     const known = [price, item.lastPrice, item.price].find((p) => typeof p === 'number' && p > 0);
     const shown = known === undefined ? null : known;
+    // (A pool's leader whose own checkout can't start here — their computer's browser off its switch, not connected,
+    //  busy with this item or too old: their group's checkouts start all the same — 🤝 Group Buy from the phone.)
+    const solo = (error) => {
+      const group = this.ctx.pools ? this.ctx.pools.group(userId).length : 0;
+      if (group) this.ctx.pools.fanOut(userId, item.id, { explicit: true, price: shown }).catch((e) => this.cfg.log('[pools]', e.message));
+      return { error, group };
+    };
+    const s = this.settings(userId);
+    if (!s.remoteBuy) return solo(`⚡ Buy from Discord on your computer is switched off — switch it on at ${this.cfg.baseUrl}/app#aco, or open the product in the browser with the extension.`);
+    const device = this.checkoutDevice(userId);
+    if (!device) return solo(`No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension, and ⚡ Buy runs there from anywhere.`);
+    if (this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return solo(`It's already checking out in ${device.name}.`);
+    if (r.acoVersion && olderVersion(device.version, r.acoVersion)) return solo(`${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}) — update it to ${r.acoVersion} to buy from ${r.name} (${this.cfg.baseUrl}/app#update).`);
+    if (!r.cartLinks && quantityOf(item.quantity) > 1 && olderVersion(device.version, QTY_EXTENSION_VERSION)) return solo(`${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}), which buys one at a time — update it to ${QTY_EXTENSION_VERSION} to buy ${quantityOf(item.quantity)} (${this.cfg.baseUrl}/app#update).`);
+
+    // Place the order, or fill checkout in and stop at the final button (and why).
     // (Its max is for one: the order's limit, that times how many. A Shop checkout link's: the whole link's.)
     const qty = r.cartLinks ? 1 : quantityOf(item.quantity);
     const one = item.maxPrice ?? shown;
@@ -527,6 +549,8 @@ export class Aco {
     const run = this.create({ userId, item, price: shown, quantity: qty, maxPrice: mode === 'place' ? cap : (item.maxPrice ?? null), mode, trigger: 'remote' }, 'queued', '',
       `⚡ Buy pressed in Discord — waiting for ${device.name} to check out.`);
     this.wake(userId);
+    // (A pool's leader's: the members who check out with them start theirs now too — not waited for here.)
+    if (this.ctx.pools) this.ctx.pools.fanOut(userId, item.id, { explicit: true, price: shown }).catch((e) => this.cfg.log('[pools]', e.message));
     await this.notifier.notify(userId, {
       type: 'aco', level: 'urgent',
       title: `⚡ Buy from Discord: ${item.name}`,
@@ -571,6 +595,8 @@ export class Aco {
     const row = this.create({ userId: user.id, item: what, price: known, maxPrice: cap, quantity: n, mode: 'place', trigger: 'buy' }, 'started', '',
       `⚡ Buy pressed in ${device.name} — Auto-checkout places the order within your limits`);
     this.db.run('UPDATE aco_runs SET device_id = :d WHERE id = :id', { d: device.id, id: row.id });
+    // (One of a pool leader's items: the members who check out with them start theirs too.)
+    if (item && this.ctx.pools) this.ctx.pools.fanOut(user.id, item.id, { explicit: true, price: known }).catch((e) => this.cfg.log('[pools]', e.message));
     return this.passFor(user.id, row);
   }
 
@@ -639,7 +665,7 @@ export class Aco {
       title: `🤖 Auto-checkout didn't start: ${base.item.name}`,
       message: `${r ? r.name : base.item.store}${base.price !== null ? ` · ${money(base.price)}` : ''}\n${message}`,
       name: base.item.name, sku: base.item.sku, url: base.item.url || null,
-      buttons: [base.item.url ? { label: '⚡ Buy', url: this.notifier.buyLink(base.userId, base.item), action: buyAction('i', base.item.id) } : null, { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }].filter(Boolean),
+      buttons: [base.item.url ? { label: this.notifier.buyLabel(base.userId), url: this.notifier.buyLink(base.userId, base.item), action: buyAction('i', base.item.id) } : null, { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }].filter(Boolean),
     });
     if (later) later.push(tell);
     else await tell();
@@ -648,7 +674,17 @@ export class Aco {
 
   /** One purchase per drop watch (monitor/drops.js): its other armed finds disarmed, and the watch's own Auto-checkout off. */
   oncePerWatch(userId, itemId) {
-    const it = this.db.get('SELECT drop_watch FROM items WHERE id = :i AND user_id = :u', { i: itemId, u: userId });
+    const it = this.db.get('SELECT drop_watch, pool_watch FROM items WHERE id = :i AND user_id = :u', { i: itemId, u: userId });
+    // (A pool's copy of what its leader's drop watch found: the copies of that watch's other finds, disarmed — and not
+    //  armed again for this arming of the leader's: server/pools.js.)
+    if (it && !it.drop_watch && it.pool_watch) {
+      const others = this.db.all('SELECT id, name FROM items WHERE user_id = :u AND pool_watch = :w AND aco = 1 AND id != :i', { u: userId, w: it.pool_watch, i: itemId });
+      for (const o of others) this.disarm(userId, o.id);
+      if (others.length) {
+        this.repo.addEvent(userId, { type: 'aco', level: 'info', message: `🤖 One purchase per drop watch: it bought one of your pool's finds, so ${others.length === 1 ? 'its other one' : `its other ${others.length}`} (${others.map((o) => o.name).slice(0, 3).join(', ')}${others.length > 3 ? '…' : ''}) ${others.length === 1 ? 'is' : 'are'} disarmed on yours` });
+      }
+      return others.length;
+    }
     if (!it || !it.drop_watch) return 0;
     const others = this.db.all('SELECT id, name FROM items WHERE user_id = :u AND drop_watch = :w AND aco = 1 AND id != :i', { u: userId, w: it.drop_watch, i: itemId });
     for (const o of others) this.disarm(userId, o.id);
@@ -732,7 +768,10 @@ export class Aco {
     for (const row of rows) {
       if (!alive()) break;
       const item = row.item_id ? this.repo.getItem(user.id, row.item_id) : null;
-      if (!item || (!item.aco && !['test', 'remote', 'queue'].includes(row.trigger)) || !item.url) {
+      // (Started by hand — Trigger ACO, ⚡ Buy, Wait for queue — it goes armed or not. A pool's, started by its leader:
+      //  the same, for the member's copy of the leader's item — unless they skipped it meanwhile.)
+      const started = ['test', 'remote', 'queue'].includes(row.trigger) || (row.trigger === 'pool' && !!item && !!item.pool && !item.pool.hold);
+      if (!item || (!item.aco && !started) || !item.url) {
         // Switched off (or removed) before a browser picked it up: it didn't start, and isn't a failure.
         this.finish(user.id, row, 'expired', 'disarmed', '').catch(() => null);
         continue;
@@ -1031,18 +1070,33 @@ export class Aco {
     }
   }
 
+  /**
+   * A tab of its own at a store's gate, opened in the member's checkout browser: a virtual queue's front page (the store
+   * puts a new visitor in line there — and it waits its turn, never refreshed), or a checkpoint's check page (for the
+   * member to solve themselves, ahead of the drop). by: 'auto' (a queue went up where they're armed), 'discord' (their
+   * "Join the queue"), 'pool' (their pool's leader's — the leader's DM says so, not this). Once while it's up.
+   */
   lobby(userId, r, by) {
     let map = this.lobbies.get(userId);
     if (!map) this.lobbies.set(userId, (map = new Map()));
     const had = map.get(r.id);
     if (had && this.now() - had.at < LOBBY_MS) return had;
     const gates = this.ctx.gates;
-    // (Its front page: the store puts a new visitor in line there.)
-    const lobby = { id: newId('lob'), store: r.id, storeName: r.name, url: gates ? gates.checkUrl(r, (r.gate.check && r.gate.check.path) || '/') : r.base, by, at: this.now(), sent: null };
+    const checkpoint = !!r.gate && r.gate.kind === 'checkpoint';
+    const url = checkpoint && gates ? gates.link(r) : gates ? gates.checkUrl(r, (r.gate.check && r.gate.check.path) || '/') : r.base;
+    const lobby = { id: newId('lob'), store: r.id, storeName: r.name, url, kind: checkpoint ? 'checkpoint' : 'queue', by, at: this.now(), sent: null };
     map.set(r.id, lobby);
-    this.repo.addEvent(userId, { type: 'aco', level: 'info', message: `🚦 ${r.name}'s virtual queue is up — ${by === 'auto' ? 'your checkout browser is getting in line for your armed items' : 'your checkout browser is getting in line (Discord)'}` });
+    if (by === 'auto' || by === 'discord') {
+      this.repo.addEvent(userId, { type: 'aco', level: 'info', message: `🚦 ${r.name}'s virtual queue is up — ${by === 'auto' ? 'your checkout browser is getting in line for your armed items' : 'your checkout browser is getting in line (Discord)'}` });
+    }
     this.wake(userId);
     return lobby;
+  }
+
+  /** Is this member's checkout browser getting in line (or at the check) at this store already, while it's up? */
+  inLobby(userId, storeId) {
+    const l = this.lobbies.get(userId) && this.lobbies.get(userId).get(storeId);
+    return !!l && this.now() - l.at < LOBBY_MS;
   }
 
   /**
@@ -1057,10 +1111,18 @@ export class Aco {
     const gates = this.ctx.gates;
     if (!r || !r.gate || r.gate.kind !== 'queue') return { error: "That store doesn't have a virtual queue Mugibot knows." };
     if (!gates || !gates.queueUp(r.id)) return { error: `${r.name}'s virtual queue isn't up right now — nothing to join. Mugibot posts in #virtual-queue-detection when it is.` };
+    // (A pool's leader: the members who check out with them get in line too — their own browsers, their own places —
+    //  whether or not this one can: server/pools.js.)
+    const pool = this.ctx.pools ? this.ctx.pools.groupQueue(userId, r) : null;
     const device = this.checkoutDevice(userId);
-    if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension.` };
+    if (!device) return { error: `No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension.`, pool };
     const lobby = this.lobby(userId, r, 'discord');
-    return { lobby, device: { id: device.id, name: device.name }, listening: this.isListening(device.id) };
+    return { lobby, device: { id: device.id, name: device.name }, listening: this.isListening(device.id), pool };
+  }
+
+  /** A store's checkpoint went up (monitor/gates.js): members armed there with their pool's leader get its check page opened. */
+  checkpointUp(r) {
+    return this.ctx.pools ? this.ctx.pools.checkpointUp(r) : new Set();
   }
 
   /** The queues this (checkout) browser should get in line for now — each handed over once. */
@@ -1075,7 +1137,7 @@ export class Aco {
       if (l.sent === device.id) continue;
       l.sent = device.id;
       const g = this.ctx.gates ? this.ctx.gates.get(l.store) : null;
-      out.push({ id: l.id, store: l.store, storeName: l.storeName, url: l.url, by: l.by, since: g ? g.since : null });
+      out.push({ id: l.id, store: l.store, storeName: l.storeName, url: l.url, kind: l.kind || 'queue', by: l.by, since: g ? g.since : null });
     }
     return out;
   }

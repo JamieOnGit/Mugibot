@@ -19,9 +19,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # (The whole suite takes about 22 minutes now — the browser tests drive every store's checkout, hot drops
-    #  included: room to spare, so a slow runner doesn't cancel it.)
-    timeout-minutes: 40
+    # (The whole suite takes about 32 minutes on a usual runner now — the browser tests drive every store's checkout,
+    #  hot drops, queues, checkpoints and pools included: room to spare, so a slow runner doesn't cancel it.)
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

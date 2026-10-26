@@ -129,6 +129,35 @@ export function register(router, ctx) {
     return { ok: true };
   }, opts);
 
+  // --- Pools (server/pools.js): made by an admin, who leads it; members join, and check out with them, themselves -----
+  router.get('/api/admin/pools', async () => ({ pools: ctx.pools.adminList() }), opts);
+  router.post('/api/admin/pools', async (req) => {
+    const pool = ctx.pools.create(req.user, req.body && req.body.name);
+    repo.audit(req.user.id, null, 'pool-create', pool.name);
+    return { pool };
+  }, opts);
+  router.put('/api/admin/pools/:id', async (req) => {
+    const pool = ctx.pools.rename(str(req.params.id, 40), req.body && req.body.name);
+    repo.audit(req.user.id, null, 'pool-rename', pool.name);
+    return { pool };
+  }, opts);
+  router.delete('/api/admin/pools/:id', async (req) => {
+    const out = ctx.pools.drop(str(req.params.id, 40));
+    repo.audit(req.user.id, null, 'pool-close', out.name);
+    return { ok: true };
+  }, opts);
+  router.post('/api/admin/pools/:id/members', async (req) => {
+    const pool = await ctx.pools.invite(str(req.params.id, 40), req.body && req.body.username, req.user);
+    const who = repo.userByUsername(str(req.body && req.body.username, 40).trim());
+    repo.audit(req.user.id, who ? who.id : null, 'pool-invite', `${pool.name}: ${who ? who.username : ''}`);
+    return { pool };
+  }, opts);
+  router.delete('/api/admin/pools/:id/members/:userId', async (req) => {
+    const pool = await ctx.pools.removeMember(str(req.params.id, 40), str(req.params.userId, 40));
+    repo.audit(req.user.id, str(req.params.userId, 40), 'pool-remove', pool.name);
+    return { pool };
+  }, opts);
+
   // --- SKUs: what members watch (counts only), and manual restock pings -----------
   router.get('/api/admin/skus', async () => ({
     skus: repo.skuSummary().map((s) => ({ ...s, storeName: retailers.name(s.store) })),

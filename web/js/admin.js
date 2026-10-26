@@ -142,7 +142,72 @@ async function loadUsers() {
   $('#prev').disabled = offset === 0;
   $('#next').disabled = offset + PAGE >= total;
 }
-loaders.members = loadUsers;
+loaders.members = async () => { await Promise.all([loadUsers(), loadPools()]); };
+
+// --- Pools (server/pools.js): made here (you lead it), members asked to join — they join, and check out with you, themselves.
+async function poolCall(method, path, body, done) {
+  try {
+    const r = await api(method, path, body);
+    if (done) toast(done, '', 'success');
+    await loadPools();
+    return r;
+  } catch (e) {
+    toast("Couldn't do that", e.message, 'warn');
+    return null;
+  }
+}
+
+async function loadPools() {
+  const { pools } = await api('GET', '/api/admin/pools');
+  const box = $('#pools');
+  box.textContent = '';
+  if (!pools.length) {
+    box.append(h('p', { class: 'muted empty' }, 'No pools yet — name one above to make it.'));
+    return;
+  }
+  for (const p of pools) {
+    const joined = p.members.filter((m) => m.status === 'active');
+    const asked = p.members.filter((m) => m.status !== 'active');
+    const following = joined.filter((m) => m.followAco).length;
+    const invite = h('form', { class: 'status-row pool-invite' },
+      h('input', { name: 'username', maxlength: '40', placeholder: 'Username to ask', 'aria-label': `Ask someone to join ${p.name}` }),
+      h('button', { class: 'btn small', type: 'submit' }, 'Ask to join'));
+    invite.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const username = invite.username.value.trim();
+      if (username) poolCall('POST', `/api/admin/pools/${p.id}/members`, { username }, `${username} asked to join ${p.name}`);
+    });
+    const rows = p.members.map((m) => h('tr', { dataset: { user: m.username } },
+      h('td', {}, h('b', {}, m.username)),
+      h('td', {}, m.status === 'active' ? h('span', { class: 'pill ok' }, 'Joined') : h('span', { class: 'pill' }, 'Asked — not answered yet')),
+      h('td', {}, m.status !== 'active' ? '—' : m.followAco ? h('span', { class: 'pill aco-pill', title: `${p.leader.username}'s Auto-checkouts start theirs too (on their own account, within their own limits)` }, '🤖 Checks out with the leader') : h('span', { class: 'muted small' }, 'Watchlist only')),
+      h('td', {}, m.joinedAt ? date(m.joinedAt) : m.invitedAt ? `asked ${date(m.invitedAt)}` : '—'),
+      h('td', {}, h('button', {
+        class: 'btn small danger', type: 'button', 'aria-label': `Take ${m.username} out of ${p.name}`,
+        onclick: () => { if (confirm(`Take ${m.username} out of "${p.name}"? ${p.leader.username}'s items come off their watchlist, and the leader's checkouts no longer start theirs.`)) poolCall('DELETE', `/api/admin/pools/${p.id}/members/${m.userId}`, undefined, `${m.username} taken out of ${p.name}`); },
+      }, m.status === 'active' ? 'Take out' : 'Cancel ask'))));
+    box.append(h('section', { class: 'pool', dataset: { pool: p.id } },
+      h('div', { class: 'card-head' },
+        h('h3', {}, `🤝 ${p.name}`),
+        h('span', { class: 'muted small' }, `Led by ${p.leader.username} · ${joined.length} joined${asked.length ? ` · ${asked.length} asked` : ''} · ${following} check${following === 1 ? 's' : ''} out with the leader`),
+        h('div', { class: 'acts' },
+          h('button', { class: 'btn small', type: 'button', onclick: () => { const name = prompt('Name the pool:', p.name); if (name && name.trim() !== p.name) poolCall('PUT', `/api/admin/pools/${p.id}`, { name }, 'Renamed'); } }, 'Rename'),
+          h('button', {
+            class: 'btn small danger', type: 'button',
+            onclick: () => { if (confirm(`Close "${p.name}"? Every member's copies of ${p.leader.username}'s items come off their watchlists, and the leader's checkouts no longer start theirs.`)) poolCall('DELETE', `/api/admin/pools/${p.id}`, undefined, `${p.name} closed`); },
+          }, 'Close pool'))),
+      p.members.length ? h('div', { class: 'table-wrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, h('th', {}, 'Member'), h('th', {}, 'In it?'), h('th', {}, 'Auto-checkout'), h('th', {}, 'Since'), h('th', {}, ''))),
+        h('tbody', {}, ...rows))) : h('p', { class: 'muted small' }, 'Nobody asked yet.'),
+      invite));
+  }
+}
+$('#pool-new').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('#pool-name').value.trim();
+  if (!name) { $('#pool-name').focus(); return; }
+  if (await poolCall('POST', '/api/admin/pools', { name }, `Pool "${name}" made — you lead it`)) $('#pool-name').value = '';
+});
 $('#search').addEventListener('submit', (e) => { e.preventDefault(); offset = 0; loadUsers(); });
 $('#plan-filter').addEventListener('change', () => { offset = 0; loadUsers(); });
 $('#prev').addEventListener('click', () => { offset = Math.max(0, offset - PAGE); loadUsers(); });

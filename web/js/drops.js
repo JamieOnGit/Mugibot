@@ -254,7 +254,9 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     tools.setOptions('store', [...new Map(watches.map((w) => [w.store, w.storeName || w.store])).entries()].sort((a, b) => a[1].localeCompare(b[1])));
     const shown = tools.apply(watches, { text: watchText, match: MATCH, order: ORDER });
     const mine = shown.filter((w) => w.mine);
-    const others = shown.filter((w) => !w.mine);
+    const others = shown.filter((w) => !w.mine && !w.pool);
+    // (Your pool's leader's own watches: theirs, as they are — what they find is on your watchlist as their items are.)
+    const pooled = shown.filter((w) => w.pool);
     const narrowed = shown.length !== watches.length;
     $('#dw-count').textContent = watches.length ? String(watches.length) : '';
     $('#dw-used').textContent = `${used} of ${limit}`;
@@ -281,6 +283,11 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const sl = $('#dw-shared');
     sl.textContent = '';
     for (const w of others) sl.append(row(w));
+    $('#dw-pool-box').hidden = !pooled.length;
+    $('#dw-pool-h').textContent = pooled.length ? `🤝 From your pool — ${pooled[0].pool}'s` : '🤝 From your pool';
+    const pl = $('#dw-pool');
+    pl.textContent = '';
+    for (const w of pooled) pl.append(row(w));
   }
 
   function whereText(w) {
@@ -324,9 +331,9 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const admin = isAdmin();
     const meta = [
       whereText(w),
-      w.shared ? `📣 for everyone${admin && w.channelId !== undefined ? ` ${postsIn(w)}` : ''}` : '🔒 just for you',
+      w.pool ? `🤝 ${w.pool}'s — what it finds is on your watchlist as theirs is` : w.shared ? `📣 for everyone${admin && w.channelId !== undefined ? ` ${postsIn(w)}` : ''}` : '🔒 just for you',
       w.aco && w.maxPrice !== null ? `🤖 auto-checkout up to ${money(w.maxPrice)}` : '',
-      w.by && !w.mine ? `by ${w.by}` : '',
+      w.by && !w.mine && !w.pool ? `by ${w.by}` : '',
       w.kind === 'page' && w.label ? `for ${phrasesText(w)}` : '',
     ].filter(Boolean).join(' · ');
     const state = stateText(w);

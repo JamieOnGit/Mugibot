@@ -58,6 +58,7 @@ export class Gates {
     this.told = new Map(); // per store: the members DM'd that it went up (they hear it came down)
     this.sweeper = null;
     this.aco = null;
+    this.pools = null; // (server/pools.js: a leader's DM gets their 🤝 Group button)
     this.posting = Promise.resolve();
     this.telling = Promise.resolve();
   }
@@ -217,15 +218,19 @@ export class Gates {
     this.cfg.log(JSON.stringify({ evt: 'gate', store: r.id, kind: r.gate.kind, status, source }));
     if (this.sweeper) this.sweeper.sys(this.line(r, gate).replace(/ \| .*$/, ''), { store: r.id, level: status === 'up' ? 'warn' : 'info' });
     if (this.feed) this.feed.broadcast('gate', view);
+    // A queue's up: the checkout browsers of members armed at that store get in line. A checkpoint's up: members armed
+    // there with their pool's leader get its check page opened, to solve before the drop (told by a DM of its own, so
+    // not the usual one as well).
+    let opened = new Set();
+    if (this.aco) {
+      if (status === 'up' && r.gate.kind === 'queue') this.aco.queueUp(r, gate);
+      if (status === 'up' && r.gate.kind === 'checkpoint') opened = this.aco.checkpointUp(r) || new Set();
+      if (status === 'down') this.aco.gateDown(r);
+    }
     // (Posts one after another: in the order they happened, and the channel found or made once. The
     // members' DMs on a line of their own, so a big store's DMs never hold up the next post.)
     this.posting = this.posting.then(() => this.post(r, gate)).catch((e) => this.cfg.log('[gates]', e.message));
-    this.telling = this.telling.then(() => this.tellMembers(r, gate)).catch((e) => this.cfg.log('[gates]', e.message));
-    // A queue's up: the checkout browsers of members armed at that store get in line.
-    if (this.aco) {
-      if (status === 'up' && r.gate.kind === 'queue') this.aco.queueUp(r, gate);
-      if (status === 'down') this.aco.gateDown(r);
-    }
+    this.telling = this.telling.then(() => this.tellMembers(r, gate, { skip: opened })).catch((e) => this.cfg.log('[gates]', e.message));
     return gate;
   }
 
@@ -317,11 +322,17 @@ export class Gates {
     if (ok) this.db.run('UPDATE gates SET posted_at = :t WHERE store = :s', { t: this.now(), s: r.id });
   }
 
-  /** The members watching something at that store: their activity feed and DM (up; down, to those told it was up). */
-  async tellMembers(r, gate) {
+  /**
+   * The members watching something at that store: their activity feed and DM (up; down, to those told it was up).
+   * A pool's leader with a group hears it too, watching there or not — with the 🤝 Group Queue / 🤝 Group Checkpoint
+   * button that starts it for the group, on their own DM (so nobody else sees it). skip: members told already, by a DM
+   * of its own (their pool's checkpoint opened for them).
+   */
+  async tellMembers(r, gate, { skip = new Set() } = {}) {
     const up = gate.status === 'up';
+    const leaders = up && this.pools ? [...this.pools.leaderIds()].filter((id) => this.pools.leadsGroup(id)) : [];
     const ids = up
-      ? this.db.all('SELECT DISTINCT user_id FROM items WHERE store = :s LIMIT :n', { s: r.id, n: MAX_DMS }).map((x) => x.user_id)
+      ? [...new Set([...this.db.all('SELECT DISTINCT user_id FROM items WHERE store = :s LIMIT :n', { s: r.id, n: MAX_DMS }).map((x) => x.user_id), ...leaders])]
       : [...(this.told.get(r.id) || [])];
     if (up) this.told.set(r.id, new Set());
     else this.told.delete(r.id);
@@ -331,15 +342,24 @@ export class Gates {
       const u = this.repo.userById(id);
       if (!u || u.disabled || !entitlement(u, this.now()).active) continue;
       if (up) this.told.get(r.id).add(id);
+      if (up && skip.has(id)) continue;
       const armed = up && queue && this.aco && this.aco.joinsQueue(id, r.id);
+      const group = up && leaders.includes(id) ? this.pools.group(id).length : 0;
       const ev = up
         ? {
-          type: 'gate', level: 'urgent', channel: 'restock',
+          type: 'gate', level: 'urgent', channel: group ? 'aco' : 'restock',
           title: queue ? `🚦 ${r.name}'s virtual queue is up${wait}` : `🛡️ ${r.name}'s checkpoint is up`,
-          message: queue
+          message: (queue
             ? `${armed ? 'Your checkout browser is getting in line for your armed items. ' : 'Get in line in your browser now, before the drop. '}Leave the queue page alone: it refreshes itself, and refreshing it yourself can lose your place.`
-            : `${r.name} wants a human check before checkout (hCaptcha). ⚡ Buy and Auto-checkout stop at it and wait for you to solve it, then carry on.`,
-          url: this.link(r), buttons: [{ label: `Open ${r.name}`, url: this.link(r) }],
+            : `${r.name} wants a human check before checkout (hCaptcha). ⚡ Buy and Auto-checkout stop at it and wait for you to solve it, then carry on.`)
+            + (!group ? '' : queue
+              ? `\n🤝 **Group Queue** puts your checkout browser in line, and the checkout browsers of the ${group} member${group === 1 ? '' : 's'} of your pool who check out with you — each a tab of its own, its own place in line.`
+              : `\n🤝 **Group Checkpoint** opens ${r.name}'s check page in your checkout browser and in those of the ${group} member${group === 1 ? '' : 's'} of your pool who check out with you, and tells each to solve it there before the drop (a human check: each solves their own).`),
+          url: this.link(r),
+          buttons: [
+            ...(group ? [{ label: queue ? '🤝 Group Queue' : '🤝 Group Checkpoint', url: `${this.cfg.baseUrl}/app#pool`, action: `${queue ? 'gq' : 'gc'}:${r.id}` }] : []),
+            { label: `Open ${r.name}`, url: this.link(r) },
+          ],
         }
         : {
           type: 'gate', level: 'info', channel: 'restock',
