@@ -796,7 +796,22 @@ test("where each store is searched: server first everywhere (saved modes from be
     assert.equal(eb.url.startsWith(`${store.url}/ebgames/search/query?q=${q}&sort=releasedate&order=desc`), true, eb.url);
     assert.equal(eb.pageUrl, `${store.url}/ebgames/search?q=${q}`);
     assert.equal(t.storeBase, `${store.url}/bigw`);
-    assert.equal(sw.paceFor(R('demo-bigw'), true), 20000, "the set pace is 15 s, but BIG W's own floor — 20 s, gentle on its bot protection — is over it");
+    // BIG W in an ordinary window (or not known yet): its own floor — 20 s, gentle on its bot protection — over the set 15 s.
+    // Read in its private window: the set pace, as the other stores.
+    const st = sw.stat('demo-bigw');
+    const was = st.privateWindow;
+    try {
+      st.privateWindow = undefined;
+      assert.equal(sw.paceFor(R('demo-bigw'), true), 20000, 'not known yet: as in an ordinary window');
+      st.privateWindow = false;
+      assert.equal(sw.paceFor(R('demo-bigw'), true), 20000, "an ordinary window: BIG W's own 20 s");
+      st.privateWindow = true;
+      assert.equal(sw.paceFor(R('demo-bigw'), true), 15000, 'its private window: the set pace');
+      assert.equal(sw.paceFor(R('demo-ebgames'), true), 15000);
+      assert.equal(sw.paceFor(R('pokemoncenter'), true), 30000, "Pokémon Center's own 30 s stays");
+    } finally {
+      st.privateWindow = was;
+    }
     assert.equal(eb.expect, 'json');
   } finally {
     await boss.put('/api/monitor/sweep', { stores: saved.stores });

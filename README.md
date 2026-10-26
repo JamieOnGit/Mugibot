@@ -522,7 +522,8 @@ npm test
     where Mugibot checks out, for everyone or just for you.
 - **📃 Search pages** (`test/pages.test.js`, the dashboard and the real extension):
   - how each store's page is read (server or admin's browser, what's read), and
-    the fastest each is read (3 s; BIG W 20 s);
+    the fastest each is read (3 s; Pokémon Center 30 s; BIG W 20 s only in an
+    ordinary window);
   - what can be added: key phrases, the pace, no product pages, no cart,
     checkout or account links, Auto-checkout only where Mugibot checks out;
   - Kmart's search from the server: the first look the scene, a new listing

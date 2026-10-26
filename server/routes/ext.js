@@ -214,7 +214,8 @@ export function register(router, ctx) {
     // (Which copy this is: it says, from 1.28.0 — before, the version it last told /api/ext/me or the searches.)
     const version = str(req.query.get('v'), 20) || req.device.version;
     if (version !== req.device.version) seen(req, version);
-    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want, version });
+    // (priv: it opens BIG W's pages in a private window of its own — Mugibot allowed in Incognito there: 1.36.0.)
+    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want, version, priv: req.query.get('priv') === '1' });
     if (ctx.drops && ctx.monitor.browserChecksOn(req.user)) checks.push(...ctx.drops.browserDue(req.user, { sites, want }));
     return { checks, intervalSeconds: cfg.monitor.browserIntervalSeconds, sites: [...want].slice(0, 20) };
   }, { auth: 'device', entitled: true });

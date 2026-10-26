@@ -485,13 +485,24 @@ export class Sweeper {
     return `${r.sweep.apiBase || (r.sweep.fromOrigin && !r.demo ? new URL(r.base).origin : r.base)}${p}`;
   }
 
-  /** The time between two searches at a store: the set pace, or the store's own slowest (Amazon: 20 s). */
+  /**
+   * The time between two searches at a store: the set pace, or the store's own slowest (Amazon: 20 s) — and from an
+   * admin's browser, a store that asks for slower only while it's read in an ordinary window (BIG W's 20 s,
+   * sharedWindowSeconds: there it shares its cookies with your own visits) at the set pace once it's read in its
+   * private window.
+   */
   paceFor(r, browser = false) {
     const s = this.settings;
-    const every = Math.max(browser ? s.browserEverySeconds : s.everySeconds, r.sweep.minSeconds || 0) * 1000;
+    const shared = browser && r.sweep.sharedWindowSeconds && !this.inPrivate(r) ? r.sweep.sharedWindowSeconds : 0;
+    const every = Math.max(browser ? s.browserEverySeconds : s.everySeconds, r.sweep.minSeconds || 0, shared) * 1000;
     // A VIP drop in its window (monitor/vip.js): its words, every few seconds.
     if (!browser && this.vip && this.vip.fast(r.id, this.now())) return Math.min(every, this.vip.sweepSeconds * 1000);
     return every;
+  }
+
+  /** Is the store read in a private window of its own (BIG W's), as an admin's browser last said? (Not known yet: no.) */
+  inPrivate(r) {
+    return !!r && !!r.sweep && !!r.sweep.privateWindow && this.stat(r.id).privateWindow === true;
   }
 
   /**

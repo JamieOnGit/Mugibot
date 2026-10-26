@@ -52,7 +52,10 @@ const RELEARN_MS = 10 * 60 * 1000;
 const MAX_JOBS = 6;
 const SHOPIFY_SKU = /\/products\/([^/?#.]+)\/?$/i;
 
-/** The fastest a store's page is read: every 3 s — or its searches' own pace, where it asks for slower (BIG W's 20 s). */
+/**
+ * The fastest a store's page is read: every 3 s — or its searches' own pace, where it asks for slower (Pokémon Center's
+ * 30 s). (BIG W's 20 s only while it's read in an ordinary window: PageWatches.floorNow.)
+ */
 export function floorFor(r) {
   return Math.max(PAGE_MIN_SECONDS, Number(r && r.sweep && r.sweep.minSeconds) || 0);
 }
@@ -205,7 +208,16 @@ export class PageWatches {
 
   /** How often a watch asks for its page to be read (never faster than its store allows). */
   everyFor(w, r = w.store === 'other' ? null : this.retailers.get(w.store)) {
-    return Math.max(floorFor(r), w.every || PAGE_DEFAULT_SECONDS);
+    return Math.max(this.floorNow(r), w.every || PAGE_DEFAULT_SECONDS);
+  }
+
+  /**
+   * The fastest a store's page is read just now: its floor — and a store that asks for slower while it's read in an
+   * ordinary window (BIG W's 20 s, sharedWindowSeconds) at that, till an admin's browser reads it in its private window.
+   */
+  floorNow(r) {
+    const shared = r && r.sweep && r.sweep.sharedWindowSeconds && !(this.sweeper && this.sweeper.inPrivate(r)) ? r.sweep.sharedWindowSeconds : 0;
+    return Math.max(floorFor(r), shared);
   }
 
   st(key) {
@@ -340,7 +352,7 @@ export class PageWatches {
       //  many pages watched never sees a burst from the admin's browser it'd turn away, nor the admin's own checkouts.)
       const gate = this.storeNext.get(r.id) || 0;
       if (gate > now) { next = Math.min(next ?? Infinity, gate); continue; }
-      this.storeNext.set(r.id, now + Math.round((floorFor(r) * 1000) / 3));
+      this.storeNext.set(r.id, now + Math.round((this.floorNow(r) * 1000) / 3));
       tabs.add(tab);
       st.inFlight = now;
       st.startedAt = now;
