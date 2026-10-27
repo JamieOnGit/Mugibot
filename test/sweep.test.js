@@ -303,6 +303,31 @@ test("store requests: a kept-open connection the store had just closed is asked 
   }
 });
 
+test("store requests: a kept-open connection reset while the store was answering is a failure — never asked again at once (the store had the request)", async () => {
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    seen.push(req.url);
+    if (req.url === '/a') {
+      res.writeHead(200, { 'content-type': 'text/plain', connection: 'keep-alive' });
+      return res.end('ok');
+    }
+    // Its answer begun — headers and part of the body — then the connection's reset.
+    res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '5000' });
+    res.write('x'.repeat(1000), () => setTimeout(() => req.socket.resetAndDestroy(), 20));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    assert.equal(await (await storeFetch(`${base}/a`)).text(), 'ok');
+    await assert.rejects(storeFetch(`${base}/b`), (e) => e.code === 'ECONNRESET' || /aborted|socket hang up/.test(e.message));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(seen, ['/a', '/b'], 'asked once');
+  } finally {
+    srv.close();
+    srv.closeAllConnections?.();
+  }
+});
+
 // --- the sweeps, against the dummy stores ------------------------------------------------
 let env;
 let store;
@@ -510,18 +535,34 @@ test("🃏 sealed products named without a card word count: a Super-Premium Coll
   // quietly; a product any card word names — a drop as ever.
   const widened = env.app.repo.getSetting('sweepWidenedAt');
   env.app.repo.setSetting('sweepWidenedAt', sw.now());
+  let vipWatch = null;
   try {
     await sweep('demo-kmart');
+    await sweep('demo-kmart', 'one piece');
     const before = alerts('listed').length;
+    // (A VIP watch's words in a name only the wider words count: a drop for the watch all the same — never quiet.)
+    const v = await boss.post('/api/monitor/vip', { store: 'demo-kmart', words: 'op 15' });
+    assert.equal(v.status, 200, v.text);
+    vipWatch = v.body.watch;
     store.shop('kmart').products.push({ sku: '43877061', name: 'Pokémon Mega Evolution Ultra-Premium Collection', price: 199, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477061 });
     store.shop('kmart').products.push({ sku: '43877062', name: 'Pokémon TCG: Widened Words Booster Bundle', price: 59, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477062 });
+    store.shop('kmart').products.push({ sku: '43877064', name: 'ONE PIECE OP-15 BOX', price: 189, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477064 });
+    assert.ok(!sw.filters(sw.settings, { legacy: true })({ title: 'ONE PIECE OP-15 BOX' }, 'one piece'), 'only the wider words count it');
     const r = await sweep('demo-kmart');
     assert.equal(r.ok, true, r.error);
     assert.ok(product('demo-kmart', '43877061'), 'tracked');
-    assert.ok(!alerts('listed').slice(0, alerts('listed').length - before).some((a) => a.sku === '43877061'), 'quietly, the first time');
+    const op = await sweep('demo-kmart', 'one piece');
+    assert.equal(op.ok, true, op.error);
+    assert.equal(op.baseline, false);
+    const fresh = alerts('listed').slice(0, alerts('listed').length - before);
+    assert.ok(!fresh.some((a) => a.sku === '43877061'), 'quietly, the first time');
     assert.ok(alerts('listed').some((a) => a.sku === '43877062'), 'a card product as ever: a drop');
+    assert.ok(fresh.some((a) => a.sku === '43877064' && a.vip), "the VIP watch's find: a VIP drop, though only the wider words count it");
+    const found = env.app.sweeper.vip.watches().find((x) => x.id === vipWatch.id).found;
+    assert.ok(found.some((f) => f.productId === product('demo-kmart', '43877064').id), "the watch's find");
   } finally {
     env.app.repo.setSetting('sweepWidenedAt', widened);
+    if (vipWatch) await boss.del(`/api/monitor/vip/${vipWatch.id}`);
   }
   // Out of that window: a product only the wider words let in is a drop like any other.
   store.shop('kmart').products.push({ sku: '43877063', name: 'Pokémon Scarlet & Violet Super-Premium Collection', price: 249, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477063 });
@@ -1199,6 +1240,12 @@ test("⚡ drop mode: a new card listing at a store (in a read that isn't setting
   sw.heat(jbr, null, t0 + 46 * 60 * 1000);
   assert.ok(sw.hotAt(jbr, t0 + 46 * 60 * 1000 + 1), 'after its rest, again');
   sw.stat(jbr.id).hot = null;
+  // Its rest counts from when it ended — not from when that was noticed (a store not searched a while: its browser closed).
+  sw.heat(jbr, null, t0);
+  assert.equal(sw.hotAt(jbr, t0 + 50 * 60 * 1000), null, 'noticed 35 minutes after it ended');
+  sw.heat(jbr, null, t0 + 51 * 60 * 1000);
+  assert.ok(sw.hotAt(jbr, t0 + 51 * 60 * 1000 + 1), 'its rest was over at 30 minutes (15 + 15): again at once');
+  sw.stat(jbr.id).hot = null;
   // Stores it doesn't apply to: Kmart (its whole list is every search already), BIG W (it lists drops ahead of time).
   for (const id of ['demo-kmart', 'demo-bigw']) {
     sw.heat(R(id), 'pokemon', t0);
@@ -1220,14 +1267,23 @@ test("⚡ drop mode: a new card listing at a store (in a read that isn't setting
   pages[1] = [...pages[1], targetProduct('70500008', 'Pokemon TCG: Drop Mode Words Bundle')];
   await t.sweepTerm(target, { keyword: 'drop mode words', page: 1, drop: 'shared' });
   assert.equal(t.hotAt(target), null, "a drop watch's own words: no drop mode");
+  pages[1] = [...pages[1], targetProduct('70500007', 'Pokemon TCG: Drop Mode Words Booster Box')];
+  await t.sweepTerm(target, { keyword: 'drop mode words', page: 1, vip: 'vip-none' });
+  assert.equal(t.hotAt(target), null, "a VIP watch's own words: no drop mode");
   pages[1] = [...pages[1], targetProduct('70500002', 'Pokemon TCG: Drop Mode Elite Trainer Box')];
   const r = await t.sweepTerm(target, { keyword: 'pokemon', page: 1 });
   assert.equal(r.ok, true, r.error);
   assert.ok(r.new >= 1, JSON.stringify(r));
   const h = t.hotAt(target);
   assert.equal(h && h.keyword, 'pokemon', JSON.stringify(h));
-  const turns = Array.from({ length: 6 }, () => t.nextTerm(target));
-  assert.deepEqual(turns.filter((_, i) => i % 2 === 0).map((x) => [x.keyword, x.page]), [['pokemon', 1], ['pokemon', 1], ['pokemon', 1]], JSON.stringify(turns));
+  // Its first page every other first-page turn; the later pages keep their one search in a round, as ever (Target's
+  // sold-outs are marked by every page having been read lately: markGone — drop mode mustn't slow them).
+  const round = t.settings.keywords.length + 1;
+  const turns = Array.from({ length: 4 * round }, () => t.nextTerm(target));
+  const firsts = turns.filter((x) => x.page === 1);
+  assert.ok(turns.some((x) => x.page > 1), JSON.stringify(turns));
+  assert.equal(turns.filter((x) => x.page > 1).length, 4, `the later pages: one search in ${round} (${JSON.stringify(turns)})`);
+  assert.deepEqual(firsts.filter((_, i) => i % 2 === 0).map((x) => [x.keyword, x.page]), Array(firsts.length / 2).fill(['pokemon', 1]), JSON.stringify(turns));
   // Admins switch it off: searched as usual at once.
   const saved = t.settings;
   t.save({ dropMode: false }, null);
@@ -1541,7 +1597,24 @@ test("Pokébox's newest products, read under their own name for the first time a
     env.app.db.run('DELETE FROM sweep_terms WHERE store = :s AND keyword = :k', { s: gg.id, k: NEWEST });
     before(7 * 3600 * 1000);
     assert.equal((await sweep('demo-goodgames', NEWEST)).baseline, true);
+    // Its first read under its own name refused (Shopify's 429 at a drop, say): the next one answered still doesn't set
+    // the scene again — what was listed meanwhile alerts — and the old second pages still go.
+    env.app.db.run('DELETE FROM sweep_terms WHERE store = :s AND keyword = :k', { s: gg.id, k: NEWEST });
+    before(60 * 1000);
+    store.state.tooMany = { goodgames: 1 };
+    const refused = await sweep('demo-goodgames', NEWEST);
+    store.state.tooMany = {};
+    assert.equal(refused.ok, false);
+    assert.ok(env.app.db.get('SELECT 1 AS y FROM sweep_terms WHERE store = :s AND keyword = :k', { s: gg.id, k: NEWEST }), 'its refused read: a row with no answer');
+    Object.assign(sw.stat(gg.id), { retryAt: 0, fails: 0, slowUntil: 0 });
+    store.shop('goodgames').products.push({ sku: 'pokemon-tcg-destined-rivals-etb-gg', name: 'Pokemon TCG Destined Rivals Elite Trainer Box', price: 89.95, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499996 });
+    const again = await sweep('demo-goodgames', NEWEST);
+    assert.equal(again.ok, true, again.error);
+    assert.equal(again.baseline, false, 'its refused first read changed nothing');
+    assert.ok(alerts('listed').some((a) => a.sku === 'pokemon-tcg-destined-rivals-etb-gg'), 'what was listed meanwhile alerts');
+    assert.equal(page2(), 0, 'the old second pages gone');
   } finally {
+    store.state.tooMany = {};
     sw.save({ stores: saved }, null);
   }
 });
@@ -1890,7 +1963,8 @@ test("🏬 Kmart's \"In store only\" (FulfilmentChannel 2): its own status — t
   assert.ok(!labels.some((l) => /Buy|Add to cart/.test(l)), `nothing to buy online: ${labels.join(', ')}`);
   assert.equal(runs().length, 0, 'no Auto-checkout run');
   assert.equal((await c.get('/api/items')).body.items.find((x) => x.id === add.body.id).status, 'in_store');
-  assert.ok(!discord.dmsTo('d-instore').some((m) => /In Store Tin/.test(m.body.embeds[0].title)), 'no "in stock" DM');
+  await env.app.monitor.delivered();
+  assert.ok(!discord.dmsTo('d-instore').some((m) => /In Store Test Tin/.test(m.body.embeds[0].title) && !/In store only/i.test(m.body.embeds[0].title)), 'no "in stock" DM');
   // Still in the shops only: nothing more.
   out = await sw.sweepTerm(r, { keyword: 'pokemon', page: 1 });
   assert.equal(out.restock, 0);

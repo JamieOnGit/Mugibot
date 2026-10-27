@@ -323,7 +323,8 @@ test("⚡ a store only struggling at a drop (502s, timeouts, a page without its 
     assert.equal(st.slowUntil, 0, 'straight back at its pace: it never turned the server away');
     assert.equal(sw.waitFor(st, every), every);
 
-    // A refusal is one, as ever: three in a row hand over, and its backoff stands even if a timeout follows.
+    // A refusal is one, as ever: three misses in a row hand over — a timeout while it's in force is one of them — and its
+    // backoff stands.
     fresh(id);
     answer = '403';
     await sweep(id);
@@ -331,12 +332,30 @@ test("⚡ a store only struggling at a drop (502s, timeouts, a page without its 
     answer = 'timeout';
     await sweep(id);
     assert.equal(sw.waitFor(st, every), every * 4, "the refusal's backoff stands");
+    assert.equal(st.serverMisses, 2, 'a timeout after a refusal: a miss');
     answer = '403';
     await sweep(id);
-    await sweep(id);
-    assert.ok(st.backup, 'three refusals: handed over');
+    assert.ok(st.backup, 'three misses: handed over');
     assert.equal(st.backup.transient, false);
     assert.ok(Math.abs(st.backup.retryAt - (sw.now() + 5 * MIN)) < 2000);
+
+    // …and a refusal followed by minutes of timeouts (bot protection that turns away, then stalls) is no "struggling"
+    // store: handed over as refused — the server back in 5 minutes, gently at first — never at once at full pace.
+    fresh(id);
+    answer = '403';
+    await sweep(id);
+    answer = 'timeout';
+    for (let i = 0; i < 3 && !st.backup; i++) {
+      clock.offset += MIN;
+      await sweep(id);
+    }
+    assert.ok(st.backup, 'handed over');
+    assert.equal(st.backup.transient, false, "a refusal's: not a struggling store's");
+    assert.ok(Math.abs(st.backup.retryAt - (sw.now() + 5 * MIN)) < 2000, `${st.backup.retryAt - sw.now()} ms`);
+    answer = 'ok';
+    assert.equal((await sweep(id)).ok, true);
+    assert.equal(st.backup, null);
+    assert.ok(st.slowUntil > sw.now(), 'taken back gently, as after any refusal');
   } finally {
     sw.fetch = real;
     fresh(id);

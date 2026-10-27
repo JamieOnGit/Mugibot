@@ -459,6 +459,8 @@ export class Monitor {
   checkNow(url) {
     const page = url && this.db.get('SELECT * FROM page_checks WHERE url = :url', { url });
     if (!page) return;
+    // (A page backing off — the store refused it, or it failed: its next read waits for that, as ever.)
+    if (page.fail_count > 0 && FAILED.has(page.status) && page.next_check_at > this.now()) return;
     this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
     const retailer = this.retailers.get(page.store) || this.retailers.forUrl(url);
     if (retailer && !this.retailers.settings(retailer).serverChecks) return;

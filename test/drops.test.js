@@ -317,6 +317,7 @@ test('🎯 a member\'s own words: what has them goes on their watchlist — thei
   assert.equal(item.dropWatch, w.id);
   assert.equal(env.app.catalog.productFor('demo-jbhifi', 'nintendo-switch-2-console'), null, 'not in anyone else\'s Tracked products');
   assert.equal(posts(ch.nontcg).length, before.nontcg);
+  await settle();
   assert.equal(dms('d-ash').length, before.dms, 'what was there already: no DM');
   // Others never see it — nor its words in the live searches.
   assert.ok(!(await misty.get('/api/drops')).body.watches.some((x) => x.id === w.id));
@@ -373,12 +374,14 @@ test('🔑 key phrases pasted at once, watched at every store Mugibot searches: 
     assert.ok(atJb && atPb, 'both on the watchlist, from both stores');
     assert.equal(atJb.aco, false, 'on sale already when the watch first looked: not armed');
     assert.equal(atPb.aco, true, 'sold out when it first looked: armed for its return');
+    await settle();
     assert.equal(dms('d-ash').length, dmsBefore, 'what was listed already: no DM');
     const stored = drops().get(w.id);
     assert.ok(stored.bases['demo-jbhifi'] && stored.bases['demo-pokebox'], JSON.stringify(stored.bases));
     // A new listing with the phrase at Pokébox, seen first by its card search ("pokemon" — after its own first read, which
     // sets its scene): a drop all the same — DM'd, armed, bought.
     assert.equal((await sw().sweepTerm(pb, { keyword: 'pokemon', page: 1 })).ok, true);
+    await settle();
     assert.equal(dms('d-ash').length, dmsBefore, 'the card search\'s first read: nothing new');
     store.addProduct('pokebox', { sku: 'pb-heavy-hitters-premium-box', name: 'Pokemon TCG: Heavy Hitters Premium Collection Box', price: 110, status: 'in_stock' });
     assert.equal((await sw().sweepTerm(pb, { keyword: 'pokemon', page: 1 })).ok, true);
@@ -391,6 +394,7 @@ test('🔑 key phrases pasted at once, watched at every store Mugibot searches: 
     // The phrase's own search there next: nothing new (it's found already).
     const n = dms('d-ash').length;
     await sw().sweepTerm(pb, { keyword: 'heavy hitters premium', page: 1, drop: 'private' });
+    await settle();
     assert.equal(dms('d-ash').length, n);
     // Shown as watched at every store.
     const mine = (await ash.get('/api/drops')).body.watches.find((x) => x.id === w.id);
@@ -420,6 +424,7 @@ test('🎯 a link at another website: its page read for stock, the member DM\'d 
   const before = dms('d-ash').length;
   await env.app.monitor.checkPage(url);
   assert.equal(env.app.repo.getItem(ash.user.id, item.id).status, 'out_of_stock');
+  await settle();
   assert.equal(dms('d-ash').length, before, 'sold out: nothing to say');
   store.setAcme('xbox-series-x-console-1tb', { status: 'in_stock' });
   await env.app.monitor.checkPage(url);
@@ -760,6 +765,7 @@ test('🎯 words at another website: read as Mugibot every couple of minutes —
   // Its page read for the first time: how it is (in stock: Ash's link test left it so), quietly.
   await env.app.monitor.checkPage(xbox.url);
   assert.equal(env.app.repo.getItem(misty.user.id, mi.id).status, 'in_stock');
+  await settle();
   assert.equal(dms('d-misty').length, before.misty, 'the first read is how it is, not a restock');
   assert.equal(posts(ch.nontcg).length, before.nontcg);
 

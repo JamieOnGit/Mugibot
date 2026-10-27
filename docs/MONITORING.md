@@ -397,7 +397,8 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   shop) needs no card word at all, only the keyword (and no "not cards" word).
   Saved card words get the new ones once, on the update; what they let in for
   the first time is tracked quietly for the first 6 hours, so products on sale
-  all along don't arrive as a burst of "new drops".
+  all along don't arrive as a burst of "new drops" — except one a VIP or drop
+  watch's words are in: that's the watch's drop as ever, alerted and armed.
 - **A refused or failed search never alerts** and keeps every product's last
   stock. A refused one (HTTP 401/403/429/503, a bot check) waits twice as long
   after each failure (up to 15 minutes), then tries again. A store that's only
@@ -405,7 +406,9 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   without its list) is searched again at half its pace three times, then twice as
   long each time, **a minute apart at most** (a search that took 15 s to time out
   counts as that much of the wait): during a drop a few slow answers no longer
-  leave it unsearched for minutes. A refusal before it still stands. When a store says how long to wait (**HTTP 429** or 503
+  leave it unsearched for minutes. A refusal before it still stands: for the 10
+  minutes it's searched gently after one, a timeout counts as a refusal would
+  (three in a row hand the store over, the server back after 5 minutes). When a store says how long to wait (**HTTP 429** or 503
   with a `Retry-After`, like Shopify's), Mugibot waits at least that long (at
   most 15 minutes): "The store refused the search (HTTP 429) — it asked to
   wait 60 s". **Reset** (below) starts a failing store again.
@@ -482,8 +485,9 @@ More keywords means each one comes round a little less often. Each store has
 its own loop, so a slow store never holds up the others.
 
 Behind the scenes (October 2026): a connection the store closed while it sat
-idle is retried once straight away on a fresh one (a GET only), instead of
-counting as a failed search and doubling the wait. The server runs 16 worker
+idle is retried once straight away on a fresh one (a GET only, and only when no
+answer had begun on it: one the store was partway through answering is a failed
+search like any), instead of counting as a failed search and doubling the wait. The server runs 16 worker
 threads (`UV_THREADPOOL_SIZE`, set in `fly.toml`, the Dockerfile and
 `render.yaml`), so a burst of sign-ins before a drop doesn't slow unpacking the
 stores' answers. And the lookups a search makes for each product (by its code, by
@@ -501,8 +505,10 @@ again for 15):
   in two or three otherwise). The third keeps the keywords going round, so a
   product listed before that goes on sale is still seen.
 - **Target and EB Games** (`sweep.hot`: their search is newest first): **that
-  keyword's first page every other search**; the other one goes round as usual,
-  later pages too (Target's sell-outs are still marked).
+  keyword's first page every other first-page search**; the others go round the
+  keywords as usual, and the later pages keep their usual one search in a round
+  (Target's sell-outs are marked by every page having been read lately, so drop
+  mode never slows them).
 - Never Kmart (its whole range is every search already), BIG W (it lists drops
   ahead of time, without a buy button) or Amazon.
 
@@ -648,7 +654,9 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
 
    What was **already on sale** when you added the watch is never armed, whichever
    search finds it first (the watch's own, or the store's keywords or newest
-   products: listed before, its page is read first). A broad
+   products: listed before, its page is read first). One Mugibot last saw sold
+   out, coming soon or in the store's shops only, back on sale when it's found, is a
+   restock: armed straight away. A broad
    watch like *pokemon* would otherwise buy everything that matches. The
    Activity log says so, and you can ⚡ Buy it yourself.
 
