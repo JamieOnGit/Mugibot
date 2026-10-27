@@ -127,7 +127,8 @@ export function parseShopifySuggest(text, { base } = {}) {
       url, image: httpsUrl(image, base), marketplace: false,
     });
   }
-  return { products, problem: null };
+  // (count: how many the store sent — fewer than the page holds, there are no more.)
+  return { products, count: list.length, problem: null };
 }
 
 /**
@@ -161,6 +162,7 @@ export function parseShopifyProducts(text, { base } = {}) {
     //  its own products have none. The store says which names are its own: sweep.sellers.)
     const sellerOption = (Array.isArray(p.options) ? p.options : []).find((o) => o && typeof o === 'object' && /^sellers?$/i.test(String(o.name || '')));
     const created = Date.parse(p.created_at || '');
+    const published = Date.parse(p.published_at || '');
     products.push({
       sku: String(p.handle), aliases: p.id ? [String(p.id)] : [], title: clean(p.title), price,
       wasPrice: was && price && was > price ? was : null, inStock,
@@ -170,12 +172,14 @@ export function parseShopifyProducts(text, { base } = {}) {
       oneVariant: vars.length === 1,
       preorder: PREORDER_RE.test(`${p.title} ${tags.join(' ')} ${p.product_type || ''}`),
       url: httpsUrl(`${shop}/products/${encodeURIComponent(p.handle)}`, base), image: httpsUrl(images[0] && images[0].src, base), marketplace: false,
-      // When the store made it (a product republished long after: not a new drop) — and who sells it, when it says.
+      // When the store made it (a product republished long after: not a new drop), when it put it up for sale (one
+      // drafted weeks before a drop) — and who sells it, when it says.
       ...(Number.isFinite(created) ? { createdAt: created } : {}),
+      ...(Number.isFinite(published) ? { publishedAt: published } : {}),
       sellers: sellerOption && Array.isArray(sellerOption.values) ? sellerOption.values.map((v) => String(v).trim()).filter(Boolean).slice(0, 10) : [],
     });
   }
-  return { products, total: products.length, problem: null };
+  return { products, total: products.length, count: list.length, problem: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +345,8 @@ export function parseCityBeach(html, { base, storeBase } = {}) {
   if (problem) return { products: [], problem };
   const doc = parseHTML(s);
   const tiles = findAll(doc, (n) => n.tag === 'div' && /(^|\s)product(\s|$)/.test(String((n.attrs && n.attrs.class) || '')) && /^\d{6,10}-\d{2}$/.test((n.attrs && n.attrs['data-pid']) || ''));
-  if (!tiles.length) return { products: [], problem: /no-results|did not return any results|0 results/i.test(s) ? 'empty' : 'layout' };
+  // (count: how many products the page had — none, when it says it has no results.)
+  if (!tiles.length) return /no-results|did not return any results|\b0 results/i.test(s) ? { products: [], count: 0, problem: 'empty' } : { products: [], problem: 'layout' };
   const products = [];
   const seen = new Set();
   for (const t of tiles) {
@@ -366,7 +371,7 @@ export function parseCityBeach(html, { base, storeBase } = {}) {
       image: img ? httpsUrl(img.attrs['data-src'] || img.attrs.src, base) : '', marketplace: false,
     });
   }
-  return { products, total: null, problem: null };
+  return { products, total: null, count: new Set(tiles.map((t) => t.attrs['data-pid'])).size, problem: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +448,7 @@ export function parseWoo(text, { base } = {}) {
       url, image: httpsUrl(img, base), marketplace: false,
     });
   }
-  return { products, total: null, problem: null };
+  return { products, total: null, count: j.length, problem: null };
 }
 
 // ---------------------------------------------------------------------------

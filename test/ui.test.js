@@ -1485,6 +1485,8 @@ test('📃 a store\'s search page in Drop watches: told apart from a product\'s 
   assert.equal(env.app.repo.listItems(env.app.repo.userByUsername('owner').id).length, items, 'not added as a SKU');
   await page.click('#w-page-go');
   await page.waitForSelector('#pp-drops:not([hidden]) #dw-page-wrap:not([hidden])');
+  // (The box was showing the Kmart page a moment ago: waited for till it has this one.)
+  await page.waitForFunction(() => document.querySelector('#dw-input').value === 'https://www.jbhifi.com.au/collections/trading-cards');
   assert.equal(await page.inputValue('#dw-input'), 'https://www.jbhifi.com.au/collections/trading-cards');
   assert.equal(await page.isVisible('#w-form'), false);
   if (shots) await page.screenshot({ path: path.join(shots, 'drops-search-page.png'), fullPage: true });

@@ -1,5 +1,5 @@
-// Auto-checkout watches arm as they always have: a VIP watch's find has its page read at the next round, even while that
-// page is backing off; a member's own find straight away; JB Hi-Fi's newest products count a drop as before; the card words an admin had already count as before through the
+// Auto-checkout watches arm by what each saw itself (monitor/sightings.js): a VIP watch's find by its search's own stock
+// reading, even while its page is backing off; a member's own find straight away; JB Hi-Fi's newest products count a drop as before; the card words an admin had already count as before through the
 // quiet window after the words widened; and a VIP watch with Auto-checkout is searched every few seconds in its window,
 // wherever it is.
 import { test, before, after } from 'node:test';
@@ -48,7 +48,8 @@ const prod = (shop, sku, title, n, extra = {}) => ({
   sku, aliases: [String(9100000 + n)], title, price: 49.95, inStock: false, url: `${store.url}/${shop}/products/${sku}`,
   variantId: String(9200000 + n), oneVariant: true, marketplace: false, sellers: [], ...extra,
 });
-const ingest = (r, term, products, url) => sw().ingest(r, term, { products, total: products.length, problem: null }, { source: 'server', url: url || sw().urlFor(r, term.keyword, term.page, { vip: !!(term.vip || term.drop) }), ms: 50 });
+// (With the count of results the store's list gave, as its parser says: whether a read holds them all.)
+const ingest = (r, term, products, url) => sw().ingest(r, term, { products, total: products.length, count: products.length, problem: null }, { source: 'server', url: url || sw().urlFor(r, term.keyword, term.page, { vip: !!(term.vip || term.drop) }), ms: 50 });
 // A page backing off: the store turned the server's last checks away.
 const backingOff = (r, url, sku, fails, ms) => {
   env.app.repo.ensurePage(url, 'product', r.id, sku);
@@ -59,7 +60,7 @@ const settle = async () => {
   await env.app.monitor.delivered();
 };
 
-test("⭐ a VIP watch with Auto-checkout finds what was on sale already when it was added, its page backing off: the page is read at the next round all the same — left alone, and never bought when it sells out and comes back", async () => {
+test("⭐ a VIP watch with Auto-checkout finds what was on sale already when it was added, its page backing off: its search says on sale — left alone, and never bought when it sells out and comes back", async () => {
   const r = R('demo-pokebox');
   const etb = DUMMY_PRODUCTS.pokebox.find((p) => p.status === 'in_stock');
   const url = `${store.url}${dummyProductPath('pokebox', etb)}`;
@@ -69,9 +70,9 @@ test("⭐ a VIP watch with Auto-checkout finds what was on sale already when it 
   const id = res.body.watch.id;
   const s = await ingest(r, { keyword: 'celebration elite trainer', page: 1, vip: id }, [prod('pokebox', etb.sku, etb.name, 1, { url, inStock: true, price: 79.95 })]);
   assert.equal(s.ok, true, s.error);
-  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['pending']);
+  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['skipped'], 'on sale already when the watch first read it');
   await settle();
-  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['skipped'], 'its page read at once: on sale already');
+  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['skipped']);
   // Sold out, then back: never bought.
   store.set('pokebox', etb.sku, { status: 'out_of_stock' });
   clock.offset += 10 * MIN;
@@ -84,7 +85,7 @@ test("⭐ a VIP watch with Auto-checkout finds what was on sale already when it 
   assert.equal((await boss.del(`/api/monitor/vip/${id}`)).status, 200);
 });
 
-test("⭐ …and one listed but not on sale yet, its page backing off: its page read at the next round all the same, armed — bought the moment it drops", async () => {
+test("⭐ …and one listed but not on sale yet, its page backing off: its search says not on sale yet — armed, bought the moment it drops", async () => {
   const r = R('demo-pokebox');
   const box = DUMMY_PRODUCTS.pokebox.find((p) => p.status === 'out_of_stock');
   const url = `${store.url}${dummyProductPath('pokebox', box)}`;
@@ -94,9 +95,9 @@ test("⭐ …and one listed but not on sale yet, its page backing off: its page 
   const id = res.body.watch.id;
   const s = await ingest(r, { keyword: 'op-15 adventure', page: 1, vip: id }, [prod('pokebox', box.sku, box.name, 11, { url, price: 249.95 })]);
   assert.equal(s.ok, true, s.error);
-  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['pending']);
+  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['armed'], 'not on sale yet when the watch first read it');
   await settle();
-  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['armed'], 'its page read at once: not on sale yet');
+  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['armed']);
   // It drops.
   store.set('pokebox', box.sku, { status: 'in_stock' });
   clock.offset += MIN;
@@ -126,7 +127,7 @@ test("🎯 a member's own drop watch with Auto-checkout at a store whose search 
   assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
 });
 
-test("🆕 JB Hi-Fi's newest products: a figure JB listed sold out before the drop watch was added, first seen on sale after it there — a drop for the watch, bought, as before", async () => {
+test("🆕 JB Hi-Fi's newest products: a figure JB listed sold out before the drop watch was added (its own search shows it so), first seen on sale after it there — bought, as before", async () => {
   const r = R('demo-jbhifi');
   const NEW = { keyword: NEWEST, page: 1 };
   const nurl = sw().urlFor(r, NEWEST, 1);
@@ -137,7 +138,8 @@ test("🆕 JB Hi-Fi's newest products: a figure JB listed sold out before the dr
   assert.equal(wr.status, 200, wr.text);
   const w = wr.body.watch;
   clock.offset += 5000;
-  assert.equal((await ingest(r, { keyword: 'labubu r2', page: 1, drop: 'shared' }, [])).ok, true);
+  // (Its own search: JB's shows what's sold out too, last.)
+  assert.equal((await ingest(r, { keyword: 'labubu r2', page: 1, drop: 'shared' }, [P])).ok, true);
   clock.offset += 5 * MIN;
   const s = await ingest(r, NEW, [CARD, { ...P, inStock: true }], nurl);
   assert.equal(s.ok, true, s.error);
@@ -177,6 +179,9 @@ test("🃏 the card words widened in an update: one an admin had among their own
     const w = wr.body.watch;
     clock.offset += 5000;
     assert.equal((await ingest(r, { keyword: 'destined r3', page: 1, drop: 'shared' }, [])).ok, true);
+    clock.offset += 5000;
+    // (The card search, after the watch was added: what it shows next that wasn't there is new to the watch.)
+    assert.equal((await ingest(r, { keyword: 'pokemon', page: 1 }, [prod('jbhifi', 'pokemon-tcg-r3-etb', 'Pokemon TCG: R3 Elite Trainer Box', 30, { inStock: true })])).ok, true);
     clock.offset += 5000;
     const B = prod('jbhifi', 'pokemon-destined-r3-blister', 'Pokemon Destined R3 Blister', 31, { inStock: true });
     const M = prod('jbhifi', 'pokemon-destined-r3-playmat', 'Pokemon Destined R3 Playmat', 32, { inStock: true });

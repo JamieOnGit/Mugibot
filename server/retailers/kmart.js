@@ -51,6 +51,7 @@ export default {
       + '&sort_by=numberOfDaysSinceStartDate&sort_order=ascending&filters%5BSeller%5D=Kmart&filters%5BSeller%5D=Target',
     pagePath: '&page={page}',
     pages: 3,
+    newestFirst: true,
     // (Its searches and its whole list are its Trading Cards range only: a product in them needn't have a card word in
     //  its name — "ONE PIECE OP-15 BOX", a "Super-Premium Collection" — to count. A VIP or drop watch's words aren't.)
     cardsOnly: true,

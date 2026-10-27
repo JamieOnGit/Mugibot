@@ -1,15 +1,17 @@
-// The never-buy rule at a words watch's first look (docs/MONITORING.md → VIP drops, Drop watches): an Auto-checkout
-// watch never buys what was on sale before it was added — not what its first look saw beyond the room it keeps, not
-// something listed all along that only moves into a full first page later — and its finds at another website are read
-// at the website's own pace, never sooner than a page backing off. Against the dummy stores (City Beach's, JB Hi-Fi's —
-// whose search returns its top 10 — and Acme Collectibles, another website): tests never touch real stores.
+// The never-buy rule at a words watch's first look (docs/MONITORING.md → What an Auto-checkout watch buys): an
+// Auto-checkout watch never buys what was on sale before it was added — not what its first look saw beyond the room it
+// keeps, not something listed all along that only moves into a full first page later — and its finds at another website
+// are read at the website's own pace, never sooner than a page backing off. Against the dummy stores (City Beach's, JB
+// Hi-Fi's — whose search returns its top 10 — and Acme Collectibles, another website): tests never touch real stores.
+// (These began with JamieOnGit/Mugibot#54's design — a full first page's newcomers waiting on their page; what each watch
+// saw itself, monitor/sightings.js, decides them now: from the search's own stock reading, where it says one.)
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client, discordOpts, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
 import { otherSku } from '../server/monitor/drops.js';
-import { pageFull } from '../server/monitor/sweep.js';
+import { holdsAll, pageSizeIn } from '../server/monitor/sweep.js';
 
 let env;
 let store;
@@ -46,48 +48,39 @@ const drops = () => env.app.drops;
 const vip = () => env.app.monitor.vip;
 const runsFor = (itemId) => env.app.db.all('SELECT * FROM aco_runs WHERE item_id = :i', { i: itemId });
 const runsOf = (userId) => env.app.db.all('SELECT * FROM aco_runs WHERE user_id = :u', { u: userId });
-// The monitor's rounds until a find waiting on its page ('pending') is settled by a read of it.
-const settled = (arm) => waitFor(async () => {
-  await env.app.monitor.tick();
-  return arm() !== 'pending';
-}, { message: 'its page read' });
-// Whether a watch's first look at a store read a full page (1), or not (0) — or null: no first look kept.
-const firstLook = (watchId, store) => {
-  const row = env.app.db.get('SELECT full FROM first_looks WHERE watch_id = :w AND store = :s', { w: watchId, s: store });
-  return row ? row.full : null;
-};
+// What the watch's first look saw at a store (monitor/sightings.js): the products in it.
+const lookOf = (watchId, store) => env.app.db.all('SELECT sku FROM watch_sightings WHERE watch = :w AND store = :s AND look = 1', { w: watchId, s: store });
 
-test('📄 a search page is full when the store says it has more, or it holds as many as its link asks for (10 or more where neither says)', () => {
+test('📄 a search page holds every result when the store says it has no more, or fewer came than its link asks for — never on a guess', () => {
   const jb = 'http://x/jbhifi/search/suggest.json?q=a&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last';
-  assert.equal(pageFull({ found: 10, url: jb }), true, "JB Hi-Fi's top 10");
-  assert.equal(pageFull({ found: 9, url: jb }), false);
+  assert.equal(pageSizeIn(jb), 10, "JB Hi-Fi's top 10");
+  assert.equal(holdsAll({ count: 10 }, pageSizeIn(jb)), false, 'a full page');
+  assert.equal(holdsAll({ count: 9 }, pageSizeIn(jb)), true);
   const cb = 'http://x/citybeach/search?q=a&srule=newest&sz=48';
-  assert.equal(pageFull({ found: 12, url: cb }), false, "City Beach's 48");
-  assert.equal(pageFull({ found: 48, url: cb }), true);
-  assert.equal(pageFull({ total: 12, found: 12, url: cb }), false, 'the store said it had them all');
-  assert.equal(pageFull({ total: 13, found: 12 }), true, 'the store said it had more');
-  assert.equal(pageFull({ found: 9, url: 'http://x/s?k=a' }), false);
-  assert.equal(pageFull({ found: 10, url: 'http://x/s?k=a' }), true, 'neither says: 10 or more is full');
+  assert.equal(holdsAll({ count: 12 }, pageSizeIn(cb)), true, "City Beach's 48");
+  assert.equal(holdsAll({ count: 48 }, pageSizeIn(cb)), false);
+  assert.equal(holdsAll({ total: 12, perPage: 12, count: 12 }, pageSizeIn(cb)), true, 'the store said it had them all');
+  assert.equal(holdsAll({ total: 13, perPage: 12, count: 12 }), false, 'the store said it had more');
+  assert.equal(holdsAll({ count: 9 }, pageSizeIn('http://x/s?k=a')), false, 'neither says: never taken as holding them all');
 });
 
-test('⭐ a drop watch whose first look sees more than it keeps (12 on sale, room for 10): the other 2 are remembered — never on the watchlist, never bought when its next search shows them again', async () => {
+test('⭐ a drop watch whose first look sees more than it keeps (12 on sale, room for 10): the other 2 are in its first look all the same — never on the watchlist, never bought when its next search shows them again', async () => {
   for (let i = 1; i <= 12; i++) store.addProduct('citybeach', { sku: `310000${String(i).padStart(2, '0')}-01`, name: `Lego Castle Set ${i}`, price: 50 + i, status: 'in_stock' });
   const w = (await ash.post('/api/drops', { store: 'demo-citybeach', words: 'lego castle set', aco: true, maxPrice: 200 })).body.watch;
   assert.ok(w);
   const cb = R('demo-citybeach');
-  // Its first look: 10 on the watchlist (waiting on their pages: City Beach's search has no stock), 2 remembered.
+  // Its first look: 10 on the watchlist (waiting on their pages: City Beach's search has no stock); all 12 in what the
+  // watch saw itself.
   let s = await sw().sweepTerm(cb, { keyword: 'lego castle set', page: 1, drop: 'private' });
   assert.equal(s.ok, true, s.error);
   const first = drops().get(w.id).found;
-  assert.equal(first.filter((f) => !f.quiet).length, 10, 'the most it keeps');
-  assert.equal(first.filter((f) => f.quiet).length, 2, 'the rest remembered');
+  assert.equal(first.length, 10, 'the most it keeps');
   assert.ok(first.every((f) => f.base === true), 'all listed already');
-  assert.equal((await ash.get('/api/drops')).body.watches.find((x) => x.id === w.id).found.length, 10, "what it only remembers isn't shown");
-  assert.ok(env.app.repo.listEvents(ash.user.id, { limit: 10 }).some((e) => /2 more are listed too — more than one watch keeps/.test(e.message)), 'its first look says so');
+  assert.equal(lookOf(w.id, 'demo-citybeach').length, 12, 'the other 2 are in its first look all the same');
   // Its own search again: the 2 are listed already, not drops — nothing added, nothing armed, nothing bought.
   s = await sw().sweepTerm(cb, { keyword: 'lego castle set', page: 1, drop: 'private' });
   assert.equal(s.ok, true, s.error);
-  assert.equal(drops().get(w.id).found.length, 12);
+  assert.equal(drops().get(w.id).found.length, 10);
   for (const sku of ['31000011-01', '31000012-01']) assert.equal(env.app.repo.itemBySku(ash.user.id, 'demo-citybeach', sku), null, `${sku} not on the watchlist`);
   assert.equal(runsOf(ash.user.id).length, 0, 'nothing bought');
   // (What drops after it still has room of its own: a new set is found, armed — and bought once its page says it's on sale.)
@@ -99,7 +92,7 @@ test('⭐ a drop watch whose first look sees more than it keeps (12 on sale, roo
   assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
 });
 
-test("⭐ a drop watch whose first look filled JB Hi-Fi's page (its top 10 of 12): one on sale all along that moves into the page later isn't bought — its page is read first (on sale: skipped); one sold out that moves in is armed for its return", async () => {
+test("⭐ a drop watch whose first look filled JB Hi-Fi's page (its top 10 of 12): one on sale all along that moves into the page later isn't bought (on sale when the watch first read it: skipped); one sold out that moves in is armed for its return", async () => {
   for (let i = 1; i <= 12; i++) store.addProduct('jbhifi', { sku: `retro-arcade-cabinet-${i}`, name: `Retro Arcade Cabinet ${i}`, price: 300 + i, status: i === 12 ? 'out_of_stock' : 'in_stock' });
   const w = (await ash.post('/api/drops', { store: 'demo-jbhifi', words: 'retro arcade cabinet', aco: true, maxPrice: 500 })).body.watch;
   assert.ok(w);
@@ -115,26 +108,19 @@ test("⭐ a drop watch whose first look filled JB Hi-Fi's page (its top 10 of 12
   const onSale = env.app.repo.itemBySku(ash.user.id, 'demo-jbhifi', 'retro-arcade-cabinet-11');
   const soldOut = env.app.repo.itemBySku(ash.user.id, 'demo-jbhifi', 'retro-arcade-cabinet-12');
   assert.ok(onSale && soldOut, 'on the watchlist (and alerted: new to the watch)');
-  assert.equal(onSale.aco, false, 'not armed on the search\'s say');
+  assert.equal(onSale.aco, false, "not armed: not shown new (the page wasn't whole), on sale when the watch first read it");
   assert.equal(runsFor(onSale.id).length, 0, 'not bought');
   const arm = (item) => () => drops().get(w.id).found.find((x) => x.itemId === item.id).arm;
-  assert.equal(arm(onSale)(), 'pending');
-  assert.equal(arm(soldOut)(), 'pending');
-  // Their pages are read, whatever the searches saw of them lately: on sale — skipped; sold out — armed for its return.
-  assert.equal(env.app.monitor.sweptLately(onSale.url, env.app.repo.now()), false);
-  await settled(arm(onSale));
-  await settled(arm(soldOut));
+  // On sale in the search when the watch first saw it — skipped; sold out — armed for its return.
   assert.equal(arm(onSale)(), 'skipped');
   assert.equal(env.app.repo.getItem(ash.user.id, onSale.id).aco, false);
   assert.equal(runsFor(onSale.id).length, 0, 'never bought');
   assert.equal(arm(soldOut)(), 'armed');
   assert.equal(env.app.repo.getItem(ash.user.id, soldOut.id).aco, true);
-  // (Its first look's page full, as the watch keeps it.)
-  assert.equal(firstLook(w.id, 'demo-jbhifi'), 1);
   assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
 });
 
-test("⭐ an admin's drop watch for everyone, and a VIP watch, whose first search filled JB Hi-Fi's page: one on sale all along that moves into the page later isn't bought (its page is read first)", async () => {
+test("⭐ an admin's drop watch for everyone, and a VIP watch, whose first search filled JB Hi-Fi's page: one on sale all along that moves into the page later isn't bought (on sale when the watch first read it)", async () => {
   // An admin's drop watch for everyone.
   for (let i = 1; i <= 12; i++) store.addProduct('jbhifi', { sku: `air-hockey-table-${i}`, name: `Air Hockey Table ${i}`, price: 300 + i, status: 'in_stock' });
   const w = (await boss.post('/api/drops', { store: 'demo-jbhifi', words: 'air hockey table', aco: true, maxPrice: 500 })).body.watch;
@@ -145,9 +131,7 @@ test("⭐ an admin's drop watch for everyone, and a VIP watch, whose first searc
   await sw().sweepTerm(jb, { keyword: 'air hockey table', page: 1, drop: 'shared' });
   const table = env.app.catalog.productFor('demo-jbhifi', 'air-hockey-table-11');
   const tableArm = () => drops().get(w.id).found.find((x) => x.productId === table.id).arm;
-  assert.equal(tableArm(), 'pending');
-  await settled(tableArm);
-  assert.equal(tableArm(), 'skipped');
+  assert.equal(tableArm(), 'skipped', 'on sale when the watch first read it');
   const tableItem = env.app.repo.itemBySku(boss.user.id, 'demo-jbhifi', 'air-hockey-table-11');
   assert.ok(!tableItem || !tableItem.aco, 'not armed');
 
@@ -157,22 +141,19 @@ test("⭐ an admin's drop watch for everyone, and a VIP watch, whose first searc
   assert.equal(r.status, 200, r.text);
   const v = r.body.watch;
   assert.equal((await sw().sweepTerm(jb, { keyword: 'jukebox deluxe', page: 1, vip: v.id })).ok, true);
-  assert.equal(firstLook(v.id, 'demo-jbhifi'), 1);
   await waitFor(async () => { await env.app.monitor.tick(); return vip().get(v.id).found.every((f) => f.arm !== 'pending'); }, { message: 'its first finds settled' });
   store.set('jbhifi', 'jukebox-deluxe-1', { listed: false });
   await sw().sweepTerm(jb, { keyword: 'jukebox deluxe', page: 1, vip: v.id });
   const jukebox = env.app.catalog.productFor('demo-jbhifi', 'jukebox-deluxe-11');
   const jukeboxArm = () => vip().get(v.id).found.find((f) => f.productId === jukebox.id).arm;
-  assert.equal(jukeboxArm(), 'pending', 'as one listed already');
-  await settled(jukeboxArm);
-  assert.equal(jukeboxArm(), 'skipped');
+  assert.equal(jukeboxArm(), 'skipped', 'on sale when the watch first read it');
   const jukeboxItem = env.app.repo.itemBySku(boss.user.id, 'demo-jbhifi', 'jukebox-deluxe-11');
   assert.ok(!jukeboxItem || !jukeboxItem.aco, 'not armed');
   assert.equal(runsOf(boss.user.id).length, 0, 'nothing bought');
   assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
 });
 
-test("⭐ a find waiting on its page is settled by what that page read said — not by a search's say moments before (sold out in the search, on sale on its page: on sale all along, never armed)", async () => {
+test("⭐ a find armed on a search's say is disarmed by what its page said moments later (sold out in the search, on sale on its page: they disagree — on sale all along, never bought)", async () => {
   for (let i = 1; i <= 11; i++) store.addProduct('jbhifi', { sku: `zephyrine-foosball-${i}`, name: `Zephyrine Foosball ${i}`, price: 300 + i, status: i === 11 ? 'out_of_stock' : 'in_stock' });
   const w = (await boss.post('/api/drops', { store: 'demo-jbhifi', words: 'zephyrine foosball', aco: true, maxPrice: 500 })).body.watch;
   const jb = R('demo-jbhifi');
@@ -182,17 +163,20 @@ test("⭐ a find waiting on its page is settled by what that page read said — 
   await sw().sweepTerm(jb, { keyword: 'zephyrine foosball', page: 1, drop: 'shared' });
   const table = env.app.catalog.productFor('demo-jbhifi', 'zephyrine-foosball-11');
   const arm = () => drops().get(w.id).found.find((x) => x.productId === table.id).arm;
-  assert.equal(arm(), 'pending');
+  assert.equal(arm(), 'armed', "the search's say: sold out");
   // …and its page, read a moment later, says it's on sale (the catalogue keeps the search's word for now).
   store.set('jbhifi', 'zephyrine-foosball-11', { status: 'in_stock' });
-  await settled(arm);
+  await env.app.monitor.checkPage(table.url);
+  await env.app.monitor.delivered();
   assert.equal(arm(), 'skipped', "what its page said: on sale — it isn't armed");
+  const bought = env.app.repo.itemBySku(boss.user.id, 'demo-jbhifi', 'zephyrine-foosball-11');
+  assert.equal(bought ? runsFor(bought.id).length : 0, 0, 'never bought');
   const item = env.app.repo.itemBySku(boss.user.id, 'demo-jbhifi', 'zephyrine-foosball-11');
   assert.ok(!item || !item.aco, 'not armed');
   assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
 });
 
-test("🧭 at a store only browsers read, a find waiting on its page is settled by a browser's read of it — a member's own item by their browser, a VIP find by an admin's: sold out there, it's armed for its return", async () => {
+test("🧭 a browser's read of a find's page counts as the server's would — a member's own item by their browser, a VIP find by an admin's: one that failed settles nothing; sold out there, it stays armed for its return", async () => {
   const jb = R('demo-jbhifi');
   // Someone's own watch: a sold-out product moves into its full first page.
   for (let i = 1; i <= 11; i++) store.addProduct('jbhifi', { sku: `quokkaroll-skeeball-${i}`, name: `Quokkaroll Skeeball ${i}`, price: 300 + i, status: i === 11 ? 'out_of_stock' : 'in_stock' });
@@ -202,10 +186,10 @@ test("🧭 at a store only browsers read, a find waiting on its page is settled 
   await sw().sweepTerm(jb, { keyword: 'quokkaroll skeeball', page: 1, drop: 'private' });
   const item = env.app.repo.itemBySku(ash.user.id, 'demo-jbhifi', 'quokkaroll-skeeball-11');
   const arm = () => drops().get(w.id).found.find((x) => x.itemId === item.id).arm;
-  assert.equal(arm(), 'pending');
-  // A read that failed settles nothing; one that worked does.
+  assert.equal(arm(), 'armed', 'sold out in the search when the watch first saw it');
+  // A read that failed changes nothing; one that worked and agrees keeps it armed.
   await env.app.monitor.browserResults(env.app.repo.userById(ash.user.id), [{ id: item.id, status: 'blocked', error: 'Access Denied' }]);
-  assert.equal(arm(), 'pending');
+  assert.equal(arm(), 'armed');
   await env.app.monitor.browserResults(env.app.repo.userById(ash.user.id), [{ id: item.id, status: 'out_of_stock', title: 'Quokkaroll Skeeball 11', price: 311 }]);
   assert.equal(arm(), 'armed');
   assert.equal(env.app.repo.getItem(ash.user.id, item.id).aco, true);
@@ -217,7 +201,7 @@ test("🧭 at a store only browsers read, a find waiting on its page is settled 
   await sw().sweepTerm(jb, { keyword: 'grabbatron claw', page: 1, vip: v.id });
   const claw = env.app.catalog.productFor('demo-jbhifi', 'grabbatron-claw-1');
   const clawArm = () => vip().get(v.id).found.find((f) => f.productId === claw.id).arm;
-  assert.equal(clawArm(), 'pending');
+  assert.equal(clawArm(), 'armed', 'sold out in the search when the watch first saw it');
   await env.app.monitor.browserResults(env.app.repo.userById(boss.user.id), [{ id: `p:${claw.id}`, status: 'out_of_stock', title: 'Grabbatron Claw 1', price: 301 }]);
   assert.equal(clawArm(), 'armed');
   assert.equal(env.app.repo.itemBySku(boss.user.id, 'demo-jbhifi', 'grabbatron-claw-1').aco, true);

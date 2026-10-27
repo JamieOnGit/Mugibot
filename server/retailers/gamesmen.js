@@ -48,6 +48,7 @@ export default {
     path: '/catalogsearch/result/?q={q}&product_list_order=recently-listed',
     pagePath: '&p={page}',
     pages: 2,
+    newestFirst: true,
     // The page is opened and read once it's drawn (a search provider may draw it in the browser).
     render: true,
     // 1.19.1: the page is read once its results are there — its menu's links (/<name> too, like its

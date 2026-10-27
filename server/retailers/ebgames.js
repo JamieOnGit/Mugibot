@@ -30,7 +30,7 @@ export default {
   // from inside it, the way that page does: newest releases first.
   sweep: {
     from: 'browser', parser: 'ebgames', inPage: true, openPath: '/search?q={q}',
-    path: '/search/query?q={q}&sort=releasedate&order=desc', pagePath: '&page={page}', pages: 2,
+    path: '/search/query?q={q}&sort=releasedate&order=desc', pagePath: '&page={page}', pages: 2, newestFirst: true,
     // Drop mode: a new listing alerted here → its keyword's first page every other search for a while.
     hot: true,
   },

@@ -259,16 +259,17 @@ test("🔎 EB Games' \"Trading cards, pre-order\" page, read from an admin's bro
   assert.equal(t.guess, `${store.url}/ebgames/search/query?category=trading-cards&condition=preorder`);
   assert.equal(pages().browserDue(admin(), { version: '1.34.0' }).pages.length, 0, 'not again while it\'s out');
   assert.deepEqual(pages().browserDue(ash.user, { version: '1.34.0' }).pages, [], "a member's browser never reads pages");
-  // What the browser read: the JSON the page fetched (its own filters).
+  // What the browser read: the JSON the page fetched (its own filters) — with EB's own count of its results (1.38.0).
   const data = t.guess;
   const read = async () => {
     const res = await fetch(data, { headers: { 'user-agent': 'Mozilla/5.0 Chrome/130' } });
     const { parseEbGames } = await import('../server/monitor/listing.js');
-    return parseEbGames(await res.text(), { base: data, storeBase: eb.base }).products;
+    const parsed = parseEbGames(await res.text(), { base: data, storeBase: eb.base });
+    return { products: parsed.products, total: parsed.total, perPage: parsed.perPage };
   };
-  let products = await read();
-  assert.deepEqual(products.map((p) => p.sku), ['312400'], 'only the pre-order trading cards');
-  let out = await pages().browserResults(admin(), [{ id: t.id, ok: true, how: 'data', learned: data, products }]);
+  let got = await read();
+  assert.deepEqual(got.products.map((p) => p.sku), ['312400'], 'only the pre-order trading cards');
+  let out = await pages().browserResults(admin(), [{ id: t.id, ok: true, how: 'data', learned: data, ...got }]);
   assert.equal(out[0].ok, true);
   let view = await watchOf(ash, w.id);
   assert.equal(view.looked, true);
@@ -284,9 +285,9 @@ test("🔎 EB Games' \"Trading cards, pre-order\" page, read from an admin's bro
   const dmsBefore = dms('d-ash').length;
   store.addProduct('ebgames', { sku: '312401', name: 'Magic: The Gathering Lorwyn Eclipsed Collector Booster Box', price: 239, status: 'preorder' });
   store.addProduct('ebgames', { sku: '312402', name: 'Pokémon TCG: Phantasmal Flames Booster Bundle', price: 60, status: 'preorder' });
-  products = await read();
-  assert.equal(products.length, 3);
-  await pages().browserResults(admin(), [{ id: t.id, ok: true, how: 'data', products }]);
+  got = await read();
+  assert.equal(got.products.length, 3);
+  await pages().browserResults(admin(), [{ id: t.id, ok: true, how: 'data', ...got }]);
   const item = env.app.repo.itemBySku(ash.user.id, 'demo-ebgames', '312401');
   assert.ok(item, "on Ash's watchlist");
   assert.equal(item.aco, true);
@@ -307,7 +308,7 @@ test("🔎 EB Games' \"Trading cards, pre-order\" page, read from an admin's bro
   clock.offset += 30 * 1000;
   t = pages().browserDue(admin(), { version: '1.34.0' }).pages[0];
   assert.ok(t, 'asked again half a minute later');
-  await pages().browserResults(admin(), [{ id: t.id, ok: true, how: 'data', products: await read() }]);
+  await pages().browserResults(admin(), [{ id: t.id, ok: true, how: 'data', ...(await read()) }]);
   view = await watchOf(ash, w.id);
   assert.equal(view.fails, 0);
   assert.equal(runsFor(item.id).length, 1, 'bought once');

@@ -95,10 +95,20 @@ test("🛡️ …nor when an admin's browser reads the newest products (its list
 });
 
 test("🆕 a new plush the watch's own search finds after its first look: its drop — armed and bought the moment it's found", async () => {
-  const w = await watch('charizard plush');
+  const r = await boss.post('/api/drops', { store: 'demo-pokebox', words: 'charizard plush', aco: true, maxPrice: 100 });
+  assert.equal(r.status, 200, r.text);
+  const w = r.body.watch;
   const own = { keyword: 'charizard plush', page: 1, drop: 'shared' };
-  const s = await sw().ingest(pb(), own, { products: [plush('charizard-plush-30cm', 'Charizard Plush 30cm', 4)], total: 1, problem: null }, { source: 'server', url: sw().urlFor(pb(), 'charizard plush', 1, { vip: true }), ms: 100 });
+  const url = sw().urlFor(pb(), 'charizard plush', 1, { vip: true });
+  // Its first look (monitor/sightings.js): what's listed then — a read with something in it (an empty one may be the
+  // store's hiccup), holding every result (fewer came than the 10 its link asks for).
+  const KEY = plush('charizard-plush-keychain', 'Charizard Plush Keychain', 5);
+  assert.equal((await sw().ingest(pb(), own, { products: [KEY], total: 1, count: 1, problem: null }, { source: 'server', url, ms: 100 })).ok, true);
+  await new Promise((done) => setTimeout(done, 5));
+  const s = await sw().ingest(pb(), own, { products: [plush('charizard-plush-30cm', 'Charizard Plush 30cm', 4), KEY], total: 2, count: 2, problem: null }, { source: 'server', url, ms: 100 });
   assert.equal(s.ok, true, s.error);
+  await env.app.monitor.delivered();
   assert.deepEqual(bought('charizard-plush-30cm'), { armed: true, runs: 1 });
+  assert.deepEqual(bought('charizard-plush-keychain'), { armed: false, runs: 0 }, 'listed already, on sale: never bought');
   assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
 });

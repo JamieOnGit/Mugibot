@@ -36,7 +36,8 @@ export default {
   // say who sells each product, so marketplace sellers can't be told apart here.
   // Amazon turns Mugibot's server away (HTTP 503, "An error occurred" — tried Oct 2026), so the
   // extension keeps an Amazon page open in its own window and asks for each search page from
-  // inside it, like the site's own pages do (expect: 'html' — a page, not JSON).
+  // inside it, like the site's own pages do (expect: 'html' — a page, not JSON). Not sweep.newestFirst:
+  // sponsored results sit at the top whatever the sort, so an old listing can be above a new one.
   sweep: {
     from: 'browser', parser: 'amazon', inPage: true, openPath: '', expect: 'html',
     path: '/s?k={q}&s=date-desc-rank', pagePath: '&page={page}', pages: 2, addWord: 'tcg', minSeconds: 20,

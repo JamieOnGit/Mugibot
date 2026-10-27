@@ -9,9 +9,10 @@
 // What a keyword watch finds gets a VIP monitor too, so its page is read straight away (and every
 // few seconds in the window) for its stock. With "Auto-checkout it for me", it also goes on that
 // admin's watchlist, armed up to their max price, so their browser checks out the moment it's in
-// stock — but only what drops: a new listing (found after the watch's first search), or something
-// already listed whose page says it isn't on sale yet. Never what was already on sale when the
-// watch was added (a broad watch would otherwise buy everything that matches).
+// stock — but only what drops after the watch was added: a new listing, or something that wasn't on
+// sale when the watch first read it. Never what was already on sale when the watch was added (a broad
+// watch would otherwise buy everything that matches). What the watch itself saw decides
+// (monitor/sightings.js), never the catalogue's last status.
 
 import { PRODUCTS_FOR_PAGE, toProduct } from '../catalog.js';
 import { newId } from '../crypto.js';
@@ -30,9 +31,6 @@ export const VIP_NOTE = 'VIP drop';
 // it isn't on sale yet), 'skipped' (it was on sale already when the watch was added) or ''. (Found
 // before this was kept: armed when found.)
 const armOf = (w, f) => (w.acoUser && w.maxPrice !== null ? f.arm || 'armed' : '');
-// Statuses that say whether something's on sale (not a failed or empty read).
-// (In the store's shops only — Kmart's "In store only" — is a reading too: not on sale online yet.)
-const READ = new Set([STATUS.IN_STOCK, STATUS.PREORDER, STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.NOT_LISTED, STATUS.IN_STORE]);
 
 function toWatch(r) {
   let found = [];
@@ -89,27 +87,10 @@ export class Vip {
     return this.termsFor(storeId).find((w) => (!only || w.id === only) && mentions(name, w.words)) || null;
   }
 
-  /**
-   * A search of these words at a store went (sweep.js): a keyword watch's first one says whether its page was full
-   * (full: more listed than the page held) — crowded().
-   */
-  searched(storeId, words, full) {
-    // (Kept once: the ones kept already aren't written again — a watch in its window is searched every few seconds.)
-    this.looked ||= new Set();
-    for (const w of this.termsFor(storeId).filter((x) => x.words === words && !this.looked.has(x.id))) {
-      this.db.run('INSERT OR IGNORE INTO first_looks (watch_id, store, full, at) VALUES (:w, :s, :f, :t)', { w: w.id, s: storeId, f: full ? 1 : 0, t: this.now() });
-      this.looked.add(w.id);
-    }
-  }
-
-  /**
-   * Did the watch's first search read a full page — more listed than the page held? Then a product new to the catalogue
-   * in its search later may only have moved into the page (one above it sold out, say), on sale since before the watch:
-   * armed only once its page says it isn't on sale (found: as listed already). (Not searched yet: as full.)
-   */
-  crowded(w) {
-    const row = this.db.get('SELECT full FROM first_looks WHERE watch_id = :w AND store = :s', { w: w.id, s: w.store });
-    return !row || !!row.full;
+  /** Every keyword watch at a store whose words are in this name (what it sees: monitor/sightings.js). */
+  watchesFor(storeId, title) {
+    const name = norm(title);
+    return name ? this.termsFor(storeId).filter((w) => mentions(name, w.words)) : [];
   }
 
   /** How often a VIP monitor's page is read (seconds): every few seconds in its drop window. Null: not a VIP page. */
@@ -172,7 +153,7 @@ export class Vip {
       if (url) {
         const { product } = monitorAdmin.add({ url, kinds: KINDS, note: VIP_NOTE }, user);
         // (Already listed: armed once its page says it isn't on sale yet.)
-        this.found(this.get(id), this.catalog.productById(product.id), { baseline: true });
+        this.found(this.get(id), this.catalog.productById(product.id)).catch((e) => this.cfg.log('[vip]', e.message));
       }
     } catch (e) {
       this.db.run('DELETE FROM vip_watches WHERE id = :id', { id });
@@ -201,33 +182,38 @@ export class Vip {
     this.db.run('DELETE FROM monitors WHERE vip_watch = :id AND note = :note', { id: w.id, note: VIP_NOTE });
     this.db.run('UPDATE monitors SET vip_watch = NULL WHERE vip_watch = :id', { id: w.id });
     this.db.run('DELETE FROM vip_watches WHERE id = :id', { id: w.id });
-    this.db.run('DELETE FROM first_looks WHERE watch_id = :id', { id: w.id });
+    if (this.sightings) this.sightings.forget(w.id);
     this.changed();
     if (user) this.repo.audit(user.id, null, 'vip-remove', w.url || `${w.store}: ${w.words}`);
     return true;
   }
 
   /**
-   * A watch found a product (a sweep's search, or its link): a VIP monitor on it, its page read
-   * now, and — when an admin asked — on their watchlist armed for Auto-checkout. baseline: it was
-   * listed already when the watch was added (its first search, or its link): armed only once its
-   * page says it isn't on sale yet (checked()).
+   * A watch found a product (a sweep's search, or its link): a VIP monitor on it, its page read now (unless it's
+   * backing off: the store refused it), and — when an admin asked — on their watchlist armed for Auto-checkout, by
+   * what the watch saw of it (monitor/sightings.js): verdict ('new': bought at once when status says it's on sale;
+   * 'armed'; 'skipped'; 'pending': its page decides — checked()). status: this read's stock (or null). later: the
+   * search's list for the alerts. Returns once any Auto-checkout run it starts is made.
    */
-  found(w, product, { baseline = false } = {}) {
-    if (!w || !product) return;
+  found(w, product, { verdict = null, status = null, later = null } = {}) {
+    if (!w || !product) return Promise.resolve();
     let monitor = this.catalog.monitorForProduct(product.id);
     if (!monitor) monitor = this.catalog.addMonitor(product.id, { kinds: KINDS, note: VIP_NOTE, createdBy: w.createdBy }).monitor;
     if (monitor.vip_watch !== w.id) this.db.run('UPDATE monitors SET vip_watch = :w, paused = 0 WHERE id = :id', { w: w.id, id: monitor.id });
     const isNew = !w.found.some((f) => f.productId === product.id);
     if (isNew) {
-      const wantArm = !!(w.acoUser && w.maxPrice !== null && product.url);
-      const arm = !wantArm ? '' : baseline ? 'pending' : 'armed';
-      this.saveFound(w, [...w.found, { productId: product.id, at: this.now(), ...(arm ? { arm } : {}) }]);
+      // (Its link watch: nothing read yet.)
+      if (!verdict && this.sightings) verdict = this.sightings.see(w, product.store, [product.sku], { how: 'link' }).verdict;
+      this.saveFound(w, [...w.found, { productId: product.id, at: this.now(), ...(this.wants(w, product) ? { arm: 'pending' } : {}) }]);
       this.repo.ensurePageFor({ store: product.store, sku: product.sku, url: product.url });
-      if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url: product.url });
-      // (Armed the first time it's found only: once it's bought and disarmed, it stays that way.)
-      if (arm === 'armed') this.arm(w, product);
+      if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url AND fail_count = 0', { url: product.url });
     }
+    return this.settle(this.get(w.id) || w, product, verdict || 'pending', status, later);
+  }
+
+  /** Does this watch arm what it finds (an admin asked, with a max price) — and can this be bought (it has a link)? */
+  wants(w, product) {
+    return !!(w.acoUser && w.maxPrice !== null && product && product.url);
   }
 
   saveFound(w, found) {
@@ -236,21 +222,74 @@ export class Vip {
   }
 
   /**
-   * A product's page was read (monitor/index.js): a watch waiting to see whether something already
-   * listed is on sale yet arms it when it isn't — and leaves it when it is (it was on sale before
-   * the watch: not a drop; ⚡ Buy it yourself if you want it).
+   * A find's Auto-checkout, by what the watch saw of it: armed ('new', or 'armed': not on sale when the watch first
+   * read it), skipped (on sale then: never bought — said in the admin's activity), or still waiting for its page.
+   * Each find is armed once: once it's bought and disarmed, it stays that way. 'new' and on sale now (status): its
+   * Auto-checkout run starts at once.
    */
-  checked(product) {
-    if (!product || !READ.has(product.status) || !this.watches().length) return;
-    for (const w of this.watches()) {
-      const f = w.found.find((x) => x.productId === product.id && x.arm === 'pending');
-      if (!f) continue;
-      const onSale = isOrderable(product.status);
-      this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm: onSale ? 'skipped' : 'armed' } : x)));
-      if (!onSale) this.arm(w, product, product.status);
-      else if (w.acoUser) {
-        this.repo.addEvent(w.acoUser, { type: 'aco', level: 'info', message: `VIP watch: ${product.name || product.sku} was on sale already when the watch was added, so it isn't armed — ⚡ Buy it yourself if you want it`, name: product.name, sku: product.sku, url: product.url || null });
+  async settle(w, product, verdict, status = null, later = null) {
+    const f = w.found.find((x) => x.productId === product.id);
+    // (Not asked for when it was found, or found before this was kept, or armed already.)
+    if (!f || !f.arm || f.arm === 'armed' || !this.wants(w, product)) return;
+    // (A find from before the watch kept what it saw: never new to it, and skipped stays skipped.)
+    if (this.sightings) verdict = this.sightings.findVerdict(w, product.store, [product.sku], verdict, { foundAt: f.at, arm: f.arm });
+    const arm = verdict === 'new' || verdict === 'armed' ? 'armed' : verdict;
+    if (arm === f.arm || arm === 'pending') return;
+    this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm } : x)));
+    if (arm === 'skipped') {
+      this.repo.addEvent(w.acoUser, { type: 'aco', level: 'info', message: `VIP watch: ${product.name || product.sku} was on sale already when the watch was added, so it isn't armed — ⚡ Buy it yourself if you want it`, name: product.name, sku: product.sku, url: product.url || null });
+      return;
+    }
+    const item = this.arm(w, product, verdict === 'armed' ? status : null);
+    if (!item || verdict !== 'new' || !this.monitor) return;
+    // (New and on sale — as this read says, or as its last read did: bought now. Its stock not known yet: its first read
+    //  that says on sale is the drop.)
+    const row = this.db.get('SELECT status FROM items WHERE id = :id', { id: item.id });
+    const onSale = isOrderable(status) ? status : row && isOrderable(row.status) ? row.status : null;
+    if (onSale) await this.buyNow(item, product, onSale, later);
+    else if (row && row.status === STATUS.UNKNOWN) this.db.run('UPDATE items SET status = :st WHERE id = :id', { st: STATUS.NOT_LISTED, id: item.id });
+  }
+
+  /**
+   * Watches (ids) that armed a find on a search's "not on sale" its own page contradicts a moment later
+   * (Sightings.revise): on sale as far as they go — skipped, and the item they armed for it disarmed (never one armed
+   * before the find: someone's own arming).
+   */
+  unarm(ids, store, sku) {
+    const product = this.catalog.productFor(store, sku);
+    if (!product) return;
+    for (const w of this.watches().filter((x) => ids.includes(x.id))) {
+      const f = w.found.find((x) => x.productId === product.id);
+      if (!f || f.arm !== 'armed') continue;
+      this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm: 'skipped' } : x)));
+      const item = this.repo.itemBySku(w.acoUser, product.store, product.sku);
+      if (item && item.aco && (item.acoAt || 0) >= (f.at || 0)) {
+        this.db.run('UPDATE items SET aco = 0, aco_at = NULL WHERE id = :id', { id: item.id });
+        if (this.hub) this.hub.publish(w.acoUser, 'watch', { id: item.id, aco: false });
       }
+      this.repo.addEvent(w.acoUser, { type: 'aco', level: 'info', message: `VIP watch: ${product.name || product.sku} — its page says it's on sale, its search said it wasn't a moment before: taken as on sale already, so it isn't armed — ⚡ Buy it yourself if you want it`, name: product.name, sku: product.sku, url: product.url || null });
+    }
+  }
+
+  /** A new listing that's on sale as it's found: its Auto-checkout run now (its alerts on later), not at its next read. */
+  async buyNow(item, product, status, later) {
+    // (On the watchlist already as on sale: this read is its drop all the same.)
+    this.db.run("UPDATE items SET status = 'pending' WHERE id = :id", { id: item.id });
+    const row = this.db.get('SELECT * FROM items WHERE id = :id', { id: item.id });
+    if (row) await this.monitor.applyResult(row, { status, title: product.name || null, price: typeof product.price === 'number' ? product.price : null, error: '', variantId: product.variant_id || null }, 'sweep', { later });
+  }
+
+  /**
+   * A product's page was read (monitor/index.js; reading: what that read said — on sale or not yet): each watch that
+   * found it records it, and a find waiting on its page is settled — armed if it isn't on sale, left alone if it is.
+   * later: the read's list for the alerts.
+   */
+  async checked(product, reading, later = null) {
+    if (!product || !reading || !this.sightings || !this.watches().length) return;
+    for (const w of this.watches()) {
+      if (!w.found.some((x) => x.productId === product.id)) continue;
+      const { verdict } = this.sightings.see(w, product.store, [product.sku], { reading, how: 'page' });
+      await this.settle(w, product, verdict, product.status, later);
     }
   }
 

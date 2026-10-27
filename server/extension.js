@@ -104,6 +104,11 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // through only once its page has been the store's for a moment (at once, a page with the store's menus on it). Before,
 // in that moment the extension's own checks of your items there could ask the store for a page, and the place in line
 // was lost. Nothing else changed in how searches or checkouts go.
+// 1.38.0: an admin's browser's searches and search-page reads say the store's own count of results with them (EB
+// Games' and Kmart's lists have one), so the server knows when a read holds every result there is — what tells an
+// Auto-checkout watch's new listing from one that only moved up into view (monitor/sightings.js). An older copy's
+// reads never say so: what they find is decided as before by the watch's own readings, never bought on newness alone.
+// Nothing else changed in how searches or checkouts go.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):

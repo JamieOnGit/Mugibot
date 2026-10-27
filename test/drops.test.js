@@ -181,7 +181,7 @@ test('🎯 an admin\'s words at a store: searched as typed in the sweeps\' turn;
   assert.equal(more.filter((t) => t.drop).length, 1);
 });
 
-test("🎯 a drop watch at JB Hi-Fi whose drop JB's newest products show first (before the watch's own search): still a drop — posted, bought for the admin — and the watch's own search doesn't post it again", async () => {
+test("🎯 a drop watch at JB Hi-Fi whose drop JB's newest products show first (before the watch's own search): still a drop — posted, bought for the admin (JB made it after the watch was added) — and the watch's own search doesn't post it again", async () => {
   const jb = R('demo-jbhifi');
   const before = posts(ch.nontcg).length;
   const r = await boss.post('/api/drops', { store: 'demo-jbhifi', words: 'Nintendo Switch 3', label: 'Switch 3', aco: true, maxPrice: 900 });
@@ -190,8 +190,9 @@ test("🎯 a drop watch at JB Hi-Fi whose drop JB's newest products show first (
   // Its first search sets its scene; the newest products' first read sets theirs.
   assert.equal((await sw().sweepTerm(jb, { keyword: 'nintendo switch 3', page: 1, drop: 'shared' })).ok, true);
   assert.equal((await sw().sweepTerm(jb, { keyword: NEWEST, page: 1 })).ok, true);
-  // JB publishes it: the newest products see it first.
-  store.addProduct('jbhifi', { sku: 'nintendo-switch-3-console-launch-edition', name: 'Nintendo Switch 3 Console Launch Edition', price: 799, status: 'in_stock' });
+  // JB makes it and publishes it: the newest products see it first. (Made after the watch was added: a drop for it. One JB
+  // made before, published again — JB does that all day — may have been on sale before the watch: never bought on that.)
+  store.addProduct('jbhifi', { sku: 'nintendo-switch-3-console-launch-edition', name: 'Nintendo Switch 3 Console Launch Edition', price: 799, status: 'in_stock', createdAt: Date.now() + clock.offset });
   const s = await sw().sweepTerm(jb, { keyword: NEWEST, page: 1 });
   assert.equal(s.ok, true, s.error);
   await waitFor(() => posts(ch.nontcg).length > before, { message: 'posted in #non-tcg-alerts' });
@@ -635,10 +636,9 @@ test('🎯 a broad watch whose first look finds plenty still hears of what drops
     const look = await drops().look(drops().get(w.id));
     assert.equal(look.ok, true, look.error);
     const first = drops().get(w.id).found;
-    assert.equal(first.filter((f) => !f.quiet).length, 10, 'its first look keeps 10 of what was listed already');
-    assert.equal(first.filter((f) => f.quiet).length, 2, '…and remembers the other 2 (listed already, never taken for a drop)');
+    assert.equal(first.length, 10, 'its first look keeps 10 of what was listed already');
     assert.ok(first.every((f) => f.base === true));
-    assert.equal((await ash.get('/api/drops')).body.watches.find((x) => x.id === w.id).found.length, 10, 'what it only remembers isn\'t shown');
+    assert.equal((await ash.get('/api/drops')).body.watches.find((x) => x.id === w.id).found.length, 10);
     const n0 = dms('d-ash').length;
     // A new one drops: there's room for it (before, a full first look left none).
     store.state.acme.products.push({ handle: 'garmin-watch-band-quickfit-22', name: 'Garmin Watch Band QuickFit 22', price: 79, status: 'in_stock', listed: true });
@@ -771,9 +771,10 @@ test('🎯 words at another website: read as Mugibot every couple of minutes —
   assert.equal(dms('d-misty').length, before.misty, 'the first read is how it is, not a restock');
   assert.equal(posts(ch.nontcg).length, before.nontcg);
 
-  // The limited edition drops.
+  // The limited edition drops: its page read in the monitor's turn (at once here: the website's not been asked just now).
   store.setAcme('xbox-series-x-25th-anniversary-edition', { listed: true });
   await drops().look(drops().get(a.id));
+  await settle();
   const post = posts(ch.nontcg).at(-1);
   assert.match(post.body.embeds[0].title, /^🟢 In stock: Xbox Series X 25th Anniversary Limited Edition Console/);
   assert.match(post.body.embeds[0].description, /Just listed/);

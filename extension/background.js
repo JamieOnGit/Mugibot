@@ -1288,6 +1288,13 @@ const why = (e) => {
   return m ? ` (${m})` : '';
 };
 
+// (The store's own count of results and how many came, where its list says them — EB Games', Kmart's — and how many it
+//  sent: the server then knows whether a read holds every result there is.)
+const counted = (parsed) => ({
+  ...(typeof parsed.total === 'number' && typeof parsed.perPage === 'number' ? { total: parsed.total, perPage: parsed.perPage } : {}),
+  ...(typeof parsed.count === 'number' ? { count: parsed.count } : {}),
+});
+
 async function sweepOne(t) {
   const started = Date.now();
   const base = { store: t.store, keyword: t.keyword, page: t.page };
@@ -1322,7 +1329,7 @@ async function sweepOne(t) {
     // (privateWindow: whether it was read in its private window — Mugibot allowed in Incognito here — or the ordinary one.)
     // (stated, none: nothing read — what the page said it had: "57 results" that hadn't been drawn, or "No results for …".)
     const said = parsed.products.length ? {} : { stated: parsed.stated ?? null, none: !!parsed.none };
-    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, ...said, next: String(page.next || '').slice(0, 2000), products: parsed.products.slice(0, 300), ...(t.privateWindow ? { privateWindow: page.incognito } : {}) };
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem, seen, ...said, ...counted(parsed), next: String(page.next || '').slice(0, 2000), products: parsed.products.slice(0, 300), ...(t.privateWindow ? { privateWindow: page.incognito } : {}) };
   }
   if (t.inPage) {
     let res;
@@ -1337,7 +1344,7 @@ async function sweepOne(t) {
     const parsed = parseListing(t.parser, res.text, opts(res.url));
     const title = parsed.problem === 'layout' ? /<title[^>]*>([^<]{0,200})/i.exec(res.text || '') : null;
     const seen = parsed.problem === 'layout' ? { title: title ? title[1] : String(res.type || ''), bytes: String(res.text || '').length } : undefined;
-    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem: parsed.problem, seen, products: parsed.products.slice(0, 300) };
+    return { ...base, ok: true, status: 200, ms: Date.now() - started, problem: parsed.problem, seen, ...counted(parsed), products: parsed.products.slice(0, 300) };
   }
   let res;
   try {
@@ -1348,7 +1355,7 @@ async function sweepOne(t) {
   if (!res.ok) return { ...base, ok: false, status: res.status, blocked: [401, 403, 429, 503].includes(res.status), ms: Date.now() - started };
   const text = (await res.text()).slice(0, 6_000_000);
   const parsed = parseListing(t.parser, text, opts(res.url));
-  return { ...base, ok: true, status: res.status, ms: Date.now() - started, problem: parsed.problem, products: parsed.products.slice(0, 300) };
+  return { ...base, ok: true, status: res.status, ms: Date.now() - started, problem: parsed.problem, ...counted(parsed), products: parsed.products.slice(0, 300) };
 }
 
 const REFUSED = [401, 403, 429, 503];
@@ -1369,7 +1376,7 @@ async function pageOne(t) {
   if (!allowed) return { ...base, ok: false, error: `This copy of Mugibot's extension (v${VERSION}) can't open ${u.hostname} — update the extension`, ms: 0 };
   const job = { ...t, noCache: true };
   // (What a page or its data had: its products — or, with none, what it said about them.)
-  const answer = (parsed, extra) => ({ ...base, ok: true, status: 200, ms: ms(), problem: parsed.problem, products: parsed.products.slice(0, 300), ...(parsed.products.length ? {} : { stated: parsed.stated ?? null, none: !!parsed.none }), ...extra });
+  const answer = (parsed, extra) => ({ ...base, ok: true, status: 200, ms: ms(), problem: parsed.problem, products: parsed.products.slice(0, 300), ...(parsed.products.length ? {} : { stated: parsed.stated ?? null, none: !!parsed.none }), ...counted(parsed), ...extra });
   // (Data that's the store's product list — its results, however few — and not something else the page fetched.)
   const isList = (parsed) => !parsed.problem || parsed.problem === 'empty';
   try {
