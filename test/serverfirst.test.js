@@ -303,10 +303,12 @@ test("⚡ a store only struggling at a drop (502s, timeouts, a page without its 
     answer = '502';
     let at = sw.now();
     await sweep(id);
+    // (From when the search was in: its waits start then — however long the store took to answer.)
+    const done = sw.now();
     assert.ok(st.backup, 'handed over after 2 minutes of no answer');
     assert.equal(st.backup.transient, true);
     assert.ok(Math.abs(st.backup.retryAt - (at + MIN)) < 2000, `the server tries again in a minute (${st.backup.retryAt - at} ms)`);
-    assert.ok(st.backup.idleAt - at <= Math.max(every * 2, MIN), "no admin's browser searching yet: a minute at most too");
+    assert.ok(st.backup.idleAt - done <= Math.max(every * 2, MIN), `no admin's browser searching yet: a minute at most too (${st.backup.idleAt - done} ms)`);
     assert.ok(since(/Kmart \(dummy store\): Mugibot's server gets no answer from it \(HTTP 502, for 2 min\) — an admin's browser searches it meanwhile, and the server tries again within a minute/));
     // Still struggling at its try: twice as long (2 minutes), not 10.
     at = sw.now();
