@@ -72,18 +72,13 @@ read their own BIG W items instead, and admins' browsers the shared monitors:
   minimised window, the way you'd open it, and read once its buy box is drawn
   (up to 10 s), then the tab's left blank. Requests from the extension's
   background are what got browsers turned away.
-- **At the usual pace in a private window** (extension **1.36.0**). In a
-  browser that opens BIG W in a private window of its own (Mugibot allowed in
-  Incognito), each product's page is read every minute, as the other stores'
-  are, as many a round as the round has room for. The live searches there go
-  at the admin's-browser pace set, like EB Games' and The Gamesmen's. Search
-  pages watched there go down to every 3 s.
-- **Gently in an ordinary window.** Without that private window: one BIG W page a
-  round (every 30 s) per browser, each product at most every **3 minutes**
-  (`browserSeconds: 180`; 15 before October 2026, though a slip read members'
-  items every minute), one live search every 20 s (`sharedWindowSeconds`; was
-  10), and search pages watched every 20 s at the fastest. Until an admin's
-  browser has said it's in its private window, the ordinary-window pace applies.
+- **Within one budget per browser** (October 2026, extension **1.39.0**). Its
+  product pages, live searches and search pages watched share it: one BIG W page
+  at a time in a browser, at least 8 s apart in its private window, 20 s in an
+  ordinary one. See **BIG W within one budget** below. (Before: in a private window
+  each product every minute, five a round, beside a search every 15 s and pages
+  watched every 3 s, in three tabs at once; in an ordinary window one a round, each
+  product every 3 minutes.)
 - One product a live search saw in the last few minutes isn't opened at all.
 - **"Access Denied".** When BIG W turns a browser away — a check, a live search,
   or a page you open yourself — that browser leaves BIG W alone for 30 minutes (no
@@ -229,6 +224,60 @@ browsers, so the extension keeps it going for as long as the browser is open:
   said: **No results** (BIG W's answer — and it stops waiting there at once, not after
   15 s) or **57 results** that hadn't been drawn yet (said as that, read again next
   round at the usual pace, nothing taken for new).
+
+**BIG W within one budget** (October 2026, extension **1.39.0**). Admins'
+browsers kept being turned away ("Access Denied", **Blocked by site** in the check
+log), half an hour at a time, then again. Each way Mugibot reads BIG W from a browser
+kept its own pace, and nothing kept them in check together: in a private window, a
+live search every 15 s, every search page watched as often as every 3 s (all of them
+together about once a second), and up to five product pages a round, in three tabs
+at once — some 17 pages a minute from one browser, three loading at once (measured
+in `test/access.test.js`). After the 30-minute pause the same pace began again.
+
+Now everything a browser reads of BIG W goes through one budget for that browser
+(`server/monitor/access.js`, set in `server/retailers/bigw.js` → `access`):
+
+- **One page at a time, the gap between.** One BIG W page loading at a time in a
+  browser, at least **8 s** between two starting (`gapSeconds`), **20 s** in an
+  ordinary window (`sharedGapSeconds`: its cookies are your own visits'), and half
+  the gap after the last one's in. About 7 pages a minute at most from a browser.
+- **Shared by weight.** Searches 2, product pages 2, search pages watched 1
+  (`shares`): none of them starved. A round of product pages (every 30 s) books the
+  next free slot, and the extension waits for it and for its own BIG W tabs before
+  opening it (1.39.0); an older extension gets one product page a round, the slot
+  kept a moment for it. Two a round (`checksPerRound`), the gap between them.
+- **Each in turn.** Every keyword, page watched, watchlist item, shared monitor
+  and product its searches found asks to be read every **5 s** (`targetSeconds`):
+  the budget decides how often each really is, longest waiting first, so none is
+  left out. The same page is never read twice in a round.
+- **Turned away all the same:** nothing more asked of BIG W from that browser for
+  **30 minutes** (as the extension does itself — and the rest of a round's pages at
+  BIG W are skipped the moment one says it), that browser's gap doubled (up to 2
+  minutes, `maxGapSeconds`), and said in the live log. A bot check where its page
+  should be doubles it too. It eases back a step (×¾) every 10 minutes it isn't turned
+  away (`easeMinutes`, counted from the end of the pause), but for a day never back
+  down to within half again of the gap it was turned away at. Each browser's own:
+  BIG W turns away a browser, not every browser, and one browser's answers never
+  slow another's. What each browser learned (its gap, its pause) is kept over a
+  restart. An admin's **↻ Reset** of BIG W lifts the server's pause (the extension's
+  own half hour still holds in that browser) and keeps the wider gap.
+- **What it's doing:** Monitor → Settings → Stores, under BIG W: the gap now (the
+  widest of the browsers reading it), how often each keyword, page watched and
+  product is really read, and whether a browser is paused or how often it was turned
+  away in the last 24 h. The server's log has
+  `[access] store=bigw event=denied who=… kind=… gapMs=… was=… blocks24h=…` lines.
+
+**The 5 s target, measured.** A browser reads one BIG W page every 8–9 s at best,
+so 5 s per keyword or product can't be met for more than one thing at a time: with
+3 keywords, 1 search page watched and 4 products (`test/access.test.js`, simulated
+browser, pages taking 5 s to build) each keyword was searched every ~64 s, the page
+watched read every ~43 s and each product every ~83 s — 6.9 pages a minute, never
+two at once, never two starting under 8 s apart. Each admin's browser has a budget of
+its own, so a second admin's browser on another network roughly halves those times.
+More keywords or products than that stretch them further: trim BIG W's watchlist and
+keywords to what matters, or add an admin's browser elsewhere. There's no approved
+BIG W product API or feed for this (its search API refuses servers too), so its own
+pages, opened as you would, at a pace its bot protection allows, are what's left.
 
 BIG W is watched only while an admin's computer is on with Chrome open and the
 extension connected. Two admins' browsers in different places read its product
@@ -1278,6 +1327,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | `MONITOR_HOST_GAP` | 5 | Seconds between page checks at the same store |
 | `MONITOR_PRICE_CHANGE_PERCENT` | 1 | The smallest price change a **monitor's** price alerts count (sweeps use the dashboard's price drop %) |
 | `MONITOR_LOG_DAYS` | 7 | How long the page-check log is kept |
+| `MONITOR_ACCESS` | (each store's own) | A store's budget for what each browser reads of it, by store, as JSON — e.g. `{"bigw":{"gapSeconds":12}}` (see **BIG W within one budget**). Any of `gapSeconds` (3–600), `sharedGapSeconds`, `maxGapSeconds`, `pauseMinutes`, `easeMinutes`, `targetSeconds`, `checksPerRound` (1–5), `shares`; the rest stays the store's own |
 | `GATE_PROBE_SECONDS` | 0 (the store's own: 60) | How often the server looks at JB Hi-Fi's checkpoint |
 | `GATE_CONFIRM_SECONDS` | 10 | How soon it looks again to be sure of a change |
 | `GATE_CHECK_SECONDS` | 0 (180; 60 while up) | How often an admin's browser looks at EB Games' and Pokémon Center's queues as a new visitor |
@@ -1311,7 +1361,8 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Clothes or toys in the list | MugiWatch's card words include "pack" and "sleeve", so "3 Pack Socks" looks like cards. Add the word (e.g. "onesie") to **Not trading cards**; products that no longer count leave the list when you save. |
 | A store shows **In queue** on the live monitor | Its virtual queue is up, so the admin's browser isn't searching it until it's through the queue or the queue's down. That's on purpose: a search could cost the admin their place in line. Nothing to do. |
 | `#virtual-queue-detection` got nothing | Press **Set up store channels** again (it makes the channel), and check the bot can post there. EB Games' and Pokémon Center's queues need an admin's browser with the extension (1.16.0 or later) open, or members' browsers landing in the queue. |
-| BIG W items say **The store said "Access Denied" to your browser** | BIG W's bot protection turned that browser away. Mugibot leaves BIG W alone from it for 30 minutes, then reads the pages again. To get back in sooner, clear BIG W's cookies in that browser (the icon left of the address → Cookies and site data), or use another network. Keep sweeping and checking out on different computers or networks if it keeps happening. |
+| BIG W items say **The store said "Access Denied" to your browser** | BIG W's bot protection turned that browser away. Mugibot leaves BIG W alone from it for 30 minutes, then reads the pages again, further apart (Monitor → Settings → Stores says how far, and how often it was turned away today). To get back in sooner, clear BIG W's cookies in that browser (the icon left of the address → Cookies and site data), or use another network. Keep sweeping and checking out on different computers or networks if it keeps happening. Update the extension to 1.39.0 or later. |
+| BIG W's keywords or products read less often than you'd like | Everything a browser reads of BIG W shares one budget (a page every 8 s or so): see **BIG W within one budget**. Fewer BIG W keywords and watchlist items, or a second admin's browser on another network, make each one's turn come sooner. Making it faster than BIG W allows is what got browsers turned away. |
 | A drop watch at another website says **refused Mugibot (HTTP 403)** or **a bot check**, or a find says **Blocked by site** | That site turns servers away. Open the extension's toolbar menu and press **Allow checks from this browser** under **Websites refusing Mugibot's server**: your browser checks it from then on (an admin's for a watch for everyone, yours for your own). At a store Mugibot knows (BIG W), an admin's browser does it with nothing to allow — keep Chrome open with the extension connected. The server keeps asking too, waiting longer each time. |
 | A drop watch at another website finds **nothing** though the site has it | Mugibot reads product links (`/products/…`, `/product/…`, `/p/…`) and the product data in the page. Give the site's own search page for those words (search there, copy the address), or watch the product's link. |
 | A drop watch's alerts went to `#misc-retailers` | There's no `#non-tcg-alerts` rule yet: press **Make #non-tcg-alerts** on the drop watches tab (or **Set up store channels**). Or pick a channel for the watch (**✎** on it). |
@@ -1343,6 +1394,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |
+| BIG W's budget: everything a browser reads of it, together | `server/monitor/access.js` (`AccessBudget`, `outcomeOf`); `access:` in `server/retailers/bigw.js`; used by `Sweeper.browserDue`/`browserResults` (searches), `PageWatches.browserDue`/`browserResults` (pages watched) and `Monitor.browserDue`/`browserResults` (product pages); setting `access` (the gap learned, paused browsers); `access` in `GET /api/monitor/sweep` stores; `runChecks()` in `extension/background.js` (`gapMs`, `startInMs`: 1.39.0); `test/access.test.js` |
 | The live event log | `emit()` and `live()` in `server/monitor/sweep.js`; `GET /api/monitor/live`; `monitor-sweep` events on the dashboard's stream |
 | Tests | `test/sweep.test.js` and `test/serverfirst.test.js`, plus the Drops page in `test/ui.test.js` and the admin's-browser sweeps (server first's stand-in too) in `test/extension.e2e.test.js` |
 

@@ -28,6 +28,16 @@ function parseKey(value, name) {
 }
 
 const int = (v, d) => (v === undefined || v === '' ? d : Number.parseInt(v, 10));
+// A JSON object setting ({} when it's not set, or isn't one: said in the log, never a crash at start).
+function jsonOf(v) {
+  if (!v) return {};
+  try {
+    const x = JSON.parse(v);
+    if (x && typeof x === 'object' && !Array.isArray(x)) return x;
+  } catch { /* said below */ }
+  console.log(new Date().toISOString(), '[config] a setting that should be a JSON object isn\'t — ignored');
+  return {};
+}
 const list = (v) => String(v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const trimSlash = (s) => String(s || '').replace(/\/+$/, '');
 
@@ -149,6 +159,9 @@ export function loadConfig(overrides = {}, env = process.env) {
       alertCooldownSeconds: o.alertCooldownSeconds ?? int(env.MONITOR_ALERT_COOLDOWN, 600),
       priceChangePercent: o.priceChangePercent ?? Number(env.MONITOR_PRICE_CHANGE_PERCENT || 1),
       logDays: o.logDays ?? int(env.MONITOR_LOG_DAYS, 7),
+      // A store's budget for what each browser reads of it (monitor/access.js — BIG W's, set in its retailer file),
+      // changed here without a release: JSON by store, e.g. {"bigw":{"gapSeconds":10,"targetSeconds":5}}.
+      access: o.monitorAccess ?? jsonOf(env.MONITOR_ACCESS),
     },
     // Background jobs: Discord role sync, Whop re-checks, expired trials.
     jobsEnabled: o.jobsEnabled ?? env.JOBS_ENABLED !== '0',

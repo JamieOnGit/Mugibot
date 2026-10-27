@@ -912,6 +912,7 @@ async function runChecks() {
     await chrome.storage.local.set({ needSites: Array.isArray(due.body.sites) ? due.body.sites.slice(0, 20) : [] });
     const results = [];
     const lastByHost = new Map();
+    const began = Date.now();
     const flows = (await getState()).flows || [];
     const held = await heldStores();
     const denied = await deniedStores();
@@ -919,8 +920,21 @@ async function runChecks() {
       if (held.has(c.store)) continue; // its queue is up here (the server may not know yet)
       if (denied.has(c.store)) continue; // it's turning this browser away just now: left alone
       const host = new URL(c.url).host;
+      // (Gentle on each store: 4 s between two of its pages — or the gap the server says for a store whose bot protection
+      //  turns a browser away that reads it too often, BIG W's: 1.39.0.)
+      const wait = Math.max(4000, Math.min(Number(c.gapMs) || 0, 60 * 1000));
       const gap = Date.now() - (lastByHost.get(host) || 0);
-      if (gap < 4000) await new Promise((r) => setTimeout(r, 4000 - gap)); // gentle on each store
+      if (gap < wait) await new Promise((r) => setTimeout(r, wait - gap));
+      // (…the slot it booked there: not before startInMs — and none of the store's own searches or pages watched still
+      //  loading in this browser: one of its pages at a time. 1.39.0.)
+      const at = began + Math.min(Number(c.startInMs) || 0, 30 * 1000);
+      if (at > Date.now()) await new Promise((r) => setTimeout(r, at - Date.now()));
+      if (c.gapMs) {
+        const going = [sweepsGoing.get(c.store), sweepsGoing.get(`page:${c.store}`)].filter(Boolean);
+        if (going.length) await withinLimit(Promise.allSettled(going), 30 * 1000).catch(() => null);
+      }
+      // (Turned away by its last page just now: the rest of the round's pages there left alone too.)
+      if ((await deniedStores()).has(c.store)) { denied.add(c.store); continue; }
       lastByHost.set(host, Date.now());
       if (c.kind === 'site') {
         results.push(await readSite(c));

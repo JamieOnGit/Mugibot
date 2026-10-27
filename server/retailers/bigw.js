@@ -45,14 +45,21 @@ export default {
   account: { signIn: '' },
   // Its product pages: BIG W's bot protection (Akamai) resets every server's connection, so the server never
   // asks (server: 'never'). Browsers do, by opening its page in the extension's window the way you'd open it
-  // (render): background requests are what got a member's browser turned away. In a browser that opens them in
-  // its private window (extension 1.36.0, Mugibot allowed in Incognito), at the usual pace — each product every
-  // minute, as many a round as there's room for; otherwise one BIG W page a round (30 s) per browser at most, and
-  // each product every 3 minutes at most (browserSeconds; 15 before Oct 2026 — though a slip read them every
-  // minute). Members' browsers read their own watchlist's; admins' browsers also read
+  // (render): background requests are what got a member's browser turned away. How often: its budget's (access,
+  // below — each product asks every targetSeconds, the budget deciding; browserSeconds is the pace without one).
+  // Members' browsers read their own watchlist's; admins' browsers also read
   // every product its live searches found that nobody monitors — its search tiles show no buy button on a drop
   // it lists ahead of time, its page says the moment it's on sale (a member's 30th Celebration UPC, Oct 2026).
   monitor: { server: 'never', browser: true, render: true, privateWindow: true, browserSeconds: 180 },
+  // Everything a browser reads of it, together (monitor/access.js): its searches, its search pages watched and its product
+  // pages each kept their own pace, and nothing kept them in check together — in a private window a search every 15 s,
+  // each page watched as often as every 3 s and five product pages a round, three tabs at once. Admins' browsers were
+  // turned away ("Access Denied") again and again (Oct 2026), half an hour at a time. Now: one BIG W page loading at a
+  // time in a browser, at least gapSeconds apart (sharedGapSeconds in an ordinary window, where its cookies are your
+  // own visits'), shared between searches, product pages and page watches by weight; turned away all the same, nothing
+  // from that browser for pauseMinutes and its gap doubled, easing back a step each easeMinutes without one.
+  // targetSeconds: how often each keyword, page and product asks to be read — the budget decides how often it is.
+  access: { gapSeconds: 8, sharedGapSeconds: 20, maxGapSeconds: 120, pauseMinutes: 30, easeMinutes: 10, targetSeconds: 5, shares: { search: 2, check: 2, page: 1 }, checksPerRound: 2 },
   flow: {
     product: {
       add: ADD_WORDS,

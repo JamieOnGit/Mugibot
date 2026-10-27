@@ -27,6 +27,7 @@
 import crypto from 'node:crypto';
 import { serialize } from '../retailers/index.js';
 import { num, str } from '../schema.js';
+import { outcomeOf } from './access.js';
 import { parseListing, siteAnswer } from './listing.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { holdsAll, olderVersion, pageSizeIn, retryAfterMs } from './sweep.js';
@@ -329,7 +330,7 @@ export class PageWatches {
    * none at a store whose queue is up (unless this browser's through it) or that's turning this browser away.
    * browser: { version, busy (tabs still reading), denied (stores turning it away), through (queues it's through) }.
    */
-  browserDue(user, { version = '', busy = new Set(), denied = new Set(), through = new Set() } = {}) {
+  browserDue(user, { version = '', busy = new Set(), denied = new Set(), through = new Set(), device = null } = {}) {
     if (!user || user.role !== 'admin') return { pages: [], waitMs: null };
     const now = this.now();
     const groups = [...this.groups().values()].filter((g) => g.r);
@@ -351,11 +352,21 @@ export class PageWatches {
       if (this.gates && this.gates.queueUp(r.id) && !through.has(r.id)) continue;
       if (st.inFlight && now - st.inFlight < JOB_MS) continue;
       if (st.nextAt > now) { next = Math.min(next ?? Infinity, st.nextAt); continue; }
-      // (All a store's pages together: a read about every second at most — a third of its fastest pace — so a store with
-      //  many pages watched never sees a burst from the admin's browser it'd turn away, nor the admin's own checkouts.)
-      const gate = this.storeNext.get(r.id) || 0;
-      if (gate > now) { next = Math.min(next ?? Infinity, gate); continue; }
-      this.storeNext.set(r.id, now + Math.round((this.floorNow(r) * 1000) / 3));
+      const budget = this.access && this.access.limited(r) ? this.access : null;
+      if (budget) {
+        // (A store with a budget for what each browser reads of it — BIG W's, monitor/access.js: its pages watched share it
+        //  with its searches and product pages — one of its pages at a time in this browser, the gap between them.)
+        budget.idle(r, device || user.id, busy);
+        const may = budget.ask(r, device || user.id, 'page', { priv: this.sweeper && typeof this.sweeper.stat(r.id).privateWindow === 'boolean' ? this.sweeper.stat(r.id).privateWindow : null });
+        if (!may.ok) { next = Math.min(next ?? Infinity, may.at); continue; }
+        budget.take(r, device || user.id, 'page', { keys: [g.key] });
+      } else {
+        // (All a store's pages together: a read about every second at most — a third of its fastest pace — so a store with
+        //  many pages watched never sees a burst from the admin's browser it'd turn away, nor the admin's own checkouts.)
+        const gate = this.storeNext.get(r.id) || 0;
+        if (gate > now) { next = Math.min(next ?? Infinity, gate); continue; }
+        this.storeNext.set(r.id, now + Math.round((this.floorNow(r) * 1000) / 3));
+      }
       tabs.add(tab);
       st.inFlight = now;
       st.startedAt = now;
@@ -378,7 +389,7 @@ export class PageWatches {
   }
 
   /** What an admin's browser read (POST /api/ext/sweeps, pages). */
-  async browserResults(user, results) {
+  async browserResults(user, results, { device = null } = {}) {
     if (!user || user.role !== 'admin' || !Array.isArray(results)) return [];
     const out = [];
     const groups = this.groups();
@@ -389,6 +400,11 @@ export class PageWatches {
       if (!g || !g.r) continue;
       const r = g.r;
       const st = this.st(g.key);
+      // (A store with a budget for what each browser reads of it — BIG W's: this page's read is done, and what came of it.)
+      if (this.access && this.access.limited(r) && !res.gate) {
+        const problem = ['blocked', 'layout', 'empty', 'unread'].includes(res.problem) ? res.problem : null;
+        this.access.done(r, device || user.id, 'page', outcomeOf({ ok: !!res.ok && problem !== 'blocked', blocked: !!res.blocked, status: res.status, error: res.error, problem }));
+      }
       try {
         // Into the store's queue (or checkpoint): it's up — the read waits, no failure, the tab left as it is.
         if (res.gate && this.gates) {

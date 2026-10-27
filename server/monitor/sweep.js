@@ -51,6 +51,7 @@ import { categoryFor, toProduct } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { serialize } from '../retailers/index.js';
 import { bad, bool, num, str } from '../schema.js';
+import { outcomeOf } from './access.js';
 import { decodeEntities } from './html.js';
 import { dropConnections, storeFetch } from './http.js';
 import { AU_STATES, mentions, norm, parseListing, termsRegex } from './listing.js';
@@ -577,6 +578,10 @@ export class Sweeper {
    */
   paceFor(r, browser = false) {
     const s = this.settings;
+    // (A store with a budget for what a browser reads of it — BIG W's, monitor/access.js: searched at its target pace, and
+    //  the budget, shared with its product pages and pages watched, decides how often a browser really does. While its
+    //  searches fail, backed off from its own pace, as ever — never sooner than before.)
+    if (browser && this.access && this.access.limited(r) && !this.stat(r.id).fails) return this.access.targetMs(r);
     const shared = browser && r.sweep.sharedWindowSeconds && !this.inPrivate(r) ? r.sweep.sharedWindowSeconds : 0;
     const every = Math.max(browser ? s.browserEverySeconds : s.everySeconds, r.sweep.minSeconds || 0, shared) * 1000;
     // A VIP drop in its window (monitor/vip.js): its words, every few seconds — at a store whose search is one big
@@ -1731,6 +1736,9 @@ export class Sweeper {
         try { dropConnections(new URL(this.urlFor(r, this.settings.keywords[0] || '')).host); } catch { /* no address */ }
       }
       this.db.run("UPDATE sweep_terms SET fails = 0, error = '' WHERE store = :s", { s: r.id });
+      // (A store with a budget for what each browser reads of it — BIG W's: the browsers it turned away asked again,
+      //  at the wider gap they learned — monitor/access.js.)
+      if (this.access) this.access.reset(r);
       done.push(r);
       // Only the stores reset: the others keep their own pace (and any backoff).
       if (server && this.running && !this.loops.has(r.id)) this.loop(r.id).catch((e) => this.cfg.log('[sweep]', e.message));
@@ -1791,6 +1799,10 @@ export class Sweeper {
         st.heldAt = 0;
         this.sys(`${r.name}: searching it again (${this.gates && this.gates.queueUp(r.id) ? 'through its virtual queue' : 'its virtual queue is down'})`, { store: r.id });
       }
+      // (A store with a budget for what each browser reads of it — BIG W's: its tabs still reading there are done with.)
+      const budget = this.access && this.access.limited(r) ? this.access : null;
+      const device = browser.device || user.id;
+      if (budget) budget.idle(r, device, busy);
       // (Its search still going in that browser: nothing yet — the browser asks again the moment that's in.)
       if (busy.has(r.id)) continue;
       const needs = r.sweep.extension;
@@ -1800,8 +1812,14 @@ export class Sweeper {
         continue;
       }
       if (st.browserNext > now) { next = Math.min(next ?? Infinity, st.browserNext); continue; }
+      // (…and its budget: one of its pages at a time in this browser, the gap between them, a fair share — or later.)
+      if (budget) {
+        const may = budget.ask(r, device, 'search', { priv: typeof st.privateWindow === 'boolean' ? st.privateWindow : null });
+        if (!may.ok) { next = Math.min(next ?? Infinity, may.at); continue; }
+      }
       this.refreshCollections(r).catch(() => {});
       const term = this.nextTerm(r, { all: false }); // (an admin's browser: each keyword, as it always has — the whole-range list is the server's; the card shops' newest products too)
+      if (budget) budget.take(r, device, 'search', { keys: [`${term.keyword}\n${term.page}`] });
       // (A VIP or drop watch's words: searched as they are.)
       const raw = !!(term.vip || term.drop);
       st.browserNext = now + this.waitFor(st, this.paceFor(r, true));
@@ -1854,7 +1872,7 @@ export class Sweeper {
   }
 
   /** What an admin's browser found. Only admins' browsers can change the shared feed. */
-  async browserResults(user, results) {
+  async browserResults(user, results, { device = null } = {}) {
     if (!user || user.role !== 'admin' || !Array.isArray(results)) return [];
     const out = [];
     for (const res of results.slice(0, 10)) {
@@ -1862,6 +1880,8 @@ export class Sweeper {
       const r = this.retailers.get(str(res.store, 40));
       if (!r) continue;
       const st = this.stat(r.id);
+      // (A store with a budget for what each browser reads of it — BIG W's: this search is done, and what came of it.)
+      if (this.access && this.access.limited(r)) this.access.done(r, device || user.id, 'search', outcomeOf({ ok: !!res.ok && res.problem !== 'blocked', blocked: !!res.blocked, status: res.status, error: res.error, problem: res.problem }));
       // (Server first: also a search asked for just before the server took back over.)
       if (!this.fromBrowser(r) && !(this.modeFor(r) === 'auto' && st.askedAt && this.now() - st.askedAt < 2 * 60 * 1000)) continue;
       const term = this.termOf(r, res);
@@ -2071,6 +2091,9 @@ export class Sweeper {
         // (Drop mode: until when, and what it's searched for meanwhile.)
         dropMode: st.hot && st.hot.until > now ? { until: st.hot.until, keyword: st.hot.keyword ? st.hot.keyword : null, newest: !!st.hot.newest } : null,
         products24h: products ? products.n : 0,
+        // (A store with a budget for what each browser reads of it — BIG W's, monitor/access.js: its gap, pauses, blocks, and how
+        //  often each keyword, page and product is really read.)
+        access: this.access ? this.access.view(r) : null,
         terms: terms.map((t) => ({ keyword: termLabel(t.keyword, r), page: t.page, url: t.url, source: t.source, lastAt: t.last_at, lastOkAt: t.last_ok_at, found: t.found, kept: t.kept, total: t.total, fails: t.fails, error: t.error, ms: t.ms, baselineAt: t.baseline_at })),
       };
     });

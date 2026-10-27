@@ -8,6 +8,7 @@ import { Pools } from './pools.js';
 import { Drops } from './monitor/drops.js';
 import { PageWatches } from './monitor/pages.js';
 import { Sightings } from './monitor/sightings.js';
+import { AccessBudget } from './monitor/access.js';
 import { Vip } from './monitor/vip.js';
 import { Catalog } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -92,9 +93,15 @@ export async function createApp(options = {}) {
   Object.assign(pages, { sweeper, monitor, gates });
   drops.pages = pages;
   sweeper.pages = pages;
+  // A store whose bot protection turns a browser away that reads it too often (BIG W's): everything a browser reads of it
+  // — searches, search pages, product pages — within one budget (monitor/access.js).
+  const access = new AccessBudget({ now, repo, log: cfg.log, sys: (message, extra) => sweeper.sys(message, extra), overrides: cfg.monitor.access });
+  Object.assign(sweeper, { access });
+  Object.assign(pages, { access });
+  Object.assign(monitor, { access });
   // Release news: admins' and the news feeds', posted in #news (and a digest each morning).
   const news = new News({ cfg, db, repo, retailers, discord, notifier, fetchImpl: storeFetchImpl, now });
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, pages, news, limiter, pageCache: new Map() };
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, pages, news, access, limiter, pageCache: new Map() };
   drops.ctx = ctx;
   // Auto-checkout: started by the monitor when an armed item drops.
   const aco = new Aco({ ...ctx, now });
@@ -275,6 +282,7 @@ export async function createApp(options = {}) {
     gates,
     drops,
     pages,
+    access,
     news,
     aco,
     bags,
