@@ -654,17 +654,14 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
 
    What was **already on sale** when you added the watch is never armed, whichever
    search finds it first (the watch's own, or the store's keywords or newest
-   products: listed before, its page is read first). One that went sold out,
-   coming soon or in the store's shops only *after* you added the watch, back on
-   sale when it's found, is a restock: armed straight away. An older "sold out"
-   may be out of date (on sale meanwhile), so its page decides — and only a page
-   read that worked does (one the store refused decides nothing). A product
-   Mugibot never tracked (not a card: a hat, a skateboard), found first by
-   another of the store's searches, is the same: its page decides. When you add
-   the watch, what the catalogue has for its words off sale (up to 10) has its
-   page read straight away, at the store's usual page pace: sold out there, it's
-   armed for its return (Target leaves sold-out products out of its results, so
-   its search never would). A broad
+   products: a product Mugibot had listed before, whatever it last said of it —
+   an old "sold out" may be out of date — has its page read first, and only a
+   read that worked decides: one the store refused decides nothing). So a
+   product that sold out *before* you added a words watch, and that the store's
+   search no longer shows while it's sold out (Target leaves those out), isn't
+   bought when it's back — for one like that, add the watch **by its product
+   link**: its page is read straight away, and sold out there, it's armed for
+   its return. A broad
    watch like *pokemon* would otherwise buy everything that matches. The
    Activity log says so, and you can ⚡ Buy it yourself.
 

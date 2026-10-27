@@ -275,24 +275,3 @@ test("⭐ …and one Mugibot last saw sold out long before the watch (that readi
   assert.equal(env.app.db.all('SELECT * FROM aco_runs r JOIN items i ON i.id = r.item_id WHERE i.user_id = :u AND i.sku = :k', { u: boss.user.id, k: NINJA }).length, 0, 'no Auto-checkout run');
   assert.equal((await boss.del(`/api/monitor/vip/${w.id}`)).status, 200);
 });
-
-test("⭐ …but one that sold out after the watch was added (Target leaves those out of its results) and is back on sale when another search finds it first: a restock — armed for Auto-checkout, not left alone as on sale already", async () => {
-  const ninja = product(NINJA);
-  assert.ok(ninja);
-  for (const it of (await boss.get('/api/items')).body.items) await boss.del(`/api/items/${it.id}`);
-  const r = await boss.post('/api/monitor/vip', { store: 'demo-citybeach', words: 'ninja spinner', aco: true, maxPrice: 50 });
-  assert.equal(r.status, 200, r.text);
-  const w = r.body.watch;
-  // Then sold out as far as Mugibot knows (as Target's sold-outs are marked: gone from its results) — after the watch.
-  env.app.db.run("UPDATE products SET status = 'out_of_stock', status_at = :t WHERE id = :id", { id: ninja.id, t: env.app.sweeper.now() });
-  const cb = R('demo-citybeach');
-  // City Beach's own "pokemon" search sees it on sale again before the watch's own does.
-  const s = await sw().sweepTerm(cb, { keyword: 'pokemon', page: 1 });
-  assert.equal(s.ok, true, s.error);
-  assert.equal(s.baseline, false);
-  const view = (await boss.get('/api/monitor/vip')).body.watches.find((x) => x.id === w.id);
-  assert.deepEqual(view.found.map((p) => [p.name, p.arm]), [['Pokémon Ninja Spinner Booster Pack Trading Cards', 'armed']], 'armed straight away: back on sale after the watch was added');
-  const item = env.app.repo.itemBySku(boss.user.id, 'demo-citybeach', NINJA);
-  assert.ok(item && item.aco, 'armed for Auto-checkout');
-  assert.equal((await boss.del(`/api/monitor/vip/${w.id}`)).status, 200);
-});

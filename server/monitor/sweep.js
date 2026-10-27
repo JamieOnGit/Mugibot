@@ -910,15 +910,7 @@ export class Sweeper {
         const quiet = !!legacy && cardsNow && !known && !(all ? s.keywords.some((k) => legacy(p, k)) : legacy(p, term.keyword));
         const cards = cardsNow && !quiet;
         const newListing = this.drops && (cards ? !republished : newest && !old) && !baseline && !edge && !mkt && !known;
-        const dropDone = (w) => {
-          const at = this.drops.baseAt(w, r.id);
-          if (baseline || !at) return true;
-          if (term.keyword !== w.words) return !newListing;
-          // (Its own words' search after its first look: new to the catalogue — a drop; one the catalogue had, on sale all
-          //  along and only moved up its results, isn't — unless it went off sale since the first look and is back.)
-          if (!before) return false;
-          return !([STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.IN_STORE, STATUS.NOT_LISTED].includes(before.status) && (before.status_at || 0) >= at);
-        };
+        const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id) || (term.keyword !== w.words && !newListing);
         // Someone's own drop watch's words in the name (monitor/drops.js): on their watchlist, theirs
         // alone. (Found by another search, it was listed already as far as that watch knows — unless it's new.)
         if (this.drops && !mkt) {
@@ -930,16 +922,10 @@ export class Sweeper {
         const watch = this.vip ? this.vip.matchFor(r.id, title, term.vip || null) : null;
         // An admin's drop watch for everyone (monitor/drops.js): it counts too, in #non-tcg-alerts.
         const drop = this.drops && !term.vip ? this.drops.sharedFor(r.id, title, term.drop ? term.keyword : null) : null;
-        // (Listed before this read, whichever search saw it: not a drop for a VIP watch — armed only if its page says it
-        //  isn't on sale. Unless it went off sale after the watch was added (sold out, coming soon, in the store's shops only
-        //  — a reading from since then) and is back: a restock, armed straight away. An older "sold out" may be stale, the
-        //  product on sale meanwhile: its page decides — something on sale before the watch is never bought.)
-        const offSince = !!watch && !!before && [STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.IN_STORE, STATUS.NOT_LISTED].includes(before.status)
-          && (before.status_at || 0) >= (watch.createdAt || Infinity);
-        // (New to the catalogue isn't new to the store — what the card words never counted (a hat, a skate) was never tracked:
-        //  found by another search than the watch's own, it's a drop only as a new listing; otherwise its page decides.)
-        const newHere = (cards ? !republished : newest && !old) && !baseline && !edge && !mkt;
-        const listedBefore = known ? !offSince : !!watch && term.vip !== watch.id && !newHere;
+        // (In the catalogue before this read, whichever search saw it: not a drop for a VIP watch — armed only once its page
+        //  (a read that worked) says it isn't on sale. Whatever the catalogue last said of it — an old "sold out" or "not
+        //  listed" may be stale — something on sale before the watch is never bought.)
+        const listedBefore = known;
         const counted = cards || quiet || ((!!watch || !!drop) && !mkt);
         if (!counted || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
         counts.kept += 1;
@@ -1026,9 +1012,7 @@ export class Sweeper {
         for (const { w } of shared) {
           const drop = dropFor(w);
           // (Not a drop: armed by how it was before this read — on sale already, it isn't bought; not on sale yet, it's armed.)
-          // (Its catalogue reading only when it's from since the watch was added: an older "sold out" may be stale.)
-          const was = !!before && (before.status_at || 0) >= (w.createdAt || Infinity) ? before.status : status;
-          await this.drops.foundShared(w, product, { baseline: !drop, status: drop || !before ? status : was, later }).catch(log);
+          await this.drops.foundShared(w, product, { baseline: !drop, status: drop || !before ? status : before.status, later }).catch(log);
         }
       }
       await Promise.allSettled(posting);

@@ -369,16 +369,15 @@ export class Drops {
   }
 
   /** A product's page was read (monitor/index.js): a find waiting to see whether it's on sale yet is armed if it isn't. */
-  checked(product, seen = product && product.status) {
-    // (seen: what the page read that's just happened said — the catalogue's own status may be the sweeps' older one.)
-    if (!product || !READ.has(seen) || !this.watches().length) return;
+  checked(product) {
+    if (!product || !READ.has(product.status) || !this.watches().length) return;
     for (const w of this.watches()) {
       const f = w.found.find((x) => x.productId === product.id && x.arm === 'pending');
       if (!f) continue;
-      const onSale = isOrderable(seen);
+      const onSale = isOrderable(product.status);
       this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm: onSale ? 'skipped' : 'armed' } : x)));
       if (onSale) this.onSale(w, product);
-      else this.arm(w, product, seen);
+      else this.arm(w, product, product.status);
     }
   }
 
