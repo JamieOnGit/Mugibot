@@ -1655,7 +1655,7 @@ test('in-browser checks: a store that refuses the server is checked by your brow
   assert.match(discord.dmsTo('d-ash').at(-1).body.embeds[0].description, /Seen by your browser/);
 });
 
-test("🧭 BIG W, whose bot protection resets every server's connection: your watchlist's BIG W items are read by your browser opening each one's page in the extension's window — one at a time, never asked for in the background — and, told \"Access Denied\", BIG W is left alone from this browser for 30 minutes (no checks, no searches), the item and the store's panel saying why", async () => {
+test("🧭 BIG W, whose bot protection resets every server's connection: your watchlist's BIG W items are read by your browser opening each one's page in the extension's window — one at a time, the gap the server says between two (its budget: monitor/access.js — 20 s in an ordinary window, as here), never asked for in the background — and, told \"Access Denied\", BIG W is left alone from this browser for 30 minutes (no checks, no searches), the item and the store's panel saying why; asked again after, at a wider gap", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const prev = env.app.repo.getSetting('retailer:demo-bigw');
   // (The dummy BIG W as the real one is: never asked by the server — retailers/bigw.js, monitor.server 'never'.)
@@ -1663,25 +1663,25 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
   const S = store.shop('bigw');
   const bigwPages = () => store.state.requests.filter((x) => x.path.startsWith('/bigw/product/'));
   const due = () => env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
+  const R = env.app.retailers.get('demo-bigw');
   try {
     await useItems([{ url: store.productUrl('bigw', '6012345'), name: 'BIG W UPC' }, { url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle' }]);
     store.set('bigw', '6012345', { status: 'out_of_stock' });
     store.set('bigw', '6012346', { status: 'in_stock' });
     const before = bigwPages().length;
+    // (This browser reads BIG W in an ordinary window — not allowed in Incognito here: 20 s between two of its pages, so
+    //  one a round; the next round asked for straight away books the slot 20 s on, and waits for it.)
     let r = await sw.evaluate(() => globalThis.mugibotRunChecks());
-    assert.equal(r.checked, 1, 'one BIG W page at a time');
-    // (The other one's turn, pushed back a minute — the next round: here, now.)
-    env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u AND checked_at IS NULL', { u: userId });
+    assert.equal(r.checked, 1, 'one BIG W page a round');
+    const began = Date.now();
     r = await sw.evaluate(() => globalThis.mugibotRunChecks());
-    assert.equal(r.checked, 1, 'the next one in the next round');
+    assert.equal(r.checked, 1, 'the other one, the next round');
+    assert.ok(Date.now() - began >= 12000, `waited for its slot: ${Date.now() - began} ms`);
     const items = env.app.repo.listItems(userId);
     assert.deepEqual(items.map((i) => [i.name, i.status, i.statusSource]).sort(), [['BIG W Bundle', 'in_stock', 'browser'], ['BIG W UPC', 'out_of_stock', 'browser']]);
     const asked = bigwPages().slice(before);
     assert.equal(asked.length, 2);
     assert.ok(asked.every((x) => x.mode === 'navigate' && /Chrome|Mozilla/.test(x.ua)), `each page opened, as you'd open it: ${JSON.stringify(asked)}`);
-    // Each at most every 3 minutes: nothing due straight after.
-    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
-    assert.equal(r.checked, 0);
 
     // "Access Denied" (its Akamai, turning this browser away): said on the item, and BIG W left alone from here.
     S.denied = true;
@@ -1694,6 +1694,7 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
     assert.ok(denied, JSON.stringify(env.app.repo.listItems(userId)));
     assert.ok(['in_stock', 'out_of_stock'].includes(denied.status), denied.status);
     assert.match(denied.error, /asks it for nothing more from here for 30 minutes/);
+    assert.equal(env.app.access.view(R).pausedBrowsers, 1, 'the server leaves BIG W alone from this browser too');
     due();
     r = await sw.evaluate(() => globalThis.mugibotRunChecks());
     assert.equal(r.checked, 0, 'nothing more asked of BIG W from this browser');
@@ -1704,12 +1705,14 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
     await page.waitForFunction(() => /bot protection is turning this browser away \("Access Denied"\)/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 15000 });
     assert.match(await panel(page).textContent(), /30 minutes/);
     await page.close();
-    // Let in again (and the half hour over): checked as before.
+    // Let in again (and the half hour over — here, and on the server, as an admin's ↻ Reset of BIG W does): checked
+    // again, gently — the gap it was turned away at, doubled (40 s).
     S.denied = false;
     await sw.evaluate(() => chrome.storage.session.remove('deniedStores'));
+    env.app.access.reset(R);
+    assert.equal(env.app.access.view(R).gapSeconds, 40);
     due();
-    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
-    assert.equal(r.checked, 1);
+    await waitFor(async () => (await sw.evaluate(() => globalThis.mugibotRunChecks())).checked === 1, { timeout: 90000, interval: 2000, message: 'checked again, at the wider gap' });
     assert.ok(env.app.repo.listItems(userId).some((i) => i.status === 'in_stock' || i.status === 'out_of_stock'));
   } finally {
     S.denied = false;

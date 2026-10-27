@@ -1735,6 +1735,9 @@ export class Sweeper {
         try { dropConnections(new URL(this.urlFor(r, this.settings.keywords[0] || '')).host); } catch { /* no address */ }
       }
       this.db.run("UPDATE sweep_terms SET fails = 0, error = '' WHERE store = :s", { s: r.id });
+      // (A store with a budget for what each browser reads of it — BIG W's: the browsers it turned away asked again,
+      //  at the wider gap they learned — monitor/access.js.)
+      if (this.access) this.access.reset(r);
       done.push(r);
       // Only the stores reset: the others keep their own pace (and any backoff).
       if (server && this.running && !this.loops.has(r.id)) this.loop(r.id).catch((e) => this.cfg.log('[sweep]', e.message));

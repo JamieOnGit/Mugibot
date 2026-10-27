@@ -259,7 +259,8 @@ Now everything a browser reads of BIG W goes through one budget for that browser
   down to within half again of the gap it was turned away at. Each browser's own:
   BIG W turns away a browser, not every browser, and one browser's answers never
   slow another's. What each browser learned (its gap, its pause) is kept over a
-  restart.
+  restart. An admin's **↻ Reset** of BIG W lifts the server's pause (the extension's
+  own half hour still holds in that browser) and keeps the wider gap.
 - **What it's doing:** Monitor → Settings → Stores, under BIG W: the gap now (the
   widest of the browsers reading it), how often each keyword, page watched and
   product is really read, and whether a browser is paused or how often it was turned

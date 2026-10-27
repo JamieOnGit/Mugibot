@@ -154,10 +154,15 @@ export class AccessBudget {
     return b.priv === false ? Math.max(b.gapMs, c.sharedGapSeconds * 1000) : b.gapMs;
   }
 
-  /** The gap between two of the store's pages from this browser now (ms): what a round of its product pages waits between them. */
-  gapMs(r, who) {
+  /**
+   * The gap between two of the store's pages from this browser now (ms): what a round of its product pages waits between
+   * them. priv: it reads the store in its private window (null: not said).
+   */
+  gapMs(r, who, { priv = null } = {}) {
     if (!this.configFor(r)) return 0;
-    return this.gapFor(r, this.browser(r, this.state(r), who));
+    const b = this.browser(r, this.state(r), who);
+    if (typeof priv === 'boolean') b.priv = priv;
+    return this.gapFor(r, b);
   }
 
   /** The least share of this browser used by the kinds waiting (but `but`'s; holders: only those a slot is kept for), or null. */
@@ -297,9 +302,10 @@ export class AccessBudget {
       b.pausedUntil = now + c.pauseMinutes * 60 * 1000;
     } else if (now - b.lastBlockAt < 60 * 1000) return;
     b.blocks = [...b.blocks.filter((t) => now - t < DAY), now].slice(-50);
-    const was = b.gapMs;
+    // (The gap it was turned away at — an ordinary window's wider one, if it's read there — doubled.)
+    const was = this.gapFor(r, b, now);
     const max = c.maxGapSeconds * 1000;
-    b.gapMs = Math.min(max, b.gapMs * 2);
+    b.gapMs = Math.min(max, was * 2);
     // (Not eased back down to within half again of the gap it was turned away at, for a day.)
     b.floorMs = Math.min(max, Math.max(b.floorUntil > now ? b.floorMs : 0, Math.round(was * 1.5)));
     b.floorUntil = now + DAY;
@@ -311,6 +317,23 @@ export class AccessBudget {
       ? `"Access Denied" (its bot protection) to a browser on a ${kind} read — nothing more asked of it from that browser for ${c.pauseMinutes} min`
       : `a bot check instead of its page to a browser on a ${kind} read`;
     this.note(r, outcome, `${r.name} showed ${what}; its pages from that browser at most every ${secs(b.gapMs)} from now (was ${secs(was)})`, { who: b.who, kind, gapMs: b.gapMs, was, blocks24h: b.blocks.length }, 'warn');
+  }
+
+  /**
+   * An admin's ↻ Reset of the store: its browsers' pauses lifted (the server's — each browser's own, in the extension, still
+   * holds there). The wider gaps they learned stay: it starts again gently.
+   */
+  reset(r) {
+    if (!this.configFor(r)) return;
+    const s = this.state(r);
+    const now = this.now();
+    for (const [who, kept] of Object.entries(s.kept)) if (kept.pausedUntil > now) this.browser(r, s, who);
+    const lifted = [...s.browsers.values()].filter((b) => b.pausedUntil > now);
+    for (const b of lifted) {
+      b.pausedUntil = 0;
+      this.save(r, b);
+    }
+    if (lifted.length) this.note(r, 'reset', `${r.name}: reset — ${lifted.length === 1 ? 'a browser' : `${lifted.length} browsers`} it turned away asked again, at the wider gap`, { browsers: lifted.length });
   }
 
   /** What this browser learned there, kept over a restart (the browsers most lately turned away). */

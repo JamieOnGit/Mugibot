@@ -222,6 +222,10 @@ test('"Access Denied": nothing more from that browser for 30 minutes and its gap
   assert.equal(gap('A', again), 16);
   assert.deepEqual([again.ask(bigw, 'A', 'search').why, again.ask(bigw, 'A', 'search').at], ['paused', t0 + 30 * MIN]);
   assert.equal(again.ask(bigw, 'B', 'search').ok, true);
+  // An admin's ↻ Reset of BIG W: the pause lifted (the extension's own still holds in that browser) — at the wider gap.
+  again.reset(bigw);
+  assert.notEqual(again.ask(bigw, 'A', 'search').why, 'paused');
+  assert.equal(gap('A', again), 16);
   // Easing: not during the pause, nor for 10 minutes after it.
   clock.tick(39 * MIN);
   assert.equal(gap('A'), 16, 'not yet eased');
@@ -527,7 +531,7 @@ test('turned away mid-read ("Access Denied"): nothing asked of BIG W from that b
   }
 });
 
-test("the other stores, as before: a browser BIG W turned away still searches and checks them — their checks in the same round at their own pace (BIG W's on top of the round's five), their searches never waiting on BIG W's budget; said in the live log", async () => {
+test("the other stores, as before: a browser BIG W turned away still searches and checks them — their checks in the same round at their own pace (BIG W's on top of the round's five), their searches never waiting on BIG W's budget; said in the live log; an admin's ↻ Reset asks BIG W again", async () => {
   const device = await Device.pair(env.url, boss, 'Other stores');
   await device.call('GET', '/api/ext/me?v=1.39.0');
   const saved = (await boss.get('/api/monitor/sweep')).body.settings.stores;
@@ -555,9 +559,12 @@ test("the other stores, as before: a browser BIG W turned away still searches an
     const due = (await device.call('GET', '/api/ext/sweeps?v=1.39.0')).body;
     assert.ok(due.terms.some((x) => x.store === 'demo-ebgames'), 'EB Games searched as ever');
     assert.ok(!due.terms.some((x) => x.store === 'demo-bigw'), 'BIG W not, from this browser');
-    clock.offset += 30 * MIN;
+    // An admin's ↻ Reset of BIG W: asked again (the extension's own half hour still holds in that browser, if it's on).
+    assert.equal((await boss.post('/api/monitor/sweep/reset', { store: 'demo-bigw' })).status, 200);
+    assert.ok(env.app.sweeper.events.some((e) => e.type === 'sys' && e.store === 'demo-bigw' && /reset — a browser it turned away asked again/.test(e.message)));
+    clock.offset += 30 * S;
     round = (await device.call('GET', '/api/ext/checks?v=1.39.0&priv=1')).body.checks;
-    assert.ok(round.some((c) => c.store === 'demo-bigw'), 'BIG W again after the half hour');
+    assert.ok(round.some((c) => c.store === 'demo-bigw'), 'BIG W again');
   } finally {
     await boss.put('/api/monitor/sweep', { stores: saved });
     env.app.repo.setSetting('retailer:demo-jbhifi', {});

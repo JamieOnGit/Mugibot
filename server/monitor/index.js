@@ -798,7 +798,7 @@ export class Monitor {
       // (An extension that waits as it's told (1.39.0): the next free slot booked, several a round while the gap between
       //  them is short — a round's waits stay well within the round. An older one: one a round, when the slot's free.)
       const waits = !!version && !olderVersion(version, GAP_EXTENSION_VERSION);
-      const gapMs = this.access.gapMs(r, who);
+      const gapMs = this.access.gapMs(r, who, { priv: fast(r) });
       const many = Math.max(1, this.access.configFor(r).checksPerRound);
       const n = !waits || gapMs * (many - 1) > ROUND_WAIT_MS ? 1 : many;
       const target = this.access.targetMs(r);
