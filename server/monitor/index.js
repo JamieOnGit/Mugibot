@@ -33,10 +33,15 @@ import { STATUS, isOrderable } from './status.js';
 import { gateOnPage } from './gate.js';
 import { readingOf } from './sightings.js';
 import { olderVersion } from './sweep.js';
+import { BOOK_MS, outcomeOf } from './access.js';
 
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 // The oldest extension that reads a store's page by opening it in its window (monitor.render: BIG W's).
 export const RENDER_EXTENSION_VERSION = '1.27.0';
+// The oldest extension that waits the gap a check says (gapMs) before its next page at that store — a round of several
+// of a budgeted store's product pages (monitor/access.js: BIG W's) goes only to one that does; an older one gets one.
+export const GAP_EXTENSION_VERSION = '1.39.0';
+const ROUND_WAIT_MS = 15 * 1000;
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
 // Not at its store (yet): a page that's not found, a code its store's search provider doesn't have — said by reads this
 // far apart at least before it counts as not on sale (one empty answer may be the store's hiccup).
@@ -656,7 +661,7 @@ export class Monitor {
    * version: the extension's (a store read by opening its page — BIG W's — only by one that does: 1.27.0).
    * priv: it opens such a store's pages in a private window of its own (extension 1.36.0, allowed in Incognito).
    */
-  browserDue(user, { through = new Set(), sites = new Set(), want = new Set(), version = null, priv = false } = {}) {
+  browserDue(user, { through = new Set(), sites = new Set(), want = new Set(), version = null, priv = false, device = null } = {}) {
     const held = (store) => !!this.gates && this.gates.queueUp(store) && !through.has(store);
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(user.id, 'alerts', {}) || {}) };
     if (!settings.browserChecks) return [];
@@ -681,10 +686,15 @@ export class Monitor {
       return { inPage: true, storeBase: r.base, ...(data ? { data, parser: r.sweep.parser } : {}) };
     };
     const cantRender = !version || olderVersion(version, RENDER_EXTENSION_VERSION);
-    const unopened = cantRender ? this.retailers.list.filter(render).map((r) => r.id) : [];
+    // (A store with a budget for what each browser reads of it — BIG W's, monitor/access.js: its product pages picked
+    //  apart, below, never among the rest — so its pages, all asking to be read every few seconds, never crowd the other
+    //  stores' out of a round.)
+    const budgeted = this.access ? this.retailers.list.filter((r) => this.access.limited(r)) : [];
+    const unopened = [...new Set([...(cantRender ? this.retailers.list.filter(render).map((r) => r.id) : []), ...budgeted.map((r) => r.id)])];
     const notThese = unopened.length ? `AND i.store NOT IN (${unopened.map((_, n) => `:r${n}`).join(', ')})` : '';
-    const rows = this.db.all(`SELECT i.*, c.status AS page_status, c.fail_count AS page_fails, c.checked_at AS page_checked, c.error AS page_error
-      FROM items i LEFT JOIN page_checks c ON c.url = i.url AND i.url != ''
+    const ITEMS = `SELECT i.*, c.status AS page_status, c.fail_count AS page_fails, c.checked_at AS page_checked, c.error AS page_error
+      FROM items i LEFT JOIN page_checks c ON c.url = i.url AND i.url != ''`;
+    const rows = this.db.all(`${ITEMS}
       WHERE i.user_id = :u AND i.monitor = 1 AND i.browser_next_at <= :now ${notThese} ORDER BY i.browser_next_at, i.position LIMIT 40`,
     { u: user.id, now, ...Object.fromEntries(unopened.map((id, n) => [`r${n}`, id])) });
     const out = [];
@@ -692,32 +702,48 @@ export class Monitor {
     // (Left for later this round — BIG W's one page a round: its turn pushed back a little, so a long BIG W
     //  list never keeps the other stores' checks out of the round.)
     const later = (table, id) => this.db.run(`UPDATE ${table} SET browser_next_at = :n WHERE id = :id`, { n: now + this.browserInterval, id });
-    for (const it of rows) {
+    // (One of the member's items this browser should read — its store, or null: not by this browser, not now.)
+    const itemStore = (it) => {
       const r = this.retailers.get(it.store);
       const other = it.store === 'other';
       // (Not a Shop checkout link: opening it starts a checkout — the server asks the store about its options instead.)
-      if (!r || r.cartLinks || !this.retailers.enabled(r) || held(it.store)) continue;
+      if (!r || r.cartLinks || !this.retailers.enabled(r) || held(it.store)) return null;
       // (Another website's page: only once it refuses the server, and where you've let the extension read that website.)
-      if (other ? !it.url : !this.retailers.settings(r).browserChecks) continue;
+      if (other ? !it.url : !this.retailers.settings(r).browserChecks) return null;
       const serverOff = !this.retailers.settings(r).serverChecks;
       const serverStruggling = FAILED.has(it.page_status) || it.page_fails > 0 || /Server checks are off/.test(it.page_error || '');
       const serverSilent = !it.page_checked && now - it.created_at > 90 * 1000;
       const searchBlocked = !it.url && this.searchStruggling(it);
-      if (!(serverOff || serverStruggling || serverSilent || searchBlocked || it.status_source === 'browser')) continue;
-      if (other && !this.siteAllowed(it.url, sites, want)) continue;
+      if (!(serverOff || serverStruggling || serverSilent || searchBlocked || it.status_source === 'browser')) return null;
+      if (other && !this.siteAllowed(it.url, sites, want)) return null;
+      return r;
+    };
+    const itemCheck = (it, r) => {
+      const url = it.url || this.retailers.searchUrl(r, it.sku);
+      return url ? serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, it.sku, it.url) }) : null;
+    };
+    const productCheck = (p, r) => {
+      const url = p.url || this.retailers.searchUrl(r, p.sku);
+      return url ? serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, p.sku, p.url) }) : null;
+    };
+    // (Seen by a live search just now: nothing more to open.)
+    const itemSwept = (it) => it.status_source === 'sweep' && it.checked_at && now - it.checked_at < SWEEP_FRESH_MS;
+    const productSwept = (p) => p.status_source === 'sweep' && p.sweep_seen_at && now - p.sweep_seen_at < SWEEP_FRESH_MS;
+    for (const it of rows) {
+      const r = itemStore(it);
+      if (!r) continue;
       if (render(r)) {
         if (cantRender) continue;
         if (rendering.has(r.id) && !fast(r)) { later('items', it.id); continue; }
-        // (Seen by a live search just now: nothing more to open.)
-        if (it.status_source === 'sweep' && it.checked_at && now - it.checked_at < SWEEP_FRESH_MS) {
+        if (itemSwept(it)) {
           this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
           continue;
         }
         rendering.add(r.id);
       }
-      const url = it.url || this.retailers.searchUrl(r, it.sku);
-      if (!url) continue;
-      out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, it.sku, it.url) }));
+      const check = itemCheck(it, r);
+      if (!check) continue;
+      out.push(check);
       this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
       if (out.length >= 5) break;
     }
@@ -725,34 +751,99 @@ export class Monitor {
     // refuses the server (Kmart), and any one whose own page refuses it (a drop watch's find at BIG W,
     // or at another website the admin has let the extension read). Members' browsers never do: only
     // the server and admins can change what everyone sees.
-    if (user.role === 'admin' && out.length < 5) {
-      const stores = this.retailers.list.filter((r) => r.id !== 'other' && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
-        && (!this.retailers.settings(r).serverChecks || this.serverStruggles(r.id)) && !held(r.id)).map((r) => r.id);
+    const admin = user.role === 'admin';
+    // (…the server refused there: every monitor at the store; a store read by opening its pages: what its searches found.)
+    const wholeStore = (r) => r.id !== 'other' && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
+      && (!this.retailers.settings(r).serverChecks || this.serverStruggles(r.id)) && !held(r.id);
+    const opensStore = (r) => render(r) && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks && !this.retailers.settings(r).serverChecks && !held(r.id);
+    if (admin && out.length < 5) {
+      const free = (r) => !budgeted.includes(r);
+      const stores = this.retailers.list.filter((r) => free(r) && wholeStore(r)).map((r) => r.id);
       const whole = this.catalog.browserTargets(stores, now, 5 - out.length);
       // (Picked in the database by where this browser may check — so ones it may not never crowd out the rest.)
-      const checks = this.retailers.list.filter((r) => r.id !== 'other' && !r.cartLinks && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks && !held(r.id)).map((r) => r.id);
+      const checks = this.retailers.list.filter((r) => free(r) && r.id !== 'other' && !r.cartLinks && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks && !held(r.id)).map((r) => r.id);
       const failing = this.catalog.browserFailing({ stores: checks, sites: this.sitePatterns(sites) }, now, 5).filter((p) => !whole.some((x) => x.id === p.id));
       for (const url of this.catalog.failingSitePages()) this.siteAllowed(url, sites, want);
       // …and at a store read by opening its pages (BIG W's), what its live searches found that nobody monitors:
       // its search tiles don't say when one goes on sale (a drop listed ahead of time shows no buy button), its
       // own page does. (Its one page a round, if the round has room for it.)
-      const opened = this.retailers.list.filter((r) => render(r) && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
-        && !this.retailers.settings(r).serverChecks && !held(r.id)).map((r) => r.id);
+      const opened = this.retailers.list.filter((r) => free(r) && opensStore(r)).map((r) => r.id);
       const swept = cantRender ? [] : this.catalog.sweptTargets(opened, now, 5).filter((p) => !whole.some((x) => x.id === p.id) && !failing.some((x) => x.id === p.id));
       for (const p of [...whole, ...failing, ...swept].slice(0, 15)) {
         if (out.length >= 5) break;
         const r = this.retailers.get(p.store);
         if (render(r) && cantRender) continue;
         if (render(r) && rendering.has(r.id) && !fast(r)) { later('products', p.id); continue; }
-        if (render(r) && p.status_source === 'sweep' && p.sweep_seen_at && now - p.sweep_seen_at < SWEEP_FRESH_MS) {
+        if (render(r) && productSwept(p)) {
           this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: p.id });
           continue;
         }
         if (render(r)) rendering.add(r.id);
-        const url = p.url || this.retailers.searchUrl(r, p.sku);
         this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.productPace(p, { priv }), id: p.id });
-        if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, p.sku, p.url) }));
+        const check = productCheck(p, r);
+        if (check) out.push(check);
       }
+    }
+    // A store with a budget for what each browser reads of it (BIG W's, monitor/access.js): its product pages a round —
+    // checksPerRound from an extension that waits the gap between them (1.39.0; one from an older one) — when its budget
+    // in this browser allows, shared with its searches and pages watched. The member's own items and (an admin's) the
+    // monitors at it and what its searches found that nobody monitors, all together: the longest waiting first, so each
+    // has its turn (each asks again at its target pace once read). Its first page first in the round (unless the slot it
+    // booked is a while off), the rest last: the other stores' read while it waits.
+    const who = device || user.id;
+    for (const r of budgeted) {
+      if (!this.retailers.enabled(r) || !this.retailers.settings(r).browserChecks || held(r.id) || (render(r) && cantRender)) continue;
+      // (Asking for this round means its last is over — the extension reads one round at a time.)
+      this.access.settled(r, who, 'check');
+      // (An extension that waits as it's told (1.39.0): the next free slot booked, several a round while the gap between
+      //  them is short — a round's waits stay well within the round. An older one: one a round, when the slot's free.)
+      const waits = !!version && !olderVersion(version, GAP_EXTENSION_VERSION);
+      const gapMs = this.access.gapMs(r, who);
+      const many = Math.max(1, this.access.configFor(r).checksPerRound);
+      const n = !waits || gapMs * (many - 1) > ROUND_WAIT_MS ? 1 : many;
+      const target = this.access.targetMs(r);
+      const want = [];
+      for (const it of this.db.all(`${ITEMS} WHERE i.user_id = :u AND i.monitor = 1 AND i.store = :s AND i.browser_next_at <= :now
+        ORDER BY i.browser_next_at, i.position LIMIT 20`, { u: user.id, s: r.id, now })) {
+        if (!itemStore(it)) continue;
+        if (itemSwept(it)) {
+          this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + target, id: it.id });
+          continue;
+        }
+        const check = itemCheck(it, r);
+        if (check) want.push({ check, key: `item:${it.id}`, table: 'items', id: it.id, due: it.browser_next_at, next: now + target });
+        if (want.length >= n) break;
+      }
+      if (admin) {
+        const seen = new Set();
+        const whole = wholeStore(r) ? this.catalog.browserTargets([r.id], now, n * 2) : [];
+        const failing = this.catalog.browserFailing({ stores: [r.id] }, now, n * 2);
+        const swept = opensStore(r) ? this.catalog.sweptTargets([r.id], now, n) : [];
+        for (const p of [...whole, ...failing, ...swept]) {
+          if (seen.has(p.id)) continue;
+          seen.add(p.id);
+          if (productSwept(p)) {
+            this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + target, id: p.id });
+            continue;
+          }
+          const check = productCheck(p, r);
+          if (check) want.push({ check, key: `product:${p.id}`, table: 'products', id: p.id, due: p.browser_next_at, next: now + this.productPace(p, { priv }) });
+        }
+      }
+      // (Never the same page twice in a round — an admin's own item and the monitor it's part of share one.)
+      const picks = [];
+      for (const w of want.sort((x, y) => x.due - y.due)) if (picks.length < n && !picks.some((p) => p.check.url === w.check.url)) picks.push(w);
+      if (!picks.length) continue;
+      const may = this.access.ask(r, who, 'check', { priv: fast(r), bookMs: waits ? BOOK_MS : 0 });
+      if (!may.ok) continue; // (its turn comes: they're still due next round)
+      const startAt = may.startAt || now;
+      this.access.take(r, who, 'check', { n: picks.length, keys: picks.map((p) => p.key), startAt });
+      picks.forEach((p, i) => {
+        this.db.run(`UPDATE ${p.table} SET browser_next_at = :n WHERE id = :id`, { n: p.next, id: p.id });
+        // (startInMs: when the first may start — the slot it booked; and not before the store's own tabs there are done.)
+        const check = { ...p.check, gapMs, ...(i === 0 && waits ? { startInMs: startAt - now } : {}) };
+        if (i === 0 && startAt - now < 2000) out.unshift(check); else out.push(check);
+      });
     }
     return out;
   }
@@ -761,11 +852,13 @@ export class Monitor {
    * How soon a product's page is read again in an admin's browser: a store read by opening its pages (BIG W's) at
    * its pace (retailer monitor.browserSeconds) — one its searches found that nobody monitors at that pace while it
    * can't be bought (it's what drops), every half hour once it can (to see it sell out, so its next restock alerts).
-   * priv: read in the browser's private window — at the usual pace then.
+   * priv: read in the browser's private window — at the usual pace then. A store with a budget for what each browser
+   * reads of it (monitor/access.js): its target pace — the budget decides how often each really is.
    */
   productPace(product, { priv = false } = {}) {
     const r = this.retailers.get(product.store);
-    const pace = r && r.monitor && r.monitor.browserSeconds && !(priv && r.monitor.privateWindow) ? r.monitor.browserSeconds * 1000 : this.browserInterval;
+    const budget = this.access && this.access.limited(r) ? this.access.targetMs(r) : null;
+    const pace = budget ?? (r && r.monitor && r.monitor.browserSeconds && !(priv && r.monitor.privateWindow) ? r.monitor.browserSeconds * 1000 : this.browserInterval);
     if (r && r.monitor && r.monitor.render && isOrderable(product.status) && !this.catalog.monitorForProduct(product.id)) return Math.max(pace, 30 * 60 * 1000);
     return pace;
   }
@@ -835,13 +928,16 @@ export class Monitor {
   }
 
   /** What an admin's browser saw on a monitored product. */
-  async browserProductResult(user, res) {
+  async browserProductResult(user, res, { device = null } = {}) {
     if (user.role !== 'admin') return false;
     const product = this.catalog.productById(String(res.id).slice(2));
     if (!product) return false;
     const now = this.now();
     const status = KNOWN.has(res.status) ? res.status : STATUS.ERROR;
     const failed = FAILED.has(status);
+    // (A store with a budget for what each browser reads of it — BIG W's: this read's done, and what came of it.)
+    const storeOf = this.retailers.get(product.store);
+    if (this.access && this.access.limited(storeOf)) this.access.done(storeOf, device || user.id, 'check', outcomeOf({ ok: !failed, status, error: res.error }));
     if (!failed && isOrderable(status)) await this.disagreed(product.store, product.sku);
     // (Refused in the admin's browser too: asked again later each time, as members' own are.)
     this.browserFails ||= new Map();
@@ -893,13 +989,13 @@ export class Monitor {
   }
 
   /** What this member's browser saw. Only ever changes this member's own items. */
-  async browserResults(user, results) {
+  async browserResults(user, results, { device = null } = {}) {
     const now = this.now();
     let applied = 0;
     for (const res of results) {
       if (!res || typeof res !== 'object') continue;
       if (typeof res.id === 'string' && res.id.startsWith('p:')) {
-        if (await this.browserProductResult(user, res)) applied += 1;
+        if (await this.browserProductResult(user, res, { device })) applied += 1;
         continue;
       }
       const row = this.db.get('SELECT * FROM items WHERE id = :id AND user_id = :u', { id: String(res.id || ''), u: user.id });
@@ -908,10 +1004,13 @@ export class Monitor {
       const failed = FAILED.has(status);
       const fails = failed ? row.browser_fails + 1 : 0;
       // (Read fine: again at its store's pace — BIG W's every few minutes, not every round; read in the browser's private
-      //  window, the usual pace.)
+      //  window, the usual pace. A store with a budget for what each browser reads of it: its target pace, the budget
+      //  deciding — and told what came of this read.)
       const storeOf = this.retailers.get(row.store);
       const priv = res.privateWindow === true && !!(storeOf && storeOf.monitor && storeOf.monitor.privateWindow);
-      const pace = storeOf && storeOf.monitor && storeOf.monitor.browserSeconds && !priv ? storeOf.monitor.browserSeconds * 1000 : this.browserInterval;
+      const budgeted = !!this.access && this.access.limited(storeOf);
+      if (budgeted) this.access.done(storeOf, device || user.id, 'check', outcomeOf({ ok: !failed, status, error: res.error }));
+      const pace = budgeted ? this.access.targetMs(storeOf) : storeOf && storeOf.monitor && storeOf.monitor.browserSeconds && !priv ? storeOf.monitor.browserSeconds * 1000 : this.browserInterval;
       const next = now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails, 5)) : pace);
       this.db.run('UPDATE items SET browser_checked_at = :now, browser_fails = :f, browser_next_at = :n WHERE id = :id', { now, f: fails, n: next, id: row.id });
       const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';

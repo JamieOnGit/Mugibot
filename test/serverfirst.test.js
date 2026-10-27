@@ -348,7 +348,7 @@ test("⚡ an admin's browser, searching each store on its own: a store it's stil
   assert.equal(r.status, 200, r.text);
   assert.equal(sw.settings.browserEverySeconds, 2);
   assert.equal(sw.paceFor(R('demo-gamesmen'), true), 2000, 'a store with no floor of its own: the set pace');
-  assert.equal(sw.paceFor(R('demo-bigw'), true), 20000, "BIG W's own floor: one search every 20 s");
+  assert.equal(sw.paceFor(R('demo-bigw'), true), 5000, "BIG W: its 5 s target — its budget for what a browser reads of it deciding (monitor/access.js)");
   r = await boss.put('/api/monitor/sweep', { browserEverySeconds: 1 });
   assert.equal(sw.settings.browserEverySeconds, 2, '2 s at the quickest');
   const turn = sw.stat('demo-bigw').turn;

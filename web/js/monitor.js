@@ -442,6 +442,17 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     return secs <= 1 ? 'trying again now' : secs < 90 ? `trying again in ${secs} s` : `trying again in ${Math.round(secs / 60)} min`;
   };
 
+  // A store with a budget for what each browser reads of it (BIG W's — server/monitor/access.js): how it's going.
+  const budgetLine = (s) => {
+    const a = s.access;
+    if (!a) return null;
+    const each = (kind, label) => (a.cadence[kind] && a.cadence[kind].everySeconds ? `${label} each every ${Math.round(a.cadence[kind].everySeconds)} s` : null);
+    const at = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const parts = [`a page every ${a.gapSeconds} s at most a browser`, each('search', 'keywords'), each('page', 'pages watched'), each('check', 'products'),
+      a.pausedUntil ? `turned away — ${a.pausedBrowsers === 1 ? 'a browser' : `${a.pausedBrowsers} browsers`} paused until ${at(a.pausedUntil)}` : a.blocks24h ? `turned away ${a.blocks24h}× in 24 h` : null].filter(Boolean);
+    return h('div', { class: 'muted small', title: `Everything a browser reads of ${s.name} — its searches, pages watched and product pages — within one budget: one page at a time, at least ${a.gapSeconds} s apart (wider after it turns a browser away), so its bot protection doesn't take Mugibot for a bot. Each asks to be read every ${a.targetSeconds} s; how often each really is, here.` }, parts.join(' · '));
+  };
+
   function renderSweep(d) {
     m.sweep = d;
     const live = d.stores.filter((s) => s.mode !== 'off');
@@ -465,7 +476,7 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
         ...Object.entries(MODES).map(([v, label]) => h('option', { value: v, selected: s.mode === v }, `${label}${v === 'browser' && s.privateWindow ? ' · private window' : ''}${v === s.defaultMode ? ' (default)' : ''}`)));
       sel.addEventListener('change', () => setMode(id, sel.value));
       body.append(h('tr', { class: s.mode === 'off' ? 'muted' : '', dataset: { store: id } },
-        h('td', {}, h('b', {}, s.name), s.avgMs ? h('div', { class: 'muted small' }, `answers in ${(s.avgMs / 1000).toFixed(1)} s`) : null),
+        h('td', {}, h('b', {}, s.name), s.avgMs ? h('div', { class: 'muted small' }, `answers in ${(s.avgMs / 1000).toFixed(1)} s`) : null, budgetLine(s)),
         h('td', {}, sel),
         h('td', {}, status),
         h('td', {}, s.lastAt ? h('time', { title: when(s.lastAt) }, ago(s.lastAt)) : '—'),

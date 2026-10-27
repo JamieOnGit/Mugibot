@@ -215,7 +215,8 @@ export function register(router, ctx) {
     const version = str(req.query.get('v'), 20) || req.device.version;
     if (version !== req.device.version) seen(req, version);
     // (priv: it opens BIG W's pages in a private window of its own — Mugibot allowed in Incognito there: 1.36.0.)
-    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want, version, priv: req.query.get('priv') === '1' });
+    // (device: this browser — a store's budget is each browser's own: monitor/access.js.)
+    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want, version, priv: req.query.get('priv') === '1', device: req.device.id });
     if (ctx.drops && ctx.monitor.browserChecksOn(req.user)) checks.push(...ctx.drops.browserDue(req.user, { sites, want }));
     return { checks, intervalSeconds: cfg.monitor.browserIntervalSeconds, sites: [...want].slice(0, 20) };
   }, { auth: 'device', entitled: true });
@@ -225,7 +226,7 @@ export function register(router, ctx) {
     if (!limiter.hit(`checks-post:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     if (!Array.isArray(req.body.results)) throw bad('results must be a list');
     const results = req.body.results.slice(0, 20);
-    let applied = await ctx.monitor.browserResults(req.user, results.filter((r) => !(r && typeof r.id === 'string' && r.id.startsWith('d:'))));
+    let applied = await ctx.monitor.browserResults(req.user, results.filter((r) => !(r && typeof r.id === 'string' && r.id.startsWith('d:'))), { device: req.device.id });
     // (Another website's search read for a drop watch.)
     for (const r of results) if (r && typeof r.id === 'string' && r.id.startsWith('d:') && ctx.drops && (await ctx.drops.browserResult(req.user, r))) applied += 1;
     return { ok: true, applied };
@@ -342,10 +343,10 @@ export function register(router, ctx) {
     //  pages' tabs still reading; denied: the stores turning this browser away just now.)
     const through = throughFrom(req.query.get('through'));
     const busy = throughFrom(req.query.get('busy'));
-    const due = ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through, busy });
+    const due = ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through, busy, device: req.device.id });
     if (req.user.role !== 'admin') return due;
     // Drop watches' search pages (monitor/pages.js): read in tabs of their own, beside the searches.
-    const pages = ctx.pages ? ctx.pages.browserDue(req.user, { version, busy, through, denied: throughFrom(req.query.get('denied')) }) : { pages: [], waitMs: null };
+    const pages = ctx.pages ? ctx.pages.browserDue(req.user, { version, busy, through, denied: throughFrom(req.query.get('denied')), device: req.device.id }) : { pages: [], waitMs: null };
     const waits = [due.waitMs, pages.waitMs].filter((x) => x !== null && x !== undefined);
     return { ...due, pages: pages.pages, waitMs: waits.length ? Math.min(...waits) : null };
   }, { auth: 'device' });
@@ -356,7 +357,7 @@ export function register(router, ctx) {
     const pages = Array.isArray(req.body.pages) ? req.body.pages : null;
     if (!Array.isArray(req.body.results) && !pages) throw bad('results must be a list');
     if (req.user.role !== 'admin') return { ok: true, results: [] };
-    const results = Array.isArray(req.body.results) ? await ctx.sweeper.browserResults(req.user, req.body.results) : [];
-    return { ok: true, results, ...(pages ? { pages: ctx.pages ? await ctx.pages.browserResults(req.user, pages) : [] } : {}) };
+    const results = Array.isArray(req.body.results) ? await ctx.sweeper.browserResults(req.user, req.body.results, { device: req.device.id }) : [];
+    return { ok: true, results, ...(pages ? { pages: ctx.pages ? await ctx.pages.browserResults(req.user, pages, { device: req.device.id }) : [] } : {}) };
   }, { auth: 'device', maxBody: 768 * 1024 });
 }
