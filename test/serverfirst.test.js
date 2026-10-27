@@ -49,7 +49,7 @@ const sweep = (id, keyword = 'pokemon', page = 1) => sw.sweepTerm(R(id), { keywo
 const card = (id) => sw.live().stores.find((s) => s.id === id);
 const due = (id) => sw.browserDue(admin, { version: '99.0.0' }).terms.find((t) => t.store === id);
 const sys = (re) => sw.events.some((e) => e.type === 'sys' && re.test(e.message));
-const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, transientSince: 0, fails: 0, failKind: '', slowUntil: 0, retryAt: 0, browserNext: 0, lastError: '' });
+const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, transientSince: 0, fails: 0, failKind: '', slowUntil: 0, refusedUntil: 0, retryAt: 0, browserNext: 0, lastError: '' });
 
 /** What an admin's browser reads at a store (the dummy store lets browsers in): the same code the server uses. */
 async function browserRead(id, keyword = 'pokemon') {
@@ -356,6 +356,20 @@ test("⚡ a store only struggling at a drop (502s, timeouts, a page without its 
     assert.equal((await sweep(id)).ok, true);
     assert.equal(st.backup, null);
     assert.ok(st.slowUntil > sw.now(), 'taken back gently, as after any refusal');
+
+    // ↻ Reset (searched gently after it, though nobody was turned away), then a struggling store: still only struggling —
+    // the server's, no "refused", no 5-minute hand-over.
+    fresh(id);
+    sw.reset(id, admin);
+    assert.ok(st.slowUntil > sw.now(), "Reset's gentle start");
+    answer = '502';
+    for (let i = 0; i < 3; i++) {
+      clock.offset += 20 * 1000;
+      await sweep(id);
+    }
+    assert.equal(st.backup, null, 'still the server\'s');
+    assert.equal(st.serverMisses, 0, 'no misses counted');
+    assert.ok(st.transientSince > 0, 'struggling, its clock going');
   } finally {
     sw.fetch = real;
     fresh(id);

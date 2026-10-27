@@ -200,7 +200,7 @@ export class Vip {
       const arm = !wantArm ? '' : baseline ? 'pending' : 'armed';
       this.saveFound(w, [...w.found, { productId: product.id, at: this.now(), ...(arm ? { arm } : {}) }]);
       this.repo.ensurePageFor({ store: product.store, sku: product.sku, url: product.url });
-      if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url: product.url });
+      if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url AND fail_count = 0', { url: product.url });
       // (Armed the first time it's found only: once it's bought and disarmed, it stays that way.)
       if (arm === 'armed') this.arm(w, product);
     }

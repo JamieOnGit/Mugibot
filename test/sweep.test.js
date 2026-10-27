@@ -564,6 +564,22 @@ test("🃏 sealed products named without a card word count: a Super-Premium Coll
     env.app.repo.setSetting('sweepWidenedAt', widened);
     if (vipWatch) await boss.del(`/api/monitor/vip/${vipWatch.id}`);
   }
+  // A card shop that reads a game's own collection (no card word needed there): what it tracked from it stays tracked when
+  // the filters are checked again (a start, a saved setting) — still not a plush, and still a card word elsewhere.
+  assert.ok(R('demo-fromthedeep').sweep.collectionPath, 'reads collections');
+  const seen = (store, sku, name) => {
+    const p = env.app.catalog.upsertProduct({ store, sku, url: `${store}/${sku}`, name, image: '', category: '' });
+    env.app.db.run('UPDATE products SET sweep_seen_at = :t WHERE id = :id', { id: p.id, t: sw.now() });
+    return p.id;
+  };
+  const kept = seen('demo-fromthedeep', 'prune-surprise-box', 'Pokemon Mega Evolution Surprise Box');
+  const plush = seen('demo-fromthedeep', 'prune-plush', 'Pokemon Pikachu Plush 30cm');
+  const elsewhere = seen('demo-jbhifi', 'prune-surprise-box-jb', 'Pokemon Mega Evolution Surprise Box');
+  sw.prune();
+  const seenAt = (id) => env.app.db.get('SELECT sweep_seen_at FROM products WHERE id = :id', { id }).sweep_seen_at;
+  assert.ok(seenAt(kept), "tracked from the shop's collection: still tracked");
+  assert.equal(seenAt(plush), null, 'a plush: never');
+  assert.equal(seenAt(elsewhere), null, 'a search that needs a card word: as before');
   // Out of that window: a product only the wider words let in is a drop like any other.
   store.shop('kmart').products.push({ sku: '43877063', name: 'Pokémon Scarlet & Violet Super-Premium Collection', price: 249, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477063 });
   await sweep('demo-kmart');

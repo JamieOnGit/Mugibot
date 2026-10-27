@@ -184,12 +184,18 @@ test('a store that refuses server checks: marked, backed off — and members\' b
   assert.equal(page.fail_count, 1);
   assert.ok(page.next_check_at - (Date.now() + clock.offset) > 60 * 1000, 'waits longer than usual before trying again');
   assert.match(store.state.requests.at(-1).ua, /^Mugibot/, 'still says who it is');
-  // A search finding it meanwhile (a member's drop watch: its stock not known) doesn't cut the wait short.
+  // A search finding it meanwhile (a member's drop watch: its stock not known) doesn't cut the wait short — nor does a
+  // page refused after a good read (its status still that read's).
   const asked = store.state.requests.length;
   env.app.monitor.checkNow(it.url);
   await env.app.monitor.delivered();
   assert.equal(env.app.db.get('SELECT next_check_at FROM page_checks WHERE url = :u', { u: it.url }).next_check_at, page.next_check_at, 'its back-off stands');
   assert.equal(store.state.requests.length, asked, 'not asked again before then');
+  env.app.db.run("UPDATE page_checks SET status = 'out_of_stock' WHERE url = :u", { u: it.url });
+  env.app.monitor.checkNow(it.url);
+  await env.app.monitor.delivered();
+  assert.equal(store.state.requests.length, asked, 'refused after a good read: not asked again either');
+  env.app.db.run("UPDATE page_checks SET status = 'blocked' WHERE url = :u", { u: it.url });
 
   // The member's browser is asked to check it instead.
   const device = await Device.pair(env.url, c);

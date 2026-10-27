@@ -457,7 +457,7 @@ export class Sweeper {
     if (!s) {
       // backup: server first, an admin's browser standing in ({ since, retryAt, tries, why, waitUntil }).
       // nextPages: '<keyword>\n<page>' → the link on that page to the next one (sweep.followNext: BIG W's).
-      s = { turn: 0, deep: 0, fails: 0, log: [], lastAt: null, lastOkAt: null, lastError: '', browserNext: 0, nextAt: null, slowUntil: 0, firstOkAt: null, backup: null, serverMisses: 0, browserAt: 0, askedAt: 0, nextPages: new Map() };
+      s = { turn: 0, deep: 0, fails: 0, log: [], lastAt: null, lastOkAt: null, lastError: '', browserNext: 0, nextAt: null, slowUntil: 0, refusedUntil: 0, firstOkAt: null, backup: null, serverMisses: 0, browserAt: 0, askedAt: 0, nextPages: new Map() };
       this.state.set(id, s);
     }
     return s;
@@ -910,10 +910,6 @@ export class Sweeper {
         const quiet = !!legacy && cardsNow && !known && !(all ? s.keywords.some((k) => legacy(p, k)) : legacy(p, term.keyword));
         const cards = cardsNow && !quiet;
         const newListing = this.drops && (cards ? !republished : newest && !old) && !baseline && !edge && !mkt && !known;
-        // (Listed before this read, whichever search saw it — and not sold out, coming soon or in the store's shops only
-        //  then: not a drop for a VIP watch, armed only if it isn't on sale. Back on sale after any of those: a restock.)
-        const offBefore = !!before && ([STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.IN_STORE].includes(before.status) || (before.status === STATUS.NOT_LISTED && !!before.last_ok_at));
-        const listedBefore = known && !offBefore;
         const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id) || (term.keyword !== w.words && !newListing);
         // Someone's own drop watch's words in the name (monitor/drops.js): on their watchlist, theirs
         // alone. (Found by another search, it was listed already as far as that watch knows — unless it's new.)
@@ -926,6 +922,13 @@ export class Sweeper {
         const watch = this.vip ? this.vip.matchFor(r.id, title, term.vip || null) : null;
         // An admin's drop watch for everyone (monitor/drops.js): it counts too, in #non-tcg-alerts.
         const drop = this.drops && !term.vip ? this.drops.sharedFor(r.id, title, term.drop ? term.keyword : null) : null;
+        // (Listed before this read, whichever search saw it: not a drop for a VIP watch — armed only if its page says it
+        //  isn't on sale. Unless it went off sale after the watch was added (sold out, coming soon, in the store's shops only
+        //  — a reading from since then) and is back: a restock, armed straight away. An older "sold out" may be stale, the
+        //  product on sale meanwhile: its page decides — something on sale before the watch is never bought.)
+        const offSince = !!watch && !!before && [STATUS.OUT_OF_STOCK, STATUS.COMING_SOON, STATUS.IN_STORE].includes(before.status)
+          && (before.status_at || 0) >= (watch.createdAt || Infinity);
+        const listedBefore = known && !offSince && !(before.status === STATUS.NOT_LISTED && !!before.last_ok_at);
         const counted = cards || quiet || ((!!watch || !!drop) && !mkt);
         if (!counted || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
         counts.kept += 1;
@@ -935,7 +938,7 @@ export class Sweeper {
         // (Found by its words alone in the whole-range list: those words, as their own search would say.)
         const found = keyword || (watch && watch.words) || (drop && drop.words) || termLabel(term.keyword, r);
         const hush = quiet && !watch;
-        const ev = await this.track(r, p, { status, keyword: found, baseline: dropOnly ? dropBaseline : baseline || edge || republished || hush, gapNew: dropOnly || edge || republished || hush ? null : gapNew, now, vip: !!watch, drop: dropOnly, category: drop && !cards ? drop.category : null, dropWatch: drop ? drop.id : null, posting });
+        const ev = await this.track(r, p, { status, keyword: found, baseline: dropOnly ? dropBaseline : baseline || edge || republished || hush, gapNew: dropOnly || edge || republished || hush ? null : gapNew, now, vip: !!watch, drop: dropOnly, category: drop && !cardsNow ? drop.category : null, dropWatch: drop ? drop.id : null, posting });
         for (const k of ev) counts[k] += 1;
         if (cards && ev.includes('new')) cardsNew += 1;
         const product = () => [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
@@ -1366,7 +1369,11 @@ export class Sweeper {
       st.failKind = info.unread ? 'unread' : info.transient && r.sweep.from !== 'browser' ? 'transient' : 'failed';
       st.lastError = info.error || 'Failed';
       st.lastNote = '';
-      if (info.blocked) st.slowUntil = now + SLOW_MS;
+      // (Refused: searched gently for a while — and, the server refused, a timeout meanwhile is a miss: serverFirst.)
+      if (info.blocked) {
+        st.slowUntil = now + SLOW_MS;
+        if (info.source === 'server') st.refusedUntil = now + SLOW_MS;
+      }
       this.totals.errors += 1;
       this.totals.streak = 0;
       this.cfg.log(JSON.stringify({ evt: 'sweep.failed', store: r.id, keyword: term.keyword, page: term.page, source: info.source, error: info.error || '', fails: st.fails, ms: info.ms ?? null }));
@@ -1415,15 +1422,16 @@ export class Sweeper {
       if (st.backup) {
         const { since, transient } = st.backup;
         // (Gently at first — not after a store that was only struggling: it never turned the server away.)
-        Object.assign(st, { backup: null, fails: 0, lastError: '', lastOkAt: now, slowUntil: transient ? 0 : now + SLOW_MS });
+        Object.assign(st, { backup: null, fails: 0, lastError: '', lastOkAt: now, slowUntil: transient ? 0 : now + SLOW_MS, refusedUntil: transient ? 0 : now + SLOW_MS });
         this.sys(`${r.name}: Mugibot's server is searching it again — the store answered (an admin's browser stood in for ${minutes(now - since)})`, { store: r.id });
       }
       return;
     }
     const why = info.empty ? (r.sweep.render ? 'its products only show once its page has run' : "no products, where an admin's browser finds some") : info.error || 'refused';
-    // (Not while a refusal's still in force — searched gently after it: then a timeout is a miss like any, as ever.
-    //  While the browser stands in, the store's pace is the browser's: the try's own refusals count, below.)
-    const transient = !!info.transient && r.sweep.from !== 'browser' && (trying || !(st.slowUntil > now));
+    // (Not while a refusal's still in force — the 10 minutes after the server was turned away (refusedUntil; a Reset's
+    //  gentle start isn't one): then a timeout is a miss like any, as ever. While the browser stands in, the store's pace is
+    //  the browser's: the try's own refusals count, below.)
+    const transient = !!info.transient && r.sweep.from !== 'browser' && (trying || !(st.refusedUntil > now));
     if (trying) {
       st.backup.tries += 1;
       st.backup.why = why;
@@ -1445,7 +1453,7 @@ export class Sweeper {
     const first = transient ? TRANSIENT_RETRY_MS : SERVER_RETRY_MS;
     st.backup = { since: now, tries: 1, retryAt: now + first, idleAt: now + this.idleWait(r, 1, transient), why, waitUntil: st.retryAt || 0, transient };
     // (The browser starts afresh: the server's failures, slower pace and Retry-After were the server's.)
-    Object.assign(st, { fails: 0, slowUntil: 0, retryAt: 0, browserNext: 0, serverMisses: 0, transientSince: 0 });
+    Object.assign(st, { fails: 0, slowUntil: 0, refusedUntil: 0, retryAt: 0, browserNext: 0, serverMisses: 0, transientSince: 0 });
     const state = info.empty ? `can't read it (${why})` : transient ? `gets no answer from it (${why}, for ${minutes(TRANSIENT_HANDOVER_MS)})` : `is refused (${why})`;
     st.lastError = `Mugibot's server ${state} — an admin's browser searches it meanwhile, and the server tries again within ${transient ? 'a minute' : '5 min'}`;
     this.sys(`${r.name}: ${st.lastError}`, { store: r.id, level: 'warn' });
@@ -1535,7 +1543,7 @@ export class Sweeper {
    */
   sweepNow() {
     for (const st of this.state.values()) {
-      Object.assign(st, { fails: 0, browserNext: 0, slowUntil: 0, transientSince: 0 });
+      Object.assign(st, { fails: 0, browserNext: 0, slowUntil: 0, refusedUntil: 0, transientSince: 0 });
       if (st.backup) st.backup.retryAt = 0;
     }
     for (const wake of this.wakers.values()) wake();
@@ -1619,7 +1627,7 @@ export class Sweeper {
       if (storeId ? r.id !== storeId : mode === 'off') continue;
       if (mode === 'browser') fromBrowser = true;
       const st = this.stat(r.id);
-      Object.assign(st, { fails: 0, lastError: '', browserNext: 0, nextAt: now, slowUntil: now + SLOW_MS, resetAt: now, needsUpdateAt: 0, transientSince: 0 });
+      Object.assign(st, { fails: 0, lastError: '', browserNext: 0, nextAt: now, slowUntil: now + SLOW_MS, resetAt: now, needsUpdateAt: 0, transientSince: 0, refusedUntil: 0 });
       if (mode === 'auto') {
         if (st.backup) st.retryAt = Math.max(st.retryAt || 0, st.backup.waitUntil || 0);
         Object.assign(st, { backup: null, serverMisses: 0 });
