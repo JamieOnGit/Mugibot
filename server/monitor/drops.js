@@ -30,6 +30,7 @@ import { PAGE_DEFAULT_SECONDS, PAGE_MAX_SECONDS, floorFor, isProductPage, pageLi
 import { publicError } from './public.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
+import { pageFull } from './sweep.js';
 
 const KINDS = ['restock', 'listed', 'price_drop'];
 export const DROP_NOTE = 'Drop watch';
@@ -170,17 +171,31 @@ export class Drops {
     // (Every store's: twice as much — the same phrase at several stores.)
     const max = (w.shared ? MAX_FOUND_SHARED : MAX_FOUND_OWN) * (w.store === ALL_STORES ? 2 : 1);
     const isBase = (f) => (typeof f.base === 'boolean' ? f.base : !!w.baselineAt && f.at <= w.baselineAt);
-    // (Your own watch's finds you've taken off your watchlist make room: they're never put back.)
+    // (Your own watch's finds you've taken off your watchlist make room: they're never put back. What's only
+    //  remembered — listed already beyond its room: remember() — takes none.)
     const kept = (f) => !f.itemId || !!this.db.get('SELECT 1 AS y FROM items WHERE id = :id', { id: f.itemId });
-    return w.found.filter((f) => isBase(f) === !!baseline && kept(f)).length < max;
+    return w.found.filter((f) => !f.quiet && isBase(f) === !!baseline && kept(f)).length < max;
   }
 
   /** What it found (kept on the watch object too, so a loop over finds sees each one). */
   saveFound(w, found) {
-    // (Both kinds of find, each to its most: what's dropped since its first look is never dropped from it.)
-    w.found = found.slice(-4 * Math.max(MAX_FOUND_SHARED, MAX_FOUND_OWN));
+    // (What dropped since its first look, to its most — the latest kept. What was listed already is never let go, so
+    //  it's never taken for a drop when it shows up again.)
+    const max = 4 * Math.max(MAX_FOUND_SHARED, MAX_FOUND_OWN);
+    const isBase = (f) => (typeof f.base === 'boolean' ? f.base : !!w.baselineAt && f.at <= w.baselineAt);
+    const drops = new Set(found.filter((f) => !isBase(f)).slice(-max));
+    w.found = found.filter((f) => isBase(f) || drops.has(f));
     this.db.run('UPDATE drop_watches SET found = :f WHERE id = :id', { id: w.id, f: JSON.stringify(w.found) });
     this.changed();
+  }
+
+  /**
+   * Listed already when the watch looked (its first look, or another search after it), beyond the room it has for
+   * that: remembered, nothing more — it takes no room, goes on no watchlist and is never armed — so it's never taken
+   * for a drop when a later search shows it again.
+   */
+  remember(w, f) {
+    this.saveFound(w, [...w.found, { ...f, at: this.now(), base: true, quiet: true }]);
   }
 
   /** Where a watch looks: the store's name, or the website's address. */
@@ -201,6 +216,16 @@ export class Drops {
   /** When a watch first looked at this store (what was listed there then was there already) — or null. */
   baseAt(w, storeId) {
     return w.store === ALL_STORES ? (w.bases && w.bases[storeId]) || null : w.baselineAt;
+  }
+
+  /**
+   * Did the watch's first look at this store read a full page — more listed than the page held? Then a product new
+   * to it in its own words' search later may only have moved into the page (one above it sold out, say), on sale since
+   * before the watch: not bought on the search's say (sweep.js). (A first look from before this was kept: as full.)
+   */
+  crowded(w, storeId) {
+    const row = this.db.get('SELECT full FROM first_looks WHERE watch_id = :w AND store = :s', { w: w.id, s: storeId });
+    return !row || !!row.full;
   }
 
   /** A search for these words at a store: 'shared' when an admin's watch for everyone has them, else 'private'. */
@@ -257,12 +282,15 @@ export class Drops {
     if (!list.length) return;
     const now = this.now();
     for (const w of list) {
+      const first = info.ok && !this.baseAt(w, storeId);
       // (Every store's: its first look at this store is this store's own "before".)
-      const bases = w.store === ALL_STORES && info.ok && !this.baseAt(w, storeId) ? JSON.stringify({ ...w.bases, [storeId]: now }) : null;
+      const bases = w.store === ALL_STORES && first ? JSON.stringify({ ...w.bases, [storeId]: now }) : null;
       this.db.run(`UPDATE drop_watches SET last_at = :now, last_ok_at = CASE WHEN :ok = 1 THEN :now ELSE last_ok_at END,
           fails = CASE WHEN :ok = 1 THEN 0 ELSE fails + 1 END, error = :err, seen = CASE WHEN :ok = 1 THEN :seen ELSE seen END,
           baseline_at = CASE WHEN :ok = 1 AND baseline_at IS NULL THEN :now ELSE baseline_at END, bases = COALESCE(:bases, bases) WHERE id = :id`,
       { id: w.id, now, ok: info.ok ? 1 : 0, seen: info.found || 0, err: info.ok ? '' : String(info.error || 'The search failed').slice(0, 200), bases });
+      // (…and whether that look's page was full: crowded().)
+      if (first) this.db.run('INSERT OR IGNORE INTO first_looks (watch_id, store, full, at) VALUES (:w, :s, :f, :t)', { w: w.id, s: storeId, f: pageFull(info) ? 1 : 0, t: now });
     }
     this.changed();
     for (const w of list) {
@@ -275,13 +303,17 @@ export class Drops {
    * An admin's watch for everyone found a product in a search (it's in the catalogue now: sweep.js):
    * a monitor on it, so its page is read for its stock too — and, when the admin asked, armed for
    * their Auto-checkout (only what drops). baseline: listed already when the watch first looked.
-   * status: its stock in the search (or null).
+   * status: its stock in the search (or null). wary: see armOf.
    */
-  async foundShared(w, product, { baseline = false, status = null } = {}) {
+  async foundShared(w, product, { baseline = false, status = null, wary = false } = {}) {
     if (!w || !product) return;
     this.monitorFor(w, product);
-    if (w.found.some((f) => f.productId === product.id) || !this.room(w, baseline)) return;
-    const arm = this.armOf(w, product.store, product.url, status, baseline);
+    if (w.found.some((f) => f.productId === product.id)) return;
+    if (!this.room(w, baseline)) {
+      if (baseline) this.remember(w, { productId: product.id, sku: product.sku, store: product.store });
+      return;
+    }
+    const arm = this.armOf(w, product.store, product.url, status, baseline, wary);
     this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, store: product.store, at: this.now(), base: !!baseline, ...(arm ? { arm } : {}) }]);
     this.repo.ensurePageFor({ store: product.store, sku: product.sku, url: product.url });
     if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url: product.url });
@@ -311,10 +343,12 @@ export class Drops {
   /**
    * Auto-checkout for one find: 'armed', 'pending' (armed once its page says it isn't on sale yet),
    * 'skipped' (on sale already at the watch's first look: not a drop) or '' (not asked for, or no checkout there).
+   * wary: new to the watch in its own search, at a store whose page was full at its first look (crowded) — it may have
+   * been listed all along: its page decides, as for one listed already.
    */
-  armOf(w, store, url, status, baseline) {
+  armOf(w, store, url, status, baseline, wary = false) {
     if (!w.aco || w.maxPrice === null || !url || !this.retailers.canBuy(store)) return '';
-    if (!baseline) return 'armed';
+    if (!baseline) return wary ? 'pending' : 'armed';
     if (READ.has(status)) return isOrderable(status) ? 'skipped' : 'armed';
     return 'pending';
   }
@@ -367,6 +401,25 @@ export class Drops {
     this.repo.addEvent(w.userId, { type: 'restock', level: 'warn', message: `Drop watch "${nameOf(w)}": your watchlist is full (${this.cfg.limits.items}), so what it finds can't go on it — remove something from your watchlist` });
   }
 
+  /**
+   * Is a find waiting on this page — Auto-checkout 'pending': armed only once its page says it isn't on sale? Then it's
+   * read when it's due, whatever a search saw of it lately (monitor/index.js sweptLately): only its page decides.
+   */
+  waitsOn(url) {
+    const list = this.watches();
+    if (this.waiting && this.waiting.list === list) return this.waiting.urls.has(url);
+    const urls = new Set();
+    for (const w of list) {
+      for (const f of w.found) {
+        if (f.arm !== 'pending') continue;
+        const p = f.productId ? this.catalog.productById(f.productId) : this.db.get('SELECT url FROM items WHERE id = :id', { id: f.itemId || '' });
+        if (p && p.url) urls.add(p.url);
+      }
+    }
+    this.waiting = { list, urls };
+    return urls.has(url);
+  }
+
   /** A product's page was read (monitor/index.js): a find waiting to see whether it's on sale yet is armed if it isn't. */
   checked(product) {
     if (!product || !READ.has(product.status) || !this.watches().length) return;
@@ -383,16 +436,20 @@ export class Drops {
   /**
    * Someone's own watch found a product in a search at a store (sweep.js): on their watchlist, theirs
    * alone. A new listing is news straight away — their DM, and Auto-checkout if it's armed and on sale.
-   * p: the search's product; status: its stock there (or null).
+   * p: the search's product; status: its stock there (or null). wary: see armOf.
    */
-  async foundOwn(w, r, p, status, { baseline = false } = {}) {
+  async foundOwn(w, r, p, status, { baseline = false, wary = false } = {}) {
     // (The same code at two stores is two products: an every-store watch's finds go by store too.)
     if (!w || !p || !p.url || w.found.some((f) => String(f.sku).toLowerCase() === String(p.sku).toLowerCase() && (!f.store || f.store === r.id))) return null;
-    if (!this.room(w, baseline)) { if (!baseline) this.noRoom(w); return null; }
-    return this.addOwn(w, { store: r.id, sku: p.sku, url: p.url, name: p.title || p.name, price: p.price ?? null }, status, { baseline });
+    if (!this.room(w, baseline)) {
+      if (baseline) this.remember(w, { sku: p.sku, store: r.id });
+      else this.noRoom(w);
+      return null;
+    }
+    return this.addOwn(w, { store: r.id, sku: p.sku, url: p.url, name: p.title || p.name, price: p.price ?? null }, status, { baseline, wary });
   }
 
-  async addOwn(w, p, status, { baseline }) {
+  async addOwn(w, p, status, { baseline, wary = false }) {
     const user = this.repo.userById(w.userId);
     if (!user || user.disabled) return null;
     let item = this.repo.itemBySku(user.id, p.store, p.sku);
@@ -400,7 +457,7 @@ export class Drops {
     const added = !item;
     if (added) {
       if (this.repo.countItems(user.id) >= this.cfg.limits.items) { this.full(w); return null; }
-      arm = this.armOf(w, p.store, p.url, p.store === 'other' ? null : status, baseline);
+      arm = this.armOf(w, p.store, p.url, p.store === 'other' ? null : status, baseline, wary);
       try {
         item = this.repo.addItem(user.id, checkItem({ url: p.url, sku: p.sku, name: productName(p), maxPrice: arm ? w.maxPrice : null, aco: arm === 'armed', monitor: true }, { retailers: this.retailers }));
       } catch (e) {
@@ -420,9 +477,10 @@ export class Drops {
     this.hub.publish(user.id, 'drop', { id: w.id });
     if (added && !baseline) {
       // A new listing: their alert now (and Auto-checkout, when it's armed and on sale). The search's
-      // stock where it says; else (and at another website) its page, read now.
+      // stock where it says; else (and at another website) its page, read as soon as the monitor may — never inside
+      // its gap between reads, nor sooner than a page backing off (monitor checkNow).
       if (p.store !== 'other' && READ.has(status)) await this.applyNow(item.id, { status, title: p.name || null, price: p.price ?? null });
-      else if (this.monitor) await this.monitor.checkPage(p.url);
+      else if (this.monitor) await this.monitor.checkNow(p.url);
     }
     return item;
   }
@@ -456,18 +514,22 @@ export class Drops {
 
   /** A watch's first look is done: what it found is how things were. Your own: one line in your activity. */
   firstLook(w) {
-    if (!w || w.shared || !w.found.length) return;
-    const n = w.found.length;
+    const kept = w ? w.found.filter((f) => !f.quiet) : [];
+    if (!w || w.shared || !kept.length) return;
+    const n = kept.length;
+    // (Beyond what it keeps: remembered as listed already, never bought — and said so.)
+    const more = w.found.length - n;
+    const rest = more ? ` ${more} more ${more === 1 ? 'is' : 'are'} listed too — more than one watch keeps, so ${more === 1 ? "it isn't" : "they aren't"} on your watchlist, and never bought.` : '';
     if (w.page) {
       this.repo.addEvent(w.userId, {
         type: 'restock', level: 'info',
-        message: `🔎 Watching ${this.where(w)}'s page for ${w.phrases.map((x) => `"${x}"`).join(', ')}: ${n} product${n === 1 ? '' : 's'} with ${w.phrases.length === 1 ? 'it' : 'one of them'} ${n === 1 ? 'is' : 'are'} on it already — on your watchlist now, so you're told when ${n === 1 ? 'it comes' : 'any comes'} back in stock. Anything new on the page, you're told the moment it's there.`,
+        message: `🔎 Watching ${this.where(w)}'s page for ${w.phrases.map((x) => `"${x}"`).join(', ')}: ${n} product${n === 1 ? '' : 's'} with ${w.phrases.length === 1 ? 'it' : 'one of them'} ${n === 1 ? 'is' : 'are'} on it already — on your watchlist now, so you're told when ${n === 1 ? 'it comes' : 'any comes'} back in stock.${rest} Anything new on the page, you're told the moment it's there.`,
       });
       return;
     }
     this.repo.addEvent(w.userId, {
       type: 'restock', level: 'info',
-      message: `🎯 Watching "${w.words}" at ${this.where(w)}: ${n} product${n === 1 ? '' : 's'} with those words ${n === 1 ? 'is' : 'are'} listed already — on your watchlist now, so you're told when ${n === 1 ? 'it comes' : 'any comes'} back in stock. Anything new, you're told the moment it drops.`,
+      message: `🎯 Watching "${w.words}" at ${this.where(w)}: ${n} product${n === 1 ? '' : 's'} with those words ${n === 1 ? 'is' : 'are'} listed already — on your watchlist now, so you're told when ${n === 1 ? 'it comes' : 'any comes'} back in stock.${rest} Anything new, you're told the moment it drops.`,
     });
   }
 
@@ -729,7 +791,11 @@ export class Drops {
   async foundSharedSite(w, p, { baseline }) {
     const url = this.siteLink(p);
     const sku = url && otherSku(url);
-    if (!sku || w.found.some((f) => f.sku === sku) || !this.room(w, baseline) || this.catalog.isBlocked('other', sku)) return;
+    if (!sku || w.found.some((f) => f.sku === sku) || this.catalog.isBlocked('other', sku)) return;
+    if (!this.room(w, baseline)) {
+      if (baseline) this.remember(w, { sku });
+      return;
+    }
     const known = this.catalog.productFor('other', sku);
     const product = this.catalog.upsertProduct({ store: 'other', sku, url, name: p.title, image: p.image || '', category: known ? '' : w.category });
     this.monitorFor(w, product);
@@ -738,9 +804,10 @@ export class Drops {
     if (!baseline && !known) {
       const t = this.now();
       this.catalog.updateProduct(product.id, { status: STATUS.NOT_LISTED, status_at: t, last_ok_at: t, confirmed: 1 });
-      if (this.monitor) await this.monitor.checkPage(url);
+      // (Read as soon as the monitor may: never inside the website's gap between reads, nor sooner than a page backing off.)
+      if (this.monitor) await this.monitor.checkNow(url);
     } else {
-      this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
+      this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url AND fail_count = 0', { url });
     }
   }
 
@@ -749,7 +816,11 @@ export class Drops {
     const url = this.siteLink(p);
     const sku = url && otherSku(url);
     if (!sku || w.found.some((f) => f.sku === sku)) return null;
-    if (!this.room(w, baseline)) { if (!baseline) this.noRoom(w); return null; }
+    if (!this.room(w, baseline)) {
+      if (baseline) this.remember(w, { sku });
+      else this.noRoom(w);
+      return null;
+    }
     return this.addOwn(w, { store: 'other', sku, url, name: p.title, price: p.price ?? null }, null, { baseline });
   }
 
@@ -923,6 +994,7 @@ export class Drops {
     const items = this.db.all('SELECT id FROM items WHERE drop_watch = :id', { id: w.id });
     this.db.run('DELETE FROM items WHERE drop_watch = :id', { id: w.id });
     this.db.run('DELETE FROM drop_watches WHERE id = :id', { id: w.id });
+    this.db.run('DELETE FROM first_looks WHERE watch_id = :id', { id: w.id });
     this.changed();
     for (const it of items) this.hub.publish(w.userId, 'watch', { id: it.id, removed: true });
     this.hub.publish(w.userId, 'drop', { id: w.id, removed: true });
@@ -1093,7 +1165,8 @@ export class Drops {
       canChange: this.canChange(w, viewer),
       // (Where it posts, for an admin's watch for everyone: admins only.)
       ...(admin && w.shared ? { channelId: w.channelId, roleId: w.roleId } : {}),
-      found: w.found.map((f) => this.foundView(w, f, mine, viewer, pooled)).filter(Boolean),
+      // (Not what it only remembers: listed already, beyond what it keeps.)
+      found: w.found.filter((f) => !f.quiet).map((f) => this.foundView(w, f, mine, viewer, pooled)).filter(Boolean),
     };
   }
 

@@ -559,6 +559,19 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
    watch like *pokemon* would otherwise buy everything that matches. The
    Activity log says so, and you can ⚡ Buy it yourself.
 
+   **A full first page.** When the watch's first search filled the store's page
+   (more listed than the page holds: JB Hi-Fi's search shows its top 10, City
+   Beach's 48, or the store said it had more), something that was on sale all
+   along can turn up in a later search, moving into the page when one above it
+   sells out. So a product new to Mugibot that the watch's own search finds then
+   isn't bought on the search's say: its page is read first, and it's armed only
+   if that read works and says it isn't on sale. You still get the 🆕 alert. At
+   a store only browsers read (EB Games, BIG W), a browser's read of its page
+   settles it, as the server's would. JB Hi-Fi's real new listings are still
+   bought at once, because its newest products show them first. Where a store's
+   page size isn't known, a first page of 10 or more counts as full (watches
+   from before this: as full).
+
    Your Auto-checkout settings and limits still apply (switch it on, keep Chrome
    open with the extension). Each product is armed once: after a purchase it stays
    disarmed. Removing the watch disarms what it armed.
@@ -649,7 +662,9 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
     (`/search?q=…`), then the page itself; it remembers what worked. Give a
     listing page (a "new arrivals" or a search page) and only that page is
     read. A site that turns Mugibot away is asked again later, waiting longer
-    each time, and is read from a browser meanwhile (below).
+    each time, and is read from a browser meanwhile (below). A new listing's
+    own page is read as soon as the monitor may: never inside the website's gap
+    between reads, and never sooner than a page that's been failing is due again.
 
   Anything whose name has **every** word counts, trading cards or not. A short
   word (three letters or fewer) or a number has to be a whole word in the name —
@@ -713,6 +728,10 @@ just backs off.
   drops (taking a find off your watchlist makes room; when it's found its most,
   it says so in your activity, once a day). Only they're told: their DM,
   webhook or email, as they've set it.
+- What it saw listed already beyond those 10 (20 for an admin's watch for
+  everyone, twice that at every store) is **remembered**: not on the watchlist,
+  never armed, and never taken for a drop when a later search shows it again.
+  Its first look says how many there were.
 - What was there at its first look goes on quietly; anything new is a DM the
   moment it's found, anything coming back in stock (or open for pre-order) is a
   DM as usual, and a find that gets **cheaper** is a 📉 DM: "Was $649.00 — now
@@ -732,7 +751,12 @@ switched on, Chrome open with the extension, your limits apply):
   the moment it's found, if it's on sale), or something listed but not on sale yet
   (bought when it goes on sale). What was already on sale is never bought — a
   broad watch would otherwise buy everything that matches. (The same rule as VIP
-  drops.)
+  drops.) That includes what the first look saw beyond what the watch keeps
+  (remembered, above). And where the first look filled the store's page (more
+  listed than the page holds: JB Hi-Fi's top 10), a product new to Mugibot that
+  the watch's own search finds later may only have moved into the page: its page
+  is read first, and it's armed only if that read says it isn't on sale. You
+  still get the alert. (See **A full first page** under VIP drops.)
 - **One purchase per watch:** once one of its finds is bought, its other finds
   are disarmed and what it finds from then on isn't armed (docs/AUTO-CHECKOUT.md →
   One purchase per arming).
@@ -1062,8 +1086,8 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Extension API | `GET/POST /api/ext/sweeps` (`server/routes/ext.js`), `sweepLoop()` in `extension/background.js` |
 | Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
 | What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
-| 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find — `hasWords`, `room` — where they post, and your own finds' price drops: `priceDropped`); `drop_watches` (with `channel_id`, `role_id`: migration 12; `bases`, each store's first look for a key phrase at every store, `ALL_STORES`: migration 18), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11), `items.price_alert_at`/`price_alert_price` (migration 13); `GET/POST /api/drops` (`phrases`: several key phrases at once), `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
-| ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
+| 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find — `hasWords`, `room` — where they post, and your own finds' price drops: `priceDropped`); `drop_watches` (with `channel_id`, `role_id`: migration 12; `bases`, each store's first look for a key phrase at every store, `ALL_STORES`: migration 18; finds beyond a watch's room remembered quietly: `remember`; whether each first look read a full page — `crowded`, `pageFull` in `server/monitor/sweep.js` — in `first_looks`, by watch and store: migration 22), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11), `items.price_alert_at`/`price_alert_price` (migration 13); `GET/POST /api/drops` (`phrases`: several key phrases at once), `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
+| ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches` (whether its first search read a full page — `crowded` — in `first_looks`: migration 22), `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js`, and the first look's cases (VIP and drop watches) in `test/firstlook.test.js` |
 | 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |
 | The live event log | `emit()` and `live()` in `server/monitor/sweep.js`; `GET /api/monitor/live`; `monitor-sweep` events on the dashboard's stream |
