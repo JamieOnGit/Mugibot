@@ -599,6 +599,14 @@ const MIGRATIONS = [
   ALTER TABLE items ADD COLUMN pool_watch TEXT;
   CREATE INDEX items_pool_src ON items(pool_src);
   `,
+  // 22 — speed under a drop's load: the lookups made for every product of every search (members watching it, by store
+  //      and SKU as their watchlist has it: any case), for every page the monitor checks (the products on it, by link),
+  //      and for the monitor's round each second (the pages due). Each one was a whole table's read before.
+  `
+  CREATE INDEX items_store_sku_nocase ON items(store, sku COLLATE NOCASE);
+  CREATE INDEX products_url ON products(url);
+  CREATE INDEX page_checks_due ON page_checks(next_check_at);
+  `,
 ];
 
 export class Db {

@@ -88,10 +88,20 @@ export function statesNote(states) {
   return states.length * 2 <= AU_STATES.length ? `In stock in ${states.join(', ')} only.` : `In stock everywhere except ${missing.join(', ')}.`;
 }
 
+// (Added Oct 2026, termsVersion 2: sealed products named without a card word — "Prismatic Evolutions Super-Premium
+// Collection", "Destined Rivals Blister", "Build & Battle Box" — went untracked. Merged into a list saved before then.)
+const ADDED_TCG_TERMS = ['premium collection', 'blister', 'build & battle', 'collector chest', 'portfolio', 'deck box', 'playmat'];
 export const TCG_TERMS = [
   'card', 'cards', 'tcg', 'booster', 'pack', 'packs', 'bundle', 'starter deck', 'deck', 'elite trainer', 'etb',
   'tin', 'collection box', 'special collection', 'display', 'trading card', 'booster box', 'binder', 'sleeve', 'sleeves',
+  ...ADDED_TCG_TERMS,
 ];
+// A card set's code in the name counts as a card word: One Piece's OP-15, EB-02, ST-21, PRB-01; Gundam's GD01 ("ONE PIECE
+// OP-15 BOX").
+const CARD_CODE_RE = /\b(?:op|eb|st|prb|gd)-?\d{1,2}\b/i;
+// After the card words widen (an update), what they let in that wasn't counted before is tracked quietly the first time
+// it's seen — for this long — never a burst of "new drops" that were on sale all along.
+const WIDENED_QUIET_MS = 6 * 3600 * 1000;
 
 // Not trading cards, even with a card word in the name ("3 Pack Socks", "Short Sleeve T-Shirt"),
 // unless the name says TCG, trading card or card game.
@@ -135,7 +145,18 @@ const MODES = ['auto', 'server', 'browser', 'off'];
 const SERVER_TRIES = 3; // (1 at a store known to turn servers away: sweep.from 'browser')
 const SERVER_RETRY_MS = 5 * 60 * 1000;
 const SERVER_RETRY_MAX_MS = 30 * 60 * 1000;
+// A store only struggling — too slow to answer, out of reach a moment, a 5xx that isn't 503, a page without its list (all
+// likeliest at a drop, when it's busiest) — turns nobody away: it's searched again soon (at half its pace three times, then a
+// minute apart at most), and an admin's browser stands in only once it's been like that this long with no answer (the server
+// trying again a minute later, twice as long each time it's still struggling). A refusal (401/403/429/503, a bot check)
+// backs off as ever. (Not at a store known to turn servers away: sweep.from 'browser' — there any miss is one.)
+const TRANSIENT_HANDOVER_MS = 2 * 60 * 1000;
+const TRANSIENT_RETRY_MS = 60 * 1000;
+const TRANSIENT_MAX_MS = 60 * 1000;
+const TRANSIENT_QUICK = 3;
 const minutes = (ms) => `${Math.max(1, Math.round(ms / 60000))} min`;
+/** "2 h 10 min", "45 min". */
+const howLong = (ms) => { const m = Math.max(1, Math.round(ms / 60000)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`; };
 const andList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0] || '');
 
 /** " (it was “Search results for: 'pokemon'”, 312 KB, 0 product links)" — what a page Mugibot couldn't read was. */
@@ -189,10 +210,19 @@ const GAP_NEW_ALERTS = 3;
 // way) and buyable there now is on sale now — once it's been listed without one this long (a tile whose button
 // is drawn a moment late isn't a drop).
 const UNKNOWN_SETTLE_MS = 10 * 60 * 1000;
+// …or once it's been read without one this many times in a row, over at least this long: a drop listed a few minutes
+// ahead of a 7 am sale (BIG W lists at 6:52, sells at 7:00) is on sale now too, not just one listed 10 minutes ahead.
+const UNKNOWN_SETTLE_READS = 3;
+const UNKNOWN_SETTLE_READS_MS = 2 * 60 * 1000;
 // A store searched from admins' browsers none of whose searches has found any products this long (no browser
 // searching it — Chrome closed, the computer asleep — or it turned them away: BIG W's "Access Denied"): its
 // drops can't be seen, so its admins are told, once, and again when it's back.
 const BLIND_MS = 20 * 60 * 1000;
+// "Restock once a day": its first restock of the (Sydney) day — and another the same day only once it's been sold out this
+// long first (a hot product's second wave: back at 13:30 after selling out at 9:04 — not a flicker), at most this many a day.
+const RESTOCK_GAP_MS = 30 * 60 * 1000;
+const RESTOCK_WAVES = 3;
+const ORDINAL = ['', '1st', '2nd', '3rd', '4th', '5th'];
 const sydneyTime = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', hour: 'numeric', minute: '2-digit', weekday: 'short' });
 const MAX_BACKOFF_MS = 15 * 60 * 1000;
 // After a store refuses a search, it's searched at a third of the pace for a while, even once it answers again.
@@ -271,6 +301,7 @@ export function sweepSettings(input, current, retailers) {
     enabled,
     keywords,
     keywordsVersion: 2, // (ADDED_KEYWORDS offered: what's saved now is the admin's choice)
+    termsVersion: 2, // (ADDED_TCG_TERMS offered too)
     modesVersion: 3, // stores: only the modes that differ from each store's default (server first, since 3)
     everySeconds: num(src.everySeconds, { min: 3, max: 600, int: true, def: SWEEP_DEFAULTS.everySeconds }),
     // (From 2 s: an admin's browser searches each store on its own — side by side — so its set pace is what each gets.)
@@ -306,6 +337,7 @@ export class Sweeper {
     this.seq = 0;
     this.totals = { searches: 0, errors: 0, streak: 0 };
     this.ttns = []; // ms from a store's answer to the alert reaching dashboards, latest alerts
+    this.unknownReads = new Map(); // product id → { n, since }: reads in a row without a buy button (UNKNOWN_SETTLE_READS)
     this.startedAt = null;
   }
 
@@ -344,6 +376,8 @@ export class Sweeper {
     if (saved.priceDropPercent === 0 && saved.priceAlerts === undefined) Object.assign(out, { priceAlerts: false, priceDropPercent: SWEEP_DEFAULTS.priceDropPercent });
     // (Saved before Riftbound and Gundam were searched for: they're on the list too.)
     if (!(saved.keywordsVersion >= 2) && Array.isArray(saved.keywords)) out.keywords = [...new Set([...saved.keywords, ...ADDED_KEYWORDS])].slice(0, 12);
+    // (Saved before the sealed-product words: they're on the list too.)
+    if (!(saved.termsVersion >= 2) && Array.isArray(saved.tcgTerms)) out.tcgTerms = [...new Set([...saved.tcgTerms, ...ADDED_TCG_TERMS])].slice(0, 80);
     return out;
   }
 
@@ -670,8 +704,9 @@ export class Sweeper {
       res = await safeFetch(this.fetch, url, { headers: this.headers(r), timeoutMs, signal: AbortSignal.timeout(timeoutMs) }, { allowPrivate: this.cfg.monitor.allowPrivateHosts });
       if (res.ok) text = await res.text();
     } catch (e) {
-      const error = e instanceof BlockedUrlError ? e.message : e.name === 'TimeoutError' ? 'The store took too long to answer' : "Couldn't reach the store";
-      return this.record(r, term, { ok: false, url, source: 'server', ms: Date.now() - started, error });
+      const blocked = e instanceof BlockedUrlError;
+      const error = blocked ? e.message : e.name === 'TimeoutError' ? 'The store took too long to answer' : "Couldn't reach the store";
+      return this.record(r, term, { ok: false, transient: !blocked, url, source: 'server', ms: Date.now() - started, error });
     }
     const ms = Date.now() - started;
     // (The whole-range list answered, but not with a list: each keyword's own search instead, now — unless that's the
@@ -686,7 +721,7 @@ export class Sweeper {
       const st = this.stat(r.id);
       if (refused && wait) { if (this.standIn(r, st)) st.backup.waitUntil = this.now() + wait; else st.retryAt = this.now() + wait; }
       return this.record(r, term, {
-        ok: false, blocked: refused, url, source: 'server', ms,
+        ok: false, blocked: refused, transient: !refused && res.status >= 500, url, source: 'server', ms,
         error: refused ? `The store refused the search (HTTP ${res.status})${wait ? ` — it asked to wait ${Math.ceil(wait / 1000)} s` : ''}` : `HTTP ${res.status}`,
       });
     }
@@ -711,30 +746,52 @@ export class Sweeper {
     return this.sweepTerm(r, this.nextTerm(r));
   }
 
-  /** Which products count (from MugiWatch): the keyword in the name, trading cards only, not a marketplace seller. */
-  filters(s = this.settings) {
-    const tcg = s.tcgOnly ? termsRegex(s.tcgTerms) : null;
+  /**
+   * Which products count (from MugiWatch): the keyword in the name, trading cards only, not a marketplace seller.
+   * cardsOnly: a read that's already only trading cards (Kmart's Trading Cards list, a game's own collection): there a
+   * card word isn't needed — only the keyword, and not one of the not-cards words. legacy: as before the card words
+   * widened (no added words, no set codes, no card-only reads).
+   */
+  filters(s = this.settings, { cardsOnly = false, legacy = false } = {}) {
+    const tcg = s.tcgOnly ? termsRegex(legacy ? (s.tcgTerms || []).filter((t) => !ADDED_TCG_TERMS.includes(t)) : s.tcgTerms) : null;
     const notCard = s.tcgOnly ? termsRegex(s.notCardTerms || []) : null;
+    const scoped = cardsOnly && !legacy;
     return (p, keyword) => {
       const name = norm(p.title || p.name);
       if (!mentions(name, keyword)) return false;
       if (s.skipMarketplace && p.marketplace) return false;
-      if (tcg && !tcg.test(name)) return false;
+      if (tcg && !scoped && !tcg.test(name) && (legacy || !CARD_CODE_RE.test(name))) return false;
       if (notCard && notCard.test(name) && !CARD_SURE_RE.test(name)) return false;
       return true;
     };
+  }
+
+  /** Is a read only trading cards already (cardsOnly: Kmart's Trading Cards list and search; a game's own collection)? */
+  cardsOnlyRead(r, term) {
+    if (term.vip || term.drop) return false;
+    return !!r.sweep.cardsOnly || (term.keyword !== ALL && term.keyword !== NEWEST && !!this.collectionFor(r, term.keyword));
+  }
+
+  /** The card words widened lately (an update): what they let in that wasn't counted before is tracked quietly at first. */
+  widenedLately(now = this.now()) {
+    const at = Number(this.repo.getSetting('sweepWidenedAt')) || 0;
+    return at > 0 && now - at < WIDENED_QUIET_MS;
   }
 
   /** Products the sweeps tracked that no longer count (the filters changed): out of the list, unless monitored. */
   prune() {
     const s = this.settings;
     const counts = this.filters(s);
-    const rows = this.db.all(`SELECT p.id, p.name, p.sweep_keyword FROM products p LEFT JOIN monitors m ON m.product_id = p.id
+    const scoped = this.filters(s, { cardsOnly: true });
+    const rows = this.db.all(`SELECT p.id, p.name, p.store, p.sweep_keyword FROM products p LEFT JOIN monitors m ON m.product_id = p.id
       WHERE p.sweep_seen_at IS NOT NULL AND m.id IS NULL`);
     let n = 0;
     for (const p of rows) {
       const kws = s.keywords.includes(p.sweep_keyword) ? [p.sweep_keyword] : s.keywords;
-      if (!kws.some((k) => counts({ title: p.name }, k))) {
+      // (A store whose searches are only trading cards — Kmart's: a card word isn't needed there.)
+      const r = this.retailers.get(p.store);
+      const fits = r && r.sweep && r.sweep.cardsOnly ? scoped : counts;
+      if (!kws.some((k) => fits({ title: p.name }, k))) {
         this.db.run('UPDATE products SET sweep_seen_at = NULL WHERE id = :id', { id: p.id });
         n += 1;
       }
@@ -763,7 +820,7 @@ export class Sweeper {
       });
     }
     // (What the page was — its title and size — so whoever looks can tell what the store sent.)
-    if (parsed.problem === 'layout') return this.record(r, term, { ok: false, url, source, ms, error: `The page didn't have the product list Mugibot reads — the store may have changed it${seenText(seen)}` });
+    if (parsed.problem === 'layout') return this.record(r, term, { ok: false, transient: source === 'server', url, source, ms, error: `The page didn't have the product list Mugibot reads — the store may have changed it${seenText(seen)}` });
     const s = this.settings;
     const now = this.now();
     const row = this.db.get('SELECT * FROM sweep_terms WHERE store = :s AND keyword = :k AND page = :p', { s: r.id, k: term.keyword, p: term.page });
@@ -789,7 +846,9 @@ export class Sweeper {
     //  only have moved up from the page after, so it's tracked, not alerted as a drop. One listed ahead of time
     //  still alerts the moment it's on sale.)
     const edge = !!r.sweep.followNext && term.page > 1 && term.page >= Math.min(10, r.sweep.pages || 1);
-    const counts_ = this.filters(s);
+    const counts_ = this.filters(s, { cardsOnly: this.cardsOnlyRead(r, term) });
+    // (The card words widened lately: what counts now that didn't before, and new to the catalogue, is tracked quietly.)
+    const legacy = this.widenedLately(now) ? this.filters(s, { legacy: true }) : null;
     const counts = { found: parsed.products.length, kept: 0, new: 0, restock: 0, price: 0 };
     // The whole range (or its newest products) in one list: each product counts for the first keyword in its name.
     const all = term.keyword === ALL || term.keyword === NEWEST;
@@ -837,7 +896,8 @@ export class Sweeper {
         const republished = old && r.sweep.newestFresh !== false;
         // (…and one it's just published, cards or not: a drop for a drop watch whose words are in its name — the newest
         //  products may see it before the watch's own search does.)
-        const newListing = this.drops && (cards ? !republished : newest && !old) && !baseline && !edge && !mkt && !known;
+        const quiet = !!legacy && cards && !known && !(all ? s.keywords.some((k) => legacy(p, k)) : legacy(p, term.keyword));
+        const newListing = this.drops && (cards ? !republished : newest && !old) && !baseline && !edge && !mkt && !known && !quiet;
         // (Listed before this read, whichever search saw it: not a drop for a VIP watch — armed only if it isn't on sale.)
         const listedBefore = known && !(before.status === STATUS.NOT_LISTED && !!before.last_ok_at);
         const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id) || (term.keyword !== w.words && !newListing);
@@ -860,13 +920,13 @@ export class Sweeper {
         const dropOnly = !!drop && !cards && !watch;
         // (Found by its words alone in the whole-range list: those words, as their own search would say.)
         const found = keyword || (watch && watch.words) || (drop && drop.words) || termLabel(term.keyword, r);
-        const ev = await this.track(r, p, { status, keyword: found, baseline: dropOnly ? dropBaseline : baseline || edge || republished, gapNew: dropOnly || edge || republished ? null : gapNew, now, vip: !!watch, drop: dropOnly, category: drop && !cards ? drop.category : null, dropWatch: drop ? drop.id : null, posting });
+        const ev = await this.track(r, p, { status, keyword: found, baseline: dropOnly ? dropBaseline : baseline || edge || republished || quiet, gapNew: dropOnly || edge || republished || quiet ? null : gapNew, now, vip: !!watch, drop: dropOnly, category: drop && !cards ? drop.category : null, dropWatch: drop ? drop.id : null, posting });
         for (const k of ev) counts[k] += 1;
         if (cards && ev.includes('new')) cardsNew += 1;
         const product = () => [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
         // (Found in the watch's first search, or listed already when another search found it: armed only if it isn't on
         //  sale yet. Something on sale before the watch is never bought, whichever search comes first.)
-        if (watch) this.vip.found(watch, product(), { baseline: baseline || edge || republished || listedBefore });
+        if (watch) this.vip.found(watch, product(), { baseline: baseline || edge || republished || listedBefore || quiet });
         if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, status, later }).catch((e) => this.cfg.log('[drops]', e.message));
       }
       // A new card listing in a read that isn't setting its scene (not a VIP or drop watch's own search): drop mode.
@@ -1047,7 +1107,8 @@ export class Sweeper {
     // drop ahead of time with none in its search tile — "unknown", not sold out — until the moment it's on sale:
     // a member's Pokémon TCG 30th Celebration UPC there, Oct 2026, went by without an alert that way.)
     const firstBuyable = isOrderable(fresh.status) && !!before && before.status === STATUS.UNKNOWN
-      && now - (before.status_at || now) >= UNKNOWN_SETTLE_MS && now - (before.sweep_first_at || now) >= UNKNOWN_SETTLE_MS;
+      && ((now - (before.status_at || now) >= UNKNOWN_SETTLE_MS && now - (before.sweep_first_at || now) >= UNKNOWN_SETTLE_MS) || this.unknownSettled(product.id, now));
+    this.noteUnknown(product.id, fresh.status, now);
     const restocked = (isOrderable(fresh.status) && (ORDERABLE_FROM.has(before && before.status) || (before && before.status === STATUS.IN_STORE)))
       || (inStore && ORDERABLE_FROM.has(before && before.status)) || firstBuyable;
     // New: never seen before, or a SKU confirmed as not listed yet (a monitor added before it's checked isn't new).
@@ -1071,9 +1132,11 @@ export class Sweeper {
       if (s.restockAlerts && restocked && before.confirmed) {
         const today = sydneyDay.format(now);
         const day = inStore ? `${today} in store` : today;
-        if (!s.restockOncePerDay || (fresh.restock_day !== today && fresh.restock_day !== day)) {
+        const due = this.restockDue(fresh, before, day, now);
+        if (due) {
           const onSale = firstBuyable ? `On sale now at ${r.name} — listed before without a buy button.` : '';
-          if (await alert(fresh, 'restock', { note: [onSale, where].filter(Boolean).join(' ') })) {
+          const again = due.again ? `Back in stock again today (its ${ORDINAL[due.wave] || `${due.wave}th`} restock — sold out for ${howLong(due.outFor)}).` : '';
+          if (await alert(fresh, 'restock', { note: [onSale, again, where].filter(Boolean).join(' ') })) {
             this.catalog.updateProduct(product.id, { restock_day: day });
             sent.push('restock');
           }
@@ -1087,6 +1150,36 @@ export class Sweeper {
     // A monitor on this product also gets the alerts it asks for (sold out, price up…).
     if (monitor && !monitor.paused && before) await this.feed.transitions(before, fresh2());
     return sent;
+  }
+
+  /** Read without a buy button UNKNOWN_SETTLE_READS times in a row, over UNKNOWN_SETTLE_READS_MS at least? */
+  unknownSettled(productId, now) {
+    const u = this.unknownReads.get(productId);
+    return !!u && u.n >= UNKNOWN_SETTLE_READS && now - u.since >= UNKNOWN_SETTLE_READS_MS;
+  }
+
+  /** A read of a product: one more in a row without a buy button (unknown), or the count starts over. */
+  noteUnknown(productId, status, now) {
+    if (status !== STATUS.UNKNOWN) { this.unknownReads.delete(productId); return; }
+    const u = this.unknownReads.get(productId);
+    this.unknownReads.set(productId, { n: (u ? u.n : 0) + 1, since: u ? u.since : now });
+    if (this.unknownReads.size > 5000) for (const [id, x] of this.unknownReads) if (now - x.since > 6 * HOUR) this.unknownReads.delete(id);
+  }
+
+  /**
+   * Is a restock of this product alerted now ("restock once a day", the default)? Its first of the Sydney day (day: the
+   * day's key, "<day> in store" for one in a store's shops only) — or another today once it's been sold out (or coming
+   * soon) at least RESTOCK_GAP_MS before coming back, up to RESTOCK_WAVES today: a hot product's second wave reaches
+   * the channels too, not only the members watching its SKU. Null: not now. { again, wave, outFor }.
+   */
+  restockDue(fresh, before, day, now) {
+    const today = sydneyDay.format(now);
+    if (!this.settings.restockOncePerDay || (fresh.restock_day !== today && fresh.restock_day !== day)) return { again: false };
+    const outFor = before && ORDERABLE_FROM.has(before.status) && before.status_at ? now - before.status_at : 0;
+    if (outFor < RESTOCK_GAP_MS) return null;
+    const waves = this.db.all("SELECT at FROM feed_alerts WHERE product_id = :p AND kind = 'restock' AND at >= :since", { p: fresh.id, since: now - 26 * HOUR })
+      .filter((x) => sydneyDay.format(x.at) === today).length;
+    return waves < RESTOCK_WAVES ? { again: true, wave: waves + 1, outFor } : null;
   }
 
   /**
@@ -1188,14 +1281,16 @@ export class Sweeper {
     // (No buy button on its own page last time too, a while: not just its tile's — a product's first page read has
     //  nothing to compare with, so an update never turns every product in stock into an alert.)
     const settled = prev === STATUS.UNKNOWN && before.status_source === 'browser'
-      && now - (before.status_at || now) >= UNKNOWN_SETTLE_MS && now - (before.sweep_first_at || now) >= UNKNOWN_SETTLE_MS;
+      && ((now - (before.status_at || now) >= UNKNOWN_SETTLE_MS && now - (before.sweep_first_at || now) >= UNKNOWN_SETTLE_MS) || this.unknownSettled(before.id, now));
     if (!isOrderable(fresh.status) || !(ORDERABLE_FROM.has(prev) || settled)) return null;
     const later = [];
     await this.members(r, { sku: fresh.sku, aliases: [], title: fresh.name, url: fresh.url, price: fresh.price }, fresh.status, later);
     let a = null;
     const today = sydneyDay.format(now);
-    if (s.restockAlerts && !(s.restockOncePerDay && fresh.restock_day === today)) {
-      const note = settled ? `On sale now at ${r.name} — seen on its own page, listed before without a buy button.` : `Seen on its own page at ${r.name}.`;
+    const due = s.restockAlerts ? this.restockDue(fresh, { status: prev, status_at: before.status_at }, today, now) : null;
+    if (due) {
+      const again = due.again ? ` Back in stock again today (its ${ORDINAL[due.wave] || `${due.wave}th`} restock — sold out for ${howLong(due.outFor)}).` : '';
+      const note = `${settled ? `On sale now at ${r.name} — seen on its own page, listed before without a buy button.` : `Seen on its own page at ${r.name}.`}${again}`;
       a = this.noteAlert(await this.feed.alert(fresh, 'restock', { sweep: true, detectedAt: now, note }));
       if (a) this.catalog.updateProduct(fresh.id, { restock_day: today });
     }
@@ -1251,8 +1346,9 @@ export class Sweeper {
       this.totals.streak += 1;
     } else {
       st.fails += 1;
-      // (unread: a page whose results hadn't been drawn when it was read — read again at the usual pace, no backing off.)
-      st.failKind = info.unread ? 'unread' : 'failed';
+      // (unread: a page whose results hadn't been drawn when it was read — read again at the usual pace, no backing off.
+      //  transient: the store struggling, not refusing — read again soon: waitFor.)
+      st.failKind = info.unread ? 'unread' : info.transient && r.sweep.from !== 'browser' ? 'transient' : 'failed';
       st.lastError = info.error || 'Failed';
       st.lastNote = '';
       if (info.blocked) st.slowUntil = now + SLOW_MS;
@@ -1300,27 +1396,40 @@ export class Sweeper {
   serverFirst(r, st, info, now, trying) {
     if (info.ok) {
       st.serverMisses = 0;
+      st.transientSince = 0;
       if (st.backup) {
-        const since = st.backup.since;
-        Object.assign(st, { backup: null, fails: 0, lastError: '', lastOkAt: now, slowUntil: now + SLOW_MS });
+        const { since, transient } = st.backup;
+        // (Gently at first — not after a store that was only struggling: it never turned the server away.)
+        Object.assign(st, { backup: null, fails: 0, lastError: '', lastOkAt: now, slowUntil: transient ? 0 : now + SLOW_MS });
         this.sys(`${r.name}: Mugibot's server is searching it again — the store answered (an admin's browser stood in for ${minutes(now - since)})`, { store: r.id });
       }
       return;
     }
     const why = info.empty ? (r.sweep.render ? 'its products only show once its page has run' : "no products, where an admin's browser finds some") : info.error || 'refused';
+    const transient = !!info.transient && r.sweep.from !== 'browser';
     if (trying) {
       st.backup.tries += 1;
       st.backup.why = why;
-      st.backup.retryAt = now + Math.min(SERVER_RETRY_MAX_MS, SERVER_RETRY_MS * 2 ** (st.backup.tries - 1));
-      st.backup.idleAt = now + this.idleWait(r, st.backup.tries);
+      // (Turned away once while standing in: it's a refusal now — the server's tries wait as for one.)
+      if (!transient) st.backup.transient = false;
+      st.backup.retryAt = now + Math.min(SERVER_RETRY_MAX_MS, (st.backup.transient ? TRANSIENT_RETRY_MS : SERVER_RETRY_MS) * 2 ** (st.backup.tries - 1));
+      st.backup.idleAt = now + this.idleWait(r, st.backup.tries, st.backup.transient);
       return;
     }
-    st.serverMisses = (st.serverMisses || 0) + 1;
-    if (st.serverMisses < (r.sweep.from === 'browser' ? 1 : SERVER_TRIES) && !(info.empty && r.sweep.render)) return;
-    st.backup = { since: now, tries: 1, retryAt: now + SERVER_RETRY_MS, idleAt: now + this.idleWait(r, 1), why, waitUntil: st.retryAt || 0 };
+    if (transient) {
+      // (Struggling, not refusing: its own misses don't count — only how long it's gone without an answer.)
+      st.transientSince = st.transientSince || now;
+      if (now - st.transientSince < TRANSIENT_HANDOVER_MS) return;
+    } else {
+      st.serverMisses = (st.serverMisses || 0) + 1;
+      if (st.serverMisses < (r.sweep.from === 'browser' ? 1 : SERVER_TRIES) && !(info.empty && r.sweep.render)) return;
+    }
+    const first = transient ? TRANSIENT_RETRY_MS : SERVER_RETRY_MS;
+    st.backup = { since: now, tries: 1, retryAt: now + first, idleAt: now + this.idleWait(r, 1, transient), why, waitUntil: st.retryAt || 0, transient };
     // (The browser starts afresh: the server's failures, slower pace and Retry-After were the server's.)
-    Object.assign(st, { fails: 0, slowUntil: 0, retryAt: 0, browserNext: 0, serverMisses: 0 });
-    st.lastError = `Mugibot's server ${info.empty ? `can't read it (${why})` : `is refused (${why})`} — an admin's browser searches it meanwhile, and the server tries again within 5 min`;
+    Object.assign(st, { fails: 0, slowUntil: 0, retryAt: 0, browserNext: 0, serverMisses: 0, transientSince: 0 });
+    const state = info.empty ? `can't read it (${why})` : transient ? `gets no answer from it (${why}, for ${minutes(TRANSIENT_HANDOVER_MS)})` : `is refused (${why})`;
+    st.lastError = `Mugibot's server ${state} — an admin's browser searches it meanwhile, and the server tries again within ${transient ? 'a minute' : '5 min'}`;
     this.sys(`${r.name}: ${st.lastError}`, { store: r.id, level: 'warn' });
   }
 
@@ -1344,9 +1453,11 @@ export class Sweeper {
     return !!st.backup && this.modeFor(r) === 'auto';
   }
 
-  /** The server's usual backoff, for its tries while no admin's browser is searching the store yet. */
-  idleWait(r, tries) {
-    return Math.min(MAX_BACKOFF_MS, this.paceFor(r) * 2 ** Math.min(SERVER_TRIES + tries - 1, 10));
+  /** The server's usual backoff, for its tries while no admin's browser is searching the store yet (a struggling store's: waitFor's). */
+  idleWait(r, tries, transient = false) {
+    const every = this.paceFor(r);
+    if (transient) return Math.max(every * 2, Math.min(TRANSIENT_MAX_MS, every * 2 ** Math.min(TRANSIENT_QUICK + tries, 10)));
+    return Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(SERVER_TRIES + tries - 1, 10));
   }
 
   /**
@@ -1366,6 +1477,12 @@ export class Sweeper {
     if (this.running || !this.cfg.monitor.enabled) return;
     this.running = true;
     this.startedAt = this.now();
+    // (The card words widened in an update, at a Mugibot that had tracked products already: from now, what they let in
+    //  is tracked quietly at first — widenedLately. A new Mugibot's first searches set the scene anyway.)
+    if (!this.repo.getSetting('sweepWidenedAt')) {
+      const tracked = this.db.get('SELECT 1 AS y FROM products WHERE sweep_seen_at IS NOT NULL LIMIT 1');
+      this.repo.setSetting('sweepWidenedAt', tracked ? this.now() : 1);
+    }
     this.prune();
     const live = this.stores().filter((x) => x.mode !== 'off');
     const from = (mode) => live.filter((x) => x.mode === mode).map((x) => x.retailer.name).join(', ');
@@ -1454,6 +1571,13 @@ export class Sweeper {
   waitFor(st, every, { jitter = false, spent = 0 } = {}) {
     const asked = st.retryAt && st.retryAt > this.now() ? st.retryAt - this.now() : 0;
     // (Not after a page that hadn't drawn its results yet: the store turned nobody away — its usual pace.)
+    // A store only struggling (TRANSIENT_*): at half its pace three times, then twice as long each time, a minute apart at
+    // most — never sooner than half its pace, and a search that took long to fail spaced itself already. (Not while it's
+    // searched gently after turning one away: a refusal's backoff stands.)
+    if (st.fails && st.failKind === 'transient' && !(st.slowUntil > this.now())) {
+      const back = st.fails <= TRANSIENT_QUICK ? every * 2 : Math.max(every * 2, Math.min(TRANSIENT_MAX_MS, every * 2 ** Math.min(st.fails, 10)));
+      return Math.max(asked, MIN_GAP_MS, back - Math.max(0, spent));
+    }
     if (st.fails && st.failKind !== 'unread') return Math.max(asked, Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(st.fails, 10)));
     const slow = st.slowUntil > this.now() ? SLOW_FACTOR : 1;
     return Math.max(asked, MIN_GAP_MS, every * slow * (jitter ? 0.8 + 0.4 * this.random() : 1) - Math.max(0, spent));

@@ -13,7 +13,7 @@ import zlib from 'node:zlib';
 import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
 import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseMagento, parseShopifyProducts, parseShopifySuggest, parseTarget, parseWoo, searchSays, termsRegex } from '../server/monitor/listing.js';
-import { storeFetch } from '../server/monitor/http.js';
+import { dropConnections, storeFetch } from '../server/monitor/http.js';
 import { ALL, NEWEST, Sweeper, olderVersion, retryAfterMs, statesNote } from '../server/monitor/sweep.js';
 
 // --- reading results -----------------------------------------------------------
@@ -273,6 +273,36 @@ test('store requests: answered like fetch (gzip and brotli unpacked), redirects 
   }
 });
 
+test("store requests: a kept-open connection the store had just closed is asked once more on a fresh one (not a failed search); anything else that breaks fails as before", async () => {
+  // A store that closes each connection after its first answer, without saying so (a reused connection is reset).
+  const served = new WeakMap();
+  let asked = 0;
+  const srv = http.createServer((req, res) => {
+    asked += 1;
+    const n = (served.get(req.socket) || 0) + 1;
+    served.set(req.socket, n);
+    if (n > 1) return req.socket.destroy();
+    if (req.url === '/reset') return req.socket.destroy();
+    res.writeHead(200, { 'content-type': 'text/plain', connection: 'keep-alive' });
+    return res.end('ok');
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    assert.equal(await (await storeFetch(`${base}/a`)).text(), 'ok');
+    const before = asked;
+    const r = await storeFetch(`${base}/b`);
+    assert.equal(r.status, 200, 'answered, on a fresh connection');
+    assert.equal(asked - before, 2, 'asked twice: the reset one, then once more');
+    // A brand-new connection reset (not a kept-open one): a failure as before, never asked again.
+    dropConnections(`127.0.0.1:${srv.address().port}`);
+    await assert.rejects(storeFetch(`${base}/reset`), (e) => e.code === 'ECONNRESET' || /socket hang up/.test(e.message));
+  } finally {
+    srv.close();
+    srv.closeAllConnections?.();
+  }
+});
+
 // --- the sweeps, against the dummy stores ------------------------------------------------
 let env;
 let store;
@@ -418,6 +448,85 @@ test('🟢 out of stock → in stock alerts a restock, once a day per product; n
   await sweep('demo-kmart'); // (a search not run for hours sets the scene again first)
   store.set('kmart', '43818648', { status: 'in_stock' });
   assert.equal((await sweep('demo-kmart')).restock, 1);
+});
+
+test("🟢 a hot product's second wave the same day: alerted again once it was sold out at least 30 minutes (a flicker isn't), saying so — at most 3 restock alerts a day", async () => {
+  const sydney = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const [h, m] = sydney.format(Date.now() + clock.offset).split(':').map(Number);
+  // (Keep the test's three hours inside one Sydney day.)
+  if (h * 60 + m >= 19 * 60) clock.offset += 6 * 3600 * 1000;
+  store.shop('kmart').products.push({ sku: '43877050', name: 'Pokémon TCG: Second Wave Elite Trainer Box', price: 89, status: 'out_of_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477050 });
+  await sweep('demo-kmart');
+  const waves = () => alerts('restock').filter((a) => a.sku === '43877050');
+  const flip = async (status, minutesLater = 0) => {
+    clock.offset += minutesLater * 60 * 1000;
+    store.set('kmart', '43877050', { status });
+    return sweep('demo-kmart');
+  };
+  // 9:00 — its first restock today.
+  assert.equal((await flip('in_stock', 1)).restock, 1);
+  // Sold out 4 minutes later; back 20 minutes after that (a flicker): nothing.
+  await flip('out_of_stock', 4);
+  assert.equal((await flip('in_stock', 20)).restock, 0);
+  assert.equal(waves().length, 1);
+  // Sold out again; back 40 minutes later: its second wave, said as that.
+  await flip('out_of_stock', 2);
+  const r2 = await flip('in_stock', 40);
+  assert.equal(r2.restock, 1);
+  assert.equal(waves().length, 2);
+  assert.match(waves()[0].note, /Back in stock again today \(its 2nd restock — sold out for 40 min\)/);
+  // A third wave (sold out an hour and a half), then a fourth: not posted — three a day at most.
+  await flip('out_of_stock', 2);
+  assert.equal((await flip('in_stock', 90)).restock, 1);
+  assert.match(waves()[0].note, /its 3rd restock — sold out for 1 h 30 min/);
+  await flip('out_of_stock', 2);
+  assert.equal((await flip('in_stock', 45)).restock, 0, 'three a day at most');
+  assert.equal(waves().length, 3);
+});
+
+test("🃏 sealed products named without a card word count: a Super-Premium Collection, a Blister, a Build & Battle Box, a set's code (ONE PIECE OP-15 BOX); Kmart's Trading Cards list needs none at all — and right after the words widen in an update, what they let in is tracked quietly the first time, never a burst of \"new drops\"", async () => {
+  const counts = sw.filters();
+  for (const name of ['Pokemon Scarlet & Violet Prismatic Evolutions Super-Premium Collection', 'Pokemon Destined Rivals Blister', 'Pokemon Build & Battle Box', 'Pokemon Collector Chest']) {
+    assert.ok(counts({ title: name }, 'pokemon'), name);
+  }
+  assert.ok(counts({ title: 'ONE PIECE OP-15 BOX' }, 'one piece'), "a set's code");
+  assert.ok(counts({ title: 'Gundam Card Game GD01 Booster Box' }, 'gundam card game'));
+  assert.ok(!counts({ title: 'Pokemon Pikachu Plush 30cm' }, 'pokemon'), 'still not a plush');
+  assert.ok(!counts({ title: 'One Piece Straw Hat Lamp' }, 'one piece'), 'nor a lamp');
+  // Kmart's Trading Cards list: a card word isn't needed — the not-cards words still count.
+  const kmartCards = sw.filters(sw.settings, { cardsOnly: true });
+  assert.ok(kmartCards({ title: 'Pokemon Mega Evolution Ascended Heroes Mini Tin Display' }, 'pokemon'));
+  assert.ok(kmartCards({ title: 'Pokemon Surprise Box' }, 'pokemon'));
+  assert.ok(!kmartCards({ title: 'Pokemon Socks 3 Pack' }, 'pokemon'), 'socks are never cards');
+  assert.equal(sw.cardsOnlyRead(R('demo-kmart'), { keyword: '*', page: 1, all: true }), true);
+  assert.equal(sw.cardsOnlyRead(R('demo-kmart'), { keyword: 'skate', page: 1, vip: 'v1' }), false, "a VIP watch's words: across the whole store");
+  assert.equal(sw.cardsOnlyRead(R('demo-target'), { keyword: 'pokemon', page: 1 }), false);
+  // A list of card words saved before these: they're added to it.
+  const saved = env.app.repo.getSetting('sweep');
+  env.app.repo.setSetting('sweep', { ...saved, termsVersion: undefined, tcgTerms: ['card', 'tcg', 'booster'] });
+  assert.ok(sw.settings.tcgTerms.includes('premium collection') && sw.settings.tcgTerms.includes('blister'));
+  env.app.repo.setSetting('sweep', saved);
+  // Just after an update widened them: at Kmart, a product only the wider words let in, new to the catalogue — tracked
+  // quietly; a product any card word names — a drop as ever.
+  const widened = env.app.repo.getSetting('sweepWidenedAt');
+  env.app.repo.setSetting('sweepWidenedAt', sw.now());
+  try {
+    await sweep('demo-kmart');
+    const before = alerts('listed').length;
+    store.shop('kmart').products.push({ sku: '43877061', name: 'Pokémon Mega Evolution Ultra-Premium Collection', price: 199, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477061 });
+    store.shop('kmart').products.push({ sku: '43877062', name: 'Pokémon TCG: Widened Words Booster Bundle', price: 59, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477062 });
+    const r = await sweep('demo-kmart');
+    assert.equal(r.ok, true, r.error);
+    assert.ok(product('demo-kmart', '43877061'), 'tracked');
+    assert.ok(!alerts('listed').slice(0, alerts('listed').length - before).some((a) => a.sku === '43877061'), 'quietly, the first time');
+    assert.ok(alerts('listed').some((a) => a.sku === '43877062'), 'a card product as ever: a drop');
+  } finally {
+    env.app.repo.setSetting('sweepWidenedAt', widened);
+  }
+  // Out of that window: a product only the wider words let in is a drop like any other.
+  store.shop('kmart').products.push({ sku: '43877063', name: 'Pokémon Scarlet & Violet Super-Premium Collection', price: 249, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477063 });
+  await sweep('demo-kmart');
+  assert.ok(alerts('listed').some((a) => a.sku === '43877063'), 'a Super-Premium Collection: a drop');
 });
 
 test('📉 a price that falls by the set percentage alerts a price drop; smaller changes are only recorded', async () => {
@@ -1868,6 +1977,27 @@ test("🟢 BIG W lists a drop ahead of time with no buy button in its search til
     assert.match(a.note, /On sale now at BIG W \(dummy store\) — listed before without a buy button/);
     assert.ok(channel().length > posts, 'posted in the channel');
     assert.equal((await bigwSearch(admin, [known, { ...day, inStock: true }, { ...night, inStock: true }])).restock, 0, 'once');
+  });
+});
+
+test("🟢 BIG W lists a 7 am drop only a few minutes ahead (6:52): read without a buy button three times in a row over two minutes, its button at 7:00 is \"on sale now\" too — not only one listed ten minutes ahead", async () => {
+  clearOfMidnight(2);
+  await asBigwBrowser(async (admin) => {
+    const known = bigwTile('6099401', 'Pokemon TCG: Paldean Fates Booster Bundle', true, 45);
+    await bigwSearch(admin, [known]);
+    // 6:52: listed, no buy button.
+    const drop = bigwTile('6099402', 'Pokemon TCG: Mega Evolution Booster Box - Seven AM');
+    assert.equal((await bigwSearch(admin, [known, drop])).new, 1);
+    // Read again at 6:54 and 6:56: still no button.
+    for (let i = 0; i < 2; i++) {
+      clock.offset += 2 * 60 * 1000;
+      await bigwSearch(admin, [known, drop]);
+    }
+    // 7:00, eight minutes after it was listed: its button — on sale now.
+    clock.offset += 4 * 60 * 1000;
+    const r = await bigwSearch(admin, [known, { ...drop, inStock: true }]);
+    assert.equal(r.restock, 1);
+    assert.match(ofSku('restock', '6099402')[0].note, /On sale now at BIG W \(dummy store\) — listed before without a buy button/);
   });
 });
 

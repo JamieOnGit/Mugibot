@@ -7,7 +7,7 @@ few seconds it reads each store's search results for your keywords (e.g.
 | Alert | When |
 |---|---|
 | 🆕 **New drop** | A product that wasn't in the results before |
-| 🟢 **Restock** | Out of stock → in stock (or pre-order). At most once a day per product, like MugiWatch |
+| 🟢 **Restock** | Out of stock → in stock (or pre-order). Once a day per product, like MugiWatch — and again the same day after it's been sold out at least 30 minutes (a hot product's second wave, "Back in stock again today (its 2nd restock — sold out for 4 h 25 min)"), 3 a day at most. A flicker (back within 30 minutes) isn't alerted again |
 | 📉 **Price drop** | The price fell by at least the set percentage (10% to start with) |
 
 Alerts go out the moment a sweep sees the change:
@@ -32,9 +32,15 @@ draw its products, so its tries only ever handed BIG W over to the browser again
 the console said **Waiting** each time it did (after every restart, too). The server
 never searches BIG W now unless an admin sets it to **Server first** or **Server only**.
 
-- **Hand-over.** The store refuses the server, or its search fails, **3 times
-  in a row** — once, at a store known to turn servers away (Amazon, EB
-  Games, Pokémon Center, Premium Bandai, The Gamesmen). Or the server's read has **no
+- **Hand-over.** The store refuses the server (HTTP 401/403/429/503, a bot
+  check), or its search fails, **3 times in a row** — once, at a store known to
+  turn servers away (Amazon, EB Games, Pokémon Center, Premium Bandai, The
+  Gamesmen). A store that's only **struggling** — too slow to answer, out of reach
+  a moment, another 5xx, a page without its list, all likeliest at a drop — isn't
+  turning anyone away: it's handed over only once it's gone **2 minutes** with no
+  answer ("Mugibot's server gets no answer from it (HTTP 502, for 2 min)"). The
+  server then tries again after **1 minute** (2, 4… while it's still struggling),
+  and takes back over at its full pace, not a third of it. Or the server's read has **no
   products** where there are some: a page that only draws them once it's open
   (Pokémon Center's), or a search an admin's browser found products
   for in the last hour. That empty read sets no scene, so the browser's first
@@ -143,8 +149,10 @@ an alert. BIG W can only be read from browsers, so:
   time with no buy button in its search tile. Mugibot keeps that as "stock not
   known" (not sold out), and buyable after that didn't count as a restock. Now a
   product listed that way for **10 minutes** or more alerts the moment it's
-  buyable: "On sale now at BIG W — listed before without a buy button". A button
-  drawn within minutes of the listing isn't a drop.
+  buyable: "On sale now at BIG W — listed before without a buy button" — and so
+  does one read without a buy button **3 times in a row over at least 2
+  minutes** (a 7 am drop listed at 6:52). A button drawn a moment after the tile
+  isn't a drop.
 - **The pages of what the searches found.** Admins' browsers also open the page
   of each BIG W product the live searches found in the last 3 days that nobody
   monitors: its tile may not say when it's on sale, its page does. The ones that
@@ -341,14 +349,17 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
    │ fetch it (honest Mugibot headers)                                     │
    │ read every product: code, name, price, stock, link, picture          │──┐
    │ next one ~5 s (±20%) after this one began, or back off after a        │  │
-   │   failure (×2 each time, ≤15 min)                                     │  │
+   │   refusal (×2 each time, ≤15 min) — soon again if it's only           │  │
+   │   struggling (slow, a 502: ×2 the pace, ≤1 min apart)                 │  │
    └──────────────────────────────────────────────────────────────────────┘  │
  admins' browsers (extension) do the same for BIG W and EB Games ────────────┤
                                                                               ▼
           members' SKUs (any product):   watchlist status → their own DM / webhook / email
           products that count:           catalogue (products) → price history
             · every word of the keyword in the name ("pokemon" matches "Pokémon")
-            · a trading-card word in the name (card, booster, ETB, tin, …)
+            · a trading-card word in the name (card, booster, ETB, tin, premium
+              collection, blister, playmat, …) or a set code (OP-15, EB-02, PRB-01)
+              — not needed in a list of cards only (Kmart's, a game's collection)
             · no "not cards" word (socks, T-shirt, plush, puzzle, …) unless it says TCG
             · not sold by a marketplace seller
                                          → 🆕 / 🟢 / 📉 alerts → feed, Discord, dashboards
@@ -377,9 +388,24 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   Shopify's **Add to cart** link (the option to buy is in the list). When a
   keyword moves between its collection and the search, the first read of the
   new one only sets the scene.
+- **The trading-card words** (October 2026) also count *premium collection*,
+  *blister*, *build & battle*, *collector chest*, *portfolio*, *deck box* and
+  *playmat*, and a card set's code in the name (One Piece's **OP-15**, EB-02,
+  ST-21, PRB-01; Gundam's GD01), so "ONE PIECE OP-15 BOX" or a "Premium
+  Collection" with no other card word isn't left out. A list that's only trading
+  cards already (Kmart's Trading Cards list, a game's own collection at a card
+  shop) needs no card word at all, only the keyword (and no "not cards" word).
+  Saved card words get the new ones once, on the update; what they let in for
+  the first time is tracked quietly for the first 6 hours, so products on sale
+  all along don't arrive as a burst of "new drops".
 - **A refused or failed search never alerts** and keeps every product's last
-  stock. The store waits twice as long after each failure (up to 15 minutes),
-  then tries again. When a store says how long to wait (**HTTP 429** or 503
+  stock. A refused one (HTTP 401/403/429/503, a bot check) waits twice as long
+  after each failure (up to 15 minutes), then tries again. A store that's only
+  struggling (too slow to answer, out of reach a moment, a 502 or 504, a page
+  without its list) is searched again at half its pace three times, then twice as
+  long each time, **a minute apart at most** (a search that took 15 s to time out
+  counts as that much of the wait): during a drop a few slow answers no longer
+  leave it unsearched for minutes. A refusal before it still stands. When a store says how long to wait (**HTTP 429** or 503
   with a `Retry-After`, like Shopify's), Mugibot waits at least that long (at
   most 15 minutes): "The store refused the search (HTTP 429) — it asked to
   wait 60 s". **Reset** (below) starts a failing store again.
@@ -454,6 +480,14 @@ isn't searched any less often (at least half a second between two searches):
 
 More keywords means each one comes round a little less often. Each store has
 its own loop, so a slow store never holds up the others.
+
+Behind the scenes (October 2026): a connection the store closed while it sat
+idle is retried once straight away on a fresh one (a GET only), instead of
+counting as a failed search and doubling the wait. The server runs 16 worker
+threads (`UV_THREADPOOL_SIZE`, set in `fly.toml`, the Dockerfile and
+`render.yaml`), so a burst of sign-ins before a drop doesn't slow unpacking the
+stores' answers. And the lookups a search makes for each product (by its code, by
+its link) and the page checks due next have database indexes of their own.
 
 **⚡ Drop mode.** Drops come in waves: a set's booster box, then its Elite
 Trainer Box, its bundle… So when a search alerts a **new card listing** at a

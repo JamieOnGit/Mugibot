@@ -49,7 +49,7 @@ const sweep = (id, keyword = 'pokemon', page = 1) => sw.sweepTerm(R(id), { keywo
 const card = (id) => sw.live().stores.find((s) => s.id === id);
 const due = (id) => sw.browserDue(admin, { version: '99.0.0' }).terms.find((t) => t.store === id);
 const sys = (re) => sw.events.some((e) => e.type === 'sys' && re.test(e.message));
-const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, fails: 0, slowUntil: 0, retryAt: 0, browserNext: 0, lastError: '' });
+const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, transientSince: 0, fails: 0, failKind: '', slowUntil: 0, retryAt: 0, browserNext: 0, lastError: '' });
 
 /** What an admin's browser reads at a store (the dummy store lets browsers in): the same code the server uses. */
 async function browserRead(id, keyword = 'pokemon') {
@@ -260,6 +260,83 @@ test("pinned to the server only while the browser stood in: nothing stands in an
   } finally {
     store.state.blockNonBrowsers = false;
     sw.save({ stores }, admin);
+    fresh(id);
+  }
+});
+
+test("⚡ a store only struggling at a drop (502s, timeouts, a page without its list) isn't turning the server away: searched again soon, not backed off for minutes — an admin's browser stands in only after 2 minutes of it with no answer, the server tries again a minute later and is straight back at its pace; a refusal still backs off", async () => {
+  const id = 'demo-kmart';
+  fresh(id);
+  const st = sw.stat(id);
+  const every = sw.paceFor(R(id));
+  const seq = sw.seq;
+  const since = (re) => sw.events.some((e) => e.id > seq && e.type === 'sys' && re.test(e.message));
+  const real = sw.fetch;
+  let answer = '502';
+  sw.fetch = async (url, init) => {
+    if (answer === '502') return new Response('<html><title>502 Bad Gateway</title></html>', { status: 502 });
+    if (answer === 'timeout') throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    if (answer === 'layout') return new Response('<html><title>Please wait</title><body>We are busy</body></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+    if (answer === '403') return new Response('Forbidden', { status: 403 });
+    return real(url, init);
+  };
+  try {
+    for (const [i, a] of ['502', 'timeout', 'layout', '502', 'timeout'].entries()) {
+      answer = a;
+      const r = await sweep(id);
+      assert.deepEqual([r.ok, r.blocked], [false, false], `${a}: ${r.error}`);
+      if (a === 'timeout') assert.equal(r.error, 'The store took too long to answer');
+      assert.equal(st.backup, null, `still the server's after ${i + 1} (${a})`);
+      assert.equal(st.failKind, 'transient', a);
+      const wait = sw.waitFor(st, every);
+      if (i < 3) assert.equal(wait, every * 2, `at half its pace after ${i + 1}`);
+      else assert.ok(wait >= every * 2 && wait <= Math.max(every * 2, MIN), `${wait} ms after ${i + 1}: a minute apart at most`);
+    }
+    // (A search that took long to fail spaced itself already: the next one isn't held back for it as well.)
+    assert.equal(sw.waitFor(st, every, { spent: 2 * MIN }), 500);
+    assert.equal(st.slowUntil, 0, 'not slowed: it turned nobody away');
+    assert.ok(!since(/refused a search/), "not said to have refused anything");
+    assert.equal(card(id).status, 'retrying');
+
+    // 2 minutes of it with no answer: an admin's browser stands in, and the server tries again within a minute.
+    clock.offset += 2 * MIN + 1000;
+    answer = '502';
+    let at = sw.now();
+    await sweep(id);
+    assert.ok(st.backup, 'handed over after 2 minutes of no answer');
+    assert.equal(st.backup.transient, true);
+    assert.ok(Math.abs(st.backup.retryAt - (at + MIN)) < 2000, `the server tries again in a minute (${st.backup.retryAt - at} ms)`);
+    assert.ok(st.backup.idleAt - at <= Math.max(every * 2, MIN), "no admin's browser searching yet: a minute at most too");
+    assert.ok(since(/Kmart \(dummy store\): Mugibot's server gets no answer from it \(HTTP 502, for 2 min\) — an admin's browser searches it meanwhile, and the server tries again within a minute/));
+    // Still struggling at its try: twice as long (2 minutes), not 10.
+    at = sw.now();
+    await sweep(id);
+    assert.equal(st.backup.tries, 2);
+    assert.ok(Math.abs(st.backup.retryAt - (at + 2 * MIN)) < 2000, `${st.backup.retryAt - at} ms`);
+    // Answering again: the server's straight back, at its own pace (not a third of it).
+    answer = 'ok';
+    const back = await sweep(id);
+    assert.equal(back.ok, true, back.error);
+    assert.equal(st.backup, null);
+    assert.equal(st.slowUntil, 0, 'straight back at its pace: it never turned the server away');
+    assert.equal(sw.waitFor(st, every), every);
+
+    // A refusal is one, as ever: three in a row hand over, and its backoff stands even if a timeout follows.
+    fresh(id);
+    answer = '403';
+    await sweep(id);
+    assert.ok(st.slowUntil > sw.now(), 'a refusal: searched gently');
+    answer = 'timeout';
+    await sweep(id);
+    assert.equal(sw.waitFor(st, every), every * 4, "the refusal's backoff stands");
+    answer = '403';
+    await sweep(id);
+    await sweep(id);
+    assert.ok(st.backup, 'three refusals: handed over');
+    assert.equal(st.backup.transient, false);
+    assert.ok(Math.abs(st.backup.retryAt - (sw.now() + 5 * MIN)) < 2000);
+  } finally {
+    sw.fetch = real;
     fresh(id);
   }
 });

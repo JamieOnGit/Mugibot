@@ -9,6 +9,9 @@ primary_region = "syd"   # Sydney
   PORT = "8080"
   DATABASE_PATH = "/data/mugibot.db"
   TRUST_PROXY = "1"
+  # Node's background threads (unpacking store answers, address lookups, sign-in hashing): 16, not 4 — a burst of
+  # sign-ins before a drop never holds up reading the stores' answers.
+  UV_THREADPOOL_SIZE = "16"
 
 # The database file. Fly snapshots volumes daily.
 [[mounts]]

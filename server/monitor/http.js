@@ -44,6 +44,10 @@ class StoreResponse {
 
 /** fetch(url, { method, headers, signal, timeoutMs, maxBytes }) on node:http(s). */
 export function storeFetch(url, init = {}) {
+  return attempt(url, init, false);
+}
+
+function attempt(url, init, retried) {
   const u = new URL(url);
   const lib = u.protocol === 'https:' ? https : u.protocol === 'http:' ? http : null;
   if (!lib) return Promise.reject(new TypeError(`Can't fetch ${u.protocol} links`));
@@ -80,7 +84,17 @@ export function storeFetch(url, init = {}) {
       if (timer) clearTimeout(timer);
       if (init.signal) init.signal.removeEventListener('abort', onAbort);
     }
-    req.on('error', (e) => finish(reject, e));
+    req.on('error', (e) => {
+      // A connection kept open that the store had just closed (it never got this request): asked once more, at once, on
+      // a fresh one — not a failed search (that doubled the wait before the next one). Only a plain GET, only once.
+      if (!retried && !done && req.reusedSocket && (e.code === 'ECONNRESET' || e.code === 'EPIPE') && (init.method || 'GET') === 'GET' && !init.body) {
+        done = true;
+        cleanup();
+        resolve(attempt(url, init, true));
+        return;
+      }
+      finish(reject, e);
+    });
     if (init.body) req.write(init.body);
     req.end();
   });
