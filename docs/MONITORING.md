@@ -32,15 +32,9 @@ draw its products, so its tries only ever handed BIG W over to the browser again
 the console said **Waiting** each time it did (after every restart, too). The server
 never searches BIG W now unless an admin sets it to **Server first** or **Server only**.
 
-- **Hand-over.** The store refuses the server (HTTP 401/403/429/503, a bot
-  check), or its search fails, **3 times in a row** — once, at a store known to
-  turn servers away (Amazon, EB Games, Pokémon Center, Premium Bandai, The
-  Gamesmen). A store that's only **struggling** — too slow to answer, out of reach
-  a moment, another 5xx, a page without its list, all likeliest at a drop — isn't
-  turning anyone away: it's handed over only once it's gone **2 minutes** with no
-  answer ("Mugibot's server gets no answer from it (HTTP 502, for 2 min)"). The
-  server then tries again after **1 minute** (2, 4… while it's still struggling),
-  and takes back over at its full pace, not a third of it. Or the server's read has **no
+- **Hand-over.** The store refuses the server, or its search fails, **3 times
+  in a row** — once, at a store known to turn servers away (Amazon, EB
+  Games, Pokémon Center, Premium Bandai, The Gamesmen). Or the server's read has **no
   products** where there are some: a page that only draws them once it's open
   (Pokémon Center's), or a search an admin's browser found products
   for in the last hour. That empty read sets no scene, so the browser's first
@@ -267,10 +261,10 @@ stick.
 | City Beach | Server first | Its search page (Salesforce Commerce Cloud, made on the server): a tile per product with its code, name, brand and price (48 a search). Stock isn't in the tiles: it comes from the product page, which the monitor reads. At most one search every 10 seconds (every 4 in a VIP drop's window) |
 | Pokémon Center (Australia) | Server first: **an admin's browser** (the extension, 1.8.1 or later) stands in at the first refusal | Its search page (`/en-au/search/<keyword>`, 32 a page), opened in the extension's window and read once it has built its product list, like BIG W's. Its bot check (Imperva) may reload the page first: the extension waits for it. At most one search every 30 seconds |
 | Premium Bandai (Australia) | Server first: **an admin's browser** (the extension, 1.8.1 or later) stands in at the first refusal | The site's own search JSON (`/api/search?keyword=…`, newest arrivals first, up to 100), asked for from inside a Premium Bandai page in the extension's window with the region its own code sends (`x-g1-area-code: au`), like EB Games'. It answers Mugibot's server too now (Oct 2026), so the server reads it. A search that finds nothing ("pokemon" there) comes back with no products list at all, only its count: that's an empty search, not a changed page. At most one search every 30 seconds |
-| Pokébox | Server first | Each keyword's search (Shopify's search suggestions, 10 a search with stock), "tcg" added ("pokemon tcg": its sealed products first — Pokébox names its hundreds of singles after the card), and **every third search the store's newest 30 products** (Shopify's product list, newest published first: about a week of its listings, Oct 2026; `sweep.newestPath`): a new drop shows up there the moment it's listed, each product in it counted for the keyword in its name, in one read (until Oct 2026 it was each keyword's second page, so a keyword saw it only every 200 s or so). One the shop drafted weeks before and has just put up is still a drop (`newestFresh: false`: it doesn't republish old products as JB does); an admin's browser standing in for the server reads the list too (`newestBrowser`). At most one read every 10 seconds |
+| Pokébox | Server first | Each keyword's search (Shopify's search suggestions, 10 a search with stock), "tcg" added ("pokemon tcg": its sealed products first — Pokébox names its hundreds of singles after the card), and **once a round of the keywords the store's newest 30 products** (the turn each keyword's second page had; Shopify's product list, newest published first: about a week of its listings, Oct 2026; `sweep.newestPath`, `newestEvery: 'round'`): a new drop shows up there the moment it's listed, each trading card in it counted for the keyword in its name, in one read (until Oct 2026 it was each keyword's second page, so a keyword saw it only every 200 s or so). One the shop drafted weeks before and has just put up is still a drop (`newestFresh: false`: it doesn't republish old products as JB does); an admin's browser standing in for the server reads the list too (`newestBrowser`). At most one read every 10 seconds |
 | Good Games, Collectible Madness, Cherry Collectables | Server first | The same as Pokébox (Shopify card shops) |
 | Gameology | Server first | The same as Pokébox (Shopify): "tcg" added to each keyword, since it sells Warhammer, board games and figures under the same names, and thousands of singles (its sealed products come first). Its own collections are too big to read whole (its "Pokemon Trading Card" one is over 600 products), so they aren't swept |
-| From The Deep Games | Server first | Each game's **whole sealed collection**, read in one go (Shopify's product list for it: every product, its stock and its option): "Pokemon TCG Sealed", "One Piece Card Game", "Riftbound", "Gundam Card Game". Where a game has more than one, the sealed one comes first (`collectionPrefer`), and its singles' collections are never read (`collectionSkip`: "Pokemon Singles (All)" alone is 30,000 products). **Every third search** is its **Preorders** collection (every game's pre-orders, where a drop is listed first — "Pokemon TCG Sealed" leaves them out), each pre-order counted for its keyword in one read. Its newest-products list isn't read: it's hundreds of Magic singles a day. At most one read every 10 seconds |
+| From The Deep Games | Server first | Each game's **whole sealed collection**, read in one go (Shopify's product list for it: every product, its stock and its option): "Pokemon TCG Sealed", "One Piece Card Game", "Riftbound", "Gundam Card Game". Where a game has more than one, the sealed one comes first (`collectionPrefer`), and its singles' collections are never read (`collectionSkip`: "Pokemon Singles (All)" alone is 30,000 products). **Once a round of the keywords** it reads its **Preorders** collection (every game's pre-orders, where a drop is listed first — "Pokemon TCG Sealed" leaves them out), each pre-order counted for its keyword in one read. Its newest-products list isn't read: it's hundreds of Magic singles a day. At most one read every 10 seconds |
 | The Gamesmen | Server first: **an admin's browser** (the extension, **1.19.1** or later) stands in at the first refusal | Its search page **newest first** ("Recently Listed": a new listing is on page 1 the moment it's up), opened in the extension's window and read once its results are drawn, 2 pages: its own tiles (its Hyvä theme, read from a copy of its real page — from 1.20: the name, the price shown with GST, a struck-through old price, "Add to Cart" or "Pre-Order", the product's id), or Magento's usual ones, or — drawn some other way — any product on the page with its link and a price. Its menu's links look like product links (its products are `/<name>`), so 1.19.1 doesn't count the site's menus as the results (1.19.0 read the page before they were drawn). Its Cloudflare turns servers away ("Sorry, you have been blocked") |
 | Games World | Server first | WooCommerce's own product API (`/wp-json/wc/store/v1/products?search=…`, newest first, 30 a search): stock, price, pre-orders (backorders) and the product's id for its add-to-cart link — only the fields Mugibot reads (about 100 KB a search). At most one search every 15 seconds |
 
@@ -349,8 +343,7 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
    │ fetch it (honest Mugibot headers)                                     │
    │ read every product: code, name, price, stock, link, picture          │──┐
    │ next one ~5 s (±20%) after this one began, or back off after a        │  │
-   │   refusal (×2 each time, ≤15 min) — soon again if it's only           │  │
-   │   struggling (slow, a 502: ×2 the pace, ≤1 min apart)                 │  │
+   │   failure (×2 each time, ≤15 min)                                     │  │
    └──────────────────────────────────────────────────────────────────────┘  │
  admins' browsers (extension) do the same for BIG W and EB Games ────────────┤
                                                                               ▼
@@ -397,15 +390,13 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   shop) needs no card word at all, only the keyword (and no "not cards" word).
   Saved card words get the new ones once, on the update; what they let in for
   the first time is tracked quietly for the first 6 hours, so products on sale
-  all along don't arrive as a burst of "new drops".
+  all along don't arrive as a burst of "new drops" — except one a VIP or drop
+  watch's words are in: that's the watch's drop as ever, alerted and armed. A new
+  word you had among your own words already (say *blister*) counts as before,
+  not quietly.
 - **A refused or failed search never alerts** and keeps every product's last
-  stock. A refused one (HTTP 401/403/429/503, a bot check) waits twice as long
-  after each failure (up to 15 minutes), then tries again. A store that's only
-  struggling (too slow to answer, out of reach a moment, a 502 or 504, a page
-  without its list) is searched again at half its pace three times, then twice as
-  long each time, **a minute apart at most** (a search that took 15 s to time out
-  counts as that much of the wait): during a drop a few slow answers no longer
-  leave it unsearched for minutes. A refusal before it still stands. When a store says how long to wait (**HTTP 429** or 503
+  stock. The store waits twice as long after each failure (up to 15 minutes),
+  then tries again. When a store says how long to wait (**HTTP 429** or 503
   with a `Retry-After`, like Shopify's), Mugibot waits at least that long (at
   most 15 minutes): "The store refused the search (HTTP 429) — it asked to
   wait 60 s". **Reset** (below) starts a failing store again.
@@ -471,10 +462,11 @@ isn't searched any less often (at least half a second between two searches):
   takes ~5 s to build). BIG W only in its private window: in an ordinary window,
   one every 20 s at the quickest. Pokémon Center and Premium Bandai: one every 30 s.
 - Pokébox, Good Games, Collectible Madness, Cherry Collectables, Gameology: their
-  newest products every ~30 s (every keyword's in each read), each keyword's search
-  every ~15 s × the number of keywords (~60 s with 4).
-- From The Deep Games: its Preorders every ~30 s (every game's), each game's
-  collection every ~15 s × the number of keywords.
+  newest products and each keyword's search once a round of the keywords, every
+  ~10 s × (the number of keywords + 1) (~50 s with 4) — every keyword's cards in
+  each newest-products read.
+- From The Deep Games: its Preorders and each game's collection once a round of
+  the keywords, every ~10 s × (the number of keywords + 1).
 - Games World: each keyword every ~30 s.
 - The Gamesmen (admin's browser): as often as the admin's-browser seconds set.
 
@@ -482,8 +474,9 @@ More keywords means each one comes round a little less often. Each store has
 its own loop, so a slow store never holds up the others.
 
 Behind the scenes (October 2026): a connection the store closed while it sat
-idle is retried once straight away on a fresh one (a GET only), instead of
-counting as a failed search and doubling the wait. The server runs 16 worker
+idle is retried once straight away on a fresh one (a GET only, and only when no
+answer had begun on it: one the store was partway through answering is a failed
+search like any), instead of counting as a failed search and doubling the wait. The server runs 16 worker
 threads (`UV_THREADPOOL_SIZE`, set in `fly.toml`, the Dockerfile and
 `render.yaml`), so a burst of sign-ins before a drop doesn't slow unpacking the
 stores' answers. And the lookups a search makes for each product (by its code, by
@@ -498,26 +491,29 @@ again for 15):
 
 - **JB Hi-Fi, Toys"R"Us, the Shopify card shops, From The Deep Games** (a
   newest-products list): their newest products **two searches in three** (one
-  in two or three otherwise). The third keeps the keywords going round, so a
+  in two, or once a round of the keywords, otherwise). The third keeps the keywords going round, so a
   product listed before that goes on sale is still seen.
 - **Target and EB Games** (`sweep.hot`: their search is newest first): **that
-  keyword's first page every other search**; the other one goes round as usual,
-  later pages too (Target's sell-outs are still marked).
+  keyword's first page every other first-page search**; the others go round the
+  keywords as usual, and the later pages keep their usual one search in a round
+  (Target's sell-outs are marked by every page having been read lately, so drop
+  mode never slows them).
 - Never Kmart (its whole range is every search already), BIG W (it lists drops
   ahead of time, without a buy button) or Amazon.
 
 It never adds a request: the same searches at the same pace, in another order,
-and never ahead of VIP drops or members' drop watches. The live log says when a
-store goes into drop mode and when it's over, and the Stores panel shows
-**⚡ Drop mode until …** beside it. **Monitor → Settings → ⚡ Drop mode** switches
-it off (on by default).
+and never ahead of VIP drops or members' drop watches. So while it's on, the
+store's **other keywords are searched less often** — an armed item restocking
+under one of them is seen later than it would be — which is why it's **off unless
+an admin switches it on** (**Monitor → Settings → ⚡ Drop mode**), say for a
+store with a big release coming. The live log says when a store goes into drop
+mode and when it's over, and the Stores panel shows **⚡ Drop mode until …**
+beside it.
 
-**Page checks** (members' watchlists, monitors): a store that can't be asked
-this second (inside `MONITOR_HOST_GAP` since its last check, or with a check of
-it still going) is left out of each round, so one store's long list never keeps
-another store's pages waiting. Within a store the oldest is first, and an armed
-item's page (Auto-checkout) 15 seconds ahead of its turn. A store with a gap has
-one check going at a time: one slow to answer holds one of the four at most.
+**Page checks** (members' watchlists, monitors): each round looks at up to 50
+pages that are due (25 before), oldest first, an armed item's page (Auto-checkout)
+15 seconds ahead of its turn. Stores are asked as before: one page per
+`MONITOR_HOST_GAP`, a slow one's next page once its gap is over.
 
 **What goes first, the moment a search sees a drop:**
 
@@ -537,8 +533,9 @@ on its way, so a store dropping a second product seconds after the first is
 still seen at its usual pace. The same for page checks and admins' browsers.
 
 Each store's DMs go out apart from the others', and a store whose alerts keep
-coming faster than they go out (its stock flapping) has at most two lots going:
-a third waits for the first.
+coming faster than they go out (its stock flapping) has at most two lots going
+on their own: a third is sent while its search waits for it, as every search did
+before — never behind another's lot.
 
 **Mugibot's line to Discord**: twelve requests at once, two of them kept for
 what can't wait (a drop's channel posts; a member's "🏦 Approve the payment in
@@ -624,19 +621,23 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
    VIP drops go to the store channels like any other alert.
 2. **Add a VIP watch**, either:
    - **A store and the words in its name**: City Beach, *pokemon skate*.
-     - Those words are searched at that store, every other search (one in three
-       once its drop window is over).
+     - Those words are searched at that store, every other search (for a watch
+       that only alerts, one in three once its drop window is over).
      - Anything with **every** word in its name counts (`skate` also matches
        "Skateboard"; accents don't matter). "Trading cards only" doesn't apply.
      - A product that's new since the watch's first search is a 🆕 new drop.
      - The store's own keyword searches count a match too.
    - **A product page**: any shop's link (a "misc" site too). A monitor reads it.
 3. **Drops at** (optional, your time). From 15 minutes before to 3 hours after:
-   - The store is searched for those words **two searches in three**, every
-     **4 seconds** (every 10 at Gamerholic and Games World, whose search is one
-     heavy list or page). The third is the store's own (its newest products, its
-     keywords, members' drop watches), so nothing else there goes unsearched for
-     3 hours, and its newest products and whole list count the watch's finds too.
+   - The store is searched for those words every **4 seconds** (every 10 at
+     Gamerholic and Games World, whose search is one heavy list or page, unless
+     the watch, or another one there, has Auto-checkout):
+     - a watch that only alerts: **two searches in three**. The third is the
+       store's own (its newest products, its keywords, members' drop watches),
+       so nothing else there goes unsearched for 3 hours, and its newest
+       products and whole list count the watch's finds too;
+     - with a watch with **Auto-checkout** there (below): those words only, so
+       its own search is the one that sees what drops first.
    - What the watch found has its page read every **5 seconds**.
    - Otherwise its pages are read every 15 seconds.
 4. **🤖 Auto-checkout it for me, up to $…** (optional). What **drops** after you
@@ -742,7 +743,9 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
     (`/search?q=…`), then the page itself; it remembers what worked. Give a
     listing page (a "new arrivals" or a search page) and only that page is
     read. A site that turns Mugibot away is asked again later, waiting longer
-    each time, and is read from a browser meanwhile (below).
+    each time, and is read from a browser meanwhile (below). A new listing's
+    own page is read as soon as the monitor may: never inside the website's gap
+    between reads, and never sooner than a page that's been failing is due again.
 
   Anything whose name has **every** word counts, trading cards or not. A short
   word (three letters or fewer) or a number has to be a whole word in the name —
@@ -752,7 +755,11 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
   At **Kmart**, whose card searches are kept to its Trading Cards, a watch's
   words (and a VIP watch's) are searched across the whole store.
   Mugibot's first look is the "before" picture: what's there already isn't a
-  drop. What shows up after it is.
+  drop. What shows up after it is. JB Hi-Fi's newest products can show a drop
+  before the watch's own search does: it counts. The card shops' newest products
+  count only trading cards that way, as before. Anything else there (a plush) is
+  a drop for the watch only when the watch's own search finds it, so a plush a
+  card shop has had on sale for days isn't bought.
 
 **Refused by the server: read from a browser instead** (extension 1.26.0). A
 drop watch's page or website that turns Mugibot's server away (HTTP 403, 429 or
@@ -1332,7 +1339,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
 | What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
 | 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find — `hasWords`, `room` — where they post, and your own finds' price drops: `priceDropped`); `drop_watches` (with `channel_id`, `role_id`: migration 12; `bases`, each store's first look for a key phrase at every store, `ALL_STORES`: migration 18), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11), `items.price_alert_at`/`price_alert_price` (migration 13); `GET/POST /api/drops` (`phrases`: several key phrases at once), `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
-| 🤖 What an Auto-checkout watch buys | `server/monitor/sightings.js` (each VIP and drop watch's first look, first stock reading and what shows it's new: its verdict); `watch_looks`, `watch_sightings`, `new_listings` (`server/db.js`, migration 23); `holdsAll` and `sight()` in `server/monitor/sweep.js`; settled in `Vip.settle`, `Drops.settleShared` / `settleOwn`, from page reads in `Monitor.watchReading`; `sweep.newestFirst` in `server/retailers/<store>.js`; `test/arming.test.js`, `test/arming-reviews.test.js` |
+| 🤖 What an Auto-checkout watch buys | `server/monitor/sightings.js` (each VIP and drop watch's first look, first stock reading and what shows it's new: its verdict); `watch_looks`, `watch_sightings`, `new_listings` (`server/db.js`, migration 24, in place of `first_looks`, migration 22); `holdsAll` and `sight()` in `server/monitor/sweep.js`; settled in `Vip.settle`, `Drops.settleShared` / `settleOwn`, from page reads in `Monitor.watchReading`; `sweep.newestFirst` in `server/retailers/<store>.js`; `test/arming.test.js`, `test/arming-reviews.test.js`, `test/firstlook.test.js` |
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |

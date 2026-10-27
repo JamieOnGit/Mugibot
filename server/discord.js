@@ -22,6 +22,9 @@ export const MAX_ACTIVE = 12;
 const KEPT_FOR_URGENT = 2;
 const PER_SECOND = 45; // (what can't wait may go to 48: never behind DMs for its turn, still under 50)
 const URGENT_PER_SECOND = 48;
+// A request counts for its second and this much more: it's sent a moment after its place is taken, and a millisecond
+// turning in between mustn't let a 46th into the same second.
+const PACE_SLACK_MS = 5;
 // First-time DMs each open a DM channel first, all on one route: two at a time, so a drop's first DMs don't run it dry.
 const OPENING_AT_ONCE = 2;
 
@@ -75,16 +78,17 @@ export class Discord {
     else this.active -= 1;
   }
 
-  /** At most PER_SECOND requests in any second to Discord, all told: waits for its turn when it'd be more. */
-  async pace(urgent = false) {
+  /**
+   * At most PER_SECOND requests in any second to Discord, all told: 0 when this one may go — its place taken, to be sent
+   * straight away — or how long to wait for its turn.
+   */
+  paceWait(urgent = false) {
     const cap = urgent ? URGENT_PER_SECOND : PER_SECOND;
-    for (;;) {
-      const now = Date.now();
-      if (this.pausedUntil > now) { await wait(this.pausedUntil - now); continue; }
-      while (this.sentAt.length && this.sentAt[0] <= now - 1000) this.sentAt.shift();
-      if (this.sentAt.length < cap) { this.sentAt.push(now); return; }
-      await wait(this.sentAt[0] + 1000 - now + 1);
-    }
+    const now = Date.now();
+    if (this.pausedUntil > now) return this.pausedUntil - now;
+    while (this.sentAt.length && this.sentAt[0] <= now - 1000 - PACE_SLACK_MS) this.sentAt.shift();
+    if (this.sentAt.length < cap) { this.sentAt.push(now); return 0; }
+    return this.sentAt[0] + 1000 + PACE_SLACK_MS - now + 1;
   }
 
   /** Discord's word on a route: no requests left on it → none sent there until its limit resets. */
@@ -120,7 +124,8 @@ export class Discord {
       let data;
       await this.slot(urgent);
       try {
-        await this.pace(urgent);
+        // (Sent the moment its place in the second is taken: nothing runs in between.)
+        for (let ms = this.paceWait(urgent); ms > 0; ms = this.paceWait(urgent)) await wait(ms);
         try {
           res = await this.fetch(`${this.d.apiBase}${path}`, { method, headers, body: payload, signal: AbortSignal.timeout(10000) });
         } catch (e) {

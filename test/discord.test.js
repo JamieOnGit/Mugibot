@@ -400,6 +400,33 @@ test("Discord's line: a drop's channel post goes ahead of members' DMs waiting t
   assert.equal((await first).status, 200, 'and the first went once Discord said');
 });
 
+test("Discord's line keeps to 45 a second even when a request goes a moment after its place is taken, across a millisecond's turn (the first of a second sent at 1 ms, its place taken at 0): the 46th waits", async () => {
+  // A clock turned by hand.
+  let clock = 1_000_000;
+  const realNow = Date.now;
+  Date.now = () => clock;
+  try {
+    const at = [];
+    const cfg = { discord: { apiBase: 'https://discord.test/api/v10', botToken: 'bot-token', guildId: 'guild-1' }, baseUrl: 'https://mugibot.test', appName: 'Mugibot', log: () => {} };
+    const d = new Discord({ cfg, repo: {}, fetchImpl: async () => {
+      if (!at.length) clock += 1;
+      at.push(clock);
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    } });
+    for (let i = 0; i < 45; i++) await d.api('POST', `/channels/c-${i}/messages`, {});
+    // A second after the first's place was taken (not yet a second after it went): the 46th waits its turn.
+    clock = 1_000_000 + 1000;
+    const last = d.api('POST', '/channels/c-45/messages', {});
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(at.length, 45, 'the 46th waits');
+    clock += 50;
+    assert.equal((await last).status, 200);
+    for (const t of at) assert.ok(at.filter((x) => x >= t && x < t + 1000).length <= 45, 'at most 45 in any second');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("a member's DM never waits on their own webhook or email (a dead webhook took 8 s, an email up to 10): back once the DM's out, the others still going; an Auto-checkout DM they must act on now goes first in line", async () => {
   const { Notifier } = await import('../server/notifier.js');
   const dmCalls = [];

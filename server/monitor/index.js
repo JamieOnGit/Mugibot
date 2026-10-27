@@ -85,8 +85,6 @@ export class Monitor {
     this.hostNext = new Map();
     this.going = new Set(); // members' alerts still going out (deliver)
     this.lines = new Map(); // store → its lots of alerts going out (two at most)
-    this.hostBusy = new Map(); // host → checks still going there
-    this.hostGap = new Map(); // host → its gap between checks (seconds)
     this.inFlight = new Set();
     this.pageSaid = new Map(); // product → what its page last said, when (a read that worked): { on, at }
     this.timer = null;
@@ -161,19 +159,14 @@ export class Monitor {
       this.db.run(`DELETE FROM page_checks WHERE kind = 'search' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = '' AND i.store = page_checks.store AND i.sku = page_checks.sku COLLATE NOCASE) AND NOT ${monitored}`);
       this.catalog.prune(this.cfg.monitor.logDays);
     }
-    // Stores that can't be asked this second (inside their gap between checks, or — with a gap — a check still going)
-    // are left out of the list, so one store's long list never keeps another store's pages waiting. Oldest first
-    // within a store, an armed item's page 15 seconds ahead of its place (its restock starts members' checkouts).
-    const wait = [...this.hostNext].filter(([, t]) => t > now).map(([h]) => h);
-    for (const [h, n] of this.hostBusy) if (n > 0 && (this.hostGap.get(h) || 0) > 0 && !wait.includes(h)) wait.push(h);
-    const skip = wait.length ? `AND c.host NOT IN (${wait.map((_, i) => `:h${i}`).join(', ')})` : '';
+    // Oldest first — an armed item's page 15 seconds ahead of its place (its restock starts members' checkouts).
     const due = this.db.all(`SELECT c.* FROM page_checks c
-      WHERE c.next_check_at <= :now ${skip} AND (EXISTS (
+      WHERE c.next_check_at <= :now AND (EXISTS (
         SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
         WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
         OR EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id WHERE m.paused = 0 AND ${PRODUCTS_FOR_PAGE}))
       ORDER BY c.next_check_at - CASE WHEN EXISTS (SELECT 1 FROM items i WHERE (${ITEMS_FOR_PAGE}) AND i.aco = 1 AND i.monitor = 1) THEN ${ARMED_AHEAD_MS} ELSE 0 END
-      LIMIT 50`, { now, ...Object.fromEntries(wait.map((h, i) => [`h${i}`, h])) });
+      LIMIT 50`, { now });
     const jobs = [];
     for (const page of due) {
       if (this.sweptLately(page.url, now)) {
@@ -190,17 +183,9 @@ export class Monitor {
       if (this.inFlight.has(page.url) || this.inFlight.size >= 4) continue;
       if ((this.hostNext.get(page.host) || 0) > now) continue;
       const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
-      // (One check at a time at a store with a gap: a store slow to answer holds one of the four, never all of them.)
-      if (gap > 0 && (this.hostBusy.get(page.host) || 0) > 0) continue;
       this.hostNext.set(page.host, now + gap * 1000);
-      this.hostGap.set(page.host, gap);
-      this.hostBusy.set(page.host, (this.hostBusy.get(page.host) || 0) + 1);
       this.inFlight.add(page.url);
-      jobs.push(this.checkPage(page.url).finally(() => {
-        this.inFlight.delete(page.url);
-        const n = (this.hostBusy.get(page.host) || 1) - 1;
-        if (n > 0) this.hostBusy.set(page.host, n); else this.hostBusy.delete(page.host);
-      }));
+      jobs.push(this.checkPage(page.url).finally(() => this.inFlight.delete(page.url)));
     }
     await Promise.all(jobs);
     return jobs.length;
@@ -495,14 +480,14 @@ export class Monitor {
    * Members' alerts (ten at a time: sendAll), sent while the monitor and the sweeps carry on — a store's next search
    * or page check never waits for a drop's DMs to be out (they took seconds with a hundred members watching). Every
    * Auto-checkout run is made before, and the channel posts went first. Each store's (key) apart from the others',
-   * never in a line behind them — and at most two lots going at a store whose alerts keep coming faster than they go
-   * out (its stock flapping): a third waits for the first, as every search did before. delivered(): once all are out.
+   * never in a line behind them — and at most two lots going on their own at a store whose alerts keep coming faster
+   * than they go out (its stock flapping): a third is sent while its caller waits for it, as every search did before —
+   * never behind another's. delivered(): once all are out.
    */
   async deliver(list, key = '') {
     if (!list || !list.length) return;
     let line = this.lines.get(key);
     if (!line) this.lines.set(key, (line = []));
-    while (line.length >= 2) await Promise.allSettled([line[0]]);
     const p = sendAll(list, (e) => this.cfg.log('[alerts]', e.message)).catch((e) => this.cfg.log('[alerts]', e.message)).finally(() => {
       this.going.delete(p);
       line.splice(line.indexOf(p), 1);
@@ -510,6 +495,7 @@ export class Monitor {
     });
     line.push(p);
     this.going.add(p);
+    if (line.length > 2) await p;
   }
 
   async delivered() {
@@ -532,16 +518,13 @@ export class Monitor {
     this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
     const retailer = this.retailers.get(page.store) || this.retailers.forUrl(url);
     if (retailer && !this.retailers.settings(retailer).serverChecks) return null;
+    if (this.inFlight.has(url) || this.inFlight.size >= 4 || (this.hostNext.get(page.host) || 0) > now) return null;
     const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
-    if (this.inFlight.has(url) || this.inFlight.size >= 4 || (this.hostNext.get(page.host) || 0) > now || (gap > 0 && (this.hostBusy.get(page.host) || 0) > 0)) return null;
     this.hostNext.set(page.host, now + gap * 1000);
-    this.hostGap.set(page.host, gap);
-    this.hostBusy.set(page.host, (this.hostBusy.get(page.host) || 0) + 1);
     this.inFlight.add(url);
+    // (Waited for by delivered(), as the alerts it sends are.)
     const p = this.checkPage(url).catch((e) => this.cfg.log('[monitor]', e.message)).finally(() => {
       this.inFlight.delete(url);
-      const n = (this.hostBusy.get(page.host) || 1) - 1;
-      if (n > 0) this.hostBusy.set(page.host, n); else this.hostBusy.delete(page.host);
       this.going.delete(p);
     });
     this.going.add(p);

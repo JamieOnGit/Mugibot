@@ -55,8 +55,10 @@ function attempt(url, init, retried) {
   const maxBytes = init.maxBytes || MAX_BYTES;
   return new Promise((resolve, reject) => {
     let done = false;
+    let answered = false;
     const finish = (fn, v) => { if (!done) { done = true; cleanup(); fn(v); } };
     const req = lib.request(u, { method: init.method || 'GET', headers, agent: agents[u.protocol] }, (res) => {
+      answered = true;
       const out = new Headers();
       for (const [k, v] of Object.entries(res.headers)) {
         if (Array.isArray(v)) v.forEach((x) => out.append(k, x));
@@ -85,9 +87,10 @@ function attempt(url, init, retried) {
       if (init.signal) init.signal.removeEventListener('abort', onAbort);
     }
     req.on('error', (e) => {
-      // A connection kept open that the store had just closed (it never got this request): asked once more, at once, on
-      // a fresh one — not a failed search (that doubled the wait before the next one). Only a plain GET, only once.
-      if (!retried && !done && req.reusedSocket && (e.code === 'ECONNRESET' || e.code === 'EPIPE') && (init.method || 'GET') === 'GET' && !init.body) {
+      // A connection kept open that the store had just closed, before any answer began (it never got this request): asked
+      // once more, at once, on a fresh one — not a failed search. Only a plain GET, only once — and never one the store
+      // had started answering when the connection went (it had the request: that's a failure like any).
+      if (!retried && !done && !answered && req.reusedSocket && (e.code === 'ECONNRESET' || e.code === 'EPIPE') && (init.method || 'GET') === 'GET' && !init.body) {
         done = true;
         cleanup();
         resolve(attempt(url, init, true));

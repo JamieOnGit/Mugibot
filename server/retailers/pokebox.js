@@ -13,7 +13,7 @@
 // Live sweeps from Mugibot's server (an admin's browser stands in only while it's refused): Pokébox
 // lists hundreds of singles a week, named after the card ("Tarragon (116/088)"), so each keyword is
 // searched with "tcg" added (Shopify's search suggestions: its sealed products first), and every
-// third search is the store's newest products (Shopify's product list, newest published first: a
+// round of the keywords the store's newest products are read (Shopify's product list, newest published first: a
 // week or so of its listings in 30, Oct 2026) — a new drop shows up there the moment it's listed,
 // counted for every keyword in one read (each keyword's second page, until then: one keyword's at a
 // time, so a keyword saw it every 200 s or so). One it drafted weeks before and has just put up is
@@ -40,10 +40,10 @@ export default {
     // Each keyword's search ("pokemon tcg": its sealed products first, not singles), 10 a search, with stock.
     path: '/search/suggest.json?q={q}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last',
     addWord: 'tcg',
-    // Every third search: the store's newest products (about 200 KB a read: 30 products) — from an admin's
-    // browser too, while it stands in for the server.
+    // Once a round of the keywords (the turn each keyword's second page had): the store's newest products (about
+    // 200 KB a read: 30 products) — from an admin's browser too, while it stands in for the server.
     newestPath: '/products.json?limit=30',
-    newestEvery: 3,
+    newestEvery: 'round',
     newestBrowser: true,
     newestFresh: false,
     minSeconds: 10,

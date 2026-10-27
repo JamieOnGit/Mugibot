@@ -174,7 +174,8 @@ export class Drops {
     const isBase = (f) => (typeof f.base === 'boolean' ? f.base : !!w.baselineAt && f.at <= w.baselineAt);
     // (Your own watch's finds you've taken off your watchlist make room: they're never put back.)
     const kept = (f) => !f.itemId || !!this.db.get('SELECT 1 AS y FROM items WHERE id = :id', { id: f.itemId });
-    return w.found.filter((f) => isBase(f) === !!baseline && kept(f)).length < max;
+    // (An entry only remembered — kept quietly by the release before this, beyond a watch's room — takes none.)
+    return w.found.filter((f) => !f.quiet && isBase(f) === !!baseline && kept(f)).length < max;
   }
 
   /** What it found (kept on the watch object too, so a loop over finds sees each one). */
@@ -565,8 +566,9 @@ export class Drops {
 
   /** A watch's first look is done: what it found is how things were. Your own: one line in your activity. */
   firstLook(w) {
-    if (!w || w.shared || !w.found.length) return;
-    const n = w.found.length;
+    const kept = w ? w.found.filter((f) => !f.quiet) : [];
+    if (!w || w.shared || !kept.length) return;
+    const n = kept.length;
     if (w.page) {
       this.repo.addEvent(w.userId, {
         type: 'restock', level: 'info',
@@ -1204,7 +1206,8 @@ export class Drops {
       canChange: this.canChange(w, viewer),
       // (Where it posts, for an admin's watch for everyone: admins only.)
       ...(admin && w.shared ? { channelId: w.channelId, roleId: w.roleId } : {}),
-      found: w.found.map((f) => this.foundView(w, f, mine, viewer, pooled)).filter(Boolean),
+      // (Not what's only remembered: listed already, beyond what it keeps — the release before this kept those.)
+      found: w.found.filter((f) => !f.quiet).map((f) => this.foundView(w, f, mine, viewer, pooled)).filter(Boolean),
     };
   }
 

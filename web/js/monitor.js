@@ -423,7 +423,7 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     const s = d.settings;
     m.sweepDefaults = d.defaults;
     $('#ms-enabled').checked = s.enabled;
-    $('#ms-dropmode').checked = s.dropMode !== false;
+    $('#ms-dropmode').checked = !!s.dropMode;
     $('#ms-every').value = s.everySeconds;
     $('#ms-bevery').value = s.browserEverySeconds;
     $('#ms-drop').value = s.priceDropPercent;

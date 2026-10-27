@@ -303,6 +303,31 @@ test("store requests: a kept-open connection the store had just closed is asked 
   }
 });
 
+test("store requests: a kept-open connection reset while the store was answering is a failure — never asked again at once (the store had the request)", async () => {
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    seen.push(req.url);
+    if (req.url === '/a') {
+      res.writeHead(200, { 'content-type': 'text/plain', connection: 'keep-alive' });
+      return res.end('ok');
+    }
+    // Its answer begun — headers and part of the body — then the connection's reset.
+    res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '5000' });
+    res.write('x'.repeat(1000), () => setTimeout(() => req.socket.resetAndDestroy(), 20));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    assert.equal(await (await storeFetch(`${base}/a`)).text(), 'ok');
+    await assert.rejects(storeFetch(`${base}/b`), (e) => e.code === 'ECONNRESET' || /aborted|socket hang up/.test(e.message));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(seen, ['/a', '/b'], 'asked once');
+  } finally {
+    srv.close();
+    srv.closeAllConnections?.();
+  }
+});
+
 // --- the sweeps, against the dummy stores ------------------------------------------------
 let env;
 let store;
@@ -510,19 +535,51 @@ test("🃏 sealed products named without a card word count: a Super-Premium Coll
   // quietly; a product any card word names — a drop as ever.
   const widened = env.app.repo.getSetting('sweepWidenedAt');
   env.app.repo.setSetting('sweepWidenedAt', sw.now());
+  let vipWatch = null;
   try {
     await sweep('demo-kmart');
+    await sweep('demo-kmart', 'one piece');
     const before = alerts('listed').length;
+    // (A VIP watch's words in a name only the wider words count: a drop for the watch all the same — never quiet.)
+    const v = await boss.post('/api/monitor/vip', { store: 'demo-kmart', words: 'op 15' });
+    assert.equal(v.status, 200, v.text);
+    vipWatch = v.body.watch;
     store.shop('kmart').products.push({ sku: '43877061', name: 'Pokémon Mega Evolution Ultra-Premium Collection', price: 199, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477061 });
     store.shop('kmart').products.push({ sku: '43877062', name: 'Pokémon TCG: Widened Words Booster Bundle', price: 59, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477062 });
+    store.shop('kmart').products.push({ sku: '43877064', name: 'ONE PIECE OP-15 BOX', price: 189, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477064 });
+    assert.ok(!sw.filters(sw.settings, { legacy: true })({ title: 'ONE PIECE OP-15 BOX' }, 'one piece'), 'only the wider words count it');
     const r = await sweep('demo-kmart');
     assert.equal(r.ok, true, r.error);
     assert.ok(product('demo-kmart', '43877061'), 'tracked');
-    assert.ok(!alerts('listed').slice(0, alerts('listed').length - before).some((a) => a.sku === '43877061'), 'quietly, the first time');
+    const op = await sweep('demo-kmart', 'one piece');
+    assert.equal(op.ok, true, op.error);
+    assert.equal(op.baseline, false);
+    const fresh = alerts('listed').slice(0, alerts('listed').length - before);
+    assert.ok(!fresh.some((a) => a.sku === '43877061'), 'quietly, the first time');
     assert.ok(alerts('listed').some((a) => a.sku === '43877062'), 'a card product as ever: a drop');
+    assert.ok(fresh.some((a) => a.sku === '43877064' && a.vip), "the VIP watch's find: a VIP drop, though only the wider words count it");
+    const found = env.app.sweeper.vip.watches().find((x) => x.id === vipWatch.id).found;
+    assert.ok(found.some((f) => f.productId === product('demo-kmart', '43877064').id), "the watch's find");
   } finally {
     env.app.repo.setSetting('sweepWidenedAt', widened);
+    if (vipWatch) await boss.del(`/api/monitor/vip/${vipWatch.id}`);
   }
+  // A card shop that reads a game's own collection (no card word needed there): what it tracked from it stays tracked when
+  // the filters are checked again (a start, a saved setting) — still not a plush, and still a card word elsewhere.
+  assert.ok(R('demo-fromthedeep').sweep.collectionPath, 'reads collections');
+  const seen = (store, sku, name) => {
+    const p = env.app.catalog.upsertProduct({ store, sku, url: `${store}/${sku}`, name, image: '', category: '' });
+    env.app.db.run('UPDATE products SET sweep_seen_at = :t WHERE id = :id', { id: p.id, t: sw.now() });
+    return p.id;
+  };
+  const kept = seen('demo-fromthedeep', 'prune-surprise-box', 'Pokemon Mega Evolution Surprise Box');
+  const plush = seen('demo-fromthedeep', 'prune-plush', 'Pokemon Pikachu Plush 30cm');
+  const elsewhere = seen('demo-jbhifi', 'prune-surprise-box-jb', 'Pokemon Mega Evolution Surprise Box');
+  sw.prune();
+  const seenAt = (id) => env.app.db.get('SELECT sweep_seen_at FROM products WHERE id = :id', { id }).sweep_seen_at;
+  assert.ok(seenAt(kept), "tracked from the shop's collection: still tracked");
+  assert.equal(seenAt(plush), null, 'a plush: never');
+  assert.equal(seenAt(elsewhere), null, 'a search that needs a card word: as before');
   // Out of that window: a product only the wider words let in is a drop like any other.
   store.shop('kmart').products.push({ sku: '43877063', name: 'Pokémon Scarlet & Violet Super-Premium Collection', price: 249, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4477063 });
   await sweep('demo-kmart');
@@ -1167,7 +1224,11 @@ test("🆕 JB Hi-Fi's newest products, every other search: a drop is seen the mo
   assert.ok(env.app.db.get("SELECT 1 AS y FROM sweep_terms WHERE store = 'demo-jbhifi' AND keyword = :k", { k: NEWEST }));
 });
 
-test("⚡ drop mode: a new card listing at a store (in a read that isn't setting its scene) has it searched for what's next there more often for a while — JB Hi-Fi's newest products two searches in three, Target's keyword every other search — at the same pace, for 15 minutes (each new listing making it 15 from then, 30 at most), then a rest; never from a VIP or drop watch's own words; admins can switch it off", async () => {
+test("⚡ drop mode (off unless an admin switches it on): a new card listing at a store (in a read that isn't setting its scene) has it searched for what's next there more often for a while — JB Hi-Fi's newest products two searches in three, Target's keyword every other search — at the same pace, for 15 minutes (each new listing making it 15 from then, 30 at most), then a rest; never from a VIP or drop watch's own words; admins can switch it off", async () => {
+  assert.equal(sw.settings.dropMode, false, 'off unless switched on');
+  sw.heat(R('demo-jbhifi'), null);
+  assert.equal(sw.hotAt(R('demo-jbhifi')), null, 'off: no drop mode');
+  sw.save({ dropMode: true }, null);
   const jbr = R('demo-jbhifi');
   const t0 = Date.now();
   sw.stat(jbr.id).hot = null;
@@ -1199,6 +1260,12 @@ test("⚡ drop mode: a new card listing at a store (in a read that isn't setting
   sw.heat(jbr, null, t0 + 46 * 60 * 1000);
   assert.ok(sw.hotAt(jbr, t0 + 46 * 60 * 1000 + 1), 'after its rest, again');
   sw.stat(jbr.id).hot = null;
+  // Its rest counts from when it ended — not from when that was noticed (a store not searched a while: its browser closed).
+  sw.heat(jbr, null, t0);
+  assert.equal(sw.hotAt(jbr, t0 + 50 * 60 * 1000), null, 'noticed 35 minutes after it ended');
+  sw.heat(jbr, null, t0 + 51 * 60 * 1000);
+  assert.ok(sw.hotAt(jbr, t0 + 51 * 60 * 1000 + 1), 'its rest was over at 30 minutes (15 + 15): again at once');
+  sw.stat(jbr.id).hot = null;
   // Stores it doesn't apply to: Kmart (its whole list is every search already), BIG W (it lists drops ahead of time).
   for (const id of ['demo-kmart', 'demo-bigw']) {
     sw.heat(R(id), 'pokemon', t0);
@@ -1220,14 +1287,23 @@ test("⚡ drop mode: a new card listing at a store (in a read that isn't setting
   pages[1] = [...pages[1], targetProduct('70500008', 'Pokemon TCG: Drop Mode Words Bundle')];
   await t.sweepTerm(target, { keyword: 'drop mode words', page: 1, drop: 'shared' });
   assert.equal(t.hotAt(target), null, "a drop watch's own words: no drop mode");
+  pages[1] = [...pages[1], targetProduct('70500007', 'Pokemon TCG: Drop Mode Words Booster Box')];
+  await t.sweepTerm(target, { keyword: 'drop mode words', page: 1, vip: 'vip-none' });
+  assert.equal(t.hotAt(target), null, "a VIP watch's own words: no drop mode");
   pages[1] = [...pages[1], targetProduct('70500002', 'Pokemon TCG: Drop Mode Elite Trainer Box')];
   const r = await t.sweepTerm(target, { keyword: 'pokemon', page: 1 });
   assert.equal(r.ok, true, r.error);
   assert.ok(r.new >= 1, JSON.stringify(r));
   const h = t.hotAt(target);
   assert.equal(h && h.keyword, 'pokemon', JSON.stringify(h));
-  const turns = Array.from({ length: 6 }, () => t.nextTerm(target));
-  assert.deepEqual(turns.filter((_, i) => i % 2 === 0).map((x) => [x.keyword, x.page]), [['pokemon', 1], ['pokemon', 1], ['pokemon', 1]], JSON.stringify(turns));
+  // Its first page every other first-page turn; the later pages keep their one search in a round, as ever (Target's
+  // sold-outs are marked by every page having been read lately: markGone — drop mode mustn't slow them).
+  const round = t.settings.keywords.length + 1;
+  const turns = Array.from({ length: 4 * round }, () => t.nextTerm(target));
+  const firsts = turns.filter((x) => x.page === 1);
+  assert.ok(turns.some((x) => x.page > 1), JSON.stringify(turns));
+  assert.equal(turns.filter((x) => x.page > 1).length, 4, `the later pages: one search in ${round} (${JSON.stringify(turns)})`);
+  assert.deepEqual(firsts.filter((_, i) => i % 2 === 0).map((x) => [x.keyword, x.page]), Array(firsts.length / 2).fill(['pokemon', 1]), JSON.stringify(turns));
   // Admins switch it off: searched as usual at once.
   const saved = t.settings;
   t.save({ dropMode: false }, null);
@@ -1236,7 +1312,7 @@ test("⚡ drop mode: a new card listing at a store (in a read that isn't setting
     t.heat(target, 'pokemon');
     assert.equal(t.stat(target.id).hot && t.stat(target.id).hot.until > t.now() ? 'hot' : 'off', 'off');
   } finally {
-    t.save({ dropMode: saved.dropMode }, null);
+    t.save({ dropMode: false }, null);
   }
 });
 
@@ -1465,7 +1541,7 @@ test("Premium Bandai: its search JSON (/api/search) — on sale, pre-orders, clo
   assert.equal(env.app.retailers.forUrl(r.products[0].url).id, 'pbandai');
 });
 
-test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg\" added: sealed products, not singles), and every third search the store's newest products — every keyword's products in one read (from an admin's browser too, standing in) — a new listing alerts from there, with Shopify's add-to-cart link, even one the shop drafted weeks before", async () => {
+test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg\" added: sealed products, not singles), and once a round of the keywords the store's newest products — every keyword's products in one read (from an admin's browser too, standing in) — a new listing alerts from there, with Shopify's add-to-cart link, even one the shop drafted weeks before", async () => {
   const saved = sw.settings.stores;
   sw.save({ stores: { ...saved, 'demo-pokebox': 'server' } }, null);
   const pb = R('demo-pokebox');
@@ -1482,12 +1558,15 @@ test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg
     assert.match(sw.urlFor(R('gameology'), 'one piece'), /^https:\/\/www\.gameology\.com\.au\/search\/suggest\.json\?q=one%20piece%20tcg&resources%5Btype%5D=product&/);
     assert.equal(sw.paceFor(R('gameology')), 10000);
     assert.equal(sw.urlFor(pb, NEWEST), `${store.url}/pokebox/products.json?limit=30`);
-    // Every third search — from the server, and from an admin's browser standing in for it (JB's is the server's alone).
+    // Once a round of the keywords (the turn their second pages had: each keyword's first page as often as before) —
+    // from the server, and from an admin's browser standing in for it (JB's is the server's alone).
     sw.stat(pb.id).hot = null;
-    const turns = Array.from({ length: 9 }, () => sw.nextTerm(pb));
+    const round = sw.settings.keywords.length + 1;
+    const turns = Array.from({ length: 3 * round }, () => sw.nextTerm(pb));
     assert.equal(turns.filter((t) => t.keyword === NEWEST).length, 3, JSON.stringify(turns));
+    for (const k of sw.settings.keywords) assert.equal(turns.filter((t) => t.keyword === k).length, 3, `${k}: once a round`);
     assert.ok(turns.every((t) => t.page === 1), 'no second pages');
-    assert.equal(Array.from({ length: 9 }, () => sw.nextTerm(pb, { all: false })).filter((t) => t.keyword === NEWEST).length, 3, "from an admin's browser too");
+    assert.equal(Array.from({ length: 3 * round }, () => sw.nextTerm(pb, { all: false })).filter((t) => t.keyword === NEWEST).length, 3, "from an admin's browser too");
     assert.deepEqual(sw.termOf(pb, { keyword: NEWEST }), { keyword: NEWEST, page: 1 }, "an admin's browser's read of it counts");
     assert.equal(sw.termOf(R('demo-jbhifi'), { keyword: NEWEST }), null, "JB Hi-Fi's: the server's alone");
     // The first read of each sets the scene.
@@ -1541,12 +1620,29 @@ test("Pokébox's newest products, read under their own name for the first time a
     env.app.db.run('DELETE FROM sweep_terms WHERE store = :s AND keyword = :k', { s: gg.id, k: NEWEST });
     before(7 * 3600 * 1000);
     assert.equal((await sweep('demo-goodgames', NEWEST)).baseline, true);
+    // Its first read under its own name refused (Shopify's 429 at a drop, say): the next one answered still doesn't set
+    // the scene again — what was listed meanwhile alerts — and the old second pages still go.
+    env.app.db.run('DELETE FROM sweep_terms WHERE store = :s AND keyword = :k', { s: gg.id, k: NEWEST });
+    before(60 * 1000);
+    store.state.tooMany = { goodgames: 1 };
+    const refused = await sweep('demo-goodgames', NEWEST);
+    store.state.tooMany = {};
+    assert.equal(refused.ok, false);
+    assert.ok(env.app.db.get('SELECT 1 AS y FROM sweep_terms WHERE store = :s AND keyword = :k', { s: gg.id, k: NEWEST }), 'its refused read: a row with no answer');
+    Object.assign(sw.stat(gg.id), { retryAt: 0, fails: 0, slowUntil: 0 });
+    store.shop('goodgames').products.push({ sku: 'pokemon-tcg-destined-rivals-etb-gg', name: 'Pokemon TCG Destined Rivals Elite Trainer Box', price: 89.95, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499996 });
+    const again = await sweep('demo-goodgames', NEWEST);
+    assert.equal(again.ok, true, again.error);
+    assert.equal(again.baseline, false, 'its refused first read changed nothing');
+    assert.ok(alerts('listed').some((a) => a.sku === 'pokemon-tcg-destined-rivals-etb-gg'), 'what was listed meanwhile alerts');
+    assert.equal(page2(), 0, 'the old second pages gone');
   } finally {
+    store.state.tooMany = {};
     sw.save({ stores: saved }, null);
   }
 });
 
-test("🃏 From The Deep Games: each game's whole sealed collection read in one go (never its singles' — 30,000 of them; the sealed one first where a game has more), and every third search its Preorders collection — every game's pre-orders in one read — a new pre-order alerts from there, with Shopify's add-to-cart link", async () => {
+test("🃏 From The Deep Games: each game's whole sealed collection read in one go (never its singles' — 30,000 of them; the sealed one first where a game has more), and once a round of the keywords its Preorders collection — every game's pre-orders in one read — a new pre-order alerts from there, with Shopify's add-to-cart link", async () => {
   const saved = sw.settings.stores;
   sw.save({ stores: { ...saved, 'demo-fromthedeep': 'server' } }, null);
   const ftd = R('demo-fromthedeep');
@@ -1555,7 +1651,7 @@ test("🃏 From The Deep Games: each game's whole sealed collection read in one 
     assert.equal(R('fromthedeep').sweep.from, 'server');
     assert.equal(sw.paceFor(R('fromthedeep')), 10000);
     assert.equal(sw.urlFor(R('fromthedeep'), NEWEST), 'https://fromthedeepgames.com.au/collections/preorders/products.json?limit=250', 'its Preorders, in place of its newest products');
-    assert.equal(R('fromthedeep').sweep.newestEvery, 3);
+    assert.equal(R('fromthedeep').sweep.newestEvery, 'round');
     // The first read: the store's collections, then the game's whole sealed collection (it sets the scene).
     let r = await sweep('demo-fromthedeep', 'pokemon', 1);
     assert.equal(r.ok, true, r.error);
@@ -1570,7 +1666,7 @@ test("🃏 From The Deep Games: each game's whole sealed collection read in one 
     assert.deepEqual([box.status, box.price], ['in_stock', 324]);
     assert.match(box.url, /\/fromthedeep\/products\/pokemon-tcg-pitch-black-booster-box-in-store-only-preorder$/);
     assert.ok(box.variant_id, 'the option to buy, for the cart link');
-    // Its Preorders collection, every third search: the pre-orders of every game, each for its own keyword (sets the scene too).
+    // Its Preorders collection, once a round of the keywords: the pre-orders of every game, each for its own keyword (sets the scene too).
     r = await sweep('demo-fromthedeep', NEWEST);
     assert.equal(r.ok, true, r.error);
     assert.equal(r.baseline, true);
@@ -1890,7 +1986,8 @@ test("🏬 Kmart's \"In store only\" (FulfilmentChannel 2): its own status — t
   assert.ok(!labels.some((l) => /Buy|Add to cart/.test(l)), `nothing to buy online: ${labels.join(', ')}`);
   assert.equal(runs().length, 0, 'no Auto-checkout run');
   assert.equal((await c.get('/api/items')).body.items.find((x) => x.id === add.body.id).status, 'in_store');
-  assert.ok(!discord.dmsTo('d-instore').some((m) => /In Store Tin/.test(m.body.embeds[0].title)), 'no "in stock" DM');
+  await env.app.monitor.delivered();
+  assert.ok(!discord.dmsTo('d-instore').some((m) => /In Store Test Tin/.test(m.body.embeds[0].title) && !/In store only/i.test(m.body.embeds[0].title)), 'no "in stock" DM');
   // Still in the shops only: nothing more.
   out = await sw.sweepTerm(r, { keyword: 'pokemon', page: 1 });
   assert.equal(out.restock, 0);
