@@ -374,7 +374,7 @@ export class Gates {
           message: queue ? `Anyone can go straight to ${r.name} again.` : `Checkout at ${r.name} is straight through again.`,
           url: this.link(r),
         };
-      sends.push(() => this.notifier.notify(id, ev, { emailAfter: true }));
+      sends.push(() => this.notifier.notify(id, ev));
     }
     await sendAll(sends, (e) => this.cfg.log('[gates]', e.message), DMS_AT_ONCE);
   }

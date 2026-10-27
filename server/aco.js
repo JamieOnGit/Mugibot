@@ -932,7 +932,7 @@ export class Aco {
           : `${text}\nYour browser is waiting its turn and carries on when it's through. Leave the queue page alone: it refreshes itself.`,
         name: row.name, sku: row.sku, url: row.url || null,
         buttons: [...(reason === 'checkpoint' ? this.phoneButtons(this.get(userId, row.id)) : []), { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
-      }).catch(() => null);
+      }, { urgent: reason === 'checkpoint' }).catch(() => null);
     }
     return run;
   }
@@ -1206,10 +1206,11 @@ export class Aco {
       expired: { level: 'warn', title: `❌ Auto-checkout didn't start: ${row.name}`, message: `${storeName}\n${text}` },
     }[status];
     if (ev && reason !== 'disarmed' && !quiet) {
+      // (Its checkout waiting on them — the final button, their bank's app, a check: first in Discord's line.)
       await this.notifier.notify(userId, {
         type: 'aco', channel: 'aco', ...ev, name: row.name, sku: row.sku, url: row.url || null,
         buttons: [...(bank ? [{ label: '🖥️ Open my computer', url: REMOTE_DESKTOP_URL }] : []), { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
-      });
+      }, { urgent: status === 'ready' || status === 'needs_you' });
     }
     return run;
   }

@@ -303,9 +303,10 @@ export class Drops {
    * An admin's watch for everyone found a product in a search (it's in the catalogue now: sweep.js):
    * a monitor on it, so its page is read for its stock too — and, when the admin asked, armed for
    * their Auto-checkout (only what drops). baseline: listed already when the watch first looked.
-   * status: its stock in the search (or null). wary: see armOf.
+   * status: its stock in the search (or null). wary: see armOf. later: the search's list for the admin's alerts (sent
+   * once its channel posts are out), the Auto-checkout run made now all the same.
    */
-  async foundShared(w, product, { baseline = false, status = null, wary = false } = {}) {
+  async foundShared(w, product, { baseline = false, status = null, wary = false, later = null } = {}) {
     if (!w || !product) return;
     this.monitorFor(w, product);
     if (w.found.some((f) => f.productId === product.id)) return;
@@ -320,7 +321,7 @@ export class Drops {
     if (arm === 'armed') {
       const item = this.arm(w, product, status);
       // On sale the moment it's found: Auto-checkout starts now (not at the next check).
-      if (item && !baseline && isOrderable(status)) await this.applyNow(item.id, { status, title: product.name, price: product.price });
+      if (item && !baseline && isOrderable(status)) await this.applyNow(item.id, { status, title: product.name, price: product.price }, later);
     } else if (arm === 'skipped') this.onSale(w, product);
     this.hub.publish(w.userId, 'drop', { id: w.id });
   }
@@ -436,9 +437,11 @@ export class Drops {
   /**
    * Someone's own watch found a product in a search at a store (sweep.js): on their watchlist, theirs
    * alone. A new listing is news straight away — their DM, and Auto-checkout if it's armed and on sale.
-   * p: the search's product; status: its stock there (or null). wary: see armOf.
+   * p: the search's product; status: its stock there (or null). wary: see armOf. later: the search's list for their DMs
+   * — sent once the product's channel posts are out (their Auto-checkout run is made now all the same), so one member's
+   * watch never holds up everyone's ping.
    */
-  async foundOwn(w, r, p, status, { baseline = false, wary = false } = {}) {
+  async foundOwn(w, r, p, status, { baseline = false, wary = false, later = null } = {}) {
     // (The same code at two stores is two products: an every-store watch's finds go by store too.)
     if (!w || !p || !p.url || w.found.some((f) => String(f.sku).toLowerCase() === String(p.sku).toLowerCase() && (!f.store || f.store === r.id))) return null;
     if (!this.room(w, baseline)) {
@@ -446,10 +449,12 @@ export class Drops {
       else this.noRoom(w);
       return null;
     }
-    return this.addOwn(w, { store: r.id, sku: p.sku, url: p.url, name: p.title || p.name, price: p.price ?? null }, status, { baseline, wary });
+    // (The listing's only option: a run for it opens the store's add-to-cart link, as for a member's own SKU — sweep.js members.)
+    const variantId = p.oneVariant && p.variantId ? String(p.variantId) : null;
+    return this.addOwn(w, { store: r.id, sku: p.sku, url: p.url, name: p.title || p.name, price: p.price ?? null, variantId }, status, { baseline, wary, later });
   }
 
-  async addOwn(w, p, status, { baseline, wary = false }) {
+  async addOwn(w, p, status, { baseline, wary = false, later = null }) {
     const user = this.repo.userById(w.userId);
     if (!user || user.disabled) return null;
     let item = this.repo.itemBySku(user.id, p.store, p.sku);
@@ -479,17 +484,17 @@ export class Drops {
       // A new listing: their alert now (and Auto-checkout, when it's armed and on sale). The search's
       // stock where it says; else (and at another website) its page, read as soon as the monitor may — never inside
       // its gap between reads, nor sooner than a page backing off (monitor checkNow).
-      if (p.store !== 'other' && READ.has(status)) await this.applyNow(item.id, { status, title: p.name || null, price: p.price ?? null });
+      if (p.store !== 'other' && READ.has(status)) await this.applyNow(item.id, { status, title: p.name || null, price: p.price ?? null, variantId: p.variantId || null }, later);
       else if (this.monitor) await this.monitor.checkNow(p.url);
     }
     return item;
   }
 
-  /** What a search said about a watchlist item it just put there, applied now (its alerts, Auto-checkout). */
-  async applyNow(itemId, { status, title = null, price = null }) {
+  /** What a search said about a watchlist item it just put there, applied now (its alerts, Auto-checkout). later: see foundOwn. */
+  async applyNow(itemId, { status, title = null, price = null, variantId = null }, later = null) {
     const row = this.db.get('SELECT * FROM items WHERE id = :id', { id: itemId });
     if (!row || !this.monitor) return;
-    await this.monitor.applyResult(row, { status, title, price: typeof price === 'number' ? price : null, error: '' }, 'sweep');
+    await this.monitor.applyResult(row, { status, title, price: typeof price === 'number' ? price : null, error: '', variantId }, 'sweep', { later });
   }
 
   /**

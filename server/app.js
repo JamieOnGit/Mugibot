@@ -311,6 +311,8 @@ export async function createApp(options = {}) {
       bags.stop();
       pools.stop();
       timers.forEach(clearInterval);
+      // (Members' alerts still going out: given a few seconds to finish.)
+      await Promise.race([monitor.delivered(), new Promise((r) => setTimeout(r, 5000).unref?.())]);
       hub.close();
       await new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections?.(); });
       db.close();

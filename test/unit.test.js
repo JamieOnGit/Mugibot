@@ -134,7 +134,7 @@ test('retailers: each store has its own flow; product codes from links; demo cop
   assert.equal(retailers.cartUrl('amazon', { sku: 'B0ABCDEF12', qty: 2 }), 'https://www.amazon.com.au/gp/aws/cart/add.html?ASIN.1=B0ABCDEF12&Quantity.1=2');
   assert.equal(retailers.cartUrl('gamesworld', { variantId: '687010', qty: 4 }), 'https://www.gamesworld.com.au/checkout/?add-to-cart=687010&quantity=4');
   // From The Deep Games: its own address, Shopify's search, its collections read whole (never its singles'), and
-  // its Preorders collection as every keyword's second page. Its pages are new to the extension in 1.29.0.
+  // its Preorders collection every third search (in place of its newest products). Its pages are new to the extension in 1.29.0.
   const ftd = retailers.get('fromthedeep');
   assert.equal(ftd.base, 'https://fromthedeepgames.com.au');
   assert.equal(ftd.acoVersion, '1.29.0');
@@ -143,7 +143,8 @@ test('retailers: each store has its own flow; product codes from links; demo cop
   assert.equal(ftd.productPath.test('/collections/pokemon-tcg'), false, 'a collection page is no product');
   assert.ok(ftd.sweep.collectionSkip.test('Pokemon Singles (All)') && !ftd.sweep.collectionSkip.test('Pokemon TCG Sealed'));
   assert.ok(ftd.sweep.collectionPrefer.test('Pokemon TCG Sealed') && !ftd.sweep.collectionPrefer.test('Pokemon TCG Preorders'));
-  assert.equal(ftd.sweep.feedPath, '/collections/preorders/products.json?limit=250');
+  assert.equal(ftd.sweep.newestPath, '/collections/preorders/products.json?limit=250');
+  assert.equal(ftd.sweep.feedPath, undefined);
   // Gameology: a product page with a collection on the way or without; a collection page isn't one. Its pages
   // are new to the extension in 1.28.0, so an older copy is never sent there.
   for (const path of ['/collections/one-piece-booster-boxs/products/one-piece-card-game-op-15-booster-box', '/products/one-piece-card-game-op-15-booster-box']) assert.ok(retailers.get('gameology').productPath.test(path), path);

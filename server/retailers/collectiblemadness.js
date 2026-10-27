@@ -7,7 +7,7 @@
 // as billing address" ticked → STOP at "Pay now".
 //
 // Live sweeps from Mugibot's server: each keyword's search ("Pokemon - TCG - …", its products are
-// named) and the store's newest products as every keyword's second page.
+// named) and, every third search, the store's newest products.
 
 import jbhifi from './jbhifi.js';
 import pokebox from './pokebox.js';

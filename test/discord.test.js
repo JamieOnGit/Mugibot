@@ -341,12 +341,21 @@ test("Discord's line: a drop's channel post goes ahead of members' DMs waiting t
   };
   const cfg = { discord: { apiBase: 'https://discord.test/api/v10', botToken: 'bot-token', guildId: 'guild-1' }, baseUrl: 'https://mugibot.test', appName: 'Mugibot', log: () => {} };
   const d = new Discord({ cfg, repo: {}, fetchImpl });
-  // Twelve DMs (six at a time), then a drop's channel post: it goes next, not thirteenth.
-  const dms = Array.from({ length: 12 }, (_, i) => d.api('POST', `/channels/dm-${i}/messages`, { content: 'dm' }));
+  // Twenty-four DMs (ten at a time: two places are kept for what can't wait), then a drop's channel post: it goes
+  // straight away, in a kept place — not twenty-fifth, nor even after a DM's done.
+  const dms = Array.from({ length: 24 }, (_, i) => d.api('POST', `/channels/dm-${i}/messages`, { content: 'dm' }));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(d.active, 10, 'ten DMs at once');
   const urgent = d.post('chan-alerts', { content: 'drop' }, { urgent: true });
   assert.ok((await Promise.all(dms)).every((x) => x.status === 200));
   assert.equal(await urgent, true);
-  assert.equal(started.indexOf('/channels/chan-alerts/messages'), 6, `straight after the six already sending (${started.join(' ')})`);
+  assert.equal(started.indexOf('/channels/chan-alerts/messages'), 10, `straight after the ten already sending (${started.join(' ')})`);
+  // A member's bank approval DM (urgent too): the same.
+  const more = Array.from({ length: 12 }, (_, i) => d.api('POST', `/channels/dm-more-${i}/messages`, { content: 'dm' }));
+  const bank = d.dm({ discord_id: 'u-1', discord_dm_channel: 'dm-bank' }, { content: 'approve' }, { urgent: true });
+  await Promise.all(more);
+  assert.equal(await bank, true);
+  assert.ok(started.indexOf('/channels/dm-bank/messages') < started.indexOf('/channels/dm-more-10/messages'), `ahead of the DMs waiting (${started.join(' ')})`);
   assert.equal(d.active, 0, 'every place given back');
   // Six told to slow down: their waits hold no place, so a seventh request goes straight away…
   const slow = Array.from({ length: 6 }, (_, i) => d.api('POST', `/channels/slow-${i}/messages`, {}));
@@ -363,4 +372,96 @@ test("Discord's line: a drop's channel post goes ahead of members' DMs waiting t
   assert.ok(Date.now() - t1 >= 200, `waited for the route's reset (${Date.now() - t1} ms)`);
   assert.equal(hits.get('/channels/bucket/messages'), 2, 'two requests, none turned away');
   assert.equal(d.active, 0);
+  // Never more than 45 requests in any second to Discord, all told (its limit is 50 a second per bot).
+  const at = [];
+  const quick = new Discord({ cfg, repo: {}, fetchImpl: async () => { at.push(Date.now()); return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }); } });
+  const burst = Date.now();
+  await Promise.all(Array.from({ length: 100 }, (_, i) => quick.api('POST', `/channels/c-${i}/messages`, {})));
+  assert.equal(at.length, 100);
+  assert.ok(Date.now() - burst >= 1000, 'a hundred take over a second');
+  for (const t of at) assert.ok(at.filter((x) => x >= t && x < t + 1000).length <= 45, 'at most 45 in any second');
+  // Discord turning the whole bot away (a global limit, not one route's): every request waits, not just the one told.
+  let told = false;
+  const times = [];
+  const globalOne = new Discord({ cfg, repo: {}, fetchImpl: async (url) => {
+    const path = new URL(url).pathname;
+    times.push([path, Date.now()]);
+    if (!told && path.endsWith('/first/messages')) {
+      told = true;
+      return new Response(JSON.stringify({ retry_after: 0.3, global: true }), { status: 429, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+  } });
+  const g0 = Date.now();
+  const first = globalOne.api('POST', '/channels/first/messages', {});
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal((await globalOne.api('POST', '/channels/second/messages', {})).status, 200);
+  assert.ok(Date.now() - g0 >= 250, `another route waited too (${Date.now() - g0} ms)`);
+  assert.equal((await first).status, 200, 'and the first went once Discord said');
+});
+
+test("Discord's line keeps to 45 a second even when a request goes a moment after its place is taken, across a millisecond's turn (the first of a second sent at 1 ms, its place taken at 0): the 46th waits", async () => {
+  // A clock turned by hand.
+  let clock = 1_000_000;
+  const realNow = Date.now;
+  Date.now = () => clock;
+  try {
+    const at = [];
+    const cfg = { discord: { apiBase: 'https://discord.test/api/v10', botToken: 'bot-token', guildId: 'guild-1' }, baseUrl: 'https://mugibot.test', appName: 'Mugibot', log: () => {} };
+    const d = new Discord({ cfg, repo: {}, fetchImpl: async () => {
+      if (!at.length) clock += 1;
+      at.push(clock);
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    } });
+    for (let i = 0; i < 45; i++) await d.api('POST', `/channels/c-${i}/messages`, {});
+    // A second after the first's place was taken (not yet a second after it went): the 46th waits its turn.
+    clock = 1_000_000 + 1000;
+    const last = d.api('POST', '/channels/c-45/messages', {});
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(at.length, 45, 'the 46th waits');
+    clock += 50;
+    assert.equal((await last).status, 200);
+    for (const t of at) assert.ok(at.filter((x) => x >= t && x < t + 1000).length <= 45, 'at most 45 in any second');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a member's DM never waits on their own webhook or email (a dead webhook took 8 s, an email up to 10): back once the DM's out, the others still going; an Auto-checkout DM they must act on now goes first in line", async () => {
+  const { Notifier } = await import('../server/notifier.js');
+  const dmCalls = [];
+  const logs = [];
+  const cfg = { appName: 'Mugibot', baseUrl: 'https://mugibot.test', dataKey: Buffer.alloc(32, 7), discord: { linkButtons: true }, log: (...a) => logs.push(a.join(' ')) };
+  const repo = {
+    addEvent: (userId, ev) => ({ id: 1, ...ev }),
+    userById: () => ({ id: 'u1', discord_id: 'd1', email: 'ash@example.com' }),
+    getData: () => ({ discordWebhook: 'https://discord.com/api/webhooks/1/dead', emailOnRestock: true, emailOnCheckout: true }),
+  };
+  let hookCalls = 0;
+  let mailCalls = 0;
+  const n = new Notifier({
+    cfg, repo, retailers: {}, hub: { publish() {} },
+    mailer: { send: () => { mailCalls += 1; return new Promise(() => {}); } }, // (an email that never finishes)
+    discord: { botReady: true, interactionsReady: false, dm: async (user, msg, opts) => { dmCalls.push(opts); return true; } },
+    fetchImpl: () => { hookCalls += 1; return new Promise(() => {}); }, // (a webhook that never answers)
+  });
+  const ev = { type: 'restock', level: 'urgent', channel: 'restock', title: 'In stock: ETB', message: 'Kmart' };
+  const t0 = Date.now();
+  const r = await n.notify('u1', ev);
+  assert.ok(Date.now() - t0 < 200, `back once the DM's out (${Date.now() - t0} ms)`);
+  assert.deepEqual(r.sent, ['discord-dm']);
+  assert.equal(hookCalls, 1, 'the webhook still sent');
+  assert.equal(mailCalls, 1, 'the email still sent');
+  assert.deepEqual(dmCalls.at(-1), { urgent: false }, 'a restock DM: in the usual line');
+  // Their bank's approval (an Auto-checkout DM to act on now): first in line.
+  await n.notify('u1', { type: 'aco', level: 'urgent', channel: 'aco', title: 'Approve the payment', message: 'Kmart' }, { urgent: true });
+  assert.deepEqual(dmCalls.at(-1), { urgent: true });
+  // A test alert says which of the three went: it waits for them all.
+  const quick = new Notifier({
+    cfg, repo, retailers: {}, hub: { publish() {} },
+    mailer: { send: async () => true },
+    discord: { botReady: true, interactionsReady: false, dm: async () => true },
+    fetchImpl: async () => new Response(null, { status: 204 }),
+  });
+  assert.deepEqual((await quick.notify('u1', ev, { wait: true })).sent.sort(), ['discord-dm', 'email', 'webhook']);
 });

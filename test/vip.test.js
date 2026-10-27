@@ -224,3 +224,23 @@ test('⭐ a product page watch: a VIP monitor read every 5 s around its drop tim
   assert.ok(!env.app.catalog.monitorForProduct(ninja.id), 'its monitor is gone');
   assert.equal((await boss.del(`/api/monitor/vip/${r.body.watch.id}`)).status, 404);
 });
+
+test("⭐ a watch that only alerts: two searches in three in its drop window (the third the store's own), one in three once it's over — a watch with Auto-checkout at the store keeps its words every search in its window, every other one after", async () => {
+  const km = R('demo-kmart');
+  const vipOf = (n) => Array.from({ length: n }, () => !!sw().nextTerm(km).vip).filter(Boolean).length;
+  const a = await boss.post('/api/monitor/vip', { store: 'demo-kmart', words: 'pokemon plush', dropAt: Date.now() + 5 * 60 * 1000 });
+  assert.equal(a.status, 200, a.text);
+  assert.equal(vipOf(3), 2, 'in its window');
+  assert.equal(vipOf(6), 4);
+  clock.offset = 4 * 3600 * 1000;
+  assert.equal(vipOf(3), 1, 'its window over');
+  assert.equal(vipOf(6), 2);
+  clock.offset = 0;
+  const b = await boss.post('/api/monitor/vip', { store: 'demo-kmart', words: 'pokemon tin', dropAt: Date.now() + 5 * 60 * 1000, aco: true, maxPrice: 80 });
+  assert.equal(b.status, 200, b.text);
+  assert.equal(vipOf(4), 4, 'with Auto-checkout, in the window');
+  clock.offset = 4 * 3600 * 1000;
+  assert.equal(vipOf(4), 2, 'with Auto-checkout, after');
+  clock.offset = 0;
+  for (const r of [a, b]) assert.equal((await boss.del(`/api/monitor/vip/${r.body.watch.id}`)).status, 200);
+});

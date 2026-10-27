@@ -614,6 +614,15 @@ const MIGRATIONS = [
   );
   INSERT OR IGNORE INTO first_looks (watch_id, store, full, at) SELECT id, store, 1, created_at FROM vip_watches WHERE words <> '';
   `,
+  // 23 — speed under a drop's load: the lookups made for every product of every search (members watching it, by store
+  //      and SKU as their watchlist has it: any case), for every page the monitor checks (the products on it, by link),
+  //      and for the monitor's round each second (the pages due). Each one was a whole table's read before. (IF NOT EXISTS: safe to run again
+  //      if another branch's migration lands next to it.)
+  `
+  CREATE INDEX IF NOT EXISTS items_store_sku_nocase ON items(store, sku COLLATE NOCASE);
+  CREATE INDEX IF NOT EXISTS products_url ON products(url);
+  CREATE INDEX IF NOT EXISTS page_checks_due ON page_checks(next_check_at);
+  `,
 ];
 
 export class Db {

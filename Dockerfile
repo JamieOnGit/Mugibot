@@ -5,7 +5,8 @@ FROM node:22-slim
 ENV NODE_ENV=production \
     PORT=8080 \
     DATABASE_PATH=/data/mugibot.db \
-    TRUST_PROXY=1
+    TRUST_PROXY=1 \
+    UV_THREADPOOL_SIZE=16
 
 WORKDIR /app
 COPY package.json ./

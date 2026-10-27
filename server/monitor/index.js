@@ -39,14 +39,16 @@ export const RENDER_EXTENSION_VERSION = '1.27.0';
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
 const KNOWN = new Set(Object.values(STATUS));
 
+// An armed item's page (Auto-checkout): checked this far ahead of its turn at its store.
+const ARMED_AHEAD_MS = 15 * 1000;
 const ITEMS_FOR_PAGE = `(c.kind = 'product' AND i.url = c.url) OR (c.kind = 'search' AND i.url = '' AND i.store = c.store AND i.sku = c.sku COLLATE NOCASE)`;
 
 /**
- * Alerts waiting to go out (members' DMs, webhooks, emails): a few at a time — each member's own
- * arrives in a fraction of a second, not after everyone before them has had theirs. A failed one is
- * logged and the rest still go.
+ * Alerts waiting to go out (members' DMs): ten at a time (as many as Discord takes at once for DMs) — each
+ * member's own arrives in a fraction of a second, not after everyone before them has had theirs. A failed one
+ * is logged and the rest still go.
  */
-export async function sendAll(list, onError, atOnce = 5) {
+export async function sendAll(list, onError, atOnce = 10) {
   let next = 0;
   const lane = async () => {
     while (next < list.length) {
@@ -76,6 +78,8 @@ export class Monitor {
     Object.assign(this, { cfg, repo, retailers, notifier, hub, catalog, feed, fetch: fetchImpl, now });
     this.db = repo.db;
     this.hostNext = new Map();
+    this.going = new Set(); // members' alerts still going out (deliver)
+    this.lines = new Map(); // store → its lots of alerts going out (two at most)
     this.inFlight = new Set();
     this.timer = null;
     this.ticks = 0;
@@ -149,12 +153,14 @@ export class Monitor {
       this.db.run(`DELETE FROM page_checks WHERE kind = 'search' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = '' AND i.store = page_checks.store AND i.sku = page_checks.sku COLLATE NOCASE) AND NOT ${monitored}`);
       this.catalog.prune(this.cfg.monitor.logDays);
     }
+    // Oldest first — an armed item's page 15 seconds ahead of its place (its restock starts members' checkouts).
     const due = this.db.all(`SELECT c.* FROM page_checks c
       WHERE c.next_check_at <= :now AND (EXISTS (
         SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
         WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
         OR EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id WHERE m.paused = 0 AND ${PRODUCTS_FOR_PAGE}))
-      ORDER BY c.next_check_at LIMIT 25`, { now });
+      ORDER BY c.next_check_at - CASE WHEN EXISTS (SELECT 1 FROM items i WHERE (${ITEMS_FOR_PAGE}) AND i.aco = 1 AND i.monitor = 1) THEN ${ARMED_AHEAD_MS} ELSE 0 END
+      LIMIT 50`, { now });
     const jobs = [];
     for (const page of due) {
       if (this.sweptLately(page.url, now)) {
@@ -375,8 +381,8 @@ export class Monitor {
         if (this.drops) this.drops.checked(read);
       }
     } finally {
-      // (Even when the shared feed's failed.)
-      await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
+      // (Even when the shared feed's failed. Going out while the next pages are checked: deliver.)
+      await this.deliver(later, prev.store);
     }
     if (prev.kind === 'search' && r.foundUrl) {
       this.resolveSku(prev.store, prev.sku, r.foundUrl);
@@ -411,7 +417,33 @@ export class Monitor {
     const later = theirs || [];
     const order = [...items].sort((a, b) => (b.aco ? 1 : 0) - (a.aco ? 1 : 0));
     for (const item of order) await this.applyResult(item, r, source, { later });
-    if (!theirs) await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
+    if (!theirs) await this.deliver(later, order.length ? order[0].store : '');
+  }
+
+  /**
+   * Members' alerts (ten at a time: sendAll), sent while the monitor and the sweeps carry on — a store's next search
+   * or page check never waits for a drop's DMs to be out (they took seconds with a hundred members watching). Every
+   * Auto-checkout run is made before, and the channel posts went first. Each store's (key) apart from the others',
+   * never in a line behind them — and at most two lots going on their own at a store whose alerts keep coming faster
+   * than they go out (its stock flapping): a third is sent while its caller waits for it, as every search did before —
+   * never behind another's. delivered(): once all are out.
+   */
+  async deliver(list, key = '') {
+    if (!list || !list.length) return;
+    let line = this.lines.get(key);
+    if (!line) this.lines.set(key, (line = []));
+    const p = sendAll(list, (e) => this.cfg.log('[alerts]', e.message)).catch((e) => this.cfg.log('[alerts]', e.message)).finally(() => {
+      this.going.delete(p);
+      line.splice(line.indexOf(p), 1);
+      if (!line.length && this.lines.get(key) === line) this.lines.delete(key);
+    });
+    line.push(p);
+    this.going.add(p);
+    if (line.length > 2) await p;
+  }
+
+  async delivered() {
+    while (this.going.size) await Promise.allSettled([...this.going]);
   }
 
   /**

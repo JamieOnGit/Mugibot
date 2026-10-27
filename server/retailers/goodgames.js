@@ -6,8 +6,7 @@
 // security code, name on card, "Use shipping address as billing address" ticked → STOP at "Pay now".
 //
 // Live sweeps from Mugibot's server: each keyword's search ("tcg" added — Good Games sells board
-// games and toys under the same names) and, as every keyword's second page, the store's newest
-// products.
+// games and toys under the same names) and, every third search, the store's newest products.
 
 import jbhifi from './jbhifi.js';
 import pokebox from './pokebox.js';

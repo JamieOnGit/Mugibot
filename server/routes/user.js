@@ -184,7 +184,7 @@ export function register(router, ctx) {
       type: 'test', level: 'urgent', channel: 'restock',
       title: 'Test alert', message: `This is how ${cfg.appName} restock pings look. You're all set!`, url: `${cfg.baseUrl}/app`,
       buttons: [{ label: 'Open dashboard', url: `${cfg.baseUrl}/app` }],
-    });
+    }, { wait: true });
     return { ok: true, sent: r.sent };
   });
 

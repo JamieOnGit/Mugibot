@@ -16,8 +16,9 @@
 // Live sweeps from Mugibot's server: each game's whole sealed collection, read in one go — "Pokemon TCG Sealed",
 // "One Piece Card Game", "Riftbound", "Gundam Card Game" (Shopify's product list for it: every product, with stock
 // and the option to add) — never its singles' collections ("Pokemon Singles (All)": 30,000 of them), and every
-// keyword's second page is its Preorders collection (every game's pre-orders: where a drop is listed first). Its
-// newest-products list isn't read: it's hundreds of Magic singles a day, a new one every few seconds.
+// round of the keywords its Preorders collection (every game's pre-orders: where a drop is listed first — "Pokemon TCG
+// Sealed" leaves them out), each product in it counted for its keyword. Its newest-products list isn't read: it's
+// hundreds of Magic singles a day, a new one every few seconds.
 
 import jbhifi from './jbhifi.js';
 import pokebox from './pokebox.js';
@@ -44,7 +45,8 @@ export default {
     collectionPath: '/collections/{collection}/products.json?limit=250',
     collectionSkip: /singles/i,
     collectionPrefer: /sealed/i,
-    // Page 2 of every keyword: its Preorders collection.
-    feedPath: '/collections/preorders/products.json?limit=250',
+    // Once a round of the keywords: its Preorders collection (in place of the store's newest products, which the card
+    // shops read).
+    newestPath: '/collections/preorders/products.json?limit=250',
   },
 };

@@ -18,6 +18,8 @@ services:
         value: /data/mugibot.db
       - key: TRUST_PROXY
         value: "1"
+      - key: UV_THREADPOOL_SIZE
+        value: "16"
       - key: DATA_ENCRYPTION_KEY
         generateValue: true   # back this up somewhere safe — without it, saved details can't be read
       - key: BASE_URL

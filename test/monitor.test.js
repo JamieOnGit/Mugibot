@@ -40,6 +40,8 @@ async function advance(seconds = 61) {
     n += done;
     if (!done) break;
   }
+  // (Members' alerts go out while the monitor carries on: done once they're out.)
+  await env.app.monitor.delivered();
   return n;
 }
 const hits = (fragment) => store.state.requests.filter((r) => r.path.includes(fragment)).length;
@@ -423,6 +425,68 @@ test("EB Games (its Cloudflare turns away every server): the server never asks i
     assert.equal(env.app.retailers.settings(eb).browserChecks, true);
   } finally {
     env.app.repo.setSetting('retailer:ebgames', {});
+  }
+});
+
+test("page checks: up to 50 due pages a round (oldest first, an armed item's page ahead of its turn), so one store's long list doesn't keep another store's page waiting — and a store slow to answer is still asked again once its gap is over, as ever", async () => {
+  const mon = env.app.monitor;
+  const { catalog, repo, db, cfg } = env.app;
+  const gap = cfg.monitor.hostGapSeconds;
+  const real = mon.checkPage;
+  const dispatched = [];
+  const release = [];
+  // (Checks that stay open until released: a store slow to answer.)
+  mon.checkPage = (url) => {
+    dispatched.push(url);
+    db.run('UPDATE page_checks SET next_check_at = :t WHERE url = :url', { url, t: mon.now() + 600000 }); // (as a check does: its next one later)
+    return new Promise((resolve) => release.push(resolve));
+  };
+  cfg.monitor.hostGapSeconds = 5;
+  const a = store.url; // 127.0.0.1
+  const b = store.url.replace('127.0.0.1', 'localhost');
+  const now = mon.now();
+  const add = (base, i, dueAgo) => {
+    const url = `${base}/fairness/${i}`;
+    const p = catalog.upsertProduct({ store: 'other', sku: `fair-${base === a ? 'a' : 'b'}-${i}`, url, name: `Fairness ${i}` });
+    catalog.addMonitor(p.id);
+    repo.ensurePage(url, 'product', 'other', p.sku);
+    db.run('UPDATE page_checks SET next_check_at = :t WHERE url = :url', { url, t: now - dueAgo });
+    return url;
+  };
+  const pending = [];
+  try {
+    // Store A: 40 pages overdue (a backlog, a tenth of a second apart); store B: one page, just due.
+    const aPages = Array.from({ length: 40 }, (_, i) => add(a, i, 600000 - i * 100));
+    const bPage = add(b, 0, 1000);
+    // An armed item on A's newest page (its member's Auto-checkout): up to 15 s ahead of its turn there.
+    const ash = await member('fairness-ash');
+    db.run(`INSERT INTO items (id, user_id, position, store, sku, name, url, aco, created_at, updated_at)
+      VALUES ('itm-fair', :u, 999, 'other', 'fair-a-39', 'Fairness 39', :url, 1, :t, :t)`, { u: ash.user.id, url: aPages[39], t: now });
+    pending.push(mon.tick());
+    await new Promise((r) => setImmediate(r));
+    assert.ok(dispatched.includes(bPage), "store B's page checked at once, however long A's list");
+    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 1, 'one a gap at store A');
+    assert.equal(dispatched.find((u) => u.startsWith(`${a}/fairness/`)), aPages[39], "A's armed page first");
+    // Still inside A's gap: not asked again.
+    clock.offset += 2000;
+    pending.push(mon.tick());
+    await new Promise((r) => setImmediate(r));
+    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 1, 'inside its gap: not again');
+    // Past its gap, the first check still going (slow to answer): A's next page is asked all the same, as ever.
+    clock.offset += 4000;
+    pending.push(mon.tick());
+    await new Promise((r) => setImmediate(r));
+    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 2, 'the next one once its gap is over');
+    assert.equal(dispatched.at(-1), aPages[0], 'then oldest first');
+  } finally {
+    release.splice(0).forEach((r) => r());
+    await Promise.all(pending);
+    mon.checkPage = real;
+    cfg.monitor.hostGapSeconds = gap;
+    db.run("DELETE FROM items WHERE id = 'itm-fair'");
+    db.run("DELETE FROM monitors WHERE product_id IN (SELECT id FROM products WHERE sku LIKE 'fair-%')");
+    db.run("DELETE FROM page_checks WHERE url LIKE '%/fairness/%'");
+    mon.hostNext.clear();
   }
 });
 

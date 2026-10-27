@@ -15,8 +15,18 @@ import { entitlement } from './entitlement.js';
 import { ENTITLED_SQL } from './repo.js';
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-// Requests to Discord at once (its own limit is 50 a second; from Sydney each takes a few hundred ms).
-const MAX_ACTIVE = 6;
+// Requests to Discord at once (from Sydney each takes a few hundred ms): twelve — two of them kept for what can't wait
+// (a drop's channel posts, a member's bank approval), so members' DMs have ten. And never more than 45 a second in all:
+// Discord's own limit is 50 a second per bot (over it, every request is turned away for a while).
+export const MAX_ACTIVE = 12;
+const KEPT_FOR_URGENT = 2;
+const PER_SECOND = 45; // (what can't wait may go to 48: never behind DMs for its turn, still under 50)
+const URGENT_PER_SECOND = 48;
+// A request counts for its second and this much more: it's sent a moment after its place is taken, and a millisecond
+// turning in between mustn't let a 46th into the same second.
+const PACE_SLACK_MS = 5;
+// First-time DMs each open a DM channel first, all on one route: two at a time, so a drop's first DMs don't run it dry.
+const OPENING_AT_ONCE = 2;
 
 /** Plain words for the Discord errors people hit while setting up. */
 function explain(status, body, what) {
@@ -38,6 +48,10 @@ export class Discord {
     this.active = 0;
     this.waiting = [];
     this.urgent = []; // a drop's channel posts: first in line, never behind members' DMs
+    this.sentAt = []; // when each request of the last second went (never more than PER_SECOND of them)
+    this.pausedUntil = 0; // Discord said "slow down" to the whole bot (a global limit): nothing goes till then
+    this.opening = 0;
+    this.toOpen = [];
     this.freeAt = new Map(); // route → when Discord said it takes requests again (none left till then)
   }
 
@@ -52,15 +66,29 @@ export class Discord {
   // meanwhile, so nothing else waits behind a wait
   // -------------------------------------------------------------------------
   async slot(urgent = false) {
-    if (this.active < MAX_ACTIVE) { this.active += 1; return; }
+    if (this.active < (urgent ? MAX_ACTIVE : MAX_ACTIVE - KEPT_FOR_URGENT)) { this.active += 1; return; }
     // (A place that comes free goes straight to the next in line: release().)
     await new Promise((r) => (urgent ? this.urgent : this.waiting).push(r));
   }
 
   release() {
-    const next = this.urgent.shift() || this.waiting.shift();
+    // (The two places kept for what can't wait: never handed to a DM in the ordinary line.)
+    const next = this.urgent.shift() || (this.active <= MAX_ACTIVE - KEPT_FOR_URGENT ? this.waiting.shift() : null);
     if (next) next();
     else this.active -= 1;
+  }
+
+  /**
+   * At most PER_SECOND requests in any second to Discord, all told: 0 when this one may go — its place taken, to be sent
+   * straight away — or how long to wait for its turn.
+   */
+  paceWait(urgent = false) {
+    const cap = urgent ? URGENT_PER_SECOND : PER_SECOND;
+    const now = Date.now();
+    if (this.pausedUntil > now) return this.pausedUntil - now;
+    while (this.sentAt.length && this.sentAt[0] <= now - 1000 - PACE_SLACK_MS) this.sentAt.shift();
+    if (this.sentAt.length < cap) { this.sentAt.push(now); return 0; }
+    return this.sentAt[0] + 1000 + PACE_SLACK_MS - now + 1;
   }
 
   /** Discord's word on a route: no requests left on it → none sent there until its limit resets. */
@@ -96,6 +124,8 @@ export class Discord {
       let data;
       await this.slot(urgent);
       try {
+        // (Sent the moment its place in the second is taken: nothing runs in between.)
+        for (let ms = this.paceWait(urgent); ms > 0; ms = this.paceWait(urgent)) await wait(ms);
         try {
           res = await this.fetch(`${this.d.apiBase}${path}`, { method, headers, body: payload, signal: AbortSignal.timeout(10000) });
         } catch (e) {
@@ -107,7 +137,11 @@ export class Discord {
       }
       this.noteLimit(route, res);
       if (res.status === 429 && attempt < 3) {
-        await wait(Math.min(10, Number(data && data.retry_after) || 1) * 1000);
+        const after = Math.min(10, Number(data && data.retry_after) || 1) * 1000;
+        // (The whole bot over Discord's limit, not one route: every request waits, not just this one.)
+        const global = (data && data.global === true) || (res.headers && typeof res.headers.get === 'function' && res.headers.get('x-ratelimit-global') === 'true');
+        if (global) this.pausedUntil = Math.max(this.pausedUntil, Date.now() + after);
+        await wait(after);
         continue;
       }
       return { status: res.status, body: data };
@@ -243,12 +277,23 @@ export class Discord {
   // -------------------------------------------------------------------------
   // Messages
   // -------------------------------------------------------------------------
-  /** DM a member. False if they can't be reached (DMs off, not in the server, bot not set up). */
-  async dm(user, message) {
+  /**
+   * DM a member. False if they can't be reached (DMs off, not in the server, bot not set up). urgent: one they have to
+   * act on now (Auto-checkout's bank approval, a check to solve) — first in line, with a drop's channel posts.
+   */
+  async dm(user, message, { urgent = false } = {}) {
     if (!this.botReady || !user || !user.discord_id) return false;
     let channel = user.discord_dm_channel;
     if (!channel) {
-      const c = await this.api('POST', '/users/@me/channels', { recipient_id: user.discord_id });
+      if (this.opening >= OPENING_AT_ONCE && !urgent) await new Promise((r) => this.toOpen.push(r));
+      else this.opening += 1;
+      let c;
+      try {
+        c = await this.api('POST', '/users/@me/channels', { recipient_id: user.discord_id }, { urgent });
+      } finally {
+        const next = this.toOpen.shift();
+        if (next) next(); else this.opening -= 1;
+      }
       if (c.status !== 200 || !c.body || !c.body.id) {
         this.repo.updateUser(user.id, { discord_error: explain(c.status, c.body, 'message you') });
         return false;
@@ -256,7 +301,7 @@ export class Discord {
       channel = c.body.id;
       this.repo.updateUser(user.id, { discord_dm_channel: channel });
     }
-    const r = await this.api('POST', `/channels/${channel}/messages`, message);
+    const r = await this.api('POST', `/channels/${channel}/messages`, message, { urgent });
     if (r.status === 200) {
       if (user.discord_error) this.repo.updateUser(user.id, { discord_error: '' });
       return true;

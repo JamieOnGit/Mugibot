@@ -572,7 +572,10 @@ said "no confirmation" by then, the bank's check still reaches you.
 
 Then, within seconds: **🏦 Approve the payment in your bank's app** as a Discord
 DM (and email, if you get them), with **🖥️ Open my computer** (Chrome Remote
-Desktop) for a code you have to type into the checkout tab. The run says
+Desktop) for a code you have to type into the checkout tab. It goes first in
+Mugibot's line to Discord, ahead of a drop's other DMs (as do **🛒 Checkout
+ready** and a checkpoint's **🛡️ solve it now**), so it reaches you in under a
+second however busy the drop. The run says
 **Needs you**. Approve it on your phone and the store goes on to its
 confirmation; Mugibot is still watching (for the half hour) and the run turns
 **✅ Order placed** by itself. "Pay" is never pressed again meanwhile.

@@ -51,6 +51,9 @@ export default {
       + '&sort_by=numberOfDaysSinceStartDate&sort_order=ascending&filters%5BSeller%5D=Kmart&filters%5BSeller%5D=Target',
     pagePath: '&page={page}',
     pages: 3,
+    // (Its searches and its whole list are its Trading Cards range only: a product in them needn't have a card word in
+    //  its name — "ONE PIECE OP-15 BOX", a "Super-Premium Collection" — to count. A VIP or drop watch's words aren't.)
+    cardsOnly: true,
   },
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.

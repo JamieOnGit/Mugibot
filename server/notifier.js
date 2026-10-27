@@ -10,6 +10,7 @@ import { STATUS_LABEL } from './monitor/status.js';
 // ⚡ Buy links go straight to the store while they're valid (then they open the buy page, one
 // press more). A member's own link only works signed in as them, so it can last a week.
 const BUY_LINK_TTL = 7 * 24 * 60 * 60 * 1000;
+const HOOKS_AT_ONCE = 8;
 const COLORS = { urgent: 0x16a34a, success: 0x16a34a, warn: 0xd97706, info: 0x2563eb, listed: 0x7c3aed, price: 0x0d9488 };
 
 const money = (n) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
@@ -28,6 +29,8 @@ export class Notifier {
     this.buyKey = purposeKey(cfg.dataKey, 'buy-link');
     this.alertBuyKey = purposeKey(cfg.dataKey, 'alert-buy-link');
     this.pools = null; // set by app.js (server/pools.js): a pool's leader's ⚡ Buy is their 🤝 Group Buy
+    this.hooks = 0; // members' own webhooks going now (at most HOOKS_AT_ONCE: a drop's never all at once)
+    this.hookQueue = [];
   }
 
   /**
@@ -70,11 +73,13 @@ export class Notifier {
    * ev: { type, level ('info'|'success'|'warn'|'urgent'), message, title?, name?, sku?, url?, buttons?: [{label, url}],
    *       channel?: 'restock' | 'listed' | 'checkout' | 'aco' — also DM / webhook / email per the member's settings;
    *                 'account' — membership news, DM'd if Discord is connected }
-   * emailAfter: back once the DM (and webhook) are out — the email still going, never holding up the next
-   * member's DM in a drop (sent then says nothing of the email).
-   * Returns { event, sent: ['discord-dm', 'webhook', 'email'] }.
+   * Back once the Discord DM is out: the member's own webhook and email still going, never holding up the next member's
+   * DM in a drop (a dead webhook took 8 s, an email up to 10) — wait: back once all three are (a test alert says which
+   * went). urgent: an Auto-checkout DM the member has to act on now (approve the payment in their bank's app, press the
+   * final button, solve a check) — first in Discord's line, ahead of a drop's other DMs.
+   * Returns { event, sent: ['discord-dm', 'webhook', 'email'] } (with wait; else the DM's alone).
    */
-  async notify(userId, ev, { emailAfter = false } = {}) {
+  async notify(userId, ev, { wait = false, urgent = false } = {}) {
     // The feed keeps one line: "In stock: Day UPC — Kmart · SKU 43818648 · $360.00".
     const firstLine = String(ev.message).split('\n')[0];
     const saved = this.repo.addEvent(userId, { ...ev, message: ev.title ? `${ev.title} — ${firstLine}` : ev.message });
@@ -88,19 +93,22 @@ export class Notifier {
     // 'aco': Auto-checkout (it spends their money): always DM'd.
     const wantsDm = { restock: settings.discordDm, listed: settings.discordDmListed, checkout: settings.discordDmCheckout, aco: true, account: true }[ev.channel];
     if (wantsDm && user.discord_id && this.discord.botReady) {
-      jobs.push(this.discord.dm(user, this.message(ev)).then((ok) => ok && sent.push('discord-dm')));
+      jobs.push(this.discord.dm(user, this.message(ev), { urgent }).then((ok) => ok && sent.push('discord-dm')));
     }
-    if (settings.discordWebhook && ev.channel !== 'account') jobs.push(this.webhook(settings, ev).then((ok) => ok && sent.push('webhook')));
+    const after = (job, what) => {
+      const done = job.then((ok) => ok && sent.push(what));
+      if (wait) jobs.push(done);
+      else done.catch((e) => this.cfg.log('[notify]', `${what}: ${e.message}`));
+    };
+    if (settings.discordWebhook && ev.channel !== 'account') after(this.webhook(settings, ev), 'webhook');
     const wantsEmail = { checkout: settings.emailOnCheckout, aco: settings.emailOnCheckout, restock: settings.emailOnRestock, listed: settings.emailOnRestock, account: true }[ev.channel];
     if (wantsEmail && user.email) {
       const links = (ev.buttons || []).map((b) => `${b.label}: ${b.url}`).join('\n');
-      const mail = this.mailer.send({
+      after(this.mailer.send({
         to: user.email,
         subject: `${this.cfg.appName}: ${ev.title || ev.message}`,
         text: `${ev.title || ''}\n${ev.message}\n${ev.url || ''}\n${links}\n\nOpen your dashboard: ${this.cfg.baseUrl}/app\nChange alert settings: ${this.cfg.baseUrl}/app#discord`,
-      });
-      if (emailAfter) mail.catch(() => null);
-      else jobs.push(mail.then((ok) => ok && sent.push('email')));
+      }), 'email');
     }
     await Promise.allSettled(jobs);
     return { event: saved, sent };
@@ -150,6 +158,8 @@ export class Notifier {
       body.embeds[0].description = `${body.embeds[0].description || ''}\n\n${ev.buttons.map((b) => `**${b.label}:** ${b.url}`).join('\n')}`.trim();
     }
     body.allowed_mentions = { parse: ['users', 'roles'] };
+    if (this.hooks >= HOOKS_AT_ONCE) await new Promise((r) => this.hookQueue.push(r));
+    else this.hooks += 1;
     try {
       const res = await this.fetch(settings.discordWebhook, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(8000),
@@ -157,6 +167,9 @@ export class Notifier {
       return res.ok;
     } catch {
       return false; // Discord down or webhook deleted — the alert is still in the activity feed
+    } finally {
+      const next = this.hookQueue.shift();
+      if (next) next(); else this.hooks -= 1;
     }
   }
 
@@ -193,7 +206,7 @@ export class Notifier {
         type: 'listed', level: 'success', color: 'listed', channel: 'listed',
         title: `Listed: ${item.name}`, message: `${meta}\nThe product page is up — now ${label.toLowerCase()}.`,
         name: item.name, sku: item.sku, url: item.url || null, buttons,
-      }, { emailAfter: true });
+      });
     }
     // Your own drop watch's find, cheaper than the read before (monitor/drops.js): at any store or website.
     if (kind === 'price_drop') {
@@ -211,6 +224,6 @@ export class Notifier {
       title: `${info.status === 'preorder' ? '🟣' : '🟢'} ${label}: ${item.name}`,
       message: `${meta}${info.note ? `\n${info.note}` : ''}\n${who}. ${buyable ? this.pressText(buy) : 'Open the product to buy it there.'}`,
       name: item.name, sku: item.sku, url: item.url || null, buttons,
-    }, { emailAfter: true });
+    });
   }
 }

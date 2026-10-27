@@ -423,6 +423,7 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     const s = d.settings;
     m.sweepDefaults = d.defaults;
     $('#ms-enabled').checked = s.enabled;
+    $('#ms-dropmode').checked = !!s.dropMode;
     $('#ms-every').value = s.everySeconds;
     $('#ms-bevery').value = s.browserEverySeconds;
     $('#ms-drop').value = s.priceDropPercent;
@@ -455,6 +456,7 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
         : s.fails ? h('span', { class: `pill ${s.fails > 2 ? 'err' : 'warn'}`, title: s.lastError }, `${s.lastError || 'Failing'}${s.nextAt ? ` · ${retryIn(s.nextAt)}` : ''}`)
           : s.backup ? h('span', { class: 'pill warn', title: `Mugibot's server: ${s.backup.why || 'refused'}` }, `Admin's browser standing in · server ${s.backup.retryAt ? `tries again ${new Date(s.backup.retryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'trying again now'}`)
           : s.slowedUntil ? h('span', { class: 'pill warn', title: 'Searched at a third of the pace for a while (after a refusal, or a reset)' }, `Gentle until ${new Date(s.slowedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
+            : s.dropMode ? h('span', { class: 'pill ok', title: `A new listing just came up here: ${s.dropMode.newest ? 'its newest products' : `"${s.dropMode.keyword}"`} searched more often for a while (same pace, no extra requests)` }, `⚡ Drop mode until ${new Date(s.dropMode.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
             : s.lastOkAt ? h('span', { class: 'pill ok', title: s.lastError || (s.lastNote ? `Its last search: ${s.lastNote}` : '') }, s.lastError || 'OK')
             : h('span', { class: 'pill' }, s.source === 'browser' ? "Waiting for an admin's browser" : 'Starting');
       const id = s.id || s.store;
@@ -727,7 +729,7 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     busy(e.target, async () => {
       try {
         const d = await api('PUT', '/api/monitor/sweep', {
-          enabled: $('#ms-enabled').checked, everySeconds: $('#ms-every').value, browserEverySeconds: $('#ms-bevery').value,
+          enabled: $('#ms-enabled').checked, dropMode: $('#ms-dropmode').checked, everySeconds: $('#ms-every').value, browserEverySeconds: $('#ms-bevery').value,
           priceDropPercent: $('#ms-drop').value, newAlerts: $('#ms-new').checked, restockAlerts: $('#ms-restock').checked, priceAlerts: $('#ms-price').checked, restockOncePerDay: $('#ms-once').checked,
           skipMarketplace: $('#ms-market').checked, tcgOnly: $('#ms-tcg').checked, tcgTerms: $('#ms-terms-input').value, notCardTerms: $('#ms-notcard-input').value,
         });
