@@ -187,8 +187,10 @@ export class Monitor {
 
   /** Has a live sweep seen what's on this product page in the last few minutes (the shared product, or members' SKUs)? */
   sweptLately(url, now) {
-    // (A VIP drop's page is always read: its stock is what decides, and every second counts.)
+    // (A VIP drop's page is always read: its stock is what decides, and every second counts. So is one a drop watch's
+    //  find waits on: only its page says whether it's armed.)
     if (this.vip && this.vip.pageSeconds(url, now)) return false;
+    if (this.drops && this.drops.waitsOn(url)) return false;
     const since = now - SWEEP_FRESH_MS;
     const product = this.db.get("SELECT 1 AS y FROM products WHERE url = :url AND sweep_seen_at >= :since AND status_source = 'sweep' LIMIT 1", { url, since });
     if (product) return true;
@@ -361,15 +363,22 @@ export class Monitor {
     const items = prev.kind === 'search' && r.foundUrl ? [] : this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id, page_checks c
       WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { url, now });
     await this.applyAll(items, { status, title: r.title || null, price: r.price ?? null, error: r.error || '' }, 'server', { later });
+    // (Someone's own drop watch's find waiting on its page — monitor/drops.js: a read that worked settles it, whatever a
+    //  search saw of it lately — armed if it isn't on sale.)
+    if (this.drops && !FAILED.has(r.status)) for (const item of items) if (item.drop_watch) this.drops.firstRead(item, r.status);
     try {
       // The shared feed: every monitored product on this page.
       for (const product of this.catalog.productsForPage(url)) {
         if (prev.kind === 'search' && r.foundUrl) continue;
         // What this check really saw: the feed keeps the last confirmed status itself.
         await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
-        // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js).
-        if (this.vip) this.vip.checked(this.catalog.productById(product.id));
-        if (this.drops) this.drops.checked(this.catalog.productById(product.id));
+        // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js): settled by what
+        // this read said, when it worked — not the catalogue's status, which a read moments after a search leaves as the
+        // search had it (feed.applyCheck), nor one a failed read kept.
+        if (FAILED.has(r.status)) continue;
+        const read = { ...this.catalog.productById(product.id), status: r.status };
+        if (this.vip) this.vip.checked(read);
+        if (this.drops) this.drops.checked(read);
       }
     } finally {
       // (Even when the shared feed's failed. Going out while the next pages are checked: deliver.)
@@ -435,6 +444,28 @@ export class Monitor {
 
   async delivered() {
     while (this.going.size) await Promise.allSettled([...this.going]);
+  }
+
+  /**
+   * A page to read as soon as the monitor may (a drop watch's find whose stock its search didn't say, another website's
+   * new listing): now, when its store can be asked this moment, as the monitor's own round would — never a store the
+   * server doesn't ask (an admin's switch: browsers read it), never inside its gap between reads, never twice at once —
+   * else next in the round. Never sooner than a page backing off (its last reads failed) is due: it's read when that's
+   * over, as it would be anyway. Returns the read started now (to wait for it), or null.
+   */
+  checkNow(url) {
+    const page = url && this.db.get('SELECT * FROM page_checks WHERE url = :url', { url });
+    if (!page) return null;
+    const now = this.now();
+    if (page.fail_count > 0 && page.next_check_at > now) return null;
+    this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
+    const retailer = this.retailers.get(page.store) || this.retailers.forUrl(url);
+    if (retailer && !this.retailers.settings(retailer).serverChecks) return null;
+    if (this.inFlight.has(url) || this.inFlight.size >= 4 || (this.hostNext.get(page.host) || 0) > now) return null;
+    const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
+    this.hostNext.set(page.host, now + gap * 1000);
+    this.inFlight.add(url);
+    return this.checkPage(url).catch((e) => this.cfg.log('[monitor]', e.message)).finally(() => this.inFlight.delete(url));
   }
 
   /** later: a list to put this item's alerts on (sent by the caller), instead of sending them now. */
@@ -769,6 +800,13 @@ export class Monitor {
     }, { source: 'browser', url: product.url || '' });
     // A product the searches found that nobody monitors, on sale on its own page now: alerted by the searches' rules.
     if (this.sweeper && fresh && !failed) await this.sweeper.pageRead(product, fresh).catch((e) => this.cfg.log('[sweep]', e.message));
+    // (A VIP or drop watch's find waiting on its page — at a store only browsers read, say: settled by this read, by what
+    //  it said, as a server's read would — checkPage.)
+    if (fresh && !failed) {
+      const read = { ...this.catalog.productById(product.id), status };
+      if (this.vip) this.vip.checked(read);
+      if (this.drops) this.drops.checked(read);
+    }
     return true;
   }
 
@@ -820,6 +858,9 @@ export class Monitor {
       const price = typeof res.price === 'number' && Number.isFinite(res.price) && res.price >= 0 && res.price < 100000 ? res.price : null;
       const error = failed ? (typeof res.error === 'string' && res.error ? res.error.slice(0, 200) : 'Your browser couldn\'t read the page') : '';
       await this.applyResult({ ...row, browser_fails: fails }, { status, title, price, error }, 'browser');
+      // (A drop watch's find waiting on its page — a store only browsers read, say: this read of its page settles it, as a
+      //  server's would — checkPage.)
+      if (row.url && row.drop_watch && this.drops && !failed) this.drops.firstRead(row, status);
       applied += 1;
     }
     return applied;

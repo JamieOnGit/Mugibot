@@ -635,8 +635,10 @@ test('🎯 a broad watch whose first look finds plenty still hears of what drops
     const look = await drops().look(drops().get(w.id));
     assert.equal(look.ok, true, look.error);
     const first = drops().get(w.id).found;
-    assert.equal(first.length, 10, 'its first look keeps 10 of what was listed already');
+    assert.equal(first.filter((f) => !f.quiet).length, 10, 'its first look keeps 10 of what was listed already');
+    assert.equal(first.filter((f) => f.quiet).length, 2, '…and remembers the other 2 (listed already, never taken for a drop)');
     assert.ok(first.every((f) => f.base === true));
+    assert.equal((await ash.get('/api/drops')).body.watches.find((x) => x.id === w.id).found.length, 10, 'what it only remembers isn\'t shown');
     const n0 = dms('d-ash').length;
     // A new one drops: there's room for it (before, a full first look left none).
     store.state.acme.products.push({ handle: 'garmin-watch-band-quickfit-22', name: 'Garmin Watch Band QuickFit 22', price: 79, status: 'in_stock', listed: true });

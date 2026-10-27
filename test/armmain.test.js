@@ -1,5 +1,5 @@
-// Auto-checkout watches arm as they always have: a watch's find has its page read at once, even while that page is backing
-// off; JB Hi-Fi's newest products count a drop as before; the card words an admin had already count as before through the
+// Auto-checkout watches arm as they always have: a VIP watch's find has its page read at the next round, even while that
+// page is backing off; a member's own find straight away; JB Hi-Fi's newest products count a drop as before; the card words an admin had already count as before through the
 // quiet window after the words widened; and a VIP watch with Auto-checkout is searched every few seconds in its window,
 // wherever it is.
 import { test, before, after } from 'node:test';
@@ -84,25 +84,29 @@ test("⭐ a VIP watch with Auto-checkout finds what was on sale already when it 
   assert.equal((await boss.del(`/api/monitor/vip/${id}`)).status, 200);
 });
 
-test("⭐ …and one listed but not on sale yet, its page backing off: armed at once — bought the moment it drops", async () => {
+test("⭐ …and one listed but not on sale yet, its page backing off: its page read at the next round all the same, armed — bought the moment it drops", async () => {
   const r = R('demo-pokebox');
-  const P = prod('pokebox', 'mew-plush-r1', 'Mew Plush R1 Edition', 11);
-  backingOff(r, P.url, P.sku, 5, 15 * MIN);
-  const res = await boss.post('/api/monitor/vip', { store: r.id, words: 'mew plush r1', dropAt: now() + 10 * MIN, aco: true, maxPrice: 100 });
+  const box = DUMMY_PRODUCTS.pokebox.find((p) => p.status === 'out_of_stock');
+  const url = `${store.url}${dummyProductPath('pokebox', box)}`;
+  backingOff(r, url, box.sku, 5, 15 * MIN);
+  const res = await boss.post('/api/monitor/vip', { store: r.id, words: 'op-15 adventure', dropAt: now() + 10 * MIN, aco: true, maxPrice: 400 });
   assert.equal(res.status, 200, res.text);
   const id = res.body.watch.id;
-  const s = await ingest(r, { keyword: 'mew plush r1', page: 1, vip: id }, [P]);
+  const s = await ingest(r, { keyword: 'op-15 adventure', page: 1, vip: id }, [prod('pokebox', box.sku, box.name, 11, { url, price: 249.95 })]);
   assert.equal(s.ok, true, s.error);
+  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['pending']);
   await settle();
-  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['armed']);
+  assert.deepEqual(sw().vip.get(id).found.map((f) => f.arm), ['armed'], 'its page read at once: not on sale yet');
+  // It drops.
+  store.set('pokebox', box.sku, { status: 'in_stock' });
   clock.offset += MIN;
-  await ingest(r, { keyword: 'mew plush r1', page: 1, vip: id }, [{ ...P, inStock: true }]);
+  await ingest(r, { keyword: 'op-15 adventure', page: 1, vip: id }, [prod('pokebox', box.sku, box.name, 11, { url, price: 249.95, inStock: true })]);
   await env.app.monitor.delivered();
-  assert.deepEqual(bought(r.id, P.sku).runs, 1, 'bought at the drop');
+  assert.equal(bought(r.id, box.sku).runs, 1, 'bought at the drop');
   assert.equal((await boss.del(`/api/monitor/vip/${id}`)).status, 200);
 });
 
-test("🎯 a member's own drop watch with Auto-checkout at a store whose search doesn't say stock (City Beach): its new find's page is read straight away, backing off or not — bought the moment it's found", async () => {
+test("🎯 a member's own drop watch with Auto-checkout at a store whose search doesn't say stock (City Beach): its new find's page is read straight away (the search's members' DMs waiting their turn) — bought the moment it's found", async () => {
   const cb = R('demo-citybeach');
   const BOARD = '20499999-01';
   const url = `${store.url}${dummyProductPath('citybeach', DUMMY_PRODUCTS.citybeach.find((p) => p.sku === BOARD))}`;
@@ -113,7 +117,6 @@ test("🎯 a member's own drop watch with Auto-checkout at a store whose search 
   let s = await sw().sweepTerm(cb, term);
   assert.equal(s.ok, true, s.error);
   assert.ok(env.app.drops.get(w.id).baselineAt);
-  backingOff(cb, url, BOARD, 4, 8 * MIN);
   store.set('citybeach', BOARD, { listed: true, status: 'in_stock' });
   clock.offset += 5000;
   s = await sw().sweepTerm(cb, term);

@@ -599,13 +599,29 @@ const MIGRATIONS = [
   ALTER TABLE items ADD COLUMN pool_watch TEXT;
   CREATE INDEX items_pool_src ON items(pool_src);
   `,
-  // 22 — speed under a drop's load: the lookups made for every product of every search (members watching it, by store
-  //      and SKU as their watchlist has it: any case), for every page the monitor checks (the products on it, by link),
-  //      and for the monitor's round each second (the pages due). Each one was a whole table's read before.
+  // 22 — a words watch's first look at each store (VIP and drop watches: watch_id): whether its page was full — more
+  //      listed than the page held, so something listed all along may show up in it only later, and an Auto-checkout
+  //      watch then doesn't buy what's new to it on the search's say. A store a watch looked at before this has no row
+  //      (as full); VIP keyword watches from before this: full. (A table of its own, made only where it isn't there, so
+  //      this migration is safe to run again if another branch's lands next to it.)
   `
-  CREATE INDEX items_store_sku_nocase ON items(store, sku COLLATE NOCASE);
-  CREATE INDEX products_url ON products(url);
-  CREATE INDEX page_checks_due ON page_checks(next_check_at);
+  CREATE TABLE IF NOT EXISTS first_looks (
+    watch_id TEXT NOT NULL,
+    store TEXT NOT NULL,
+    full INTEGER NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (watch_id, store)
+  );
+  INSERT OR IGNORE INTO first_looks (watch_id, store, full, at) SELECT id, store, 1, created_at FROM vip_watches WHERE words <> '';
+  `,
+  // 23 — speed under a drop's load: the lookups made for every product of every search (members watching it, by store
+  //      and SKU as their watchlist has it: any case), for every page the monitor checks (the products on it, by link),
+  //      and for the monitor's round each second (the pages due). Each one was a whole table's read before. (IF NOT EXISTS: safe to run again
+  //      if another branch's migration lands next to it.)
+  `
+  CREATE INDEX IF NOT EXISTS items_store_sku_nocase ON items(store, sku COLLATE NOCASE);
+  CREATE INDEX IF NOT EXISTS products_url ON products(url);
+  CREATE INDEX IF NOT EXISTS page_checks_due ON page_checks(next_check_at);
   `,
 ];
 
