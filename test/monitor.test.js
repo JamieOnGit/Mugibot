@@ -428,7 +428,7 @@ test("EB Games (its Cloudflare turns away every server): the server never asks i
   }
 });
 
-test("one store's long list never keeps another store's pages waiting: a store that can't be asked this second is left out (oldest first within a store, an armed item's page ahead of its turn), and one check at a time at a store", async () => {
+test("one store's long list never keeps another store's pages waiting: a store that can't be asked this second is left out (oldest first within a store, an armed item's page ahead of its turn) — and a store slow to answer is still asked again once its gap is over, as ever", async () => {
   const mon = env.app.monitor;
   const { catalog, repo, db, cfg } = env.app;
   const gap = cfg.monitor.hostGapSeconds;
@@ -465,19 +465,18 @@ test("one store's long list never keeps another store's pages waiting: a store t
     pending.push(mon.tick());
     await new Promise((r) => setImmediate(r));
     assert.ok(dispatched.includes(bPage), "store B's page checked at once, however long A's list");
-    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 1, 'one at a time at store A');
+    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 1, 'one a gap at store A');
     assert.equal(dispatched.find((u) => u.startsWith(`${a}/fairness/`)), aPages[39], "A's armed page first");
-    // Still going at A (slow to answer), and past its gap: A isn't asked again until that check is in.
-    clock.offset += 6000;
+    // Still inside A's gap: not asked again.
+    clock.offset += 2000;
     pending.push(mon.tick());
     await new Promise((r) => setImmediate(r));
-    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 1, 'never two at once at A');
-    release.splice(0).forEach((r) => r());
-    await Promise.all(pending.splice(0));
-    clock.offset += 6000;
+    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 1, 'inside its gap: not again');
+    // Past its gap, the first check still going (slow to answer): A's next page is asked all the same, as ever.
+    clock.offset += 4000;
     pending.push(mon.tick());
     await new Promise((r) => setImmediate(r));
-    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 2, 'the next one once it answered');
+    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 2, 'the next one once its gap is over');
     assert.equal(dispatched.at(-1), aPages[0], 'then oldest first');
   } finally {
     release.splice(0).forEach((r) => r());

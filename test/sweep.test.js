@@ -1224,7 +1224,11 @@ test("🆕 JB Hi-Fi's newest products, every other search: a drop is seen the mo
   assert.ok(env.app.db.get("SELECT 1 AS y FROM sweep_terms WHERE store = 'demo-jbhifi' AND keyword = :k", { k: NEWEST }));
 });
 
-test("⚡ drop mode: a new card listing at a store (in a read that isn't setting its scene) has it searched for what's next there more often for a while — JB Hi-Fi's newest products two searches in three, Target's keyword every other search — at the same pace, for 15 minutes (each new listing making it 15 from then, 30 at most), then a rest; never from a VIP or drop watch's own words; admins can switch it off", async () => {
+test("⚡ drop mode (off unless an admin switches it on): a new card listing at a store (in a read that isn't setting its scene) has it searched for what's next there more often for a while — JB Hi-Fi's newest products two searches in three, Target's keyword every other search — at the same pace, for 15 minutes (each new listing making it 15 from then, 30 at most), then a rest; never from a VIP or drop watch's own words; admins can switch it off", async () => {
+  assert.equal(sw.settings.dropMode, false, 'off unless switched on');
+  sw.heat(R('demo-jbhifi'), null);
+  assert.equal(sw.hotAt(R('demo-jbhifi')), null, 'off: no drop mode');
+  sw.save({ dropMode: true }, null);
   const jbr = R('demo-jbhifi');
   const t0 = Date.now();
   sw.stat(jbr.id).hot = null;
@@ -1308,7 +1312,7 @@ test("⚡ drop mode: a new card listing at a store (in a read that isn't setting
     t.heat(target, 'pokemon');
     assert.equal(t.stat(target.id).hot && t.stat(target.id).hot.until > t.now() ? 'hot' : 'off', 'off');
   } finally {
-    t.save({ dropMode: saved.dropMode }, null);
+    t.save({ dropMode: false }, null);
   }
 });
 
@@ -1537,7 +1541,7 @@ test("Premium Bandai: its search JSON (/api/search) — on sale, pre-orders, clo
   assert.equal(env.app.retailers.forUrl(r.products[0].url).id, 'pbandai');
 });
 
-test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg\" added: sealed products, not singles), and every third search the store's newest products — every keyword's products in one read (from an admin's browser too, standing in) — a new listing alerts from there, with Shopify's add-to-cart link, even one the shop drafted weeks before", async () => {
+test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg\" added: sealed products, not singles), and once a round of the keywords the store's newest products — every keyword's products in one read (from an admin's browser too, standing in) — a new listing alerts from there, with Shopify's add-to-cart link, even one the shop drafted weeks before", async () => {
   const saved = sw.settings.stores;
   sw.save({ stores: { ...saved, 'demo-pokebox': 'server' } }, null);
   const pb = R('demo-pokebox');
@@ -1554,12 +1558,15 @@ test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg
     assert.match(sw.urlFor(R('gameology'), 'one piece'), /^https:\/\/www\.gameology\.com\.au\/search\/suggest\.json\?q=one%20piece%20tcg&resources%5Btype%5D=product&/);
     assert.equal(sw.paceFor(R('gameology')), 10000);
     assert.equal(sw.urlFor(pb, NEWEST), `${store.url}/pokebox/products.json?limit=30`);
-    // Every third search — from the server, and from an admin's browser standing in for it (JB's is the server's alone).
+    // Once a round of the keywords (the turn their second pages had: each keyword's first page as often as before) —
+    // from the server, and from an admin's browser standing in for it (JB's is the server's alone).
     sw.stat(pb.id).hot = null;
-    const turns = Array.from({ length: 9 }, () => sw.nextTerm(pb));
+    const round = sw.settings.keywords.length + 1;
+    const turns = Array.from({ length: 3 * round }, () => sw.nextTerm(pb));
     assert.equal(turns.filter((t) => t.keyword === NEWEST).length, 3, JSON.stringify(turns));
+    for (const k of sw.settings.keywords) assert.equal(turns.filter((t) => t.keyword === k).length, 3, `${k}: once a round`);
     assert.ok(turns.every((t) => t.page === 1), 'no second pages');
-    assert.equal(Array.from({ length: 9 }, () => sw.nextTerm(pb, { all: false })).filter((t) => t.keyword === NEWEST).length, 3, "from an admin's browser too");
+    assert.equal(Array.from({ length: 3 * round }, () => sw.nextTerm(pb, { all: false })).filter((t) => t.keyword === NEWEST).length, 3, "from an admin's browser too");
     assert.deepEqual(sw.termOf(pb, { keyword: NEWEST }), { keyword: NEWEST, page: 1 }, "an admin's browser's read of it counts");
     assert.equal(sw.termOf(R('demo-jbhifi'), { keyword: NEWEST }), null, "JB Hi-Fi's: the server's alone");
     // The first read of each sets the scene.
@@ -1635,7 +1642,7 @@ test("Pokébox's newest products, read under their own name for the first time a
   }
 });
 
-test("🃏 From The Deep Games: each game's whole sealed collection read in one go (never its singles' — 30,000 of them; the sealed one first where a game has more), and every third search its Preorders collection — every game's pre-orders in one read — a new pre-order alerts from there, with Shopify's add-to-cart link", async () => {
+test("🃏 From The Deep Games: each game's whole sealed collection read in one go (never its singles' — 30,000 of them; the sealed one first where a game has more), and once a round of the keywords its Preorders collection — every game's pre-orders in one read — a new pre-order alerts from there, with Shopify's add-to-cart link", async () => {
   const saved = sw.settings.stores;
   sw.save({ stores: { ...saved, 'demo-fromthedeep': 'server' } }, null);
   const ftd = R('demo-fromthedeep');
@@ -1644,7 +1651,7 @@ test("🃏 From The Deep Games: each game's whole sealed collection read in one 
     assert.equal(R('fromthedeep').sweep.from, 'server');
     assert.equal(sw.paceFor(R('fromthedeep')), 10000);
     assert.equal(sw.urlFor(R('fromthedeep'), NEWEST), 'https://fromthedeepgames.com.au/collections/preorders/products.json?limit=250', 'its Preorders, in place of its newest products');
-    assert.equal(R('fromthedeep').sweep.newestEvery, 3);
+    assert.equal(R('fromthedeep').sweep.newestEvery, 'round');
     // The first read: the store's collections, then the game's whole sealed collection (it sets the scene).
     let r = await sweep('demo-fromthedeep', 'pokemon', 1);
     assert.equal(r.ok, true, r.error);
@@ -1659,7 +1666,7 @@ test("🃏 From The Deep Games: each game's whole sealed collection read in one 
     assert.deepEqual([box.status, box.price], ['in_stock', 324]);
     assert.match(box.url, /\/fromthedeep\/products\/pokemon-tcg-pitch-black-booster-box-in-store-only-preorder$/);
     assert.ok(box.variant_id, 'the option to buy, for the cart link');
-    // Its Preorders collection, every third search: the pre-orders of every game, each for its own keyword (sets the scene too).
+    // Its Preorders collection, once a round of the keywords: the pre-orders of every game, each for its own keyword (sets the scene too).
     r = await sweep('demo-fromthedeep', NEWEST);
     assert.equal(r.ok, true, r.error);
     assert.equal(r.baseline, true);

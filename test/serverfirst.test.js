@@ -49,7 +49,7 @@ const sweep = (id, keyword = 'pokemon', page = 1) => sw.sweepTerm(R(id), { keywo
 const card = (id) => sw.live().stores.find((s) => s.id === id);
 const due = (id) => sw.browserDue(admin, { version: '99.0.0' }).terms.find((t) => t.store === id);
 const sys = (re) => sw.events.some((e) => e.type === 'sys' && re.test(e.message));
-const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, fails: 0, failKind: '', slowUntil: 0, refusedUntil: 0, resetAt: 0, retryAt: 0, browserNext: 0, lastError: '' });
+const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, mainAt: 0, mainFails: 0, mainDue: undefined, searchAt: 0, fails: 0, failKind: '', slowUntil: 0, refusedUntil: 0, resetAt: 0, retryAt: 0, browserNext: 0, lastError: '' });
 
 /** What an admin's browser reads at a store (the dummy store lets browsers in): the same code the server uses. */
 async function browserRead(id, keyword = 'pokemon') {
@@ -281,40 +281,56 @@ test("⚡ a store only struggling at a drop (502s, timeouts, a page without its 
     return real(url, init);
   };
   try {
-    for (const [i, a] of ['502', 'timeout'].entries()) {
+    // Searched as the loop does (each next search when waitFor says), the store answering a 502, a timeout and a page
+    // without its list: every search it would have had before (twice as long apart after each failure: 10 s, then 20)
+    // is made, never one later — and the third miss of those hands it over, as ever.
+    const t0 = sw.now();
+    const secs = () => Math.round((sw.now() - t0) / 1000);
+    const times = [];
+    for (const [i, a] of ['502', 'timeout', 'layout'].entries()) {
       answer = a;
+      st.searchAt = sw.now();
+      times.push(secs());
       const r = await sweep(id);
       assert.deepEqual([r.ok, r.blocked], [false, false], `${a}: ${r.error}`);
       if (a === 'timeout') assert.equal(r.error, 'The store took too long to answer');
-      assert.equal(st.backup, null, `still the server's after ${i + 1} (${a})`);
-      assert.equal(st.failKind, 'transient', a);
-      assert.equal(sw.waitFor(st, every), every * 2, `at half its pace after ${i + 1}`);
+      if (i < 2) {
+        assert.equal(st.backup, null, `still the server's after ${i + 1} (${a})`);
+        assert.equal(st.failKind, 'transient', a);
+        clock.offset += sw.waitFor(st, every);
+      }
     }
-    // (A search that took long to fail spaced itself already: the next one isn't held back for it as well.)
-    assert.equal(sw.waitFor(st, every, { spent: 2 * MIN }), 500);
+    assert.deepEqual(times, [0, 2 * every / 1000, 6 * every / 1000], 'the searches it always had');
     assert.equal(st.slowUntil, 0, 'not slowed: it turned nobody away');
     assert.ok(!since(/refused a search/), "not said to have refused anything");
-    assert.equal(card(id).status, 'retrying');
-
-    // The third miss in a row (a page without its list): an admin's browser stands in, as ever — and the server tries
-    // again within a minute.
-    answer = 'layout';
-    let at = sw.now();
-    await sweep(id);
-    // (From when the search was in: its waits start then — however long the store took to answer.)
-    const done = sw.now();
     assert.ok(st.backup, 'handed over at the third miss');
     assert.equal(st.backup.transient, true);
-    assert.ok(Math.abs(st.backup.retryAt - (at + MIN)) < 2000, `the server tries again in a minute (${st.backup.retryAt - at} ms)`);
-    assert.ok(st.backup.idleAt - done <= Math.max(every * 2, MIN), `no admin's browser searching yet: a minute at most too (${st.backup.idleAt - done} ms)`);
     assert.ok(since(/Kmart \(dummy store\): Mugibot's server gets no answer from it \(.+\) — an admin's browser searches it meanwhile, and the server tries again within a minute/));
+    // Its tries (no admin's browser searching it yet): the usual ones — 8 and 16 times its pace after the hand-over and
+    // the try before (40 s, then 80 at 5 s) — and, where those are more than a minute apart, one a minute in between.
     answer = '502';
-    // Still struggling at its try: twice as long (2 minutes), not 10.
-    at = sw.now();
+    const tries = [];
+    for (let i = 0; i < 4; i++) {
+      clock.offset += Math.max(0, sw.nextTry(R(id), st) - sw.now());
+      tries.push(secs());
+      assert.equal((await sweep(id)).ok, false);
+    }
+    const handed = 6 * every / 1000;
+    assert.deepEqual(tries, [handed + 8 * every / 1000, handed + 8 * every / 1000 + 60, handed + 24 * every / 1000, handed + 24 * every / 1000 + 60], 'the usual tries, and a minute apart between them');
+    assert.equal(st.backup.tries, 3, 'only the usual tries counted');
+    // (A search that took long to fail spaced itself already: the next one isn't held back for it as well.)
+    fresh(id);
+    answer = '502';
     await sweep(id);
-    assert.equal(st.backup.tries, 2);
-    assert.ok(Math.abs(st.backup.retryAt - (at + 2 * MIN)) < 2000, `${st.backup.retryAt - at} ms`);
+    assert.equal(sw.waitFor(st, every, { spent: 2 * MIN }), 500);
     // Answering again: the server's straight back, at its own pace (not a third of it).
+    fresh(id);
+    for (let i = 0; i < 3; i++) {
+      st.searchAt = sw.now();
+      await sweep(id);
+      if (!st.backup) clock.offset += sw.waitFor(st, every);
+    }
+    assert.ok(st.backup && st.backup.transient);
     answer = 'ok';
     const back = await sweep(id);
     assert.equal(back.ok, true, back.error);
@@ -362,14 +378,16 @@ test("⚡ a store only struggling at a drop (502s, timeouts, a page without its 
     sw.reset(id, admin);
     assert.ok(st.slowUntil > sw.now(), "Reset's gentle start");
     answer = '502';
+    let at = 0;
     for (let i = 0; i < 3; i++) {
       clock.offset += 20 * 1000;
       at = sw.now();
+      st.searchAt = at;
       await sweep(id);
     }
     assert.ok(st.backup, 'three misses: handed over');
     assert.equal(st.backup.transient, true, 'only struggling');
-    assert.ok(Math.abs(st.backup.retryAt - (at + MIN)) < 2000, `the server tries again in a minute (${st.backup.retryAt - at} ms)`);
+    assert.ok(Math.abs(st.backup.probeAt - (at + MIN)) < 2000, `the server tries again in a minute (${st.backup.probeAt - at} ms)`);
   } finally {
     sw.fetch = real;
     fresh(id);

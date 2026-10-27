@@ -183,10 +183,40 @@ test("🃏 the card words widened in an update: one an admin had among their own
     assert.deepEqual(Object.fromEntries(env.app.drops.get(w.id).found.map((f) => [f.sku, f.arm])), { 'pokemon-destined-r3-blister': 'armed', 'pokemon-destined-r3-playmat': 'skipped' });
     assert.equal(bought(r.id, B.sku).runs, 1, 'the blister bought');
     assert.equal(bought(r.id, M.sku).runs, 0);
+    // The quiet window over: a playmat new to the catalogue counts for alerts now — and still isn't a drop for the watch
+    // by the card search alone (the catalogue never tracked one before the words widened), as before.
+    clock.offset += 6 * 3600 * 1000 + MIN;
+    assert.equal(sw().widenedLately(), false);
+    // (Not read for 6 hours: its scene set again first.)
+    assert.equal((await ingest(r, { keyword: 'pokemon', page: 1 }, [])).baseline, true);
+    clock.offset += 5000;
+    const M2 = prod('jbhifi', 'pokemon-destined-r3-playmat-deluxe', 'Pokemon Destined R3 Playmat Deluxe', 33, { inStock: true });
+    const s2 = await ingest(r, { keyword: 'pokemon', page: 1 }, [M2]);
+    assert.deepEqual([s2.ok, s2.baseline], [true, false]);
+    await env.app.monitor.delivered();
+    assert.equal(env.app.drops.get(w.id).found.find((f) => f.sku === M2.sku).arm, 'skipped');
+    assert.equal(bought(r.id, M2.sku).runs, 0);
+    assert.ok(env.app.catalog.productFor(r.id, M2.sku), 'tracked: the widened words count it');
     assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
   } finally {
     repo.setSetting('sweep', keep.sweep);
     repo.setSetting('sweepWidenedAt', keep.at);
     repo.setSetting('sweepTermsHad', keep.had);
     }
+});
+
+test("🔔 a store whose alerts keep coming (two lots of DMs still going out there): a search's own DMs go out while it waits for them alone — never behind another's lot", async () => {
+  const mon = env.app.monitor;
+  const hold = [];
+  const slow = () => new Promise((r) => hold.push(r));
+  mon.deliver([slow], 'demo-flapping');
+  mon.deliver([slow], 'demo-flapping');
+  let sent = false;
+  const third = mon.deliver([async () => { sent = true; }], 'demo-flapping').then(() => 'out');
+  const was = await Promise.race([third, new Promise((r) => setTimeout(() => r('waiting'), 500))]);
+  assert.equal(was, 'out', 'its own DMs sent, not waiting on the others');
+  assert.equal(sent, true);
+  assert.equal(hold.length, 2, 'the other lots still going');
+  hold.forEach((r) => r());
+  await mon.delivered();
 });

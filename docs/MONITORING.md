@@ -38,9 +38,9 @@ never searches BIG W now unless an admin sets it to **Server first** or **Server
   Gamesmen). A store that's only **struggling** — too slow to answer, out of reach
   a moment, another 5xx, a page without its list, all likeliest at a drop — is
   handed over the same way ("Mugibot's server gets no answer from it (HTTP 502)"),
-  but it isn't turning anyone away: the server tries again after **1 minute** (2,
-  4… while it's still struggling), and takes back over at its full pace, not a
-  third of it. Or the server's read has **no
+  but it isn't turning anyone away: besides its usual tries (after 5 minutes,
+  10, 20…), the server tries again **every minute**, and takes back over at its
+  full pace, not a third of it. Or the server's read has **no
   products** where there are some: a page that only draws them once it's open
   (Pokémon Center's), or a search an admin's browser found products
   for in the last hour. That empty read sets no scene, so the browser's first
@@ -267,10 +267,10 @@ stick.
 | City Beach | Server first | Its search page (Salesforce Commerce Cloud, made on the server): a tile per product with its code, name, brand and price (48 a search). Stock isn't in the tiles: it comes from the product page, which the monitor reads. At most one search every 10 seconds (every 4 in a VIP drop's window) |
 | Pokémon Center (Australia) | Server first: **an admin's browser** (the extension, 1.8.1 or later) stands in at the first refusal | Its search page (`/en-au/search/<keyword>`, 32 a page), opened in the extension's window and read once it has built its product list, like BIG W's. Its bot check (Imperva) may reload the page first: the extension waits for it. At most one search every 30 seconds |
 | Premium Bandai (Australia) | Server first: **an admin's browser** (the extension, 1.8.1 or later) stands in at the first refusal | The site's own search JSON (`/api/search?keyword=…`, newest arrivals first, up to 100), asked for from inside a Premium Bandai page in the extension's window with the region its own code sends (`x-g1-area-code: au`), like EB Games'. It answers Mugibot's server too now (Oct 2026), so the server reads it. A search that finds nothing ("pokemon" there) comes back with no products list at all, only its count: that's an empty search, not a changed page. At most one search every 30 seconds |
-| Pokébox | Server first | Each keyword's search (Shopify's search suggestions, 10 a search with stock), "tcg" added ("pokemon tcg": its sealed products first — Pokébox names its hundreds of singles after the card), and **every third search the store's newest 30 products** (Shopify's product list, newest published first: about a week of its listings, Oct 2026; `sweep.newestPath`): a new drop shows up there the moment it's listed, each product in it counted for the keyword in its name, in one read (until Oct 2026 it was each keyword's second page, so a keyword saw it only every 200 s or so). One the shop drafted weeks before and has just put up is still a drop (`newestFresh: false`: it doesn't republish old products as JB does); an admin's browser standing in for the server reads the list too (`newestBrowser`). At most one read every 10 seconds |
+| Pokébox | Server first | Each keyword's search (Shopify's search suggestions, 10 a search with stock), "tcg" added ("pokemon tcg": its sealed products first — Pokébox names its hundreds of singles after the card), and **once a round of the keywords the store's newest 30 products** (the turn each keyword's second page had; Shopify's product list, newest published first: about a week of its listings, Oct 2026; `sweep.newestPath`, `newestEvery: 'round'`): a new drop shows up there the moment it's listed, each trading card in it counted for the keyword in its name, in one read (until Oct 2026 it was each keyword's second page, so a keyword saw it only every 200 s or so). One the shop drafted weeks before and has just put up is still a drop (`newestFresh: false`: it doesn't republish old products as JB does); an admin's browser standing in for the server reads the list too (`newestBrowser`). At most one read every 10 seconds |
 | Good Games, Collectible Madness, Cherry Collectables | Server first | The same as Pokébox (Shopify card shops) |
 | Gameology | Server first | The same as Pokébox (Shopify): "tcg" added to each keyword, since it sells Warhammer, board games and figures under the same names, and thousands of singles (its sealed products come first). Its own collections are too big to read whole (its "Pokemon Trading Card" one is over 600 products), so they aren't swept |
-| From The Deep Games | Server first | Each game's **whole sealed collection**, read in one go (Shopify's product list for it: every product, its stock and its option): "Pokemon TCG Sealed", "One Piece Card Game", "Riftbound", "Gundam Card Game". Where a game has more than one, the sealed one comes first (`collectionPrefer`), and its singles' collections are never read (`collectionSkip`: "Pokemon Singles (All)" alone is 30,000 products). **Every third search** is its **Preorders** collection (every game's pre-orders, where a drop is listed first — "Pokemon TCG Sealed" leaves them out), each pre-order counted for its keyword in one read. Its newest-products list isn't read: it's hundreds of Magic singles a day. At most one read every 10 seconds |
+| From The Deep Games | Server first | Each game's **whole sealed collection**, read in one go (Shopify's product list for it: every product, its stock and its option): "Pokemon TCG Sealed", "One Piece Card Game", "Riftbound", "Gundam Card Game". Where a game has more than one, the sealed one comes first (`collectionPrefer`), and its singles' collections are never read (`collectionSkip`: "Pokemon Singles (All)" alone is 30,000 products). **Once a round of the keywords** it reads its **Preorders** collection (every game's pre-orders, where a drop is listed first — "Pokemon TCG Sealed" leaves them out), each pre-order counted for its keyword in one read. Its newest-products list isn't read: it's hundreds of Magic singles a day. At most one read every 10 seconds |
 | The Gamesmen | Server first: **an admin's browser** (the extension, **1.19.1** or later) stands in at the first refusal | Its search page **newest first** ("Recently Listed": a new listing is on page 1 the moment it's up), opened in the extension's window and read once its results are drawn, 2 pages: its own tiles (its Hyvä theme, read from a copy of its real page — from 1.20: the name, the price shown with GST, a struck-through old price, "Add to Cart" or "Pre-Order", the product's id), or Magento's usual ones, or — drawn some other way — any product on the page with its link and a price. Its menu's links look like product links (its products are `/<name>`), so 1.19.1 doesn't count the site's menus as the results (1.19.0 read the page before they were drawn). Its Cloudflare turns servers away ("Sorry, you have been blocked") |
 | Games World | Server first | WooCommerce's own product API (`/wp-json/wc/store/v1/products?search=…`, newest first, 30 a search): stock, price, pre-orders (backorders) and the product's id for its add-to-cart link — only the fields Mugibot reads (about 100 KB a search). At most one search every 15 seconds |
 
@@ -405,11 +405,14 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   stock. A refused one (HTTP 401/403/429/503, a bot check) waits twice as long
   after each failure (up to 15 minutes), then tries again. A store that's only
   struggling (too slow to answer, out of reach a moment, a 502 or 504, a page
-  without its list) is searched again at half its pace three times, then twice as
-  long each time, **a minute apart at most** (a search that took 15 s to time out
-  counts as that much of the wait): during a drop a few slow answers no longer
-  leave it unsearched for minutes. Three misses in a row still hand it to an
-  admin's browser, as before. A refusal before it still stands: for the 10
+  without its list) gets every search it always had (twice as long apart after
+  each failure) and, where those are far apart, more in between: at half its
+  pace, then twice as long each time, **a minute apart at most** (a search that
+  took 15 s to time out counts as that much of the wait), never in the half-pace
+  just before one of its usual ones. So during a drop a few slow answers no
+  longer leave it unsearched for minutes, and it's never searched later than
+  before. Three misses in a row (its usual searches) still hand it to an admin's
+  browser, as before. A refusal before it still stands: for the 10
   minutes it's searched gently after one, a timeout counts as a refusal would
   (the server back after 5 minutes, not 1). When a store says how long to wait (**HTTP 429** or 503
   with a `Retry-After`, like Shopify's), Mugibot waits at least that long (at
@@ -477,10 +480,11 @@ isn't searched any less often (at least half a second between two searches):
   takes ~5 s to build). BIG W only in its private window: in an ordinary window,
   one every 20 s at the quickest. Pokémon Center and Premium Bandai: one every 30 s.
 - Pokébox, Good Games, Collectible Madness, Cherry Collectables, Gameology: their
-  newest products every ~30 s (every keyword's in each read), each keyword's search
-  every ~15 s × the number of keywords (~60 s with 4).
-- From The Deep Games: its Preorders every ~30 s (every game's), each game's
-  collection every ~15 s × the number of keywords.
+  newest products and each keyword's search once a round of the keywords, every
+  ~10 s × (the number of keywords + 1) (~50 s with 4) — every keyword's cards in
+  each newest-products read.
+- From The Deep Games: its Preorders and each game's collection once a round of
+  the keywords, every ~10 s × (the number of keywords + 1).
 - Games World: each keyword every ~30 s.
 - The Gamesmen (admin's browser): as often as the admin's-browser seconds set.
 
@@ -505,7 +509,7 @@ again for 15):
 
 - **JB Hi-Fi, Toys"R"Us, the Shopify card shops, From The Deep Games** (a
   newest-products list): their newest products **two searches in three** (one
-  in two or three otherwise). The third keeps the keywords going round, so a
+  in two, or once a round of the keywords, otherwise). The third keeps the keywords going round, so a
   product listed before that goes on sale is still seen.
 - **Target and EB Games** (`sweep.hot`: their search is newest first): **that
   keyword's first page every other first-page search**; the others go round the
@@ -516,17 +520,21 @@ again for 15):
   ahead of time, without a buy button) or Amazon.
 
 It never adds a request: the same searches at the same pace, in another order,
-and never ahead of VIP drops or members' drop watches. The live log says when a
-store goes into drop mode and when it's over, and the Stores panel shows
-**⚡ Drop mode until …** beside it. **Monitor → Settings → ⚡ Drop mode** switches
-it off (on by default).
+and never ahead of VIP drops or members' drop watches. So while it's on, the
+store's **other keywords are searched less often** — an armed item restocking
+under one of them is seen later than it would be — which is why it's **off unless
+an admin switches it on** (**Monitor → Settings → ⚡ Drop mode**), say for a
+store with a big release coming. The live log says when a store goes into drop
+mode and when it's over, and the Stores panel shows **⚡ Drop mode until …**
+beside it.
 
 **Page checks** (members' watchlists, monitors): a store that can't be asked
-this second (inside `MONITOR_HOST_GAP` since its last check, or with a check of
-it still going) is left out of each round, so one store's long list never keeps
-another store's pages waiting. Within a store the oldest is first, and an armed
-item's page (Auto-checkout) 15 seconds ahead of its turn. A store with a gap has
-one check going at a time: one slow to answer holds one of the four at most.
+this second (inside `MONITOR_HOST_GAP` since its last check) is left out of each
+round, so one store's long list never keeps another store's pages waiting.
+Within a store the oldest is first, and an armed item's page (Auto-checkout) 15
+seconds ahead of its turn. A store slow to answer still has its next page asked
+once its gap is over, as before — an armed page never waits for another page's
+answer.
 
 **What goes first, the moment a search sees a drop:**
 
@@ -546,8 +554,9 @@ on its way, so a store dropping a second product seconds after the first is
 still seen at its usual pace. The same for page checks and admins' browsers.
 
 Each store's DMs go out apart from the others', and a store whose alerts keep
-coming faster than they go out (its stock flapping) has at most two lots going:
-a third waits for the first.
+coming faster than they go out (its stock flapping) has at most two lots going
+on their own: a third is sent while its search waits for it, as every search did
+before — never behind another's lot.
 
 **Mugibot's line to Discord**: twelve requests at once, two of them kept for
 what can't wait (a drop's channel posts; a member's "🏦 Approve the payment in

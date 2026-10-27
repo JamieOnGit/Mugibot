@@ -132,7 +132,9 @@ export const SWEEP_DEFAULTS = Object.freeze({
   restockOncePerDay: true,
   priceAlerts: true,
   priceDropPercent: 10,
-  dropMode: true,
+  // (Off unless an admin switches it on: searching one store's newest products or keyword more often means its other
+  //  keywords less often — an armed item restocking under one of them is seen later meanwhile.)
+  dropMode: false,
 });
 
 const MODES = ['auto', 'server', 'browser', 'off'];
@@ -316,7 +318,7 @@ export function sweepSettings(input, current, retailers) {
     restockOncePerDay: bool(src.restockOncePerDay, true),
     priceAlerts: bool(src.priceAlerts, true),
     priceDropPercent: num(src.priceDropPercent, { min: 1, max: 90, def: SWEEP_DEFAULTS.priceDropPercent }),
-    dropMode: bool(src.dropMode, true),
+    dropMode: bool(src.dropMode, false),
   };
 }
 
@@ -611,7 +613,10 @@ export class Sweeper {
         st.hotTurn = ((st.hotTurn || 0) + 1) % 3;
         if (st.hotTurn !== 0) return { keyword: NEWEST, page: 1 };
       } else {
-        st.newestTurn = ((st.newestTurn || 0) + 1) % Math.max(2, r.sweep.newestEvery || 2);
+        // ('round': once a round of the keywords — the turn their second page had, so each keyword's first page comes
+        //  as often as before.)
+        const every = r.sweep.newestEvery === 'round' ? this.settings.keywords.length + 1 : r.sweep.newestEvery || 2;
+        st.newestTurn = ((st.newestTurn || 0) + 1) % Math.max(2, every);
         if (st.newestTurn === 1) return { keyword: NEWEST, page: 1 };
       }
     }
@@ -664,7 +669,7 @@ export class Sweeper {
     const st = this.stat(r.id);
     const h = st.hot;
     if (!h || !h.until) return null;
-    if (now < h.until && this.settings.dropMode !== false) return h;
+    if (now < h.until && this.settings.dropMode) return h;
     if (h.until) {
       this.sys(`${r.name}: drop mode over — searched as usual again`, { store: r.id });
       // (Its rest from when it ended — not from when that was noticed: a store not searched a while, its browser closed.)
@@ -678,7 +683,7 @@ export class Sweeper {
    * for its newest products): drop mode there, or 15 more minutes of it — 30 at most, then a rest of 15.
    */
   heat(r, keyword, now = this.now()) {
-    if (this.settings.dropMode === false) return;
+    if (!this.settings.dropMode) return;
     const newest = !!r.sweep.newestPath;
     if (!newest && !(r.sweep.hot && keyword)) return;
     const st = this.stat(r.id);
@@ -882,7 +887,10 @@ export class Sweeper {
     const edge = !!r.sweep.followNext && term.page > 1 && term.page >= Math.min(10, r.sweep.pages || 1);
     const counts_ = this.filters(s, { cardsOnly: this.cardsOnlyRead(r, term) });
     // (The card words widened lately: what counts now that didn't before, and new to the catalogue, is tracked quietly.)
-    const legacy = this.widenedLately(now) ? this.filters(s, { legacy: true }) : null;
+    // (The card words as they were before they widened: what a drop watch's arming goes by, as ever — and, for their
+    //  first 6 hours, what counts a product out loud: widenedLately.)
+    const legacy = this.filters(s, { legacy: true });
+    const widened = this.widenedLately(now);
     const counts = { found: parsed.products.length, kept: 0, new: 0, restock: 0, price: 0 };
     // The whole range (or its newest products) in one list: each product counts for the first keyword in its name.
     const all = term.keyword === ALL || term.keyword === NEWEST;
@@ -934,9 +942,12 @@ export class Sweeper {
         //  a watch only when its own search finds it, as ever — the catalogue never tracked it, so "new" says nothing.)
         // (Counted by the widened card words alone, lately (widenedLately): tracked quietly — and, as before they widened,
         //  not a card listing: a VIP or drop watch whose words are in its name makes it theirs, a drop, alerted and armed.)
-        const quiet = !!legacy && cardsNow && !known && !(all ? s.keywords.some((k) => legacy(p, k)) : legacy(p, term.keyword));
+        const cardsBefore = cardsNow && (all ? s.keywords.some((k) => legacy(p, k)) : legacy(p, term.keyword));
+        const quiet = widened && cardsNow && !known && !cardsBefore;
         const cards = cardsNow && !quiet;
-        const newListing = this.drops && (cards ? !republished : newest && !old && r.sweep.newestFresh !== false) && !baseline && !edge && !mkt && !known;
+        // (A card listing new to the catalogue, by the card words as they were: only the widened words count it — a
+        //  playmat, say — and the catalogue never tracked it before they did, so "new" says nothing.)
+        const newListing = this.drops && (cardsBefore ? !republished : newest && !old && r.sweep.newestFresh !== false) && !baseline && !edge && !mkt && !known;
         const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id) || (term.keyword !== w.words && !newListing);
         // Someone's own drop watch's words in the name (monitor/drops.js): on their watchlist, theirs
         // alone. (Found by another search, it was listed already as far as that watch knows — unless it's new.)
@@ -1415,6 +1426,18 @@ export class Sweeper {
     });
     if (keep) Object.assign(st, keep);
     if (info.source === 'browser') st.browserAt = now;
+    // (The server's searches as they always were — twice as long after each failure, from its end — kept alongside: a
+    //  struggling store's quicker searches come in between them, never instead of one. mainDue: this was one of them.)
+    if (info.source === 'server' && !trying) {
+      // (Refused — or failing while a refusal's in force — it's counted as ever, whenever it came.)
+      const struggling = !info.ok && !!info.transient && r.sweep.from !== 'browser' && !(st.refusedUntil > now);
+      st.mainDue = !struggling || !st.mainAt || (st.searchAt || now) >= st.mainAt - 1000;
+      if (info.ok) Object.assign(st, { mainAt: 0, mainFails: 0 });
+      else if (st.mainDue) {
+        st.mainFails = (st.mainFails || 0) + 1;
+        st.mainAt = info.unread ? 0 : now + Math.min(MAX_BACKOFF_MS, this.paceFor(r) * 2 ** Math.min(st.mainFails, 10));
+      }
+    }
     if (info.source === 'server' && this.modeFor(r) === 'auto') this.serverFirst(r, st, info, now, trying);
     const out = { store: r.id, keyword: termLabel(term.keyword, r), page: term.page, ok: info.ok, blocked: !!info.blocked, ...(info.unread ? { unread: true } : {}), error: info.error || '', found: info.found || 0, kept: info.kept || 0, new: info.new || 0, restock: info.restock || 0, price: info.price || 0, baseline: !!info.baseline, ms: info.ms ?? null };
     // A drop watch's words (monitor/drops.js): how it went shows on the watch. ('private': someone's own
@@ -1454,22 +1477,29 @@ export class Sweeper {
     //  the browser's: the try's own refusals count, below.)
     const transient = !!info.transient && r.sweep.from !== 'browser' && (trying || !(st.refusedUntil > now));
     if (trying) {
-      st.backup.tries += 1;
-      st.backup.why = why;
-      // (Turned away once while standing in: it's a refusal now — the server's tries wait as for one.)
-      if (!transient) st.backup.transient = false;
-      st.backup.retryAt = now + Math.min(SERVER_RETRY_MAX_MS, (st.backup.transient ? TRANSIENT_RETRY_MS : SERVER_RETRY_MS) * 2 ** (st.backup.tries - 1));
-      st.backup.idleAt = now + this.idleWait(r, st.backup.tries, st.backup.transient);
+      const b = st.backup;
+      b.why = why;
+      // (Turned away once while standing in: it's a refusal now — no more quicker tries.)
+      if (!transient) b.transient = false;
+      // The server's tries as ever (5, 10, 20… minutes; sooner while no admin's browser is searching it) — a struggling
+      // store's quicker ones, a minute apart, come in between and leave those be.
+      if (!b.transient || now >= this.mainTry(r, st, now) - 1000) {
+        b.tries += 1;
+        b.retryAt = now + Math.min(SERVER_RETRY_MAX_MS, SERVER_RETRY_MS * 2 ** (b.tries - 1));
+        b.idleAt = now + this.idleWait(r, b.tries);
+      }
+      b.probeAt = b.transient ? now + TRANSIENT_RETRY_MS : 0;
       return;
     }
-    // (Struggling or refused, three misses in a row hand over, as ever. Only struggling, the server tries again sooner while
-    //  the browser stands in, and takes back over at its full pace.)
+    // (Struggling or refused, three misses in a row hand over, as ever — a struggling store's quicker searches in between
+    //  not counted, so they never bring it forward. Only struggling, the server tries again sooner while the browser
+    //  stands in, and takes back over at its full pace.)
+    if (transient && st.mainDue === false) return;
     st.serverMisses = (st.serverMisses || 0) + 1;
     if (st.serverMisses < (r.sweep.from === 'browser' ? 1 : SERVER_TRIES) && !(info.empty && r.sweep.render)) return;
-    const first = transient ? TRANSIENT_RETRY_MS : SERVER_RETRY_MS;
-    st.backup = { since: now, tries: 1, retryAt: now + first, idleAt: now + this.idleWait(r, 1, transient), why, waitUntil: st.retryAt || 0, transient };
+    st.backup = { since: now, tries: 1, retryAt: now + SERVER_RETRY_MS, idleAt: now + this.idleWait(r, 1), why, waitUntil: st.retryAt || 0, transient, probeAt: transient ? now + TRANSIENT_RETRY_MS : 0 };
     // (The browser starts afresh: the server's failures, slower pace and Retry-After were the server's.)
-    Object.assign(st, { fails: 0, slowUntil: 0, refusedUntil: 0, retryAt: 0, browserNext: 0, serverMisses: 0 });
+    Object.assign(st, { fails: 0, slowUntil: 0, refusedUntil: 0, retryAt: 0, browserNext: 0, serverMisses: 0, mainAt: 0, mainFails: 0 });
     const state = info.empty ? `can't read it (${why})` : transient ? `gets no answer from it (${why})` : `is refused (${why})`;
     st.lastError = `Mugibot's server ${state} — an admin's browser searches it meanwhile, and the server tries again within ${transient ? 'a minute' : '5 min'}`;
     this.sys(`${r.name}: ${st.lastError}`, { store: r.id, level: 'warn' });
@@ -1495,11 +1525,9 @@ export class Sweeper {
     return !!st.backup && this.modeFor(r) === 'auto';
   }
 
-  /** The server's usual backoff, for its tries while no admin's browser is searching the store yet (a struggling store's: waitFor's). */
-  idleWait(r, tries, transient = false) {
-    const every = this.paceFor(r);
-    if (transient) return Math.max(every * 2, Math.min(TRANSIENT_MAX_MS, every * 2 ** Math.min(TRANSIENT_QUICK + tries, 10)));
-    return Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(SERVER_TRIES + tries - 1, 10));
+  /** The server's usual backoff, for its tries while no admin's browser is searching the store yet. */
+  idleWait(r, tries) {
+    return Math.min(MAX_BACKOFF_MS, this.paceFor(r) * 2 ** Math.min(SERVER_TRIES + tries - 1, 10));
   }
 
   /**
@@ -1507,6 +1535,15 @@ export class Sweeper {
    * searching the store — before that, at the server's usual backoff — never before Retry-After.
    */
   nextTry(r, st, now = this.now()) {
+    const b = st.backup;
+    const main = this.mainTry(r, st, now);
+    // (A struggling store's quicker try — never in the half-pace just before the usual one: that one, then.)
+    if (!b.probeAt || b.probeAt >= main - 2 * this.paceFor(r)) return main;
+    return Math.max(b.waitUntil || 0, b.probeAt);
+  }
+
+  /** The server's usual next try while an admin's browser stands in (never before Retry-After). */
+  mainTry(r, st, now = this.now()) {
     const b = st.backup;
     const searching = !!st.browserAt && st.browserAt >= b.since && now - st.browserAt < Math.max(60 * 1000, 4 * this.paceFor(r, true));
     return Math.max(b.waitUntil || 0, searching ? b.retryAt || 0 : Math.min(b.retryAt || 0, b.idleAt ?? b.retryAt ?? 0));
@@ -1554,8 +1591,8 @@ export class Sweeper {
    */
   sweepNow() {
     for (const st of this.state.values()) {
-      Object.assign(st, { fails: 0, browserNext: 0, slowUntil: 0, refusedUntil: 0 });
-      if (st.backup) st.backup.retryAt = 0;
+      Object.assign(st, { fails: 0, browserNext: 0, slowUntil: 0, refusedUntil: 0, mainAt: 0, mainFails: 0 });
+      if (st.backup) Object.assign(st.backup, { retryAt: 0, probeAt: 0 });
     }
     for (const wake of this.wakers.values()) wake();
   }
@@ -1582,6 +1619,7 @@ export class Sweeper {
         }
         const term = backup ? this.tryTerm(r) : this.nextTerm(r);
         const began = Date.now();
+        st.searchAt = this.now();
         await this.sweepTerm(r, term).catch((e) => this.record(r, term, { ok: false, source: 'server', error: e.message }));
         const spent = Date.now() - began;
         // Handed over to an admin's browser (or still standing in): the next try waits at the top.
@@ -1611,11 +1649,17 @@ export class Sweeper {
     // A store only struggling (TRANSIENT_*): at half its pace three times, then twice as long each time, a minute apart at
     // most — never sooner than half its pace, and a search that took long to fail spaced itself already. (Not while it's
     // searched gently after turning one away: a refusal's backoff stands.)
+    // Never after the search it would have had before (mainAt: twice as long after each failure) — and, struggling, none
+    // in the half-pace just before that one: that one, then.
+    const main = st.mainAt ? Math.max(0, st.mainAt - this.now()) : Infinity;
     if (st.fails && st.failKind === 'transient' && !(st.slowUntil > this.now())) {
-      const back = st.fails <= TRANSIENT_QUICK ? every * 2 : Math.max(every * 2, Math.min(TRANSIENT_MAX_MS, every * 2 ** Math.min(st.fails, 10)));
-      return Math.max(asked, MIN_GAP_MS, back - Math.max(0, spent));
+      let back = (st.fails <= TRANSIENT_QUICK ? every * 2 : Math.max(every * 2, Math.min(TRANSIENT_MAX_MS, every * 2 ** Math.min(st.fails, 10)))) - Math.max(0, spent);
+      if (back >= main - every * 2) back = main;
+      return Math.max(asked, MIN_GAP_MS, back);
     }
-    if (st.fails && st.failKind !== 'unread') return Math.max(asked, Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(st.fails, 10)));
+    // (Refused: its failures as they were always counted — a struggling store's searches in between aren't — so its
+    //  backoff is exactly what it was; after one of those in between, never past the search it would have had.)
+    if (st.fails && st.failKind !== 'unread') return Math.max(asked, Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(st.mainFails || st.fails, 10), st.mainDue === false ? main : Infinity));
     const slow = st.slowUntil > this.now() ? SLOW_FACTOR : 1;
     return Math.max(asked, MIN_GAP_MS, every * slow * (jitter ? 0.8 + 0.4 * this.random() : 1) - Math.max(0, spent));
   }
@@ -1638,7 +1682,7 @@ export class Sweeper {
       if (storeId ? r.id !== storeId : mode === 'off') continue;
       if (mode === 'browser') fromBrowser = true;
       const st = this.stat(r.id);
-      Object.assign(st, { fails: 0, lastError: '', browserNext: 0, nextAt: now, slowUntil: now + SLOW_MS, resetAt: now, needsUpdateAt: 0, refusedUntil: 0 });
+      Object.assign(st, { fails: 0, lastError: '', browserNext: 0, nextAt: now, slowUntil: now + SLOW_MS, resetAt: now, needsUpdateAt: 0, refusedUntil: 0, mainAt: 0, mainFails: 0 });
       if (mode === 'auto') {
         if (st.backup) st.retryAt = Math.max(st.retryAt || 0, st.backup.waitUntil || 0);
         Object.assign(st, { backup: null, serverMisses: 0 });
