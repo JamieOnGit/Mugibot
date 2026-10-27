@@ -32,15 +32,9 @@ draw its products, so its tries only ever handed BIG W over to the browser again
 the console said **Waiting** each time it did (after every restart, too). The server
 never searches BIG W now unless an admin sets it to **Server first** or **Server only**.
 
-- **Hand-over.** The store refuses the server (HTTP 401/403/429/503, a bot
-  check), or its search fails, **3 times in a row** — once, at a store known to
-  turn servers away (Amazon, EB Games, Pokémon Center, Premium Bandai, The
-  Gamesmen). A store that's only **struggling** — too slow to answer, out of reach
-  a moment, another 5xx, a page without its list, all likeliest at a drop — is
-  handed over the same way ("Mugibot's server gets no answer from it (HTTP 502)"),
-  but it isn't turning anyone away: besides its usual tries (after 5 minutes,
-  10, 20…), the server tries again **every minute**, and takes back over at its
-  full pace, not a third of it. Or the server's read has **no
+- **Hand-over.** The store refuses the server, or its search fails, **3 times
+  in a row** — once, at a store known to turn servers away (Amazon, EB
+  Games, Pokémon Center, Premium Bandai, The Gamesmen). Or the server's read has **no
   products** where there are some: a page that only draws them once it's open
   (Pokémon Center's), or a search an admin's browser found products
   for in the last hour. That empty read sets no scene, so the browser's first
@@ -349,8 +343,7 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
    │ fetch it (honest Mugibot headers)                                     │
    │ read every product: code, name, price, stock, link, picture          │──┐
    │ next one ~5 s (±20%) after this one began, or back off after a        │  │
-   │   refusal (×2 each time, ≤15 min) — soon again if it's only           │  │
-   │   struggling (slow, a 502: ×2 the pace, ≤1 min apart)                 │  │
+   │   failure (×2 each time, ≤15 min)                                     │  │
    └──────────────────────────────────────────────────────────────────────┘  │
  admins' browsers (extension) do the same for BIG W and EB Games ────────────┤
                                                                               ▼
@@ -402,19 +395,8 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   word you had among your own words already (say *blister*) counts as before,
   not quietly.
 - **A refused or failed search never alerts** and keeps every product's last
-  stock. A refused one (HTTP 401/403/429/503, a bot check) waits twice as long
-  after each failure (up to 15 minutes), then tries again. A store that's only
-  struggling (too slow to answer, out of reach a moment, a 502 or 504, a page
-  without its list) gets every search it always had (twice as long apart after
-  each failure) and, where those are far apart, more in between: at half its
-  pace, then twice as long each time, **a minute apart at most** (a search that
-  took 15 s to time out counts as that much of the wait), never in the half-pace
-  just before one of its usual ones. So during a drop a few slow answers no
-  longer leave it unsearched for minutes, and it's never searched later than
-  before. Three misses in a row (its usual searches) still hand it to an admin's
-  browser, as before. A refusal before it still stands: for the 10
-  minutes it's searched gently after one, a timeout counts as a refusal would
-  (the server back after 5 minutes, not 1). When a store says how long to wait (**HTTP 429** or 503
+  stock. The store waits twice as long after each failure (up to 15 minutes),
+  then tries again. When a store says how long to wait (**HTTP 429** or 503
   with a `Retry-After`, like Shopify's), Mugibot waits at least that long (at
   most 15 minutes): "The store refused the search (HTTP 429) — it asked to
   wait 60 s". **Reset** (below) starts a failing store again.
@@ -528,13 +510,10 @@ store with a big release coming. The live log says when a store goes into drop
 mode and when it's over, and the Stores panel shows **⚡ Drop mode until …**
 beside it.
 
-**Page checks** (members' watchlists, monitors): a store that can't be asked
-this second (inside `MONITOR_HOST_GAP` since its last check) is left out of each
-round, so one store's long list never keeps another store's pages waiting.
-Within a store the oldest is first, and an armed item's page (Auto-checkout) 15
-seconds ahead of its turn. A store slow to answer still has its next page asked
-once its gap is over, as before — an armed page never waits for another page's
-answer.
+**Page checks** (members' watchlists, monitors): each round looks at up to 50
+pages that are due (25 before), oldest first, an armed item's page (Auto-checkout)
+15 seconds ahead of its turn. Stores are asked as before: one page per
+`MONITOR_HOST_GAP`, a slow one's next page once its gap is over.
 
 **What goes first, the moment a search sees a drop:**
 

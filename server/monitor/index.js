@@ -153,18 +153,14 @@ export class Monitor {
       this.db.run(`DELETE FROM page_checks WHERE kind = 'search' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = '' AND i.store = page_checks.store AND i.sku = page_checks.sku COLLATE NOCASE) AND NOT ${monitored}`);
       this.catalog.prune(this.cfg.monitor.logDays);
     }
-    // Stores that can't be asked this second (inside their gap between checks) are left out of the list, so one store's
-    // long list never keeps another store's pages waiting. Oldest first within a store, an armed item's page 15 seconds
-    // ahead of its place (its restock starts members' checkouts).
-    const wait = [...this.hostNext].filter(([, t]) => t > now).map(([h]) => h);
-    const skip = wait.length ? `AND c.host NOT IN (${wait.map((_, i) => `:h${i}`).join(', ')})` : '';
+    // Oldest first — an armed item's page 15 seconds ahead of its place (its restock starts members' checkouts).
     const due = this.db.all(`SELECT c.* FROM page_checks c
-      WHERE c.next_check_at <= :now ${skip} AND (EXISTS (
+      WHERE c.next_check_at <= :now AND (EXISTS (
         SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
         WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
         OR EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id WHERE m.paused = 0 AND ${PRODUCTS_FOR_PAGE}))
       ORDER BY c.next_check_at - CASE WHEN EXISTS (SELECT 1 FROM items i WHERE (${ITEMS_FOR_PAGE}) AND i.aco = 1 AND i.monitor = 1) THEN ${ARMED_AHEAD_MS} ELSE 0 END
-      LIMIT 50`, { now, ...Object.fromEntries(wait.map((h, i) => [`h${i}`, h])) });
+      LIMIT 50`, { now });
     const jobs = [];
     for (const page of due) {
       if (this.sweptLately(page.url, now)) {

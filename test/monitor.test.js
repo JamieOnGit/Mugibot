@@ -428,7 +428,7 @@ test("EB Games (its Cloudflare turns away every server): the server never asks i
   }
 });
 
-test("one store's long list never keeps another store's pages waiting: a store that can't be asked this second is left out (oldest first within a store, an armed item's page ahead of its turn) — and a store slow to answer is still asked again once its gap is over, as ever", async () => {
+test("page checks: up to 50 due pages a round (oldest first, an armed item's page ahead of its turn), so one store's long list doesn't keep another store's page waiting — and a store slow to answer is still asked again once its gap is over, as ever", async () => {
   const mon = env.app.monitor;
   const { catalog, repo, db, cfg } = env.app;
   const gap = cfg.monitor.hostGapSeconds;

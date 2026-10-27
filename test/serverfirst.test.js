@@ -49,7 +49,7 @@ const sweep = (id, keyword = 'pokemon', page = 1) => sw.sweepTerm(R(id), { keywo
 const card = (id) => sw.live().stores.find((s) => s.id === id);
 const due = (id) => sw.browserDue(admin, { version: '99.0.0' }).terms.find((t) => t.store === id);
 const sys = (re) => sw.events.some((e) => e.type === 'sys' && re.test(e.message));
-const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, mainAt: 0, mainFails: 0, mainDue: undefined, searchAt: 0, fails: 0, failKind: '', slowUntil: 0, refusedUntil: 0, resetAt: 0, retryAt: 0, browserNext: 0, lastError: '' });
+const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, fails: 0, slowUntil: 0, retryAt: 0, browserNext: 0, lastError: '' });
 
 /** What an admin's browser reads at a store (the dummy store lets browsers in): the same code the server uses. */
 async function browserRead(id, keyword = 'pokemon') {
@@ -260,136 +260,6 @@ test("pinned to the server only while the browser stood in: nothing stands in an
   } finally {
     store.state.blockNonBrowsers = false;
     sw.save({ stores }, admin);
-    fresh(id);
-  }
-});
-
-test("⚡ a store only struggling at a drop (502s, timeouts, a page without its list) isn't turning the server away: searched again soon, not backed off for minutes — three misses in a row hand it to an admin's browser as ever, the server tries again a minute later and is straight back at its pace; a refusal still backs off", async () => {
-  const id = 'demo-kmart';
-  fresh(id);
-  const st = sw.stat(id);
-  const every = sw.paceFor(R(id));
-  const seq = sw.seq;
-  const since = (re) => sw.events.some((e) => e.id > seq && e.type === 'sys' && re.test(e.message));
-  const real = sw.fetch;
-  let answer = '502';
-  sw.fetch = async (url, init) => {
-    if (answer === '502') return new Response('<html><title>502 Bad Gateway</title></html>', { status: 502 });
-    if (answer === 'timeout') throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
-    if (answer === 'layout') return new Response('<html><title>Please wait</title><body>We are busy</body></html>', { status: 200, headers: { 'content-type': 'text/html' } });
-    if (answer === '403') return new Response('Forbidden', { status: 403 });
-    return real(url, init);
-  };
-  try {
-    // Searched as the loop does (each next search when waitFor says), the store answering a 502, a timeout and a page
-    // without its list: every search it would have had before (twice as long apart after each failure: 10 s, then 20)
-    // is made, never one later — and the third miss of those hands it over, as ever.
-    const t0 = sw.now();
-    const secs = () => Math.round((sw.now() - t0) / 1000);
-    const times = [];
-    for (const [i, a] of ['502', 'timeout', 'layout'].entries()) {
-      answer = a;
-      st.searchAt = sw.now();
-      times.push(secs());
-      const r = await sweep(id);
-      assert.deepEqual([r.ok, r.blocked], [false, false], `${a}: ${r.error}`);
-      if (a === 'timeout') assert.equal(r.error, 'The store took too long to answer');
-      if (i < 2) {
-        assert.equal(st.backup, null, `still the server's after ${i + 1} (${a})`);
-        assert.equal(st.failKind, 'transient', a);
-        clock.offset += sw.waitFor(st, every);
-      }
-    }
-    assert.deepEqual(times, [0, 2 * every / 1000, 6 * every / 1000], 'the searches it always had');
-    assert.equal(st.slowUntil, 0, 'not slowed: it turned nobody away');
-    assert.ok(!since(/refused a search/), "not said to have refused anything");
-    assert.ok(st.backup, 'handed over at the third miss');
-    assert.equal(st.backup.transient, true);
-    assert.ok(since(/Kmart \(dummy store\): Mugibot's server gets no answer from it \(.+\) — an admin's browser searches it meanwhile, and the server tries again within a minute/));
-    // Its tries (no admin's browser searching it yet): the usual ones — 8 and 16 times its pace after the hand-over and
-    // the try before (40 s, then 80 at 5 s) — and, where those are more than a minute apart, one a minute in between.
-    answer = '502';
-    const tries = [];
-    for (let i = 0; i < 4; i++) {
-      clock.offset += Math.max(0, sw.nextTry(R(id), st) - sw.now());
-      tries.push(secs());
-      assert.equal((await sweep(id)).ok, false);
-    }
-    const handed = 6 * every / 1000;
-    assert.deepEqual(tries, [handed + 8 * every / 1000, handed + 8 * every / 1000 + 60, handed + 24 * every / 1000, handed + 24 * every / 1000 + 60], 'the usual tries, and a minute apart between them');
-    assert.equal(st.backup.tries, 3, 'only the usual tries counted');
-    // (A search that took long to fail spaced itself already: the next one isn't held back for it as well.)
-    fresh(id);
-    answer = '502';
-    await sweep(id);
-    assert.equal(sw.waitFor(st, every, { spent: 2 * MIN }), 500);
-    // Answering again: the server's straight back, at its own pace (not a third of it).
-    fresh(id);
-    for (let i = 0; i < 3; i++) {
-      st.searchAt = sw.now();
-      await sweep(id);
-      if (!st.backup) clock.offset += sw.waitFor(st, every);
-    }
-    assert.ok(st.backup && st.backup.transient);
-    answer = 'ok';
-    const back = await sweep(id);
-    assert.equal(back.ok, true, back.error);
-    assert.equal(st.backup, null);
-    assert.equal(st.slowUntil, 0, 'straight back at its pace: it never turned the server away');
-    assert.equal(sw.waitFor(st, every), every);
-
-    // A refusal is one, as ever: three misses in a row hand over — a timeout while it's in force is one of them — and its
-    // backoff stands.
-    fresh(id);
-    answer = '403';
-    await sweep(id);
-    assert.ok(st.slowUntil > sw.now(), 'a refusal: searched gently');
-    answer = 'timeout';
-    await sweep(id);
-    assert.equal(sw.waitFor(st, every), every * 4, "the refusal's backoff stands");
-    assert.equal(st.serverMisses, 2, 'a timeout after a refusal: a miss');
-    answer = '403';
-    await sweep(id);
-    assert.ok(st.backup, 'three misses: handed over');
-    assert.equal(st.backup.transient, false);
-    assert.ok(Math.abs(st.backup.retryAt - (sw.now() + 5 * MIN)) < 2000);
-
-    // …and a refusal followed by minutes of timeouts (bot protection that turns away, then stalls) is no "struggling"
-    // store: handed over as refused — the server back in 5 minutes, gently at first — never at once at full pace.
-    fresh(id);
-    answer = '403';
-    await sweep(id);
-    answer = 'timeout';
-    for (let i = 0; i < 3 && !st.backup; i++) {
-      clock.offset += MIN;
-      await sweep(id);
-    }
-    assert.ok(st.backup, 'handed over');
-    assert.equal(st.backup.transient, false, "a refusal's: not a struggling store's");
-    assert.ok(Math.abs(st.backup.retryAt - (sw.now() + 5 * MIN)) < 2000, `${st.backup.retryAt - sw.now()} ms`);
-    answer = 'ok';
-    assert.equal((await sweep(id)).ok, true);
-    assert.equal(st.backup, null);
-    assert.ok(st.slowUntil > sw.now(), 'taken back gently, as after any refusal');
-
-    // ↻ Reset (searched gently after it, though nobody was turned away), then a struggling store: still only struggling —
-    // no "refused", no 5-minute wait for the server.
-    fresh(id);
-    sw.reset(id, admin);
-    assert.ok(st.slowUntil > sw.now(), "Reset's gentle start");
-    answer = '502';
-    let at = 0;
-    for (let i = 0; i < 3; i++) {
-      clock.offset += 20 * 1000;
-      at = sw.now();
-      st.searchAt = at;
-      await sweep(id);
-    }
-    assert.ok(st.backup, 'three misses: handed over');
-    assert.equal(st.backup.transient, true, 'only struggling');
-    assert.ok(Math.abs(st.backup.probeAt - (at + MIN)) < 2000, `the server tries again in a minute (${st.backup.probeAt - at} ms)`);
-  } finally {
-    sw.fetch = real;
     fresh(id);
   }
 });

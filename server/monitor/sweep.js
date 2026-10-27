@@ -147,15 +147,6 @@ const MODES = ['auto', 'server', 'browser', 'off'];
 const SERVER_TRIES = 3; // (1 at a store known to turn servers away: sweep.from 'browser')
 const SERVER_RETRY_MS = 5 * 60 * 1000;
 const SERVER_RETRY_MAX_MS = 30 * 60 * 1000;
-// A store only struggling — too slow to answer, out of reach a moment, a 5xx that isn't 503, a page without its list (all
-// likeliest at a drop, when it's busiest) — turns nobody away: it's searched again soon (at half its pace three times, then a
-// minute apart at most). Three misses in a row hand it to an admin's browser, as ever; the server tries again a minute
-// later (twice as long each time it's still struggling) and is back at its full pace once it answers. A refusal
-// (401/403/429/503, a bot check) backs off as ever. (Not at a store known to turn servers away: sweep.from 'browser' —
-// there any miss hands over.)
-const TRANSIENT_RETRY_MS = 60 * 1000;
-const TRANSIENT_MAX_MS = 60 * 1000;
-const TRANSIENT_QUICK = 3;
 const minutes = (ms) => `${Math.max(1, Math.round(ms / 60000))} min`;
 /** "2 h 10 min", "45 min". */
 const howLong = (ms) => { const m = Math.max(1, Math.round(ms / 60000)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`; };
@@ -459,7 +450,7 @@ export class Sweeper {
     if (!s) {
       // backup: server first, an admin's browser standing in ({ since, retryAt, tries, why, waitUntil }).
       // nextPages: '<keyword>\n<page>' → the link on that page to the next one (sweep.followNext: BIG W's).
-      s = { turn: 0, deep: 0, fails: 0, log: [], lastAt: null, lastOkAt: null, lastError: '', browserNext: 0, nextAt: null, slowUntil: 0, refusedUntil: 0, firstOkAt: null, backup: null, serverMisses: 0, browserAt: 0, askedAt: 0, nextPages: new Map() };
+      s = { turn: 0, deep: 0, fails: 0, log: [], lastAt: null, lastOkAt: null, lastError: '', browserNext: 0, nextAt: null, slowUntil: 0, firstOkAt: null, backup: null, serverMisses: 0, browserAt: 0, askedAt: 0, nextPages: new Map() };
       this.state.set(id, s);
     }
     return s;
@@ -724,9 +715,8 @@ export class Sweeper {
       res = await safeFetch(this.fetch, url, { headers: this.headers(r), timeoutMs, signal: AbortSignal.timeout(timeoutMs) }, { allowPrivate: this.cfg.monitor.allowPrivateHosts });
       if (res.ok) text = await res.text();
     } catch (e) {
-      const blocked = e instanceof BlockedUrlError;
-      const error = blocked ? e.message : e.name === 'TimeoutError' ? 'The store took too long to answer' : "Couldn't reach the store";
-      return this.record(r, term, { ok: false, transient: !blocked, url, source: 'server', ms: Date.now() - started, error });
+      const error = e instanceof BlockedUrlError ? e.message : e.name === 'TimeoutError' ? 'The store took too long to answer' : "Couldn't reach the store";
+      return this.record(r, term, { ok: false, url, source: 'server', ms: Date.now() - started, error });
     }
     const ms = Date.now() - started;
     // (The whole-range list answered, but not with a list: each keyword's own search instead, now — unless that's the
@@ -741,7 +731,7 @@ export class Sweeper {
       const st = this.stat(r.id);
       if (refused && wait) { if (this.standIn(r, st)) st.backup.waitUntil = this.now() + wait; else st.retryAt = this.now() + wait; }
       return this.record(r, term, {
-        ok: false, blocked: refused, transient: !refused && res.status >= 500, url, source: 'server', ms,
+        ok: false, blocked: refused, url, source: 'server', ms,
         error: refused ? `The store refused the search (HTTP ${res.status})${wait ? ` — it asked to wait ${Math.ceil(wait / 1000)} s` : ''}` : `HTTP ${res.status}`,
       });
     }
@@ -857,7 +847,7 @@ export class Sweeper {
       });
     }
     // (What the page was — its title and size — so whoever looks can tell what the store sent.)
-    if (parsed.problem === 'layout') return this.record(r, term, { ok: false, transient: source === 'server', url, source, ms, error: `The page didn't have the product list Mugibot reads — the store may have changed it${seenText(seen)}` });
+    if (parsed.problem === 'layout') return this.record(r, term, { ok: false, url, source, ms, error: `The page didn't have the product list Mugibot reads — the store may have changed it${seenText(seen)}` });
     const s = this.settings;
     const now = this.now();
     const row = this.db.get('SELECT * FROM sweep_terms WHERE store = :s AND keyword = :k AND page = :p', { s: r.id, k: term.keyword, p: term.page });
@@ -1395,16 +1385,11 @@ export class Sweeper {
       this.totals.streak += 1;
     } else {
       st.fails += 1;
-      // (unread: a page whose results hadn't been drawn when it was read — read again at the usual pace, no backing off.
-      //  transient: the store struggling, not refusing — read again soon: waitFor.)
-      st.failKind = info.unread ? 'unread' : info.transient && r.sweep.from !== 'browser' ? 'transient' : 'failed';
+      // (unread: a page whose results hadn't been drawn when it was read — read again at the usual pace, no backing off.)
+      st.failKind = info.unread ? 'unread' : 'failed';
       st.lastError = info.error || 'Failed';
       st.lastNote = '';
-      // (Refused: searched gently for a while — and, the server refused, a timeout meanwhile is a miss: serverFirst.)
-      if (info.blocked) {
-        st.slowUntil = now + SLOW_MS;
-        if (info.source === 'server') st.refusedUntil = now + SLOW_MS;
-      }
+      if (info.blocked) st.slowUntil = now + SLOW_MS;
       this.totals.errors += 1;
       this.totals.streak = 0;
       this.cfg.log(JSON.stringify({ evt: 'sweep.failed', store: r.id, keyword: term.keyword, page: term.page, source: info.source, error: info.error || '', fails: st.fails, ms: info.ms ?? null }));
@@ -1426,18 +1411,6 @@ export class Sweeper {
     });
     if (keep) Object.assign(st, keep);
     if (info.source === 'browser') st.browserAt = now;
-    // (The server's searches as they always were — twice as long after each failure, from its end — kept alongside: a
-    //  struggling store's quicker searches come in between them, never instead of one. mainDue: this was one of them.)
-    if (info.source === 'server' && !trying) {
-      // (Refused — or failing while a refusal's in force — it's counted as ever, whenever it came.)
-      const struggling = !info.ok && !!info.transient && r.sweep.from !== 'browser' && !(st.refusedUntil > now);
-      st.mainDue = !struggling || !st.mainAt || (st.searchAt || now) >= st.mainAt - 1000;
-      if (info.ok) Object.assign(st, { mainAt: 0, mainFails: 0 });
-      else if (st.mainDue) {
-        st.mainFails = (st.mainFails || 0) + 1;
-        st.mainAt = info.unread ? 0 : now + Math.min(MAX_BACKOFF_MS, this.paceFor(r) * 2 ** Math.min(st.mainFails, 10));
-      }
-    }
     if (info.source === 'server' && this.modeFor(r) === 'auto') this.serverFirst(r, st, info, now, trying);
     const out = { store: r.id, keyword: termLabel(term.keyword, r), page: term.page, ok: info.ok, blocked: !!info.blocked, ...(info.unread ? { unread: true } : {}), error: info.error || '', found: info.found || 0, kept: info.kept || 0, new: info.new || 0, restock: info.restock || 0, price: info.price || 0, baseline: !!info.baseline, ms: info.ms ?? null };
     // A drop watch's words (monitor/drops.js): how it went shows on the watch. ('private': someone's own
@@ -1462,46 +1435,26 @@ export class Sweeper {
     if (info.ok) {
       st.serverMisses = 0;
       if (st.backup) {
-        const { since, transient } = st.backup;
-        // (Gently at first — not after a store that was only struggling: it never turned the server away.)
-        // (A Reset's own gentle start, though, holds for its 10 minutes.)
-        const gentle = Math.max(transient ? 0 : now + SLOW_MS, st.resetAt ? st.resetAt + SLOW_MS : 0);
-        Object.assign(st, { backup: null, fails: 0, lastError: '', lastOkAt: now, slowUntil: gentle, refusedUntil: transient ? 0 : now + SLOW_MS });
+        const since = st.backup.since;
+        Object.assign(st, { backup: null, fails: 0, lastError: '', lastOkAt: now, slowUntil: now + SLOW_MS });
         this.sys(`${r.name}: Mugibot's server is searching it again — the store answered (an admin's browser stood in for ${minutes(now - since)})`, { store: r.id });
       }
       return;
     }
     const why = info.empty ? (r.sweep.render ? 'its products only show once its page has run' : "no products, where an admin's browser finds some") : info.error || 'refused';
-    // (Not while a refusal's still in force — the 10 minutes after the server was turned away (refusedUntil; a Reset's
-    //  gentle start isn't one): then a timeout is a miss like any, as ever. While the browser stands in, the store's pace is
-    //  the browser's: the try's own refusals count, below.)
-    const transient = !!info.transient && r.sweep.from !== 'browser' && (trying || !(st.refusedUntil > now));
     if (trying) {
-      const b = st.backup;
-      b.why = why;
-      // (Turned away once while standing in: it's a refusal now — no more quicker tries.)
-      if (!transient) b.transient = false;
-      // The server's tries as ever (5, 10, 20… minutes; sooner while no admin's browser is searching it) — a struggling
-      // store's quicker ones, a minute apart, come in between and leave those be.
-      if (!b.transient || now >= this.mainTry(r, st, now) - 1000) {
-        b.tries += 1;
-        b.retryAt = now + Math.min(SERVER_RETRY_MAX_MS, SERVER_RETRY_MS * 2 ** (b.tries - 1));
-        b.idleAt = now + this.idleWait(r, b.tries);
-      }
-      b.probeAt = b.transient ? now + TRANSIENT_RETRY_MS : 0;
+      st.backup.tries += 1;
+      st.backup.why = why;
+      st.backup.retryAt = now + Math.min(SERVER_RETRY_MAX_MS, SERVER_RETRY_MS * 2 ** (st.backup.tries - 1));
+      st.backup.idleAt = now + this.idleWait(r, st.backup.tries);
       return;
     }
-    // (Struggling or refused, three misses in a row hand over, as ever — a struggling store's quicker searches in between
-    //  not counted, so they never bring it forward. Only struggling, the server tries again sooner while the browser
-    //  stands in, and takes back over at its full pace.)
-    if (transient && st.mainDue === false) return;
     st.serverMisses = (st.serverMisses || 0) + 1;
     if (st.serverMisses < (r.sweep.from === 'browser' ? 1 : SERVER_TRIES) && !(info.empty && r.sweep.render)) return;
-    st.backup = { since: now, tries: 1, retryAt: now + SERVER_RETRY_MS, idleAt: now + this.idleWait(r, 1), why, waitUntil: st.retryAt || 0, transient, probeAt: transient ? now + TRANSIENT_RETRY_MS : 0 };
+    st.backup = { since: now, tries: 1, retryAt: now + SERVER_RETRY_MS, idleAt: now + this.idleWait(r, 1), why, waitUntil: st.retryAt || 0 };
     // (The browser starts afresh: the server's failures, slower pace and Retry-After were the server's.)
-    Object.assign(st, { fails: 0, slowUntil: 0, refusedUntil: 0, retryAt: 0, browserNext: 0, serverMisses: 0, mainAt: 0, mainFails: 0 });
-    const state = info.empty ? `can't read it (${why})` : transient ? `gets no answer from it (${why})` : `is refused (${why})`;
-    st.lastError = `Mugibot's server ${state} — an admin's browser searches it meanwhile, and the server tries again within ${transient ? 'a minute' : '5 min'}`;
+    Object.assign(st, { fails: 0, slowUntil: 0, retryAt: 0, browserNext: 0, serverMisses: 0 });
+    st.lastError = `Mugibot's server ${info.empty ? `can't read it (${why})` : `is refused (${why})`} — an admin's browser searches it meanwhile, and the server tries again within 5 min`;
     this.sys(`${r.name}: ${st.lastError}`, { store: r.id, level: 'warn' });
   }
 
@@ -1535,15 +1488,6 @@ export class Sweeper {
    * searching the store — before that, at the server's usual backoff — never before Retry-After.
    */
   nextTry(r, st, now = this.now()) {
-    const b = st.backup;
-    const main = this.mainTry(r, st, now);
-    // (A struggling store's quicker try — never in the half-pace just before the usual one: that one, then.)
-    if (!b.probeAt || b.probeAt >= main - 2 * this.paceFor(r)) return main;
-    return Math.max(b.waitUntil || 0, b.probeAt);
-  }
-
-  /** The server's usual next try while an admin's browser stands in (never before Retry-After). */
-  mainTry(r, st, now = this.now()) {
     const b = st.backup;
     const searching = !!st.browserAt && st.browserAt >= b.since && now - st.browserAt < Math.max(60 * 1000, 4 * this.paceFor(r, true));
     return Math.max(b.waitUntil || 0, searching ? b.retryAt || 0 : Math.min(b.retryAt || 0, b.idleAt ?? b.retryAt ?? 0));
@@ -1591,8 +1535,8 @@ export class Sweeper {
    */
   sweepNow() {
     for (const st of this.state.values()) {
-      Object.assign(st, { fails: 0, browserNext: 0, slowUntil: 0, refusedUntil: 0, mainAt: 0, mainFails: 0 });
-      if (st.backup) Object.assign(st.backup, { retryAt: 0, probeAt: 0 });
+      Object.assign(st, { fails: 0, browserNext: 0, slowUntil: 0 });
+      if (st.backup) st.backup.retryAt = 0;
     }
     for (const wake of this.wakers.values()) wake();
   }
@@ -1619,7 +1563,6 @@ export class Sweeper {
         }
         const term = backup ? this.tryTerm(r) : this.nextTerm(r);
         const began = Date.now();
-        st.searchAt = this.now();
         await this.sweepTerm(r, term).catch((e) => this.record(r, term, { ok: false, source: 'server', error: e.message }));
         const spent = Date.now() - began;
         // Handed over to an admin's browser (or still standing in): the next try waits at the top.
@@ -1646,20 +1589,7 @@ export class Sweeper {
   waitFor(st, every, { jitter = false, spent = 0 } = {}) {
     const asked = st.retryAt && st.retryAt > this.now() ? st.retryAt - this.now() : 0;
     // (Not after a page that hadn't drawn its results yet: the store turned nobody away — its usual pace.)
-    // A store only struggling (TRANSIENT_*): at half its pace three times, then twice as long each time, a minute apart at
-    // most — never sooner than half its pace, and a search that took long to fail spaced itself already. (Not while it's
-    // searched gently after turning one away: a refusal's backoff stands.)
-    // Never after the search it would have had before (mainAt: twice as long after each failure) — and, struggling, none
-    // in the half-pace just before that one: that one, then.
-    const main = st.mainAt ? Math.max(0, st.mainAt - this.now()) : Infinity;
-    if (st.fails && st.failKind === 'transient' && !(st.slowUntil > this.now())) {
-      let back = (st.fails <= TRANSIENT_QUICK ? every * 2 : Math.max(every * 2, Math.min(TRANSIENT_MAX_MS, every * 2 ** Math.min(st.fails, 10)))) - Math.max(0, spent);
-      if (back >= main - every * 2) back = main;
-      return Math.max(asked, MIN_GAP_MS, back);
-    }
-    // (Refused: its failures as they were always counted — a struggling store's searches in between aren't — so its
-    //  backoff is exactly what it was; after one of those in between, never past the search it would have had.)
-    if (st.fails && st.failKind !== 'unread') return Math.max(asked, Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(st.mainFails || st.fails, 10), st.mainDue === false ? main : Infinity));
+    if (st.fails && st.failKind !== 'unread') return Math.max(asked, Math.min(MAX_BACKOFF_MS, every * 2 ** Math.min(st.fails, 10)));
     const slow = st.slowUntil > this.now() ? SLOW_FACTOR : 1;
     return Math.max(asked, MIN_GAP_MS, every * slow * (jitter ? 0.8 + 0.4 * this.random() : 1) - Math.max(0, spent));
   }
@@ -1682,7 +1612,7 @@ export class Sweeper {
       if (storeId ? r.id !== storeId : mode === 'off') continue;
       if (mode === 'browser') fromBrowser = true;
       const st = this.stat(r.id);
-      Object.assign(st, { fails: 0, lastError: '', browserNext: 0, nextAt: now, slowUntil: now + SLOW_MS, resetAt: now, needsUpdateAt: 0, refusedUntil: 0, mainAt: 0, mainFails: 0 });
+      Object.assign(st, { fails: 0, lastError: '', browserNext: 0, nextAt: now, slowUntil: now + SLOW_MS, resetAt: now, needsUpdateAt: 0 });
       if (mode === 'auto') {
         if (st.backup) st.retryAt = Math.max(st.retryAt || 0, st.backup.waitUntil || 0);
         Object.assign(st, { backup: null, serverMisses: 0 });
