@@ -607,6 +607,45 @@ const MIGRATIONS = [
   CREATE INDEX products_url ON products(url);
   CREATE INDEX page_checks_due ON page_checks(next_check_at);
   `,
+  // 23 — what each VIP and drop watch saw itself (server/monitor/sightings.js), which decides what its Auto-checkout buys.
+  //      watch_looks: its first look at a store — when, how many reads, whether every one held all the store's results
+  //      (whole), how they were read (how: the server, or an admin's browser — and how there), and when it was done. watch_sightings: each product it's seen there — when, whether it was in that
+  //      first look, the first stock reading it got (on: on sale, off: not on sale yet; how: what said it), and when it
+  //      was shown to be listed after the watch was added (new_at). new_listings: a product known not to have been
+  //      listed at a store at `since` (a new card listing, or one a watch's whole first look didn't have).
+  `
+  CREATE TABLE watch_looks (
+    watch TEXT NOT NULL,
+    store TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    reads INTEGER NOT NULL DEFAULT 0,
+    found INTEGER NOT NULL DEFAULT 0,
+    whole INTEGER NOT NULL DEFAULT 1,
+    how TEXT NOT NULL DEFAULT '',
+    done_at INTEGER,
+    PRIMARY KEY (watch, store)
+  );
+  CREATE TABLE watch_sightings (
+    watch TEXT NOT NULL,
+    store TEXT NOT NULL,
+    sku TEXT NOT NULL COLLATE NOCASE,
+    at INTEGER NOT NULL,
+    look INTEGER NOT NULL DEFAULT 0,
+    first TEXT NOT NULL DEFAULT '',
+    first_at INTEGER,
+    first_how TEXT NOT NULL DEFAULT '',
+    new_at INTEGER,
+    PRIMARY KEY (watch, store, sku)
+  );
+  CREATE INDEX watch_sightings_product ON watch_sightings(store, sku COLLATE NOCASE);
+  CREATE TABLE new_listings (
+    store TEXT NOT NULL,
+    sku TEXT NOT NULL COLLATE NOCASE,
+    since INTEGER NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (store, sku)
+  );
+  `,
 ];
 
 export class Db {

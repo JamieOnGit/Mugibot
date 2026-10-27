@@ -639,18 +639,18 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
      3 hours, and its newest products and whole list count the watch's finds too.
    - What the watch found has its page read every **5 seconds**.
    - Otherwise its pages are read every 15 seconds.
-4. **🤖 Auto-checkout it for me, up to $…** (optional). What **drops** goes on
-   your watchlist, armed for Auto-checkout up to that max price, and your browser
-   checks out the moment its page says it's in stock. What drops:
-   - a new listing: anything found after the watch's first search;
-   - something already listed whose page says it isn't on sale yet (coming
-     soon, sold out).
+4. **🤖 Auto-checkout it for me, up to $…** (optional). What **drops** after you
+   added the watch goes on your watchlist, armed for Auto-checkout up to that max
+   price, and your browser checks out the moment it's on sale. What drops:
+   - a new listing (bought at once when it's on sale as it's found);
+   - something that wasn't on sale when the watch first read it (coming soon,
+     sold out): armed, and bought when it goes on sale.
 
-   What was **already on sale** when you added the watch is never armed, whichever
-   search finds it first (the watch's own, or the store's keywords or newest
-   products: listed before, its page is read first). A broad
-   watch like *pokemon* would otherwise buy everything that matches. The
-   Activity log says so, and you can ⚡ Buy it yourself.
+   What was **already on sale** when you added the watch is never bought, whichever
+   search finds it first (the watch's own, the store's keywords or newest
+   products). A broad watch like *pokemon* would otherwise buy everything that
+   matches. The Activity log says so, and you can ⚡ Buy it yourself. How Mugibot
+   tells which is which: **🤖 What an Auto-checkout watch buys**, below.
 
    Your Auto-checkout settings and limits still apply (switch it on, keep Chrome
    open with the extension). Each product is armed once: after a purchase it stays
@@ -821,11 +821,12 @@ just backs off.
 switched on, Chrome open with the extension, your limits apply):
 - **A link** is armed like a watchlist item: bought as soon as it's on sale —
   now, if it already is.
-- **Words** arm only what **drops** after the first look: a new listing (bought
-  the moment it's found, if it's on sale), or something listed but not on sale yet
-  (bought when it goes on sale). What was already on sale is never bought — a
-  broad watch would otherwise buy everything that matches. (The same rule as VIP
-  drops.)
+- **Words** arm only what **drops** after you added the watch: a new listing
+  (bought the moment it's found, if it's on sale), or something that wasn't on
+  sale when the watch first read it (bought when it goes on sale). What was already
+  on sale is never bought — a broad watch would otherwise buy everything that
+  matches. (The same rule as VIP drops: **🤖 What an Auto-checkout watch buys**,
+  below.)
 - **One purchase per watch:** once one of its finds is bought, its other finds
   are disarmed and what it finds from then on isn't armed (docs/AUTO-CHECKOUT.md →
   One purchase per arming).
@@ -836,6 +837,85 @@ watches, admins 30 (`MAX_DROP_WATCHES`).
 
 Settings (environment variables): `DROP_SWEEP_SECONDS` (30), `DROP_SITE_SECONDS`
 (120), `MAX_DROP_WATCHES` (10).
+
+#### 🤖 What an Auto-checkout watch buys
+
+A VIP watch or drop watch (words, key phrases or a search page) with Auto-checkout
+buys what **drops after you added it**: a new listing, or a restock of something
+that wasn't on sale when you added it. It **never** buys what was on sale when you
+added it. (A drop watch's product link is different: it's armed like a watchlist
+item, bought whenever it's on sale. A VIP watch's link is decided like the rest:
+by its page's first reading.)
+
+The catalogue's last status can't decide which: it says when the status last
+changed, not when it was last confirmed. City Beach's search doesn't say the
+stock at all. A page read and a search can disagree (EB Games' search, and "not
+available online" on its page). So each watch decides by **what it saw itself**
+(`server/monitor/sightings.js`), for each product it's seen at a store:
+
+- **Its first look there.** The watch's own search (or its page) at that store:
+  its first read, or its first two when the first had no products (one empty
+  answer may be the store's hiccup).
+- **The first stock reading it got.** A search that says the stock, or a page
+  read that worked (one the store refused says nothing). Every watch whose words
+  are in the product's name gets it, whichever search read it. Where a page and a
+  search said otherwise within the last 3 minutes, it counts as on sale.
+- **Whether a read showed it's new since you added the watch.** One of these:
+  - the watch's own search shows it, and its first look didn't. This only counts
+    when every read of that first look held **every result** the store has (the
+    store's own count of results says so, or fewer came back than the page holds:
+    10 at JB Hi-Fi and the Shopify card shops, 48 at City Beach, 30 at Games
+    World). It also has to be read the same way as the first look (the server's
+    answer and a page drawn in an admin's browser can differ). At Target, which
+    leaves sold-out products out of its results, it only counts for a first look
+    made within 15 minutes of adding the watch.
+  - the store made it after you added the watch (the creation time in a Shopify
+    store's product list: JB Hi-Fi's newest products, the card shops');
+  - it's a **new card listing**, new to the catalogue in a card search that isn't
+    setting its scene (the same 🆕 the channels get). It counts for every watch
+    added before that search last read.
+  - another watch's whole first look at the store didn't have it, and that look
+    was after you added this watch (not at Target).
+
+  None of these counts for a product the watch had already seen before then.
+
+What it does with that:
+
+- **New** (any of the above): armed, and bought at once if it's on sale.
+- **First read not on sale** (sold out, coming soon, in the store's shops only):
+  armed for its return.
+- **First read on sale**: never bought (the Activity log says so). It's armed only
+  if a read later shows it's new after all. For example, Target hides a product
+  while it's sold out: one sold out before you added the watch, and back, is
+  missing from the watch's whole first look. The card search may see it first, on
+  sale, but the watch's own search then shows it's new, and it's bought.
+- **No reading yet** (a search without stock): its page is read at the store's
+  usual pace, never sooner while the store is refusing it (backing off).
+  BIG W's and EB Games' pages are read in an admin's browser, and that read
+  settles it too.
+
+So these are never bought: something on sale all along that only moved up into
+a search's view (JB Hi-Fi's search shows its top 10), whatever a first look saw
+beyond what the watch keeps (10 or 20 finds), a product Mugibot never tracked (a
+hat, a skateboard) that another search sees first, and anything whose only
+"sold out" was the catalogue's own old one.
+
+What's still missed (failing safe):
+
+- A drop whose search never shows every result (a broad watch, Amazon's or BIG
+  W's search), seen first on sale, isn't bought unless the store's creation time
+  or the card search says it's new.
+- JB Hi-Fi often makes a product days before it publishes it. A non-card drop
+  made before you added the watch, seen first in its newest products, waits for
+  the watch's own search to show it's new.
+
+Searches and page reads from an admin's browser only say they held every result
+from extension **1.38.0** (it passes on the store's own count). An older copy's
+reads are decided by the watch's own readings alone.
+
+Each watch's first look starts afresh with this release: its next search is its
+first look. Nothing is asked of a store more often than before: a find's page is
+read at the store's usual pace, and never while it's backing off.
 
 ### 📃 Search pages: a store's page read every few seconds for your key phrases
 
@@ -860,11 +940,15 @@ switch it if it's wrong), and asks for:
   DM, and puts what it finds on their watchlist.
 
 **What's a drop.** The watch's first look at the page is how things were: what's
-on it then goes on the watchlist quietly (and is armed only if it isn't on sale
-yet). After that, a product with a phrase is a **drop** (🆕 posted or DM'd, and
-bought at once when armed) when it wasn't on the page before **and** Mugibot
-didn't know it at that store, or knew it as not on sale and it's on sale now.
-A product coming back onto the page isn't a drop. Its restock is, the usual way.
+on it then goes on the watchlist quietly (and is armed only if the page says it
+isn't on sale yet — never by an old "sold out" Mugibot had). After that, a product
+with a phrase is a **drop** (🆕 posted or DM'd) when it wasn't on the page before
+**and** Mugibot didn't know it at that store, or knew it as not on sale and it's on
+sale now. A product coming back onto the page isn't a drop. Its restock is, the
+usual way. What **Auto-checkout** buys of them is decided the way every watch's is
+(**🤖 What an Auto-checkout watch buys**, below): a drop is bought at once when
+the page shows it can't have been there before — every product on it was read,
+and the watch's first look of it (read the same way) didn't have it.
 The first read after the page is read another way (the server, then an admin's
 browser) or after 6 hours without an answer sets the scene again: nothing in it
 is a drop. So does the first read after Mugibot restarts. (A product pushed onto
@@ -1156,6 +1240,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
 | What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
 | 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find — `hasWords`, `room` — where they post, and your own finds' price drops: `priceDropped`); `drop_watches` (with `channel_id`, `role_id`: migration 12; `bases`, each store's first look for a key phrase at every store, `ALL_STORES`: migration 18), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11), `items.price_alert_at`/`price_alert_price` (migration 13); `GET/POST /api/drops` (`phrases`: several key phrases at once), `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
+| 🤖 What an Auto-checkout watch buys | `server/monitor/sightings.js` (each VIP and drop watch's first look, first stock reading and what shows it's new: its verdict); `watch_looks`, `watch_sightings`, `new_listings` (`server/db.js`, migration 23); `holdsAll` and `sight()` in `server/monitor/sweep.js`; settled in `Vip.settle`, `Drops.settleShared` / `settleOwn`, from page reads in `Monitor.watchReading`; `test/arming.test.js` |
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |

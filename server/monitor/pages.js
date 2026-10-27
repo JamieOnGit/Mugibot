@@ -29,7 +29,7 @@ import { serialize } from '../retailers/index.js';
 import { num, str } from '../schema.js';
 import { parseListing, siteAnswer } from './listing.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
-import { olderVersion, retryAfterMs } from './sweep.js';
+import { holdsAll, olderVersion, pageSizeIn, retryAfterMs } from './sweep.js';
 
 export const PAGE_MIN_SECONDS = 3;
 export const PAGE_DEFAULT_SECONDS = 5;
@@ -133,12 +133,12 @@ export function planFor(r, pageUrl, { urlFor = null } = {}) {
     // Kmart's search: its search provider (Constructor.io), the way its drop watches search it; its other pages, drawn in a browser.
     case 'constructor': {
       const q = search(param('searchTerm', 'q', 'text'));
-      return { server: q ? { url: q, parser: 'constructor', json: true } : null, browser: render('generic') };
+      return { server: q ? { url: q, parser: 'constructor', json: true, size: pageSizeIn(q) } : null, browser: render('generic') };
     }
     // WooCommerce: its search through its product API; a category page, as it is.
     case 'woo': {
       const q = search(param('s'));
-      return { server: q ? { url: q, parser: 'woo', json: true } : page('generic'), browser: render('generic') };
+      return { server: q ? { url: q, parser: 'woo', json: true, size: pageSizeIn(q) } : page('generic'), browser: render('generic') };
     }
     // Shopify: a collection is its products.json (every product in it, with stock — its filters left to the key
     // phrases); a search, its suggestions; any other page as it is. A browser draws it where those come back empty.
@@ -147,8 +147,9 @@ export function planFor(r, pageUrl, { urlFor = null } = {}) {
       const sku = r.skuFromPath || SHOPIFY_SKU;
       const col = rel.match(/^\/collections\/([^/?#]+)/);
       const q = /^\/search\/?$/.test(rel) ? param('q', 'query', 'keyword') : '';
-      const server = col ? { url: `${r.base}/collections/${col[1]}/products.json?limit=250`, parser: 'shopify', json: true }
-        : q ? { url: `${r.base}/search/suggest.json?q=${encodeURIComponent(q)}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last`, parser: 'shopify-suggest', json: true }
+      // (size: how many a read holds at most — Shopify's own limits — so one with fewer holds every product there is.)
+      const server = col ? { url: `${r.base}/collections/${col[1]}/products.json?limit=250`, parser: 'shopify', json: true, size: 250 }
+        : q ? { url: `${r.base}/search/suggest.json?q=${encodeURIComponent(q)}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last`, parser: 'shopify-suggest', json: true, size: 10 }
           : page('generic', { skuFromPath: sku });
       return { server, browser: render('generic', { skuFromPath: sku }) };
     }
@@ -315,7 +316,9 @@ export class PageWatches {
     }
     const text = (await res.text()).slice(0, 8_000_000);
     const parsed = parseListing(want.parser, text, { base: res.url || want.url, storeBase: r.base, productPath: want.productPath || null, skuFromPath: want.skuFromPath || null, storeName: r.name });
-    return this.done(g, { source: 'server', how: 'server', parsed });
+    // (whole: it holds every result there is — the store's own count says so, or fewer came than Mugibot's own address
+    //  asks for. A page's own address is the person's: its size isn't trusted.)
+    return this.done(g, { source: 'server', how: 'server', parsed, whole: holdsAll(parsed, want.size || 0) });
   }
 
   // ---------------------------------------------------------------------------
@@ -409,7 +412,11 @@ export class PageWatches {
         const products = (Array.isArray(res.products) ? res.products : []).slice(0, 300).map((p) => this.sweeper.cleanProduct(r, p)).filter(Boolean);
         const problem = ['blocked', 'layout', 'empty', 'unread'].includes(res.problem) ? res.problem : null;
         const stated = num(res.stated, { min: 0, max: 1e7, int: true, def: null });
-        await this.done(g, { source: 'browser', how: res.how === 'data' ? 'browser:data' : 'browser:page', parsed: { products, problem, stated } });
+        // (The store's own count of results and how many came, where the browser says: whether the read holds them all.)
+        const total = num(res.total, { min: 0, max: 1e7, int: true, def: null });
+        const perPage = num(res.perPage, { min: 0, max: 1e5, int: true, def: null });
+        const parsed = { products, problem, stated, total, perPage };
+        await this.done(g, { source: 'browser', how: res.how === 'data' ? 'browser:data' : 'browser:page', parsed, whole: total !== null && perPage !== null && holdsAll(parsed) });
         out.push({ id: res.id, ok: true, products: products.length });
       } finally {
         // (Its next read is handed out only once this one's been taken in: never two at once for a page.)
@@ -437,8 +444,8 @@ export class PageWatches {
   // ---------------------------------------------------------------------------
   // What a read means
   // ---------------------------------------------------------------------------
-  /** A read that answered: its products for each watch on the page (their finds), and when it's read next. */
-  async done(g, { source, how, parsed }) {
+  /** A read that answered: its products for each watch on the page (their finds), and when it's read next. whole: it held every result. */
+  async done(g, { source, how, parsed, whole = false }) {
     const st = this.st(g.key);
     const now = this.now();
     st.lastAt = now;
@@ -466,7 +473,7 @@ export class PageWatches {
     const fresh = scene ? null : new Set(products.map(keyOf).filter((k) => k && !st.seen.has(k)));
     const peers = g.watches;
     try {
-      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now });
+      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now, whole, how });
       else await this.settleSite(peers, products, { fresh });
     } finally {
       for (const p of products) { const k = keyOf(p); if (k && st.seen.size < 5000) st.seen.add(k); }

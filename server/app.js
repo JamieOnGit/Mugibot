@@ -7,6 +7,7 @@ import { Bags } from './bags.js';
 import { Pools } from './pools.js';
 import { Drops } from './monitor/drops.js';
 import { PageWatches } from './monitor/pages.js';
+import { Sightings } from './monitor/sightings.js';
 import { Vip } from './monitor/vip.js';
 import { Catalog } from './catalog.js';
 import { loadConfig } from './config.js';
@@ -69,6 +70,12 @@ export async function createApp(options = {}) {
   const vip = new Vip({ cfg, db, repo, catalog, retailers, hub, now });
   monitor.vip = vip;
   sweeper.vip = vip;
+  vip.monitor = monitor;
+  // What each VIP and drop watch saw itself: what its Auto-checkout buys (a drop after it was added, never what was on sale then).
+  const sightings = new Sightings({ db, now });
+  Object.assign(vip, { sightings });
+  Object.assign(monitor, { sightings });
+  Object.assign(sweeper, { sightings });
   // Checkpoints and virtual queues (JB Hi-Fi's, EB Games', Pokémon Center's): seen up and down, posted in #virtual-queue-detection.
   const gates = new Gates({ cfg, db, repo, retailers, discord, notifier, hub, feed, fetchImpl: storeFetchImpl, now });
   gates.sweeper = sweeper;
@@ -76,7 +83,7 @@ export async function createApp(options = {}) {
   monitor.gates = gates;
   // Drop watches: anything outside the card keywords, by link or words, at any store or website.
   const drops = new Drops({ cfg, db, repo, catalog, retailers, hub, notifier, fetchImpl: storeFetchImpl, now });
-  Object.assign(drops, { monitor, sweeper });
+  Object.assign(drops, { monitor, sweeper, sightings });
   monitor.drops = drops;
   sweeper.drops = drops;
   feed.drops = drops;

@@ -31,6 +31,7 @@ import { SWEEP_FRESH_MS } from './feed.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
 import { gateOnPage } from './gate.js';
+import { readingOf } from './sightings.js';
 import { olderVersion } from './sweep.js';
 
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
@@ -83,6 +84,7 @@ export class Monitor {
     this.hostBusy = new Map(); // host → checks still going there
     this.hostGap = new Map(); // host → its gap between checks (seconds)
     this.inFlight = new Set();
+    this.pageSaid = new Map(); // product → what its page last said, when (a read that worked): { on, at }
     this.timer = null;
     this.ticks = 0;
     this.lastTickAt = null;
@@ -382,9 +384,8 @@ export class Monitor {
         if (prev.kind === 'search' && r.foundUrl) continue;
         // What this check really saw: the feed keeps the last confirmed status itself.
         await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
-        // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js).
-        if (this.vip) this.vip.checked(this.catalog.productById(product.id));
-        if (this.drops) this.drops.checked(this.catalog.productById(product.id));
+        // What every VIP and drop watch that's seen it saw (monitor/sightings.js) — a read that worked only.
+        if (!failed && prev.kind === 'product') await this.watchReading(product.id, r.status, 'page');
       }
     } finally {
       // (Even when the shared feed's failed. Going out while the next pages are checked: deliver.)
@@ -395,6 +396,33 @@ export class Monitor {
       return { status: 'found', url: r.foundUrl };
     }
     return { status, previous: prev.status };
+  }
+
+  /**
+   * A product's page read that worked (status: what it said): what every VIP and drop watch that's seen the product saw
+   * (monitor/sightings.js), and a find of theirs waiting on its page settled. Where a live search saw it in the last
+   * few minutes, the search's reading is the one the catalogue keeps (feed.applyCheck) and the one a watch goes by: a
+   * page that disagrees with a fresh search never decides.
+   */
+  async watchReading(productId, status, how) {
+    const product = this.catalog.productById(productId);
+    if (!product) return;
+    const now = this.now();
+    if (readingOf(status)) {
+      this.pageSaid.set(product.id, { on: isOrderable(status), at: now });
+      if (this.pageSaid.size > 5000) for (const [id, x] of this.pageSaid) if (now - x.at > SWEEP_FRESH_MS) this.pageSaid.delete(id);
+    }
+    const reading = readingOf(product.status);
+    if (!reading || !this.sightings) return;
+    this.sightings.read(product.store, [product.sku], reading, how);
+    if (this.vip) await this.vip.checked(product, reading).catch((e) => this.cfg.log('[vip]', e.message));
+    if (this.drops) await this.drops.checked(product, reading).catch((e) => this.cfg.log('[drops]', e.message));
+  }
+
+  /** Did this product's own page say it's on sale in the last few minutes (a search saying it isn't disagrees with it)? */
+  pageSaysOn(productId, now = this.now()) {
+    const p = this.pageSaid.get(productId);
+    return !!p && p.on && now - p.at < SWEEP_FRESH_MS;
   }
 
   /** The product page for a SKU has been found: every item waiting for it gets the link. */
@@ -452,13 +480,16 @@ export class Monitor {
   }
 
   /**
-   * A page to read as soon as the monitor may (a drop watch's find whose stock its search didn't say): next in the
-   * monitor's round — and now, without waiting for it, when its store can be asked this moment. Never a store the
-   * server doesn't ask (BIG W, EB Games, an admin's switch: browsers read it), never inside its gap, never twice at once.
+   * A page to read as soon as the monitor may (a drop watch's find whose stock its search didn't say, another website's
+   * new listing): next in the monitor's round — and now, without waiting for it, when its store can be asked this
+   * moment. Never a store the server doesn't ask (BIG W, EB Games, an admin's switch: browsers read it), never inside
+   * its gap, never twice at once — and never a page that's backing off (the store refused it): that waits its turn.
    */
   checkNow(url) {
     const page = url && this.db.get('SELECT * FROM page_checks WHERE url = :url', { url });
     if (!page) return;
+    // (Backing off — the store refused it: read at its turn, never sooner.)
+    if (page.fail_count > 0) return;
     this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
     const retailer = this.retailers.get(page.store) || this.retailers.forUrl(url);
     if (retailer && !this.retailers.settings(retailer).serverChecks) return;
@@ -502,6 +533,14 @@ export class Monitor {
     if (changed || error !== (item.error || '')) {
       this.hub.publish(item.user_id, 'watch', { id: item.id, status, source, checkedAt: now, price: r.price ?? item.last_price, error });
     }
+    // Your own drop watch's find read off its page — from the server or a browser (a search's reading is the search's:
+    // sweep.js): what the watch saw of it, and its Auto-checkout settled if it was waiting on this (monitor/drops.js).
+    if (item.drop_watch && this.drops && !failed && source !== 'sweep') {
+      await this.drops.itemRead({ ...item, status }, status).catch((e) => this.cfg.log('[drops]', e.message));
+      // (Armed just now — its Auto-checkout run goes with this read's alerts.)
+      const now2 = this.db.get('SELECT aco FROM items WHERE id = :id', { id: item.id });
+      if (now2) item = { ...item, aco: now2.aco };
+    }
     // Your own drop watch's find — at any store or website: its price going down is news too (monitor/drops.js).
     // (With the other alerts, after every member's Auto-checkout run is made: applyAll.)
     if (item.drop_watch && this.drops && !failed && typeof r.price === 'number') {
@@ -511,10 +550,7 @@ export class Monitor {
     }
     if (!changed) return status;
     const fresh = { ...item, status, last_price: r.price ?? item.last_price, title: r.title || item.title };
-    if (firstRead) {
-      if (this.drops) this.drops.firstRead(fresh, status);
-      return status;
-    }
+    if (firstRead) return status;
     if (isOrderable(status) && !isOrderable(prev)) {
       await this.alertRestock(fresh, { status, price: r.price ?? item.last_price, source, wasListed: prev !== STATUS.NOT_LISTED, later, variantId: r.variantId || null });
     } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.BLOCKED, STATUS.ERROR, STATUS.NOT_FOUND, 'pending'].includes(status)) {
@@ -808,6 +844,9 @@ export class Monitor {
       status, price, image, title: typeof res.title === 'string' ? res.title.slice(0, 200) : null,
       error: failed ? (typeof res.error === 'string' && res.error ? res.error.slice(0, 200) : "The admin's browser couldn't read the page") : '',
     }, { source: 'browser', url: product.url || '' });
+    // What every VIP and drop watch that's seen it saw: its own page, read in the admin's browser (a store only
+    // browsers read — BIG W's, EB Games' — settles a find waiting on its page this way).
+    if (fresh && !failed && product.url) await this.watchReading(product.id, status, 'browser');
     // A product the searches found that nobody monitors, on sale on its own page now: alerted by the searches' rules.
     if (this.sweeper && fresh && !failed) await this.sweeper.pageRead(product, fresh).catch((e) => this.cfg.log('[sweep]', e.message));
     return true;
