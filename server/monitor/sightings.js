@@ -160,7 +160,7 @@ export class Sightings {
    * The watch saw a product at a store. codes: its SKU (kept) and aliases. reading: what this read says of its stock
    * ('on', 'off' or ''); how: what read it. own: the watch's own read (its words' search, its page) — way: how it was
    * read (as ownRead's how). created: when the store made it (null: not said). published: when it put it up for sale,
-   * at a store that never republishes what's on sale (null: not said). knownAt: when Mugibot's catalogue first had it
+   * a drop drafted not long before, at a store that never republishes what's on sale (null: not said). knownAt: when Mugibot's catalogue first had it
    * at this store, before this read (null: it didn't). hides: the store leaves sold-out products out of its results.
    * Returns { verdict, before } — before: its verdict until now (null: never seen by the watch).
    */
@@ -200,8 +200,9 @@ export class Sightings {
         // …and a look soon after the watch was added — or else something the catalogue never had at all.
         && (look.at - w.createdAt <= LOOK_NEAR_MS || typeof knownAt !== 'number');
       // (Made by the store after the watch was added: nothing the watch saw can be from before that. Or put up for sale
-      //  since, and not seen by the watch before: not on sale when it was added.)
-      const made = (typeof created === 'number' && created >= w.createdAt) || fresh(published);
+      //  since — not seen by the watch, nor in the catalogue, before the watch was added: not on sale when it was added.)
+      const made = (typeof created === 'number' && created >= w.createdAt)
+        || (fresh(published) && !(typeof knownAt === 'number' && knownAt < w.createdAt));
       const listed = this.newListing(store, codes);
       const told = !!listed && fresh(listed.since) && (!listed.look || listed.since - w.createdAt <= LOOK_NEAR_MS);
       if (missed || made || told) set.new_at = now;

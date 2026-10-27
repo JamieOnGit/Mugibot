@@ -386,11 +386,13 @@ export class Monitor {
       // The shared feed: every monitored product on this page.
       for (const product of this.catalog.productsForPage(url)) {
         if (prev.kind === 'search' && r.foundUrl) continue;
+        // (Not at its store till this read, as its page's reads said: when it was last said — Monitor.unlisted.)
+        const unlistedAt = !failed && this.unlisted(product) ? product.last_ok_at : null;
         // What this check really saw: the feed keeps the last confirmed status itself.
         await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
         // What every VIP and drop watch that's seen it saw (monitor/sightings.js) — a read that worked only. (A product not
         // at its store yet — a page not found, Kmart's "not listed" — isn't on sale yet.)
-        if (!failed && prev.kind === 'product') await this.watchReading(product.id, r.status, 'page', { later, notListed: true });
+        if (!failed && prev.kind === 'product') await this.watchReading(product.id, r.status, 'page', { later, notListed: true, unlistedAt });
       }
     } finally {
       // (Even when the shared feed's failed. Going out while the next pages are checked: deliver.)
@@ -408,12 +410,16 @@ export class Monitor {
    * (monitor/sightings.js), and a find of theirs waiting on its page settled. Where a live search saw it in the last
    * few minutes, the search's reading is the one the catalogue keeps (feed.applyCheck) and the one a watch goes by: a
    * page that disagrees with a fresh search never decides. later: the read's list for the alerts. notListed: a product
-   * page read — "not at the store yet" is a reading (Monitor.unlisted).
+   * page read — "not at the store yet" is a reading (Monitor.unlisted). unlistedAt: its page's reads said it wasn't at
+   * the store till this one, last at this time.
    */
-  async watchReading(productId, status, how, { later = null, notListed = false } = {}) {
+  async watchReading(productId, status, how, { later = null, notListed = false, unlistedAt = null } = {}) {
     const product = this.catalog.productById(productId);
     if (!product) return;
     const now = this.now();
+    // (At the store now: not listed then — new to every watch added by then that hadn't seen it, whichever read sees it
+    //  next; a search seeing it first does the same: Sweeper.sight.)
+    if (unlistedAt && this.sightings && !UNLISTED.has(product.status)) this.sightings.listed(product.store, product.sku, unlistedAt);
     if (readingOf(status)) {
       this.pageSaid.set(product.id, { on: isOrderable(status), at: now });
       if (this.pageSaid.size > 5000) for (const [id, x] of this.pageSaid) if (now - x.at > SWEEP_FRESH_MS) this.pageSaid.delete(id);
@@ -839,6 +845,7 @@ export class Monitor {
     //  protection turns a browser away for.)
     this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id',
       { n: now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails + 1, 5)) : this.productPace({ ...product, status }, { priv: res.privateWindow === true })), id: product.id });
+    const unlistedAt = !failed && this.unlisted(product) ? product.last_ok_at : null;
     const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';
     if (!product.url && found) {
       let ok = false;
@@ -864,7 +871,7 @@ export class Monitor {
     // browsers read — BIG W's, EB Games' — settles a find waiting on its page this way).
     if (fresh && !failed && product.url) {
       const later = [];
-      await this.watchReading(product.id, status, 'browser', { later, notListed: true });
+      await this.watchReading(product.id, status, 'browser', { later, notListed: true, unlistedAt });
       await this.deliver(later, product.store);
     }
     // A product the searches found that nobody monitors, on sale on its own page now: alerted by the searches' rules.

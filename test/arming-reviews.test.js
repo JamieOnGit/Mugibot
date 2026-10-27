@@ -1,5 +1,5 @@
 // What an Auto-checkout watch buys (docs/MONITORING.md → What an Auto-checkout watch buys), the cases adversarial reviews
-// of the design found (two rounds, each one reviewer for wrong buys and one for lost ones): each a wrong buy (something
+// of the design found (three rounds, each one reviewer for wrong buys and one for lost ones): each a wrong buy (something
 // on sale when the watch was added, bought) or a lost one (a drop after it was added, not bought). Against the dummy
 // stores (tests never touch real stores).
 import { test, before, after } from 'node:test';
@@ -14,7 +14,7 @@ let boss;
 let ash;
 let clock;
 // The stores searched (each test's changes put back after it).
-const STORES = { 'demo-citybeach': 'server', 'demo-jbhifi': 'server', 'demo-kmart': 'server', 'demo-target': 'server', 'demo-bigw': 'browser', 'demo-fromthedeep': 'server', 'demo-amazon': 'browser', 'demo-trainertown': 'server' };
+const STORES = { 'demo-citybeach': 'server', 'demo-jbhifi': 'server', 'demo-kmart': 'server', 'demo-target': 'server', 'demo-bigw': 'browser', 'demo-fromthedeep': 'server', 'demo-amazon': 'browser', 'demo-trainertown': 'server', 'demo-gamerholic': 'server' };
 
 before(async () => {
   store = await startMockStore();
@@ -521,5 +521,52 @@ test("💸 a VIP link added before the product is published (JB Hi-Fi: its page 
   await env.app.monitor.delivered();
   assert.equal(armed(boss, 'demo-jbhifi', SKU), true, 'armed');
   assert.equal(runsFor(itemOf(boss, 'demo-jbhifi', SKU)).length, 1, 'bought');
+  assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
+});
+
+// ---------------------------------------------------------------------------
+// The third round
+// ---------------------------------------------------------------------------
+
+test("🛡️ Gamerholic: a booster box on sale for months (past the newest 100 its reads show), set to draft and put back up after the watch was added — never bought", async () => {
+  const gh = R('demo-gamerholic');
+  const day = 86400000;
+  const OLD = 'pokemon-tcg-temporal-forces-booster-box';
+  store.addProduct('gamerholic', { sku: OLD, name: 'Pokemon TCG Temporal Forces Booster Box', price: 199, status: 'in_stock', createdAt: now() - 200 * day });
+  for (let i = 1; i <= 100; i++) store.addProduct('gamerholic', { sku: `one-piece-card-sleeves-${i}`, name: `One Piece Card Sleeves ${i}`, price: 10, status: 'in_stock', createdAt: now() - day });
+  const v = (await boss.post('/api/monitor/vip', { store: 'demo-gamerholic', words: 'booster box', aco: true, maxPrice: 300 })).body.watch;
+  for (let i = 0; i < 2; i++) { await sw().sweepTerm(gh, { keyword: 'booster box', page: 1, vip: v.id }); clock.offset += 61 * 1000; }
+  // Draft, then Active again a minute later (a photo fixed): Shopify's published_at is now, at the top of the newest.
+  const S = store.shop('gamerholic');
+  const [p] = S.products.splice(S.products.findIndex((x) => x.sku === OLD), 1);
+  S.products.push(Object.assign(p, { publishedAt: now() - 1000 }));
+  await sw().sweepTerm(gh, { keyword: 'booster box', page: 1, vip: v.id });
+  await env.app.monitor.delivered();
+  assert.equal(armed(boss, 'demo-gamerholic', OLD), false, 'not armed');
+  assert.equal(runsFor(itemOf(boss, 'demo-gamerholic', OLD)).length, 0, 'on sale when the watch was added: never bought');
+  assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
+});
+
+test("💸 a VIP keyword watch at Kmart; the drop's link monitored ahead (not listed yet), its page read seeing the drop before the watch's own search does — bought", async () => {
+  const km = R('demo-kmart');
+  const SKU = '44399101';
+  const url = store.addProduct('kmart', { sku: SKU, name: 'Pokemon TCG Quasar Nebula Booster Bundle', price: 49, status: 'in_stock', listed: false });
+  assert.equal((await boss.post('/api/monitor/monitors', { url })).status, 200);
+  await env.app.monitor.checkPage(url);
+  clock.offset += 61 * 1000;
+  await env.app.monitor.checkPage(url);
+  const v = (await boss.post('/api/monitor/vip', { store: 'demo-kmart', words: 'quasar nebula', aco: true, maxPrice: 150 })).body.watch;
+  for (let i = 0; i < 2; i++) {
+    assert.equal((await sw().sweepTerm(km, { keyword: 'quasar nebula', page: 1, vip: v.id })).found, 0);
+    clock.offset += 61 * 1000;
+  }
+  await env.app.monitor.checkPage(url); // still not listed, since the watch was added
+  store.set('kmart', SKU, { listed: true });
+  clock.offset += 20 * 1000;
+  await env.app.monitor.checkPage(url); // its page read sees the drop first
+  await sw().sweepTerm(km, { keyword: 'quasar nebula', page: 1, vip: v.id });
+  await env.app.monitor.checkPage(url);
+  await env.app.monitor.delivered();
+  assert.equal(runsFor(itemOf(boss, 'demo-kmart', SKU)).length, 1, 'not listed after the watch was added: bought');
   assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
 });

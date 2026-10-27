@@ -274,6 +274,8 @@ const ALL_LABEL = 'every trading card';
 export const NEWEST = '+';
 const NEWEST_LABEL = 'newest products';
 const NEWEST_FRESH_MS = 14 * 24 * 3600 * 1000;
+// A product published this long after it was made at most: a drop drafted ahead (its published time says when it went up).
+const DRAFTED_MS = 42 * 24 * 3600 * 1000;
 /** A search's keyword, as it's said: the whole-range and newest lists by name (a store's own name for its list: sweep.allLabel). */
 const termLabel = (k, r = null) => (k === ALL ? (r && r.sweep && r.sweep.allLabel) || ALL_LABEL : k === NEWEST ? NEWEST_LABEL : k);
 // Drop mode: a store where a new card listing has just been alerted (a read that wasn't setting its scene) is
@@ -1098,9 +1100,11 @@ export class Sweeper {
     //  watch goes, so it's never armed on that.)
     let reading = readingOf(status);
     if (reading === 'off' && before && this.monitor.pageSaysOn(before.id, now)) reading = 'on';
-    // (When it was put up for sale — Shopify's published_at — only where the store never republishes what's on sale: JB
-    //  Hi-Fi's newest products, republished all day, aren't new.)
-    const published = typeof p.publishedAt === 'number' && !(r.sweep.newestPath && r.sweep.newestFresh !== false) ? p.publishedAt : null;
+    // (When it was put up for sale — Shopify's published_at — for a drop drafted not long before: one made long ago and
+    //  put back up, or hidden while it was sold out, isn't new. Never where the store republishes what's on sale all day
+    //  — JB Hi-Fi's newest products.)
+    const drafted = typeof p.publishedAt === 'number' && typeof p.createdAt === 'number' && p.publishedAt - p.createdAt <= DRAFTED_MS;
+    const published = drafted && !(r.sweep.newestPath && r.sweep.newestFresh !== false) ? p.publishedAt : null;
     const opts = { reading, how: 'search', created: typeof p.createdAt === 'number' ? p.createdAt : null, published, knownAt: before ? before.created_at : null, hides: !!r.sweep.goneMeansSoldOut };
     // (Each watch's own read first: a product its whole first look didn't have is new to the others too.)
     const mine = list.filter(own);

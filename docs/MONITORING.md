@@ -896,12 +896,14 @@ available online" on its page). So each watch decides by **what it saw itself**
       never had the product at all.
   - the store made it after you added the watch (the creation time in a Shopify
     store's product list: JB Hi-Fi's newest products, the card shops'); or put it
-    up for sale after that, and the watch hadn't seen it before (the time a Shopify
-    store published it: card shops draft drops weeks ahead. Not at JB Hi-Fi or
-    Toys"R"Us, which republish what's on sale all day);
+    up for sale after that (the time a Shopify store published it: card shops draft
+    drops weeks ahead), when the store made it at most 6 weeks before publishing it
+    and neither the watch nor the catalogue had it before you added the watch. A
+    product made long ago and put back up isn't new. Not at JB Hi-Fi or Toys"R"Us,
+    which republish what's on sale all day;
   - its own page's reads said it wasn't at the store (a link monitored ahead of
     its drop: not found, or not listed yet, a minute apart) after you added the
-    watch, until a search showed it;
+    watch, until a read (its page's, or a search) showed it;
   - it's a **new card listing**, new to the catalogue in a card search that isn't
     setting its scene (the same 🆕 the channels get), in a read where it can't be
     an old product moving up into view: one that holds every result; a card shop's
@@ -964,8 +966,12 @@ What's still missed (failing safe):
   adding it (its reads haven't said "not there" a minute apart yet); and a link
   whose page was once read on sale, then "not there".
 - A find not on sale whose page's first read comes more than 5 minutes after the
-  watch first saw it (the store refusing the server meanwhile): not armed for its
-  return.
+  watch first saw it: not armed for its return. That happens when the store is
+  refusing the server meanwhile, and at a store only admins' browsers read (BIG
+  W, EB Games) when no admin's Chrome is reading, for a VIP link too. BIG W's
+  pages in an ordinary window are one a round, its armed products' re-reads first:
+  a VIP watch's finds there can wait longer than that. Allowing the extension in
+  Incognito reads 5 a round.
 - A page read in an admin's browser only holds every result where the extension
   passes on the store's count (EB Games', Kmart's): a JB Hi-Fi collection page it
   draws doesn't, so a drop there is bought only when JB's newest products or the
@@ -982,6 +988,9 @@ What could still be bought though it was on sale before (rare):
 - A product on sale when you added the watch that sold out within 5 minutes,
   before its page's first read, at a store whose search doesn't say the stock
   (City Beach): armed by its sold-out reading.
+- At a Shopify store, a product made at most 6 weeks before, on sale when you
+  added the watch but never seen by it or the catalogue, then hidden (sold out,
+  or set to draft) and put back up.
 - A product out of the watch's view when you added it (below its search's top
   results), on sale then, that sold out before coming into view: armed by its
   sold-out reading.
