@@ -47,6 +47,7 @@ export default {
     // Needs the extension that sends those headers.
     extension: '1.8.1',
     minSeconds: 30,
+    newestFirst: true,
   },
   // Store login monitor: the page's USER_DATA has the member ("loggedInMember") once you're signed in.
   // (Guests can check out too — signed in, your billing address is already there.)

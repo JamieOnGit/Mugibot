@@ -18,7 +18,7 @@ import { PRODUCTS_FOR_PAGE, toProduct } from '../catalog.js';
 import { newId } from '../crypto.js';
 import { bad, bool, httpUrl, item as checkItem, num, str } from '../schema.js';
 import { mentions, norm } from './listing.js';
-import { isOrderable } from './status.js';
+import { STATUS, isOrderable } from './status.js';
 
 // Fast from 15 minutes before the drop time to 3 hours after it.
 export const VIP_BEFORE_MS = 15 * 60 * 1000;
@@ -231,6 +231,8 @@ export class Vip {
     const f = w.found.find((x) => x.productId === product.id);
     // (Not asked for when it was found, or found before this was kept, or armed already.)
     if (!f || !f.arm || f.arm === 'armed' || !this.wants(w, product)) return;
+    // (A find from before the watch kept what it saw: never new to it, and skipped stays skipped.)
+    if (this.sightings) verdict = this.sightings.findVerdict(w, product.store, [product.sku], verdict, { foundAt: f.at, arm: f.arm });
     const arm = verdict === 'new' || verdict === 'armed' ? 'armed' : verdict;
     if (arm === f.arm || arm === 'pending') return;
     this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm } : x)));
@@ -239,7 +241,13 @@ export class Vip {
       return;
     }
     const item = this.arm(w, product, verdict === 'armed' ? status : null);
-    if (item && verdict === 'new' && isOrderable(status) && this.monitor) await this.buyNow(item, product, status, later);
+    if (!item || verdict !== 'new' || !this.monitor) return;
+    // (New and on sale — as this read says, or as its last read did: bought now. Its stock not known yet: its first read
+    //  that says on sale is the drop.)
+    const row = this.db.get('SELECT status FROM items WHERE id = :id', { id: item.id });
+    const onSale = isOrderable(status) ? status : row && isOrderable(row.status) ? row.status : null;
+    if (onSale) await this.buyNow(item, product, onSale, later);
+    else if (row && row.status === STATUS.UNKNOWN) this.db.run('UPDATE items SET status = :st WHERE id = :id', { st: STATUS.NOT_LISTED, id: item.id });
   }
 
   /** A new listing that's on sale as it's found: its Auto-checkout run now (its alerts on later), not at its next read. */
@@ -253,13 +261,14 @@ export class Vip {
   /**
    * A product's page was read (monitor/index.js; reading: what that read said — on sale or not yet): each watch that
    * found it records it, and a find waiting on its page is settled — armed if it isn't on sale, left alone if it is.
+   * later: the read's list for the alerts.
    */
-  async checked(product, reading) {
+  async checked(product, reading, later = null) {
     if (!product || !reading || !this.sightings || !this.watches().length) return;
     for (const w of this.watches()) {
       if (!w.found.some((x) => x.productId === product.id)) continue;
       const { verdict } = this.sightings.see(w, product.store, [product.sku], { reading, how: 'page' });
-      await this.settle(w, product, verdict, product.status);
+      await this.settle(w, product, verdict, product.status, later);
     }
   }
 

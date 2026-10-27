@@ -838,7 +838,7 @@ export class Sweeper {
   }
 
   /** What one search found. parsed: { products, total, problem } */
-  async ingest(r, term, parsed, { source, url, ms = null, seen = null }) {
+  async ingest(r, term, parsed, { source, url, ms = null, seen = null, way = source }) {
     // A person's check in an admin's browser: only that person passes it (Mugibot never answers one).
     if (parsed.problem === 'blocked') {
       return this.record(r, term, {
@@ -891,13 +891,25 @@ export class Sweeper {
     const posting = [];
     let cardsNew = 0;
     // A VIP or drop watch's own words: this read is that watch's own (each with those words) — part of its first look
-    // there while that's going (monitor/sightings.js). whole: it holds every result the store has for them.
+    // there while that's going (monitor/sightings.js). whole: it holds every result the store has for them. way: how it
+    // was read (an admin's browser asking the same address as the server is the server's way).
     const mine = term.vip || term.drop ? this.watchesNamed(r.id, term.keyword) : [];
     const own = (w) => mine.some((x) => x.id === w.id);
     const whole = holdsAll(parsed, pageSizeIn(url));
-    const way = source;
+    const codesIn = parsed.products.map((p) => [p.sku, ...(p.aliases || [])].filter(Boolean));
+    // (A new card listing is one an old product moving up into view can't be: in a read that holds every result; in the
+    //  newest products of a store that never republishes old ones; or, in a search the store sorts newest first, above a
+    //  product the catalogue already had — what comes up from below lands under everything that was in view.)
+    const knownBelow = [];
+    if (r.sweep.newestFirst) {
+      let any = false;
+      for (let i = codesIn.length - 1; i >= 0; i--) {
+        knownBelow[i] = any;
+        any = any || codesIn[i].some((k) => !!this.catalog.productFor(r.id, k));
+      }
+    }
     try {
-      for (const p of parsed.products) {
+      for (const [i, p] of parsed.products.entries()) {
         // (In stock in the store's shops only — Kmart's "In store only": a status of its own, never ordered online.)
         const status = p.inStock === true ? (p.inStoreOnly ? STATUS.IN_STORE : p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
         // Members' own SKUs, whatever they are.
@@ -933,7 +945,11 @@ export class Sweeper {
         const newListing = this.drops && (cards ? !republished : newest && !old) && !baseline && !edge && !mkt && !known && !quiet;
         // What each VIP and drop watch at this store saw of it (monitor/sightings.js): what its Auto-checkout buys. (A new
         // card listing — the card search's 🆕 — wasn't listed when this search last read: new to every watch added by then.)
-        const newCard = cards && !known && !baseline && !edge && !republished && !quiet && !mkt && !!row && !!row.last_ok_at;
+        // (Not on the last page read of a search that has several — a product new there may only have come up from the page
+        //  after it, at any store.)
+        const lastPage = term.page > 1 && term.page >= Math.min(10, r.sweep.pages || 1);
+        const intoView = !(whole || (newest && r.sweep.newestFresh === false) || !!knownBelow[i]);
+        const newCard = cards && !known && !baseline && !edge && !lastPage && !intoView && !republished && !quiet && !mkt && !!row && !!row.last_ok_at;
         const seen = mkt ? new Map() : this.sight(r, p, { title, status, own, way, before, newSince: newCard ? row.last_ok_at : null, now });
         const verdict = (w) => (seen.get(w.id) || {}).verdict || 'pending';
         // (Alerts: listed already as far as a drop watch knows — found by another search than its own words', unless it's
@@ -966,7 +982,7 @@ export class Sweeper {
         if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, verdict: verdict(drop), status, later }).catch((e) => this.cfg.log('[drops]', e.message));
       }
       // (One more read of each own watch's first look, while that's going.)
-      if (this.sightings) for (const w of mine) this.sightings.ownRead(w, r.id, { whole, found: parsed.products.length, how: way });
+      if (this.sightings) for (const w of mine) this.sightings.ownRead(w, r.id, { whole, codes: codesIn, how: way });
       // A new card listing in a read that isn't setting its scene (not a VIP or drop watch's own search): drop mode.
       if (cardsNew && !baseline && !term.vip && !term.drop) this.heat(r, all ? null : term.keyword, now);
       await Promise.allSettled(posting);
@@ -1002,6 +1018,8 @@ export class Sweeper {
     const posting = [];
     const log = (e) => this.cfg.log('[drops]', e.message);
     const own = (w) => watches.some((x) => x.id === w.id);
+    // (Every product on the page goes in its watches' first look — whatever it's called, blocked or a marketplace's.)
+    const codesIn = products.map((p) => [p.sku, ...(p.aliases || [])].filter(Boolean));
     try {
       for (const p of products) {
         const status = p.inStock === true ? (p.inStoreOnly ? STATUS.IN_STORE : p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
@@ -1044,7 +1062,7 @@ export class Sweeper {
         }
       }
       // (One more read of each watch's first look, while that's going.)
-      if (this.sightings) for (const w of watches) this.sightings.ownRead(w, r.id, { whole, found: products.length, how });
+      if (this.sightings) for (const w of watches) this.sightings.ownRead(w, r.id, { whole, codes: codesIn, how });
       await Promise.allSettled(posting);
       return counted;
     } finally {
@@ -1063,8 +1081,8 @@ export class Sweeper {
    * What each VIP and drop watch at this store saw of a product in this read (monitor/sightings.js) — what its
    * Auto-checkout buys: the stock this read says (status), whether it's in the first look of a watch whose own read
    * this is (own; way: how it was read), and whether the read shows it's new (newSince: a time it wasn't listed — a new
-   * card listing's; the store's own creation time, p.createdAt). before: the catalogue's product (or null). Returns each
-   * watch's { verdict, before }.
+   * card listing's; the store's own creation time, p.createdAt). before: the catalogue's product before this read (or
+   * null: it's new to the catalogue). Returns each watch's { verdict, before }.
    */
   sight(r, p, { title, status, own, way = '', before = null, newSince = null, now = this.now() }) {
     const out = new Map();
@@ -1077,7 +1095,7 @@ export class Sweeper {
     //  watch goes, so it's never armed on that.)
     let reading = readingOf(status);
     if (reading === 'off' && before && this.monitor.pageSaysOn(before.id, now)) reading = 'on';
-    const opts = { reading, how: 'search', created: typeof p.createdAt === 'number' ? p.createdAt : null, hides: !!r.sweep.goneMeansSoldOut };
+    const opts = { reading, how: 'search', created: typeof p.createdAt === 'number' ? p.createdAt : null, knownAt: before ? before.created_at : null, hides: !!r.sweep.goneMeansSoldOut };
     // (Each watch's own read first: a product its whole first look didn't have is new to the others too.)
     const mine = list.filter(own);
     for (const w of mine) out.set(w.id, this.sightings.see(w, r.id, codes, { ...opts, own: true, way }));
@@ -1860,7 +1878,11 @@ export class Sweeper {
       // (The store's own count of results and how many came, where the browser says: whether the read holds them all.)
       const total = num(res.total, { min: 0, max: 1e7, int: true, def: null });
       const perPage = total === null ? null : num(res.perPage, { min: 0, max: 1e5, int: true, def: null });
-      out.push(await this.ingest(r, term, { products, total, ...(perPage !== null ? { perPage } : {}), problem, stated, none: res.none === true }, { source: 'browser', url, ms, seen }));
+      const count = num(res.count, { min: 0, max: 1e5, int: true, def: null });
+      // (Asked for at the same address as the server would — not a page drawn or asked from inside the store's own: its
+      //  answer is the server's, as far as what a watch saw goes.)
+      const way = r.sweep.render || r.sweep.inPage ? 'browser' : 'server';
+      out.push(await this.ingest(r, term, { products, total, ...(perPage !== null ? { perPage } : {}), ...(count !== null ? { count } : {}), problem, stated, none: res.none === true }, { source: 'browser', url, ms, seen, way }));
     }
     return out;
   }

@@ -854,28 +854,49 @@ available online" on its page). So each watch decides by **what it saw itself**
 (`server/monitor/sightings.js`), for each product it's seen at a store:
 
 - **Its first look there.** The watch's own search (or its page) at that store:
-  its first read, or its first two when the first had no products (one empty
-  answer may be the store's hiccup).
+  its first read, and every product in it, whatever it was called then. When the
+  first read has no products, the look runs until there have been two reads a
+  minute apart (an empty answer may be the store's hiccup).
 - **The first stock reading it got.** A search that says the stock, or a page
   read that worked (one the store refused says nothing). Every watch whose words
-  are in the product's name gets it, whichever search read it. Where a page and a
-  search said otherwise within the last 3 minutes, it counts as on sale.
+  are in the product's name gets it, whichever search read it, under every code
+  the store gives the product. Where a page and a search said otherwise within the
+  last 3 minutes, it counts as on sale. Kmart's "not listed yet" (its search
+  provider doesn't have it) counts as not on sale.
 - **Whether a read showed it's new since you added the watch.** One of these:
   - the watch's own search shows it, and its first look didn't. This only counts
     when every read of that first look held **every result** the store has (the
     store's own count of results says so, or fewer came back than the page holds:
     10 at JB Hi-Fi and the Shopify card shops, 48 at City Beach, 30 at Games
-    World). It also has to be read the same way as the first look (the server's
-    answer and a page drawn in an admin's browser can differ). At Target, which
-    leaves sold-out products out of its results, it only counts for a first look
-    made within 15 minutes of adding the watch.
+    World). It also has to be read the same way as the first look: the server's
+    answer and a page drawn in an admin's browser can differ, though an admin's
+    browser asking the same address the server does counts as the same way. And
+    it doesn't count:
+    - for something the store made before you added the watch (a collection it's
+      been put in since);
+    - for something Mugibot's catalogue already had before that first look, at a
+      store whose results show sold-out products too. It was there all along,
+      only not under those words: a name the store changed, a page it's been put
+      on. At Target, which leaves sold-out products out of its results, one missing
+      from the first look was sold out then, so its return counts as a restock;
+    - for something the watch saw elsewhere more than 10 minutes before its own
+      search showed it;
+    - when the first look came more than 15 minutes after you added the watch
+      (as for every watch from before this release), unless the catalogue has
+      never had the product at all.
   - the store made it after you added the watch (the creation time in a Shopify
     store's product list: JB Hi-Fi's newest products, the card shops');
   - it's a **new card listing**, new to the catalogue in a card search that isn't
-    setting its scene (the same 🆕 the channels get). It counts for every watch
-    added before that search last read.
+    setting its scene (the same 🆕 the channels get), in a read where it can't be
+    an old product moving up into view: one that holds every result; a card shop's
+    newest products (they never republish old ones); or a search the store sorts
+    newest first (Target, Kmart, EB Games, Amazon, The Gamesmen, City Beach, Games
+    World, Premium Bandai), above a product the catalogue already had, and not on
+    the last page read. It counts for every watch added before that search last
+    read. (JB Hi-Fi's searches show their top 10 by relevance: a card listing new
+    to the catalogue there isn't taken as new on that alone.)
   - another watch's whole first look at the store didn't have it, and that look
-    was after you added this watch (not at Target).
+    came within 15 minutes after you added this watch.
 
   None of these counts for a product the watch had already seen before then.
 
@@ -897,8 +918,14 @@ What it does with that:
 So these are never bought: something on sale all along that only moved up into
 a search's view (JB Hi-Fi's search shows its top 10), whatever a first look saw
 beyond what the watch keeps (10 or 20 finds), a product Mugibot never tracked (a
-hat, a skateboard) that another search sees first, and anything whose only
-"sold out" was the catalogue's own old one.
+hat, a skateboard) that another search sees first, something renamed or put on a
+page that only now has the watch's words, what was on a page before its key
+phrases were changed, and anything whose only "sold out" was the catalogue's own
+old one. A find made before this release that was skipped stays skipped.
+
+A new find that's on sale is bought at once, whichever read showed it's new: as
+that read says, or as its last read did. One whose stock isn't known yet is bought
+on the first read that says it's on sale.
 
 What's still missed (failing safe):
 
@@ -907,11 +934,23 @@ What's still missed (failing safe):
   or the card search says it's new.
 - JB Hi-Fi often makes a product days before it publishes it. A non-card drop
   made before you added the watch, seen first in its newest products, waits for
-  the watch's own search to show it's new.
+  the watch's own search to show it's new. The same goes for a JB card drop: JB's
+  card searches only show their top 10, so they don't say it's new.
+- A drop within a minute of adding a watch whose first look was empty is part of
+  that first look: bought only if it wasn't on sale at its first reading.
+- At a watch from before this release, something the card search has seen since
+  isn't taken as new from its own search (its first look was long after it was
+  added).
+
+What could still be bought though it was on sale before (rare):
+
+- A product whose page was up before you added the watch but that the store's
+  search didn't have yet (its search catching up minutes later).
+- At Target, a product on sale that the store renames to have the watch's words.
 
 Searches and page reads from an admin's browser only say they held every result
-from extension **1.38.0** (it passes on the store's own count). An older copy's
-reads are decided by the watch's own readings alone.
+from extension **1.38.0** (it passes on the store's own count of results, and how
+many came). An older copy's reads never show something is new on that alone.
 
 Each watch's first look starts afresh with this release: its next search is its
 first look. Nothing is asked of a store more often than before: a find's page is
@@ -1240,7 +1279,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | Dashboard | `web/app.html` (Live, Settings and Check log pages; the Tracked products / My watchlist / My activity card), `web/js/live.js` (the live page: sonar, stores and their switches, numbers, feed, alerts, response times), `web/js/monitor.js` (products, product page, Settings, Check log), `web/js/app.js` (the watchlist and activity lists), `renderPager` in `web/js/common.js` |
 | What members see of the sweeps | `server/monitor/public.js` (used by `GET /api/monitor/live` and the live stream in `server/monitor/feed.js`); members' own store switches: `GET/PUT /api/monitor/prefs` |
 | 🎯 Drop watches | `server/monitor/drops.js` (watches, their searches' turn, other websites' reads, what they find — `hasWords`, `room` — where they post, and your own finds' price drops: `priceDropped`); `drop_watches` (with `channel_id`, `role_id`: migration 12; `bases`, each store's first look for a key phrase at every store, `ALL_STORES`: migration 18), `items.drop_watch`, `monitors.drop_watch` (`server/db.js`, migration 11), `items.price_alert_at`/`price_alert_price` (migration 13); `GET/POST /api/drops` (`phrases`: several key phrases at once), `PUT /api/drops/:id` (its name; admins: its channel and role), `GET /api/drops/discord` (admins: the server's channels and roles), `POST /api/drops/:id/check`, `DELETE /api/drops/:id`, `POST /api/drops/channel`; routing in `Feed.routesFor` (`server/monitor/feed.js`); `web/js/drops.js`; Acme Collectibles (another website) in `devtools/mockstore.js`; `test/drops.test.js` and the 🎯 tests in `test/extension.e2e.test.js` and `test/ui.test.js` |
-| 🤖 What an Auto-checkout watch buys | `server/monitor/sightings.js` (each VIP and drop watch's first look, first stock reading and what shows it's new: its verdict); `watch_looks`, `watch_sightings`, `new_listings` (`server/db.js`, migration 23); `holdsAll` and `sight()` in `server/monitor/sweep.js`; settled in `Vip.settle`, `Drops.settleShared` / `settleOwn`, from page reads in `Monitor.watchReading`; `test/arming.test.js` |
+| 🤖 What an Auto-checkout watch buys | `server/monitor/sightings.js` (each VIP and drop watch's first look, first stock reading and what shows it's new: its verdict); `watch_looks`, `watch_sightings`, `new_listings` (`server/db.js`, migration 23); `holdsAll` and `sight()` in `server/monitor/sweep.js`; settled in `Vip.settle`, `Drops.settleShared` / `settleOwn`, from page reads in `Monitor.watchReading`; `sweep.newestFirst` in `server/retailers/<store>.js`; `test/arming.test.js`, `test/arming-reviews.test.js` |
 | ⭐ VIP drops | `server/monitor/vip.js`; `vip_watches`, `monitors.vip_watch`, `alert_routes.vip` (`server/db.js`, migration 9); `GET/POST /api/monitor/vip`, `DELETE /api/monitor/vip/:id`, `POST /api/monitor/vip/channel`; `test/vip.test.js` |
 | 🚦 Checkpoints and virtual queues | `server/monitor/gates.js` (up and down, the posts, DMs), `server/monitor/gate.js` (reading a page; the extension has a copy); `gate:` in `server/retailers/<store>.js`; `gates` (`server/db.js`, migration 10); `GET /api/gates`, `POST /api/ext/gates`; `test/gates.test.js` and the 🛡️/🚦 tests in `test/extension.e2e.test.js` |
 | JB Hi-Fi's marketplace sellers | `sweep.sellers` in `server/retailers/jbhifi.js`; `sellerOf()` and `checkSellers()` in `server/monitor/sweep.js` |

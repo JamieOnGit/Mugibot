@@ -1288,9 +1288,12 @@ const why = (e) => {
   return m ? ` (${m})` : '';
 };
 
-// (The store's own count of results and how many came, where its list says them — EB Games', Kmart's: the server then
-//  knows whether a read holds every result there is.)
-const counted = (parsed) => (typeof parsed.total === 'number' && typeof parsed.perPage === 'number' ? { total: parsed.total, perPage: parsed.perPage } : {});
+// (The store's own count of results and how many came, where its list says them — EB Games', Kmart's — and how many it
+//  sent: the server then knows whether a read holds every result there is.)
+const counted = (parsed) => ({
+  ...(typeof parsed.total === 'number' && typeof parsed.perPage === 'number' ? { total: parsed.total, perPage: parsed.perPage } : {}),
+  ...(typeof parsed.count === 'number' ? { count: parsed.count } : {}),
+});
 
 async function sweepOne(t) {
   const started = Date.now();

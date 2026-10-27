@@ -184,8 +184,11 @@ test("💸 sold out before the watch was added, and left out of the store's sear
   clock.offset += 60 * 60 * 1000;
   const v = (await boss.post('/api/monitor/vip', { store: 'demo-target', words: 'destined rivals', aco: true, maxPrice: 200 })).body.watch;
   const d = (await ash.post('/api/drops', { store: 'demo-target', words: 'destined rivals', aco: true, maxPrice: 200 })).body.watch;
-  // Their first look (the drop watch's search is the same words — one search for both): neither is there.
-  for (let i = 0; i < 2; i++) assert.equal((await sw().sweepTerm(tg, { keyword: 'destined rivals', page: 1, vip: v.id })).found, 0);
+  // Their first look (the drop watch's search is the same words — one search for both): neither is there, a minute on.
+  for (let i = 0; i < 2; i++) {
+    assert.equal((await sw().sweepTerm(tg, { keyword: 'destined rivals', page: 1, vip: v.id })).found, 0);
+    clock.offset += 61 * 1000;
+  }
   // Back: the card search sees the ETB first, the watches' own search the bundle.
   store.set('target', ONE, { status: 'in_stock' });
   store.set('target', TWO, { status: 'in_stock' });
@@ -293,4 +296,31 @@ test('⏳ a find never reads a page that is backing off (the store refused it) e
   } finally {
     store.state.acme.products.splice(base);
   }
+});
+
+test("🛡️ a watch from before this update: what it saw on sale then (skipped) is never bought later — not even when it's gone from the search and back", async () => {
+  const jb = R('demo-jbhifi');
+  const SKU = 'retro-arcade-mini-console';
+  store.addProduct('jbhifi', { sku: SKU, name: 'Retro Arcade Mini Console', price: 149, status: 'in_stock' });
+  const v = (await boss.post('/api/monitor/vip', { store: 'demo-jbhifi', words: 'retro arcade mini', aco: true, maxPrice: 300 })).body.watch;
+  const d = (await ash.post('/api/drops', { store: 'demo-jbhifi', words: 'retro arcade mini', aco: true, maxPrice: 300 })).body.watch;
+  await sw().sweepTerm(jb, { keyword: 'retro arcade mini', page: 1, vip: v.id });
+  await env.app.monitor.checkPage(product('demo-jbhifi', SKU).url);
+  assert.equal(await vipArm(v.id, SKU), 'skipped');
+  assert.equal(env.app.drops.get(d.id).found[0].arm, 'skipped');
+  // As it was before this update: its finds kept, nothing of what it saw.
+  for (const w of [v, d]) env.app.sweeper.sightings.forget(w.id);
+  clock.offset += 60 * 1000;
+  // Gone from JB's search a while (its next search: its first look now), then back.
+  store.set('jbhifi', SKU, { listed: false });
+  await sw().sweepTerm(jb, { keyword: 'retro arcade mini', page: 1, vip: v.id });
+  await sw().sweepTerm(jb, { keyword: 'retro arcade mini', page: 1, vip: v.id });
+  store.set('jbhifi', SKU, { listed: true });
+  await sw().sweepTerm(jb, { keyword: 'retro arcade mini', page: 1, vip: v.id });
+  await env.app.monitor.delivered();
+  assert.equal(armed(boss, 'demo-jbhifi', SKU), false, 'VIP: skipped stays skipped');
+  assert.equal(armed(ash, 'demo-jbhifi', SKU), false, 'drop watch: skipped stays skipped');
+  assert.equal(runsFor(itemOf(ash, 'demo-jbhifi', SKU)).length, 0);
+  assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
+  assert.equal((await ash.del(`/api/drops/${d.id}`)).status, 200);
 });

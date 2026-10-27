@@ -343,7 +343,7 @@ export function parseCityBeach(html, { base, storeBase } = {}) {
   const doc = parseHTML(s);
   const tiles = findAll(doc, (n) => n.tag === 'div' && /(^|\s)product(\s|$)/.test(String((n.attrs && n.attrs.class) || '')) && /^\d{6,10}-\d{2}$/.test((n.attrs && n.attrs['data-pid']) || ''));
   // (count: how many products the page had — none, when it says it has no results.)
-  if (!tiles.length) return /no-results|did not return any results|0 results/i.test(s) ? { products: [], count: 0, problem: 'empty' } : { products: [], problem: 'layout' };
+  if (!tiles.length) return /no-results|did not return any results|\b0 results/i.test(s) ? { products: [], count: 0, problem: 'empty' } : { products: [], problem: 'layout' };
   const products = [];
   const seen = new Set();
   for (const t of tiles) {

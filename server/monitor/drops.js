@@ -297,9 +297,11 @@ export class Drops {
     if (!w || !product) return;
     this.monitorFor(w, product);
     if (!w.found.some((f) => f.productId === product.id)) {
-      if (!this.room(w, baseline)) return;
+      // (New to the watch — what it saw says so — has the room of what's dropped since its first look.)
+      const base = baseline && verdict !== 'new';
+      if (!this.room(w, base)) return;
       const want = this.armFor(w, product.store, product.url, 'pending');
-      this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, store: product.store, at: this.now(), base: !!baseline, ...(want ? { arm: want } : {}) }]);
+      this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, store: product.store, at: this.now(), base, ...(want ? { arm: want } : {}) }]);
       this.repo.ensurePageFor({ store: product.store, sku: product.sku, url: product.url });
       // (Its page read now — unless it's backing off, the store having refused it: at its turn then.)
       if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url AND fail_count = 0', { url: product.url });
@@ -316,13 +318,27 @@ export class Drops {
   async settleShared(w, product, verdict, status = null, later = null) {
     const f = w.found.find((x) => x.productId === product.id);
     if (!f || !f.arm || f.arm === 'armed') return;
+    // (A find from before the watch kept what it saw: never new to it, and skipped stays skipped.)
+    if (this.sightings) verdict = this.sightings.findVerdict(w, product.store, [product.sku], verdict, { foundAt: f.at, arm: f.arm });
     const arm = this.armFor(w, product.store, product.url, verdict);
     if (!arm || arm === f.arm || arm === 'pending') return;
     this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm } : x)));
     if (arm === 'skipped') { this.onSale(w, product); return; }
     const item = this.arm(w, product, verdict === 'armed' ? status : null);
     // On sale the moment it's found: Auto-checkout starts now (not at the next check).
-    if (item && verdict === 'new' && isOrderable(status)) await this.applyNow(item.id, { status, title: product.name, price: product.price, fresh: true }, later);
+    if (item && verdict === 'new') await this.buyIfOnSale(item.id, status, { title: product.name, price: product.price }, later);
+  }
+
+  /**
+   * A find new to its watch, just armed: bought now if it's on sale — as this read says, or as its last read did. Its
+   * stock not known yet: "not listed" a moment ago, so its first read that says on sale is the drop.
+   */
+  async buyIfOnSale(itemId, status, { title = null, price = null } = {}, later = null) {
+    const row = this.db.get('SELECT status FROM items WHERE id = :id', { id: itemId });
+    if (!row) return;
+    const onSale = isOrderable(status) ? status : isOrderable(row.status) ? row.status : null;
+    if (onSale) await this.applyNow(itemId, { status: onSale, title, price, fresh: true }, later);
+    else if (row.status === STATUS.UNKNOWN) this.db.run('UPDATE items SET status = :st WHERE id = :id', { st: STATUS.NOT_LISTED, id: itemId });
   }
 
   /**
@@ -403,12 +419,12 @@ export class Drops {
    * watch that found it records it, and a find waiting on its page is settled — armed if it isn't on sale, left alone
    * if it is.
    */
-  async checked(product, reading) {
+  async checked(product, reading, later = null) {
     if (!product || !reading || !this.sightings || !this.watches().length) return;
     for (const w of this.watches()) {
       if (!w.found.some((x) => x.productId === product.id)) continue;
       const { verdict } = this.sightings.see(w, product.store, [product.sku], { reading, how: 'page' });
-      await this.settleShared(w, product, verdict, product.status);
+      await this.settleShared(w, product, verdict, product.status, later);
     }
   }
 
@@ -425,7 +441,9 @@ export class Drops {
     // (The same code at two stores is two products: an every-store watch's finds go by store too.)
     const f = w.found.find((x) => String(x.sku).toLowerCase() === String(p.sku).toLowerCase() && (!x.store || x.store === r.id));
     if (f) { await this.settleOwn(w, f, verdict, status, later); return null; }
-    if (!this.room(w, baseline)) { if (!baseline) this.noRoom(w); return null; }
+    // (New to the watch — what it saw says so — has the room of what's dropped since its first look.)
+    const base = baseline && verdict !== 'new';
+    if (!this.room(w, base)) { if (!base) this.noRoom(w); return null; }
     // (The listing's only option: a run for it opens the store's add-to-cart link, as for a member's own SKU — sweep.js members.)
     const variantId = p.oneVariant && p.variantId ? String(p.variantId) : null;
     return this.addOwn(w, { store: r.id, sku: p.sku, url: p.url, name: p.title || p.name, price: p.price ?? null, variantId }, status, { baseline, verdict, later });
@@ -456,7 +474,7 @@ export class Drops {
       this.db.run(`UPDATE items SET drop_watch = :w, status = :st, status_source = 'server', status_at = :t, checked_at = :t,
         last_price = COALESCE(:price, last_price) WHERE id = :id`, { w: w.id, st, t, price: typeof p.price === 'number' ? p.price : null, id: item.id });
     }
-    this.saveFound(w, [...w.found, { itemId: item.id, sku: p.sku, store: p.store, at: this.now(), base: !!baseline, ...(arm ? { arm } : {}) }]);
+    this.saveFound(w, [...w.found, { itemId: item.id, sku: p.sku, store: p.store, at: this.now(), base: !fresh, ...(arm ? { arm } : {}) }]);
     this.hub.publish(user.id, 'watch', { id: item.id, added: true });
     this.hub.publish(user.id, 'drop', { id: w.id });
     if (added && fresh) {
@@ -471,19 +489,21 @@ export class Drops {
 
   /**
    * Someone's own watch's find seen again, or read (its page): armed by what the watch saw of it now, once — bought,
-   * it stays disarmed. 'new' and on sale (status): bought now. f: the find.
+   * it stays disarmed. 'new': bought now if it's on sale (buy: false — the caller's read does that: its page's own read).
+   * f: the find.
    */
-  async settleOwn(w, f, verdict, status = null, later = null) {
+  async settleOwn(w, f, verdict, status = null, later = null, { buy = true } = {}) {
     if (!f || !f.itemId || !f.arm || f.arm === 'armed') return;
     const item = this.db.get('SELECT * FROM items WHERE id = :id', { id: f.itemId });
     if (!item) return;
+    if (this.sightings) verdict = this.sightings.findVerdict(w, item.store, [item.sku], verdict, { foundAt: f.at, arm: f.arm });
     const arm = this.armFor(w, item.store, item.url, verdict);
     if (!arm || arm === f.arm || arm === 'pending') return;
     this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm } : x)));
     if (arm === 'skipped') { this.onSale(w, { name: item.name, sku: item.sku, url: item.url }); return; }
     this.db.run('UPDATE items SET aco = 1, aco_at = :t, max_price = COALESCE(max_price, :max) WHERE id = :id AND aco = 0', { t: this.now(), max: w.maxPrice, id: item.id });
     this.armedNote(w, { ...item, maxPrice: item.max_price ?? w.maxPrice });
-    if (verdict === 'new' && isOrderable(status)) await this.applyNow(item.id, { status, title: item.name, price: item.last_price, fresh: true }, later);
+    if (verdict === 'new' && buy) await this.buyIfOnSale(item.id, status, { title: item.name, price: item.last_price }, later);
   }
 
   armedNote(w, item) {
@@ -515,7 +535,7 @@ export class Drops {
     if (!f) return;
     const { verdict } = this.sightings.see(w, item.store, [item.sku], { reading, how: 'page' });
     // (Armed here, its run goes with this read's own alerts: monitor/index.js applyResult.)
-    await this.settleOwn(w, f, verdict);
+    await this.settleOwn(w, f, verdict, null, null, { buy: false });
   }
 
   /** A watch's first look is done: what it found is how things were. Your own: one line in your activity. */

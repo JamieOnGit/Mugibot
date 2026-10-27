@@ -30,7 +30,7 @@ export default {
   skuFromPath: /\/(\d{6,10}-\d{2})\.html/,
   productPath: /^(\/au|\/citybeach)\/[^/]+\/\d{6,10}-\d{2}\.html$/,
   searchPath: '/search?q={q}',
-  sweep: { from: 'server', parser: 'citybeach', path: '/search?q={q}&srule=newest&sz=48', minSeconds: 10 },
+  sweep: { from: 'server', parser: 'citybeach', path: '/search?q={q}&srule=newest&sz=48', minSeconds: 10, newestFirst: true },
   account: { signIn: '/login' },
   // (Its pages answer quickly: a VIP drop's pages can be read a couple of seconds apart.)
   monitor: { server: true, browser: true, hostGapSeconds: 2 },
