@@ -39,6 +39,8 @@ export const RENDER_EXTENSION_VERSION = '1.27.0';
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
 const KNOWN = new Set(Object.values(STATUS));
 
+// An armed item's page (Auto-checkout): checked this far ahead of its turn at its store.
+const ARMED_AHEAD_MS = 15 * 1000;
 const ITEMS_FOR_PAGE = `(c.kind = 'product' AND i.url = c.url) OR (c.kind = 'search' AND i.url = '' AND i.store = c.store AND i.sku = c.sku COLLATE NOCASE)`;
 
 /**
@@ -76,6 +78,8 @@ export class Monitor {
     Object.assign(this, { cfg, repo, retailers, notifier, hub, catalog, feed, fetch: fetchImpl, now });
     this.db = repo.db;
     this.hostNext = new Map();
+    this.hostBusy = new Map(); // host → checks still going there
+    this.hostGap = new Map(); // host → its gap between checks (seconds)
     this.inFlight = new Set();
     this.timer = null;
     this.ticks = 0;
@@ -149,12 +153,19 @@ export class Monitor {
       this.db.run(`DELETE FROM page_checks WHERE kind = 'search' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = '' AND i.store = page_checks.store AND i.sku = page_checks.sku COLLATE NOCASE) AND NOT ${monitored}`);
       this.catalog.prune(this.cfg.monitor.logDays);
     }
+    // Stores that can't be asked this second (inside their gap between checks, or — with a gap — a check still going)
+    // are left out of the list, so one store's long list never keeps another store's pages waiting. Oldest first
+    // within a store, an armed item's page 15 seconds ahead of its place (its restock starts members' checkouts).
+    const wait = [...this.hostNext].filter(([, t]) => t > now).map(([h]) => h);
+    for (const [h, n] of this.hostBusy) if (n > 0 && (this.hostGap.get(h) || 0) > 0 && !wait.includes(h)) wait.push(h);
+    const skip = wait.length ? `AND c.host NOT IN (${wait.map((_, i) => `:h${i}`).join(', ')})` : '';
     const due = this.db.all(`SELECT c.* FROM page_checks c
-      WHERE c.next_check_at <= :now AND (EXISTS (
+      WHERE c.next_check_at <= :now ${skip} AND (EXISTS (
         SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
         WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
         OR EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id WHERE m.paused = 0 AND ${PRODUCTS_FOR_PAGE}))
-      ORDER BY c.next_check_at LIMIT 25`, { now });
+      ORDER BY c.next_check_at - CASE WHEN EXISTS (SELECT 1 FROM items i WHERE (${ITEMS_FOR_PAGE}) AND i.aco = 1 AND i.monitor = 1) THEN ${ARMED_AHEAD_MS} ELSE 0 END
+      LIMIT 50`, { now, ...Object.fromEntries(wait.map((h, i) => [`h${i}`, h])) });
     const jobs = [];
     for (const page of due) {
       if (this.sweptLately(page.url, now)) {
@@ -171,9 +182,17 @@ export class Monitor {
       if (this.inFlight.has(page.url) || this.inFlight.size >= 4) continue;
       if ((this.hostNext.get(page.host) || 0) > now) continue;
       const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
+      // (One check at a time at a store with a gap: a store slow to answer holds one of the four, never all of them.)
+      if (gap > 0 && (this.hostBusy.get(page.host) || 0) > 0) continue;
       this.hostNext.set(page.host, now + gap * 1000);
+      this.hostGap.set(page.host, gap);
+      this.hostBusy.set(page.host, (this.hostBusy.get(page.host) || 0) + 1);
       this.inFlight.add(page.url);
-      jobs.push(this.checkPage(page.url).finally(() => this.inFlight.delete(page.url)));
+      jobs.push(this.checkPage(page.url).finally(() => {
+        this.inFlight.delete(page.url);
+        const n = (this.hostBusy.get(page.host) || 1) - 1;
+        if (n > 0) this.hostBusy.set(page.host, n); else this.hostBusy.delete(page.host);
+      }));
     }
     await Promise.all(jobs);
     return jobs.length;

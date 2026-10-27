@@ -39,8 +39,9 @@ export default {
     from: 'server',
     parser: 'woo',
     path: '/wp-json/wc/store/v1/products?search={q}&per_page=30&orderby=date&order=desc&_fields=id,name,slug,permalink,sku,type,prices,images,is_in_stock,is_purchasable,is_on_backorder,stock_availability,add_to_cart',
-    // (A WordPress page made fresh for each search: at most one every 15 s.)
+    // (A WordPress page made fresh for each search: at most one every 15 s — every 10 s in a VIP drop's window.)
     minSeconds: 15,
+    vipMinSeconds: 10,
   },
   // Store login monitor: WordPress marks every page's body "logged-in" once you're signed in.
   account: { signIn: '/my-account/', check: { path: '/my-account/', signedIn: /<body[^>]*class="[^"]*\blogged-in\b/, signedOut: /<body[^>]*class=/ } },

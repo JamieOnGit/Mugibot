@@ -18,8 +18,8 @@
 //
 // Live sweeps from Mugibot's server: Gameology sells Warhammer, board games and figures under the same
 // names as the cards, and thousands of singles, so each keyword is searched with "tcg" added (Shopify's
-// search suggestions: its sealed products first), and every keyword's second page is the store's newest
-// products — a new drop shows up there the moment it's listed.
+// search suggestions: its sealed products first), and every third search is the store's newest products —
+// a new drop shows up there the moment it's listed.
 
 import jbhifi from './jbhifi.js';
 import pokebox from './pokebox.js';

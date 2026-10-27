@@ -30,10 +30,15 @@ export default {
   sweep: {
     from: 'server',
     parser: 'shopify',
-    // The newest 100 products (about half a day of Gamerholic's listings).
+    // The newest 100 products (about half a day of Gamerholic's listings), every product in it counted for its
+    // keyword on every read (allPath: until Oct 2026 each read counted one keyword's, so each was seen every minute).
     path: '/products.json?limit=100',
-    // One list for every keyword, about 200 KB a read: no more than one read every 15 s.
+    allPath: '/products.json?limit=100',
+    allLabel: 'newest products',
+    // One list for every keyword, about 200 KB a read: no more than one read every 15 s — every 10 s in a VIP drop's
+    // window (its words are read from the same list).
     minSeconds: 15,
+    vipMinSeconds: 10,
   },
   monitor: { server: true, browser: true },
   flow: {

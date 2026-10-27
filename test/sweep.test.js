@@ -14,7 +14,7 @@ import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, wa
 import { startMockStore } from '../devtools/mockstore.js';
 import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseMagento, parseShopifyProducts, parseShopifySuggest, parseTarget, parseWoo, searchSays, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
-import { NEWEST, Sweeper, olderVersion, retryAfterMs, statesNote } from '../server/monitor/sweep.js';
+import { ALL, NEWEST, Sweeper, olderVersion, retryAfterMs, statesNote } from '../server/monitor/sweep.js';
 
 // --- reading results -----------------------------------------------------------
 function targetPage(products, total = products.length) {
@@ -1009,6 +1009,8 @@ test("🆕 JB Hi-Fi's newest products, every other search: a drop is seen the mo
   assert.equal(sw.urlFor(R('jbhifi'), NEWEST), 'https://www.jbhifi.com.au/products.json?limit=30');
   assert.equal(sw.urlFor(jbr, NEWEST), `${store.url}/jbhifi/products.json?limit=30`);
   // Every other search, between the keywords' (and only from the server: an admin's browser searches each keyword).
+  // (Not in drop mode: an earlier test's new JB listing would have it so — see the drop mode test.)
+  sw.stat(jbr.id).hot = null;
   const turns = Array.from({ length: 8 }, () => sw.nextTerm(jbr));
   assert.equal(turns.filter((t) => t.keyword === NEWEST).length, 4, JSON.stringify(turns));
   assert.ok(turns.filter((t) => t.keyword !== NEWEST).every((t) => sw.settings.keywords.includes(t.keyword)));
@@ -1053,6 +1055,116 @@ test("🆕 JB Hi-Fi's newest products, every other search: a drop is seen the mo
   sw.save({ keywords: [...saved, 'lorcana'] }, null);
   sw.save({ keywords: saved }, null);
   assert.ok(env.app.db.get("SELECT 1 AS y FROM sweep_terms WHERE store = 'demo-jbhifi' AND keyword = :k", { k: NEWEST }));
+});
+
+test("⚡ drop mode: a new card listing at a store (in a read that isn't setting its scene) has it searched for what's next there more often for a while — JB Hi-Fi's newest products two searches in three, Target's keyword every other search — at the same pace, for 15 minutes (each new listing making it 15 from then, 30 at most), then a rest; never from a VIP or drop watch's own words; admins can switch it off", async () => {
+  const jbr = R('demo-jbhifi');
+  const t0 = Date.now();
+  sw.stat(jbr.id).hot = null;
+  const pace = sw.paceFor(jbr);
+  // JB Hi-Fi (a newest-products list): its newest products two searches in three.
+  sw.heat(jbr, null, t0);
+  assert.deepEqual({ ...sw.hotAt(jbr, t0), since: 0, until: 0 }, { since: 0, until: 0, newest: true, keyword: null });
+  assert.ok(sw.events.some((e) => e.type === 'sys' && /JB Hi-Fi \(dummy store\): a new listing just came up — drop mode for 15 minutes: its newest products two searches in three \(same pace, no extra requests\)/.test(e.message)));
+  const real = sw.now;
+  sw.now = () => t0 + 1000;
+  try {
+    const turns = Array.from({ length: 9 }, () => sw.nextTerm(jbr));
+    assert.equal(turns.filter((t) => t.keyword === NEWEST).length, 6, JSON.stringify(turns));
+    assert.ok(turns.filter((t) => t.keyword !== NEWEST).every((t) => sw.settings.keywords.includes(t.keyword)), 'its keywords still searched');
+    assert.equal(sw.paceFor(jbr), pace, 'the same pace: no extra requests');
+  } finally {
+    sw.now = real;
+  }
+  // Another new listing: 15 minutes from then — never more than 30 from the first.
+  sw.heat(jbr, null, t0 + 10 * 60 * 1000);
+  assert.equal(sw.stat(jbr.id).hot.until, t0 + 25 * 60 * 1000);
+  sw.heat(jbr, null, t0 + 20 * 60 * 1000);
+  assert.equal(sw.stat(jbr.id).hot.until, t0 + 30 * 60 * 1000);
+  // Over: searched as usual again (said in the live log), and not again for 15 minutes.
+  assert.equal(sw.hotAt(jbr, t0 + 30 * 60 * 1000 + 1), null);
+  assert.ok(sw.events.some((e) => e.type === 'sys' && /JB Hi-Fi \(dummy store\): drop mode over — searched as usual again/.test(e.message)));
+  sw.heat(jbr, null, t0 + 40 * 60 * 1000);
+  assert.equal(sw.hotAt(jbr, t0 + 40 * 60 * 1000 + 1), null, 'resting');
+  sw.heat(jbr, null, t0 + 46 * 60 * 1000);
+  assert.ok(sw.hotAt(jbr, t0 + 46 * 60 * 1000 + 1), 'after its rest, again');
+  sw.stat(jbr.id).hot = null;
+  // Stores it doesn't apply to: Kmart (its whole list is every search already), BIG W (it lists drops ahead of time).
+  for (const id of ['demo-kmart', 'demo-bigw']) {
+    sw.heat(R(id), 'pokemon', t0);
+    assert.equal(sw.hotAt(R(id), t0), null, id);
+  }
+
+  // Target (its search newest first): a real new listing, read from the server.
+  const pages = { 1: [targetProduct('70500001', 'Pokemon TCG: Drop Mode Booster 1')] };
+  const fakeTarget = async (url) => new Response(targetPage(pages[Number(new URL(url).searchParams.get('page') || 1)] || [], pages[1].length), { status: 200, headers: { 'content-type': 'text/html' } });
+  const { cfg, repo, catalog, feed, monitor, retailers, hub } = env.app;
+  const t = new Sweeper({ cfg, repo, catalog, feed, monitor, retailers, hub, fetchImpl: fakeTarget, now: () => Date.now() + clock.offset });
+  const target = retailers.get('target');
+  // (Its first read sets the scene.)
+  env.app.db.run("DELETE FROM sweep_terms WHERE store = 'target'");
+  pages[1] = [...pages[1], targetProduct('70500009', 'Pokemon TCG: Drop Mode Words Tin')];
+  assert.equal((await t.sweepTerm(target, { keyword: 'pokemon', page: 1 })).baseline, true);
+  assert.equal(t.hotAt(target), null, 'setting the scene: no drop mode');
+  // A VIP or drop watch's own words: never.
+  pages[1] = [...pages[1], targetProduct('70500008', 'Pokemon TCG: Drop Mode Words Bundle')];
+  await t.sweepTerm(target, { keyword: 'drop mode words', page: 1, drop: 'shared' });
+  assert.equal(t.hotAt(target), null, "a drop watch's own words: no drop mode");
+  pages[1] = [...pages[1], targetProduct('70500002', 'Pokemon TCG: Drop Mode Elite Trainer Box')];
+  const r = await t.sweepTerm(target, { keyword: 'pokemon', page: 1 });
+  assert.equal(r.ok, true, r.error);
+  assert.ok(r.new >= 1, JSON.stringify(r));
+  const h = t.hotAt(target);
+  assert.equal(h && h.keyword, 'pokemon', JSON.stringify(h));
+  const turns = Array.from({ length: 6 }, () => t.nextTerm(target));
+  assert.deepEqual(turns.filter((_, i) => i % 2 === 0).map((x) => [x.keyword, x.page]), [['pokemon', 1], ['pokemon', 1], ['pokemon', 1]], JSON.stringify(turns));
+  // Admins switch it off: searched as usual at once.
+  const saved = t.settings;
+  t.save({ dropMode: false }, null);
+  try {
+    assert.equal(t.hotAt(target), null);
+    t.heat(target, 'pokemon');
+    assert.equal(t.stat(target.id).hot && t.stat(target.id).hot.until > t.now() ? 'hot' : 'off', 'off');
+  } finally {
+    t.save({ dropMode: saved.dropMode }, null);
+  }
+});
+
+test("Gamerholic: its newest 100 is one list for every keyword — each read counts every keyword's products (not one keyword's a read); a failed read is one request, never asked again straight away", async () => {
+  const gr = R('gamerholic');
+  assert.equal(sw.urlFor(gr, ALL), 'https://gamerholic.com.au/products.json?limit=100');
+  assert.equal(sw.urlFor(gr, 'pokemon'), sw.urlFor(gr, ALL), 'the same list either way');
+  const list = { status: 200, products: [] };
+  let asked = 0;
+  const fake = async () => {
+    asked += 1;
+    return new Response(list.status === 200 ? JSON.stringify({ products: list.products }) : 'oops', { status: list.status, headers: { 'content-type': 'application/json' } });
+  };
+  const shopify = (id, title) => ({ id, title, handle: `gr-${id}`, created_at: new Date().toISOString(), variants: [{ id, title: 'Default Title', price: '59.95', available: true }], images: [] });
+  const { cfg, repo, catalog, feed, monitor, retailers, hub } = env.app;
+  const t = new Sweeper({ cfg, repo, catalog, feed, monitor, retailers, hub, fetchImpl: fake });
+  assert.deepEqual(t.nextTerm(gr), { keyword: ALL, page: 1, all: true });
+  assert.deepEqual(t.nextTerm(gr), { keyword: ALL, page: 1, all: true }, 'every search');
+  list.products = [shopify(91001, 'Pokemon TCG: Gamerholic Booster Box')];
+  let r = await t.sweepTerm(gr, { keyword: ALL, page: 1, all: true });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.keyword, 'newest products', 'called what it is');
+  // One read: a Pokémon product and a One Piece one, each for its own keyword.
+  list.products = [shopify(91002, 'One Piece Card Game: OP-16 Booster Box'), shopify(91003, 'Pokemon TCG: Gamerholic Elite Trainer Box'), ...list.products];
+  r = await t.sweepTerm(gr, { keyword: ALL, page: 1, all: true });
+  assert.equal(r.new, 2, JSON.stringify(r));
+  assert.match(alerts('listed').find((a) => a.sku === 'gr-91002').note || '', /New in "one piece" at Gamerholic/);
+  assert.match(alerts('listed').find((a) => a.sku === 'gr-91003').note || '', /New in "pokemon" at Gamerholic/);
+  // A failed read (its search is the same list: nothing else to ask): one request, recorded, backed off as any search.
+  list.status = 500;
+  asked = 0;
+  r = await t.sweepTerm(gr, { keyword: ALL, page: 1, all: true });
+  assert.equal(asked, 1, 'asked once');
+  assert.equal(r.ok, false);
+  assert.ok(!(t.stat(gr.id).allOffUntil > Date.now()), 'not switched to keyword searches');
+  assert.equal(t.stat(gr.id).fails, 1);
+  // A VIP drop's window there: its words read from the same list — every 10 s, not 4.
+  assert.equal(gr.sweep.vipMinSeconds, 10);
 });
 
 test('↻ Reset: a store asking to wait (429, Retry-After) is waited for; Reset (one store, or all) starts it again gently; a browser store gets a fresh tab', async () => {
@@ -1243,39 +1355,88 @@ test("Premium Bandai: its search JSON (/api/search) — on sale, pre-orders, clo
   assert.equal(env.app.retailers.forUrl(r.products[0].url).id, 'pbandai');
 });
 
-test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg\" added: sealed products, not singles), and as its second page the store's newest products — a new listing alerts from there, with Shopify's add-to-cart link", async () => {
+test("Pokébox and the other card shops on Shopify: each keyword's search (\"tcg\" added: sealed products, not singles), and every third search the store's newest products — every keyword's products in one read (from an admin's browser too, standing in) — a new listing alerts from there, with Shopify's add-to-cart link, even one the shop drafted weeks before", async () => {
   const saved = sw.settings.stores;
   sw.save({ stores: { ...saved, 'demo-pokebox': 'server' } }, null);
+  const pb = R('demo-pokebox');
   try {
     assert.match(sw.urlFor(R('pokebox'), 'pokemon'), /^https:\/\/www\.pokebox\.com\.au\/search\/suggest\.json\?q=pokemon%20tcg&/);
-    assert.equal(sw.urlFor(R('pokebox'), 'one piece', 2), 'https://www.pokebox.com.au/products.json?limit=30', 'page 2: its newest products, whatever the keyword');
+    assert.equal(sw.urlFor(R('pokebox'), NEWEST), 'https://www.pokebox.com.au/products.json?limit=30', 'its newest products');
     assert.equal(sw.paceFor(R('pokebox')), 10000);
     for (const id of ['goodgames', 'collectiblemadness', 'cherrycollectables', 'gameology']) {
       assert.equal(R(id).sweep.from, 'server', id);
-      assert.equal(sw.urlFor(R(id), 'pokemon', 2), `${R(id).base}/products.json?limit=30`, id);
+      assert.equal(sw.urlFor(R(id), NEWEST), `${R(id).base}/products.json?limit=30`, id);
+      assert.equal(R(id).sweep.pages, undefined, `${id}: no second pages any more`);
     }
     // Gameology (Warhammer, board games and thousands of singles under the same names): "tcg" added, sealed products first.
     assert.match(sw.urlFor(R('gameology'), 'one piece'), /^https:\/\/www\.gameology\.com\.au\/search\/suggest\.json\?q=one%20piece%20tcg&resources%5Btype%5D=product&/);
     assert.equal(sw.paceFor(R('gameology')), 10000);
-    assert.equal(sw.urlFor(R('demo-pokebox'), 'pokemon', 2), `${store.url}/pokebox/products.json?limit=30`);
-    // The first read of each page sets the scene.
+    assert.equal(sw.urlFor(pb, NEWEST), `${store.url}/pokebox/products.json?limit=30`);
+    // Every third search — from the server, and from an admin's browser standing in for it (JB's is the server's alone).
+    sw.stat(pb.id).hot = null;
+    const turns = Array.from({ length: 9 }, () => sw.nextTerm(pb));
+    assert.equal(turns.filter((t) => t.keyword === NEWEST).length, 3, JSON.stringify(turns));
+    assert.ok(turns.every((t) => t.page === 1), 'no second pages');
+    assert.equal(Array.from({ length: 9 }, () => sw.nextTerm(pb, { all: false })).filter((t) => t.keyword === NEWEST).length, 3, "from an admin's browser too");
+    assert.deepEqual(sw.termOf(pb, { keyword: NEWEST }), { keyword: NEWEST, page: 1 }, "an admin's browser's read of it counts");
+    assert.equal(sw.termOf(R('demo-jbhifi'), { keyword: NEWEST }), null, "JB Hi-Fi's: the server's alone");
+    // The first read of each sets the scene.
     assert.equal((await sweep('demo-pokebox', 'pokemon', 1)).baseline, true);
-    assert.equal((await sweep('demo-pokebox', 'pokemon', 2)).baseline, true);
+    assert.equal((await sweep('demo-pokebox', NEWEST)).baseline, true);
     assert.equal(product('demo-pokebox', 'pokemon-tcg-30th-celebration-elite-trainer-box-etb').status, 'in_stock');
-    // A product the store lists: its newest products show it.
+    // Products the store lists: its newest products show them, each counted for its own keyword in the one read — one the
+    // shop drafted a month ago and has just put up too (it doesn't republish old products, as JB Hi-Fi does).
     store.shop('pokebox').products.push({ sku: 'pokemon-tcg-perfect-order-booster-bundle', name: 'Pokemon TCG: Mega Evolution ME03 - Perfect Order Booster Bundle', price: 79.99, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499990 });
-    const r = await sweep('demo-pokebox', 'pokemon', 2);
+    store.shop('pokebox').products.push({ sku: 'one-piece-card-game-op15-booster-box', name: 'One Piece Card Game OP-15 Booster Box', price: 199.95, status: 'preorder', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499991, createdDaysAgo: 30 });
+    const r = await sweep('demo-pokebox', NEWEST);
     assert.equal(r.ok, true, r.error);
-    assert.equal(r.new, 1);
-    assert.ok(alerts('listed').some((a) => a.sku === 'pokemon-tcg-perfect-order-booster-bundle'));
+    assert.equal(r.new, 2);
+    const bundle = alerts('listed').find((a) => a.sku === 'pokemon-tcg-perfect-order-booster-bundle');
+    assert.match(bundle.note || '', /New in "pokemon" at Pokébox/);
+    const op = alerts('listed').find((a) => a.sku === 'one-piece-card-game-op15-booster-box');
+    assert.ok(op, 'drafted weeks before, put up now: a drop');
+    assert.match(op.note || '', /New in "one piece" at Pokébox/);
     assert.equal(product('demo-pokebox', 'pokemon-tcg-perfect-order-booster-bundle').variant_id, '4499990', 'the option to buy, for the cart link');
     assert.equal(env.app.retailers.cartUrl('demo-pokebox', { variantId: '4499990' }), `${store.url}/pokebox/cart/4499990:1`);
+  } finally {
+    sw.stat(pb.id).hot = null;
+    sw.save({ stores: saved }, null);
+  }
+});
+
+test("Pokébox's newest products, read under their own name for the first time after an update: when every keyword read that list lately (as its second page, before), they don't set the scene again — what was listed meanwhile still alerts", async () => {
+  const saved = sw.settings.stores;
+  sw.save({ stores: { ...saved, 'demo-goodgames': 'server' } }, null);
+  const gg = R('demo-goodgames');
+  const url = sw.urlFor(gg, NEWEST);
+  try {
+    // Before the update: each keyword's second page was this same list, read a minute ago.
+    const before = (ago) => {
+      for (const [i, k] of sw.settings.keywords.entries()) {
+        const t = sw.now() - (i === 0 ? ago : 60 * 1000);
+        env.app.db.run(`INSERT OR REPLACE INTO sweep_terms (store, keyword, page, url, source, baseline_at, last_at, last_ok_at, found, kept, total, fails, error, ms)
+          VALUES (:s, :k, 2, :u, 'server', :t, :t, :t, 1, 1, NULL, 0, '', 100)`, { s: gg.id, k, u: url, t });
+      }
+    };
+    const page2 = () => env.app.db.all('SELECT * FROM sweep_terms WHERE store = :s AND page > 1', { s: gg.id }).length;
+    before(60 * 1000);
+    // Listed meanwhile.
+    store.shop('goodgames').products.push({ sku: 'pokemon-tcg-journey-together-etb-gg', name: 'Pokemon TCG Journey Together Elite Trainer Box', price: 89.95, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499995 });
+    const r = await sweep('demo-goodgames', NEWEST);
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.baseline, false, 'the scene was set already');
+    assert.ok(alerts('listed').some((a) => a.sku === 'pokemon-tcg-journey-together-etb-gg'), 'what was listed meanwhile alerts');
+    assert.equal(page2(), 0, 'the second pages it was read as are no longer searched: gone from the list of searches');
+    // A keyword that didn't read it lately: the first read under the list's own name sets the scene, as before.
+    env.app.db.run('DELETE FROM sweep_terms WHERE store = :s AND keyword = :k', { s: gg.id, k: NEWEST });
+    before(7 * 3600 * 1000);
+    assert.equal((await sweep('demo-goodgames', NEWEST)).baseline, true);
   } finally {
     sw.save({ stores: saved }, null);
   }
 });
 
-test("🃏 From The Deep Games: each game's whole sealed collection read in one go (never its singles' — 30,000 of them; the sealed one first where a game has more), and every keyword's second page its Preorders collection — a new pre-order alerts from there, with Shopify's add-to-cart link", async () => {
+test("🃏 From The Deep Games: each game's whole sealed collection read in one go (never its singles' — 30,000 of them; the sealed one first where a game has more), and every third search its Preorders collection — every game's pre-orders in one read — a new pre-order alerts from there, with Shopify's add-to-cart link", async () => {
   const saved = sw.settings.stores;
   sw.save({ stores: { ...saved, 'demo-fromthedeep': 'server' } }, null);
   const ftd = R('demo-fromthedeep');
@@ -1283,7 +1444,8 @@ test("🃏 From The Deep Games: each game's whole sealed collection read in one 
   try {
     assert.equal(R('fromthedeep').sweep.from, 'server');
     assert.equal(sw.paceFor(R('fromthedeep')), 10000);
-    assert.equal(sw.urlFor(R('fromthedeep'), 'one piece', 2), 'https://fromthedeepgames.com.au/collections/preorders/products.json?limit=250', 'page 2: its Preorders, whatever the keyword');
+    assert.equal(sw.urlFor(R('fromthedeep'), NEWEST), 'https://fromthedeepgames.com.au/collections/preorders/products.json?limit=250', 'its Preorders, in place of its newest products');
+    assert.equal(R('fromthedeep').sweep.newestEvery, 3);
     // The first read: the store's collections, then the game's whole sealed collection (it sets the scene).
     let r = await sweep('demo-fromthedeep', 'pokemon', 1);
     assert.equal(r.ok, true, r.error);
@@ -1298,16 +1460,15 @@ test("🃏 From The Deep Games: each game's whole sealed collection read in one 
     assert.deepEqual([box.status, box.price], ['in_stock', 324]);
     assert.match(box.url, /\/fromthedeep\/products\/pokemon-tcg-pitch-black-booster-box-in-store-only-preorder$/);
     assert.ok(box.variant_id, 'the option to buy, for the cart link');
-    // Its Preorders collection, as page 2: the pre-orders of every game (sets the scene too).
-    r = await sweep('demo-fromthedeep', 'riftbound', 2);
+    // Its Preorders collection, every third search: the pre-orders of every game, each for its own keyword (sets the scene too).
+    r = await sweep('demo-fromthedeep', NEWEST);
     assert.equal(r.ok, true, r.error);
     assert.equal(r.baseline, true);
-    assert.match(row('riftbound', 2).url, /\/fromthedeep\/collections\/preorders\/products\.json\?limit=250$/);
-    assert.equal(product('demo-fromthedeep', 'riftbound-league-of-legends-tcg-vendetta-booster-box-preorder').status, 'preorder');
-    assert.equal((await sweep('demo-fromthedeep', 'pokemon', 2)).baseline, true);
+    assert.match(row(NEWEST).url, /\/fromthedeep\/collections\/preorders\/products\.json\?limit=250$/);
+    assert.ok(r.found >= 1, 'every game\'s pre-orders (a Riftbound one here: counted where "riftbound" is searched for)');
     // 🆕 A pre-order the store lists: alerted from its Preorders, with Shopify's cart link.
     store.shop('fromthedeep').products.push({ sku: 'pokemon-tcg-ascended-heroes-booster-bundle-preorder', name: 'Pokemon TCG Ascended Heroes Booster Bundle (Purchase Limit of 4)', price: 69.95, status: 'preorder', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4499980 });
-    r = await sweep('demo-fromthedeep', 'pokemon', 2);
+    r = await sweep('demo-fromthedeep', NEWEST);
     assert.equal(r.ok, true, r.error);
     assert.equal(r.new, 1);
     const a = alerts('listed').find((x) => x.sku === 'pokemon-tcg-ascended-heroes-booster-bundle-preorder');

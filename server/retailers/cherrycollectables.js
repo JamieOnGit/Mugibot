@@ -6,7 +6,7 @@
 // security code, name on card, "Use shipping address as billing address" ticked → STOP at "Pay now".
 //
 // Live sweeps from Mugibot's server: each keyword's search ("tcg" added: it lists thousands of
-// singles and sports breaks) and the store's newest products as every keyword's second page.
+// singles and sports breaks) and, every third search, the store's newest products.
 
 import jbhifi from './jbhifi.js';
 import pokebox from './pokebox.js';

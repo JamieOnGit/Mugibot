@@ -31,6 +31,8 @@ export default {
   sweep: {
     from: 'browser', parser: 'ebgames', inPage: true, openPath: '/search?q={q}',
     path: '/search/query?q={q}&sort=releasedate&order=desc', pagePath: '&page={page}', pages: 2,
+    // Drop mode: a new listing alerted here → its keyword's first page every other search for a while.
+    hot: true,
   },
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.

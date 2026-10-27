@@ -426,6 +426,69 @@ test("EB Games (its Cloudflare turns away every server): the server never asks i
   }
 });
 
+test("one store's long list never keeps another store's pages waiting: a store that can't be asked this second is left out (oldest first within a store, an armed item's page ahead of its turn), and one check at a time at a store", async () => {
+  const mon = env.app.monitor;
+  const { catalog, repo, db, cfg } = env.app;
+  const gap = cfg.monitor.hostGapSeconds;
+  const real = mon.checkPage;
+  const dispatched = [];
+  const release = [];
+  // (Checks that stay open until released: a store slow to answer.)
+  mon.checkPage = (url) => {
+    dispatched.push(url);
+    db.run('UPDATE page_checks SET next_check_at = :t WHERE url = :url', { url, t: mon.now() + 600000 }); // (as a check does: its next one later)
+    return new Promise((resolve) => release.push(resolve));
+  };
+  cfg.monitor.hostGapSeconds = 5;
+  const a = store.url; // 127.0.0.1
+  const b = store.url.replace('127.0.0.1', 'localhost');
+  const now = mon.now();
+  const add = (base, i, dueAgo) => {
+    const url = `${base}/fairness/${i}`;
+    const p = catalog.upsertProduct({ store: 'other', sku: `fair-${base === a ? 'a' : 'b'}-${i}`, url, name: `Fairness ${i}` });
+    catalog.addMonitor(p.id);
+    repo.ensurePage(url, 'product', 'other', p.sku);
+    db.run('UPDATE page_checks SET next_check_at = :t WHERE url = :url', { url, t: now - dueAgo });
+    return url;
+  };
+  const pending = [];
+  try {
+    // Store A: 40 pages overdue (a backlog, a tenth of a second apart); store B: one page, just due.
+    const aPages = Array.from({ length: 40 }, (_, i) => add(a, i, 600000 - i * 100));
+    const bPage = add(b, 0, 1000);
+    // An armed item on A's newest page (its member's Auto-checkout): up to 15 s ahead of its turn there.
+    const ash = await member('fairness-ash');
+    db.run(`INSERT INTO items (id, user_id, position, store, sku, name, url, aco, created_at, updated_at)
+      VALUES ('itm-fair', :u, 999, 'other', 'fair-a-39', 'Fairness 39', :url, 1, :t, :t)`, { u: ash.user.id, url: aPages[39], t: now });
+    pending.push(mon.tick());
+    await new Promise((r) => setImmediate(r));
+    assert.ok(dispatched.includes(bPage), "store B's page checked at once, however long A's list");
+    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 1, 'one at a time at store A');
+    assert.equal(dispatched.find((u) => u.startsWith(`${a}/fairness/`)), aPages[39], "A's armed page first");
+    // Still going at A (slow to answer), and past its gap: A isn't asked again until that check is in.
+    clock.offset += 6000;
+    pending.push(mon.tick());
+    await new Promise((r) => setImmediate(r));
+    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 1, 'never two at once at A');
+    release.splice(0).forEach((r) => r());
+    await Promise.all(pending.splice(0));
+    clock.offset += 6000;
+    pending.push(mon.tick());
+    await new Promise((r) => setImmediate(r));
+    assert.equal(dispatched.filter((u) => u.startsWith(`${a}/fairness/`)).length, 2, 'the next one once it answered');
+    assert.equal(dispatched.at(-1), aPages[0], 'then oldest first');
+  } finally {
+    release.splice(0).forEach((r) => r());
+    await Promise.all(pending);
+    mon.checkPage = real;
+    cfg.monitor.hostGapSeconds = gap;
+    db.run("DELETE FROM items WHERE id = 'itm-fair'");
+    db.run("DELETE FROM monitors WHERE product_id IN (SELECT id FROM products WHERE sku LIKE 'fair-%')");
+    db.run("DELETE FROM page_checks WHERE url LIKE '%/fairness/%'");
+    mon.hostNext.clear();
+  }
+});
+
 test('announced SKUs (an admin\'s): restocks are posted in the Discord channel once', async () => {
   const boss = new Client(env.url);
   await boss.post('/api/auth/login', { username: 'boss', password: 'correct horse battery staple' });
