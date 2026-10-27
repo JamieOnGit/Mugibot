@@ -72,6 +72,25 @@ export function olderVersion(a, b) {
   return false;
 }
 
+// The fewest products any store's search page holds (JB Hi-Fi's suggestions: 10). A page whose size isn't in its link
+// and whose store doesn't say how many results there are counts as full once it has this many.
+const MIN_PAGE = 10;
+// What a search link asks for as its page's size: limit=10, sz=48, per_page=30, num_results_per_page=100,
+// resources[limit]=10 (Shopify's suggestions).
+const PAGE_SIZE_RE = /[?&](?:limit|sz|size|per_page|perpage|page_size|pagesize|num_results_per_page|hitsperpage|rows|resources(?:%5B|\[)limit(?:%5D|\]))=(\d{1,4})(?:&|$)/i;
+
+/**
+ * Was a search's page full — more listed than it held, so a product that was listed all along can show up in it only
+ * later (one above it sells out and drops off, say)? read: { total, found, url } — what the store said it had (or
+ * null), how many products the page had, and its link. Where neither says: full at MIN_PAGE (fails safe).
+ */
+export function pageFull({ total = null, found = 0, url = '' } = {}) {
+  const n = Number(found) || 0;
+  if (typeof total === 'number' && total >= 0) return total > n;
+  const m = String(url || '').match(PAGE_SIZE_RE);
+  return n >= (m && Number(m[1]) > 0 ? Number(m[1]) : MIN_PAGE);
+}
+
 /**
  * Kmart's states with stock, when it isn't all of them: "In stock in NSW, VIC only." — or, when most have
  * it, the ones that don't: "In stock everywhere except NT." ('' for every state, or when it isn't known.)
@@ -744,11 +763,15 @@ export class Sweeper {
         //  products may see it before the watch's own search does.)
         const newListing = this.drops && (cards || newest) && !republished && !baseline && !edge && !mkt && !known;
         const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id) || (term.keyword !== w.words && !newListing);
+        // (New to the catalogue in the watch's own words' search — and new to the watch — where its first look read a
+        //  full page (drops.crowded): it may have been listed all along and only now moved into the page. Its page
+        //  decides, not the search: armed only if it isn't on sale.)
+        const wary = (w) => !known && term.keyword === w.words && this.drops.crowded(w, r.id);
         // Someone's own drop watch's words in the name (monitor/drops.js): on their watchlist, theirs
         // alone. (Found by another search, it was listed already as far as that watch knows — unless it's new.)
         if (this.drops && !mkt) {
           for (const w of this.drops.ownFor(r.id, title)) {
-            await this.drops.foundOwn(w, r, p, status, { baseline: dropDone(w) }).catch((e) => this.cfg.log('[drops]', e.message));
+            await this.drops.foundOwn(w, r, p, status, { baseline: dropDone(w), wary: wary(w) }).catch((e) => this.cfg.log('[drops]', e.message));
           }
         }
         // A VIP watch's words in the name (monitor/vip.js): it counts, trading cards or not.
@@ -766,10 +789,13 @@ export class Sweeper {
         const ev = await this.track(r, p, { status, keyword: found, baseline: dropOnly ? dropBaseline : baseline || edge || republished, gapNew: dropOnly || edge || republished ? null : gapNew, now, vip: !!watch, drop: dropOnly, category: drop && !cards ? drop.category : null, dropWatch: drop ? drop.id : null, posting });
         for (const k of ev) counts[k] += 1;
         const product = () => [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
-        // (Found in the watch's first search: listed already, so armed only if it isn't on sale yet.)
-        if (watch) this.vip.found(watch, product(), { baseline });
-        if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, status }).catch((e) => this.cfg.log('[drops]', e.message));
+        // (Found in the watch's first search: listed already, so armed only if it isn't on sale yet. So is one new to the
+        //  catalogue in its own words' search later, where its first search read a full page — vip.crowded.)
+        if (watch) this.vip.found(watch, product(), { baseline: baseline || (!known && term.keyword === watch.words && this.vip.crowded(watch)) });
+        if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, status, wary: wary(drop) }).catch((e) => this.cfg.log('[drops]', e.message));
       }
+      // (A VIP watch's first search of its words: whether its page was full — vip.crowded.)
+      if (this.vip) this.vip.searched(r.id, term.keyword, pageFull({ total: parsed.total ?? null, found: parsed.products.length, url }));
       await Promise.allSettled(posting);
       const out = this.record(r, term, { ok: true, url, source, ms, baseline, total: parsed.total ?? null, ...counts, error: parsed.problem === 'empty' ? emptyText(r, term, parsed) : '' });
       out.gone = all ? 0 : await this.markGone(r, term.keyword, now);

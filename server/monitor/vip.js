@@ -89,6 +89,29 @@ export class Vip {
     return this.termsFor(storeId).find((w) => (!only || w.id === only) && mentions(name, w.words)) || null;
   }
 
+  /**
+   * A search of these words at a store went (sweep.js): a keyword watch's first one says whether its page was full
+   * (full: more listed than the page held) — crowded().
+   */
+  searched(storeId, words, full) {
+    // (Kept once: the ones kept already aren't written again — a watch in its window is searched every few seconds.)
+    this.looked ||= new Set();
+    for (const w of this.termsFor(storeId).filter((x) => x.words === words && !this.looked.has(x.id))) {
+      this.db.run('INSERT OR IGNORE INTO first_looks (watch_id, store, full, at) VALUES (:w, :s, :f, :t)', { w: w.id, s: storeId, f: full ? 1 : 0, t: this.now() });
+      this.looked.add(w.id);
+    }
+  }
+
+  /**
+   * Did the watch's first search read a full page — more listed than the page held? Then a product new to the catalogue
+   * in its search later may only have moved into the page (one above it sold out, say), on sale since before the watch:
+   * armed only once its page says it isn't on sale (found: as listed already). (Not searched yet: as full.)
+   */
+  crowded(w) {
+    const row = this.db.get('SELECT full FROM first_looks WHERE watch_id = :w AND store = :s', { w: w.id, s: w.store });
+    return !row || !!row.full;
+  }
+
   /** How often a VIP monitor's page is read (seconds): every few seconds in its drop window. Null: not a VIP page. */
   pageSeconds(url, now = this.now()) {
     if (!this.watches().length) return null;
@@ -178,6 +201,7 @@ export class Vip {
     this.db.run('DELETE FROM monitors WHERE vip_watch = :id AND note = :note', { id: w.id, note: VIP_NOTE });
     this.db.run('UPDATE monitors SET vip_watch = NULL WHERE vip_watch = :id', { id: w.id });
     this.db.run('DELETE FROM vip_watches WHERE id = :id', { id: w.id });
+    this.db.run('DELETE FROM first_looks WHERE watch_id = :id', { id: w.id });
     this.changed();
     if (user) this.repo.audit(user.id, null, 'vip-remove', w.url || `${w.store}: ${w.words}`);
     return true;
