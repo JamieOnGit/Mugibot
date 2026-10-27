@@ -161,6 +161,7 @@ export function parseShopifyProducts(text, { base } = {}) {
     //  its own products have none. The store says which names are its own: sweep.sellers.)
     const sellerOption = (Array.isArray(p.options) ? p.options : []).find((o) => o && typeof o === 'object' && /^sellers?$/i.test(String(o.name || '')));
     const created = Date.parse(p.created_at || '');
+    const published = Date.parse(p.published_at || '');
     products.push({
       sku: String(p.handle), aliases: p.id ? [String(p.id)] : [], title: clean(p.title), price,
       wasPrice: was && price && was > price ? was : null, inStock,
@@ -172,6 +173,7 @@ export function parseShopifyProducts(text, { base } = {}) {
       url: httpsUrl(`${shop}/products/${encodeURIComponent(p.handle)}`, base), image: httpsUrl(images[0] && images[0].src, base), marketplace: false,
       // When the store made it (a product republished long after: not a new drop) — and who sells it, when it says.
       ...(Number.isFinite(created) ? { createdAt: created } : {}),
+      ...(Number.isFinite(published) ? { publishedAt: published } : {}),
       sellers: sellerOption && Array.isArray(sellerOption.values) ? sellerOption.values.map((v) => String(v).trim()).filter(Boolean).slice(0, 10) : [],
     });
   }

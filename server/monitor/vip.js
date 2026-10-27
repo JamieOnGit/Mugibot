@@ -225,7 +225,7 @@ export class Vip {
       this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm: onSale ? 'skipped' : 'armed' } : x)));
       if (!onSale) this.arm(w, product, product.status);
       else if (w.acoUser) {
-        this.repo.addEvent(w.acoUser, { type: 'aco', level: 'info', message: `VIP watch: ${product.name || product.sku} was on sale when its page was read — listed before, not a drop for this watch, so it isn't armed — ⚡ Buy it yourself if you want it`, name: product.name, sku: product.sku, url: product.url || null });
+        this.repo.addEvent(w.acoUser, { type: 'aco', level: 'info', message: `VIP watch: ${product.name || product.sku} was on sale already when the watch was added, so it isn't armed — ⚡ Buy it yourself if you want it`, name: product.name, sku: product.sku, url: product.url || null });
       }
     }
   }

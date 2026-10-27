@@ -247,6 +247,8 @@ const ALL_LABEL = 'every trading card';
 export const NEWEST = '+';
 const NEWEST_LABEL = 'newest products';
 const NEWEST_FRESH_MS = 14 * 24 * 3600 * 1000;
+// A store's clock and Mugibot's: this far apart at most (when it says it put a product up, against a watch's first look).
+const STORE_CLOCK_MS = 2 * 60 * 1000;
 /** A search's keyword, as it's said: the whole-range and newest lists by name (a store's own name for its list: sweep.allLabel). */
 const termLabel = (k, r = null) => (k === ALL ? (r && r.sweep && r.sweep.allLabel) || ALL_LABEL : k === NEWEST ? NEWEST_LABEL : k);
 // Drop mode: a store where a new card listing has just been alerted (a read that wasn't setting its scene) is
@@ -579,12 +581,16 @@ export class Sweeper {
     // third the store's own as usual (its drop watches' words, newest products, keywords: a store with a VIP drop on
     // is still searched for everything else, and its newest products and whole list still count VIP finds); once
     // every watch's drop window there is over, one in three.
+    // (A watch with Auto-checkout at this store: its words every search in its drop window and every other one otherwise, as
+    //  ever — what drops at a store is armed by whichever search sees it first, so the watch's own search keeps seeing it
+    //  first as often as before.)
     const vip = this.vip ? this.vip.termsFor(r.id) : [];
     if (vip.length) {
       const fast = vip.filter((w) => this.vip.inWindow(w, now));
+      const aco = vip.some((w) => !!w.acoUser);
       const over = !fast.length && vip.every((w) => !!w.dropAt && now > w.dropAt + VIP_AFTER_MS);
       const turn = (st.vipTurn = (st.vipTurn || 0) + 1);
-      if (fast.length ? turn % 3 !== 0 : over ? turn % 3 === 1 : turn % 2 === 1) {
+      if (aco ? fast.length > 0 || turn % 2 === 1 : fast.length ? turn % 3 !== 0 : over ? turn % 3 === 1 : turn % 2 === 1) {
         const list = fast.length ? fast : vip;
         const w = list[(st.vipNext = (st.vipNext || 0) + 1) % list.length];
         return { keyword: w.words, page: 1, vip: w.id };
@@ -910,7 +916,12 @@ export class Sweeper {
         const quiet = !!legacy && cardsNow && !known && !(all ? s.keywords.some((k) => legacy(p, k)) : legacy(p, term.keyword));
         const cards = cardsNow && !quiet;
         const newListing = this.drops && (cards ? !republished : newest && !old) && !baseline && !edge && !mkt && !known;
-        const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id) || (term.keyword !== w.words && !newListing);
+        // (In another search's newest products, a product the card words don't count is a drop for a watch only when the store
+        //  put it up after the watch's first look, when it says when: the catalogue never tracked it, so "new to the
+        //  catalogue" says nothing. Made earlier and published since — drafted for its drop: it counts.)
+        const upAt = Math.max(typeof p.createdAt === 'number' ? p.createdAt : 0, typeof p.publishedAt === 'number' ? p.publishedAt : 0);
+        const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id)
+          || (term.keyword !== w.words && (!newListing || (!cards && upAt > 0 && upAt < this.drops.baseAt(w, r.id) - STORE_CLOCK_MS)));
         // Someone's own drop watch's words in the name (monitor/drops.js): on their watchlist, theirs
         // alone. (Found by another search, it was listed already as far as that watch knows — unless it's new.)
         if (this.drops && !mkt) {
@@ -922,10 +933,6 @@ export class Sweeper {
         const watch = this.vip ? this.vip.matchFor(r.id, title, term.vip || null) : null;
         // An admin's drop watch for everyone (monitor/drops.js): it counts too, in #non-tcg-alerts.
         const drop = this.drops && !term.vip ? this.drops.sharedFor(r.id, title, term.drop ? term.keyword : null) : null;
-        // (In the catalogue before this read, whichever search saw it: not a drop for a VIP watch — armed only once its page
-        //  (a read that worked) says it isn't on sale. Whatever the catalogue last said of it — an old "sold out" or "not
-        //  listed" may be stale — something on sale before the watch is never bought.)
-        const listedBefore = known;
         const counted = cards || quiet || ((!!watch || !!drop) && !mkt);
         if (!counted || this.catalog.isBlocked(r.id, p.sku, p.aliases)) continue;
         counts.kept += 1;
@@ -941,7 +948,7 @@ export class Sweeper {
         const product = () => [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
         // (Found in the watch's first search, or listed already when another search found it: armed only if it isn't on
         //  sale yet. Something on sale before the watch is never bought, whichever search comes first.)
-        if (watch) this.vip.found(watch, product(), { baseline: baseline || edge || republished || listedBefore });
+        if (watch) this.vip.found(watch, product(), { baseline });
         if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, status, later }).catch((e) => this.cfg.log('[drops]', e.message));
       }
       // A new card listing in a read that isn't setting its scene (not a VIP or drop watch's own search): drop mode.

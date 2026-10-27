@@ -630,19 +630,22 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
    VIP drops go to the store channels like any other alert.
 2. **Add a VIP watch**, either:
    - **A store and the words in its name**: City Beach, *pokemon skate*.
-     - Those words are searched at that store, every other search (one in three
-       once its drop window is over).
+     - Those words are searched at that store, every other search (for a watch
+       that only alerts, one in three once its drop window is over).
      - Anything with **every** word in its name counts (`skate` also matches
        "Skateboard"; accents don't matter). "Trading cards only" doesn't apply.
      - A product that's new since the watch's first search is a 🆕 new drop.
      - The store's own keyword searches count a match too.
    - **A product page**: any shop's link (a "misc" site too). A monitor reads it.
 3. **Drops at** (optional, your time). From 15 minutes before to 3 hours after:
-   - The store is searched for those words **two searches in three**, every
-     **4 seconds** (every 10 at Gamerholic and Games World, whose search is one
-     heavy list or page). The third is the store's own (its newest products, its
-     keywords, members' drop watches), so nothing else there goes unsearched for
-     3 hours, and its newest products and whole list count the watch's finds too.
+   - The store is searched for those words every **4 seconds** (every 10 at
+     Gamerholic and Games World, whose search is one heavy list or page):
+     - a watch that only alerts: **two searches in three**. The third is the
+       store's own (its newest products, its keywords, members' drop watches),
+       so nothing else there goes unsearched for 3 hours, and its newest
+       products and whole list count the watch's finds too;
+     - with a watch with **Auto-checkout** there (below): those words only, so
+       its own search is the one that sees what drops first.
    - What the watch found has its page read every **5 seconds**.
    - Otherwise its pages are read every 15 seconds.
 4. **🤖 Auto-checkout it for me, up to $…** (optional). What **drops** goes on
@@ -652,16 +655,7 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
    - something already listed whose page says it isn't on sale yet (coming
      soon, sold out).
 
-   What was **already on sale** when you added the watch is never armed, whichever
-   search finds it first (the watch's own, or the store's keywords or newest
-   products: a product Mugibot had listed before, whatever it last said of it —
-   an old "sold out" may be out of date — has its page read first, and only a
-   read that worked decides: one the store refused decides nothing). So a
-   product that sold out *before* you added a words watch, and that the store's
-   search no longer shows while it's sold out (Target leaves those out), isn't
-   bought when it's back — for one like that, add the watch **by its product
-   link**: its page is read straight away, and sold out there, it's armed for
-   its return. A broad
+   What was **already on sale** when you added the watch is never armed. A broad
    watch like *pokemon* would otherwise buy everything that matches. The
    Activity log says so, and you can ⚡ Buy it yourself.
 
@@ -765,7 +759,11 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
   At **Kmart**, whose card searches are kept to its Trading Cards, a watch's
   words (and a VIP watch's) are searched across the whole store.
   Mugibot's first look is the "before" picture: what's there already isn't a
-  drop. What shows up after it is.
+  drop. What shows up after it is. A store's newest products (JB Hi-Fi's, the
+  card shops') can show something the watch's own search didn't: what isn't a
+  card is a drop there only when the store says it put it up after the watch's
+  first look (one drafted earlier and put up since still is), so a plush a card
+  shop has had on sale for days isn't bought.
 
 **Refused by the server: read from a browser instead** (extension 1.26.0). A
 drop watch's page or website that turns Mugibot's server away (HTTP 403, 429 or

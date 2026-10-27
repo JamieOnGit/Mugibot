@@ -84,7 +84,7 @@ test('⭐ a keyword watch at City Beach: a new Pokémon skateboard is posted in 
   assert.equal(w.fastNow, true, 'in its window (10 minutes before)');
   assert.equal((await boss.post('/api/monitor/vip', { store: 'demo-citybeach', words: 'pokemon skate' })).status, 400, 'not twice');
 
-  // In the window its words are two of every three searches at City Beach, every 4 s (the third: the store's own).
+  // In the window its words are all City Beach is searched for, every 4 s.
   const cb = R('demo-citybeach');
   const term = sw().nextTerm(cb);
   assert.deepEqual(term, { keyword: 'pokemon skate', page: 1, vip: w.id });
@@ -101,11 +101,6 @@ test('⭐ a keyword watch at City Beach: a new Pokémon skateboard is posted in 
   const vipBefore = posts(vipChannel).length;
   s = await sw().sweepTerm(cb, sw().nextTerm(cb));
   assert.equal(s.new, 1, s.error);
-  // The third search in the window is City Beach's own (its keywords: the rest of the store isn't left unsearched for
-  // 3 hours) — from an admin's browser too.
-  const third = sw().nextTerm(cb);
-  assert.ok(!third.vip && sw().settings.keywords.includes(third.keyword), JSON.stringify(third));
-  assert.deepEqual(Array.from({ length: 3 }, () => !!sw().nextTerm(cb, { all: false }).vip), [true, true, false], "an admin's browser's searches too");
   const board = product(BOARD);
   assert.equal(board.name, 'Pokémon Pikachu Complete Skateboard', 'brand + name, as the tile has them');
   assert.equal(board.category, 'pokemon');
@@ -158,11 +153,11 @@ test('⭐ a keyword watch at City Beach: a new Pokémon skateboard is posted in 
   // The store's ordinary keyword search counts it too ("trading cards only" doesn't leave it out).
   s = await sw().sweepTerm(cb, { keyword: 'pokemon', page: 1 });
   assert.equal(s.kept, 2, 'the booster pack and the VIP skateboard');
-  // Its drop window over: one search in three, at the store's own pace.
+  // Out of its window: every other search, at the store's own pace.
   clock.offset = 4 * 3600 * 1000;
   assert.equal(sw().paceFor(cb), 10000);
-  const turns = [sw().nextTerm(cb), sw().nextTerm(cb), sw().nextTerm(cb)];
-  assert.equal(turns.filter((t) => t.vip).length, 1, JSON.stringify(turns));
+  const turns = [sw().nextTerm(cb), sw().nextTerm(cb)];
+  assert.equal(turns.filter((t) => t.vip).length, 1);
   assert.equal(env.app.monitor.pageInterval(board.url), 15000);
   clock.offset = 0;
 });
@@ -195,7 +190,7 @@ test('⭐ a broad watch with Auto-checkout arms only what drops: what was alread
   assert.equal(posts(vipChannel).length, vipPosted, 'no alerts for what was there already');
   const view = (await boss.get('/api/monitor/vip')).body.watches.find((x) => x.id === w.id);
   assert.deepEqual(view.found.map((p) => [p.name, p.arm]), [['Pokémon Beach Towel', 'skipped'], ['Pokémon Beach Bag', 'armed']]);
-  assert.ok(env.app.repo.listEvents(boss.user.id).some((e) => /Pokémon Beach Towel was on sale when its page was read — listed before, not a drop for this watch/.test(e.message)));
+  assert.ok(env.app.repo.listEvents(boss.user.id).some((e) => /Pokémon Beach Towel was on sale already when the watch was added/.test(e.message)));
   // The bag goes on sale: 🟢 in #vip-drop, and Auto-checkout starts.
   store.set('citybeach', '20482222-01', { status: 'in_stock' });
   await env.app.monitor.checkPage(bag.url);
@@ -230,48 +225,22 @@ test('⭐ a product page watch: a VIP monitor read every 5 s around its drop tim
   assert.equal((await boss.del(`/api/monitor/vip/${r.body.watch.id}`)).status, 404);
 });
 
-test("⭐ an Auto-checkout watch never buys what was on sale before it — even when another search (the store's keywords, its newest products) finds it before the watch's own does", async () => {
-  // The booster pack's been in the catalogue (and on sale) since the keyword searches above.
-  const ninja = product(NINJA);
-  assert.ok(ninja && ninja.status === 'in_stock');
-  const r = await boss.post('/api/monitor/vip', { store: 'demo-citybeach', words: 'ninja spinner', aco: true, maxPrice: 50 });
-  assert.equal(r.status, 200, r.text);
-  const w = r.body.watch;
-  const cb = R('demo-citybeach');
-  // City Beach's own "pokemon" search finds it first (not the watch's words: not setting their scene).
-  const s = await sw().sweepTerm(cb, { keyword: 'pokemon', page: 1 });
-  assert.equal(s.ok, true, s.error);
-  assert.equal(s.baseline, false);
-  assert.ok(!env.app.repo.itemBySku(boss.user.id, 'demo-citybeach', NINJA) || !env.app.repo.itemBySku(boss.user.id, 'demo-citybeach', NINJA).aco, 'not armed straight away');
-  // Its page: on sale already — left alone, never bought.
-  await env.app.monitor.checkPage(ninja.url);
-  const item = env.app.repo.itemBySku(boss.user.id, 'demo-citybeach', NINJA);
-  assert.ok(!item || !item.aco, 'never armed');
-  assert.equal(env.app.db.all('SELECT * FROM aco_runs r JOIN items i ON i.id = r.item_id WHERE i.user_id = :u AND i.sku = :k', { u: boss.user.id, k: NINJA }).length, 0, 'no Auto-checkout run');
-  const view = (await boss.get('/api/monitor/vip')).body.watches.find((x) => x.id === w.id);
-  assert.deepEqual(view.found.map((p) => [p.name, p.arm]), [['Pokémon Ninja Spinner Booster Pack Trading Cards', 'skipped']]);
-  assert.equal((await boss.del(`/api/monitor/vip/${w.id}`)).status, 200);
-});
-
-test("⭐ …and one Mugibot last saw sold out long before the watch (that reading may be stale: on sale meanwhile) is still never bought when another search finds it on sale — its page decides", async () => {
-  const ninja = product(NINJA);
-  assert.ok(ninja);
-  // "Sold out" — a reading from a month ago; the store has had it on sale since.
-  env.app.db.run("UPDATE products SET status = 'out_of_stock', status_at = :t, checked_at = :t WHERE id = :id", { id: ninja.id, t: env.app.sweeper.now() - 30 * 24 * 3600 * 1000 });
-  const r = await boss.post('/api/monitor/vip', { store: 'demo-citybeach', words: 'ninja spinner', aco: true, maxPrice: 50 });
-  assert.equal(r.status, 200, r.text);
-  const w = r.body.watch;
-  const s = await sw().sweepTerm(R('demo-citybeach'), { keyword: 'pokemon', page: 1 });
-  assert.equal(s.ok, true, s.error);
-  assert.equal(s.baseline, false);
-  let view = (await boss.get('/api/monitor/vip')).body.watches.find((x) => x.id === w.id);
-  assert.deepEqual(view.found.map((p) => p.arm), ['pending'], 'not armed on an old reading');
-  // Its page: on sale — left alone, never bought.
-  await env.app.monitor.checkPage(product(NINJA).url);
-  view = (await boss.get('/api/monitor/vip')).body.watches.find((x) => x.id === w.id);
-  assert.deepEqual(view.found.map((p) => p.arm), ['skipped']);
-  const item = env.app.repo.itemBySku(boss.user.id, 'demo-citybeach', NINJA);
-  assert.ok(!item || !item.aco, 'never armed');
-  assert.equal(env.app.db.all('SELECT * FROM aco_runs r JOIN items i ON i.id = r.item_id WHERE i.user_id = :u AND i.sku = :k', { u: boss.user.id, k: NINJA }).length, 0, 'no Auto-checkout run');
-  assert.equal((await boss.del(`/api/monitor/vip/${w.id}`)).status, 200);
+test("⭐ a watch that only alerts: two searches in three in its drop window (the third the store's own), one in three once it's over — a watch with Auto-checkout at the store keeps its words every search in its window, every other one after", async () => {
+  const km = R('demo-kmart');
+  const vipOf = (n) => Array.from({ length: n }, () => !!sw().nextTerm(km).vip).filter(Boolean).length;
+  const a = await boss.post('/api/monitor/vip', { store: 'demo-kmart', words: 'pokemon plush', dropAt: Date.now() + 5 * 60 * 1000 });
+  assert.equal(a.status, 200, a.text);
+  assert.equal(vipOf(3), 2, 'in its window');
+  assert.equal(vipOf(6), 4);
+  clock.offset = 4 * 3600 * 1000;
+  assert.equal(vipOf(3), 1, 'its window over');
+  assert.equal(vipOf(6), 2);
+  clock.offset = 0;
+  const b = await boss.post('/api/monitor/vip', { store: 'demo-kmart', words: 'pokemon tin', dropAt: Date.now() + 5 * 60 * 1000, aco: true, maxPrice: 80 });
+  assert.equal(b.status, 200, b.text);
+  assert.equal(vipOf(4), 4, 'with Auto-checkout, in the window');
+  clock.offset = 4 * 3600 * 1000;
+  assert.equal(vipOf(4), 2, 'with Auto-checkout, after');
+  clock.offset = 0;
+  for (const r of [a, b]) assert.equal((await boss.del(`/api/monitor/vip/${r.body.watch.id}`)).status, 200);
 });

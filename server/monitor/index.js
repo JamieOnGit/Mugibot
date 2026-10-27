@@ -382,10 +382,9 @@ export class Monitor {
         if (prev.kind === 'search' && r.foundUrl) continue;
         // What this check really saw: the feed keeps the last confirmed status itself.
         await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
-        // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js) — never by a refused
-        // or failed read: the catalogue keeps its last status then, perhaps an old "sold out".
-        if (!failed && this.vip) this.vip.checked(this.catalog.productById(product.id));
-        if (!failed && this.drops) this.drops.checked(this.catalog.productById(product.id));
+        // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js).
+        if (this.vip) this.vip.checked(this.catalog.productById(product.id));
+        if (this.drops) this.drops.checked(this.catalog.productById(product.id));
       }
     } finally {
       // (Even when the shared feed's failed. Going out while the next pages are checked: deliver.)
