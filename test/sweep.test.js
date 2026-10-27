@@ -973,6 +973,11 @@ test("where each store is searched: server first everywhere (saved modes from be
         st.privateWindow = priv;
         assert.equal(sw.paceFor(R('demo-bigw'), true), 5000, `its target, the budget deciding (${priv})`);
       }
+      // (Its searches failing: backed off from its own pace, as ever — 20 s in an ordinary window — never from the target.)
+      const fails = st.fails;
+      Object.assign(st, { privateWindow: false, fails: 1 });
+      assert.equal(sw.paceFor(R('demo-bigw'), true), 20000);
+      st.fails = fails;
       assert.equal(sw.paceFor(R('demo-ebgames'), true), 15000);
       assert.equal(sw.paceFor(R('pokemoncenter'), true), 30000, "Pokémon Center's own 30 s stays");
     } finally {

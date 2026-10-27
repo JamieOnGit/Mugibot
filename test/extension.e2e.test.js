@@ -1718,6 +1718,11 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
     S.denied = false;
     await sw.evaluate(() => chrome.storage.session.remove('deniedStores')).catch(() => null);
     env.app.repo.setSetting('retailer:demo-bigw', prev || {});
+    // (What this browser learned at the dummy BIG W — turned away here: a doubled gap, its floor for the day — forgotten,
+    //  so the tests after see a browser it never turned away.)
+    env.app.access.stores.delete('demo-bigw');
+    delete env.app.access.saved['demo-bigw'];
+    env.app.repo.setSetting('access', env.app.access.saved);
     await useItems([]);
   }
 });
@@ -2207,7 +2212,10 @@ test("BIG W: products the page downloaded but hasn't drawn (a page in a hidden w
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;
   const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
-  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-bigw': 'browser' } }, null);
+  // (Its one keyword: the next search is that one's, wherever the keywords' turn was left by the tests before — BIG W's
+  //  searches come every 20 s in an ordinary window, so a turn of two keywords could take longer than the wait.)
+  const keywords = sweeper.settings.keywords;
+  sweeper.save({ browserEverySeconds: 5, keywords: ['pokemon'], stores: { ...off, 'demo-bigw': 'browser' } }, null);
   store.shop('bigw').clientSearch = 'data';
   store.shop('bigw').products.push({ sku: '6012399', name: 'Pokémon TCG: Hidden Window Booster Bundle', price: 49, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'select', lateMs: 0, id: 4412399 });
   env.app.repo.updateUser(userId, { role: 'admin' });
@@ -2221,7 +2229,7 @@ test("BIG W: products the page downloaded but hasn't drawn (a page in a hidden w
   } finally {
     env.app.repo.updateUser(userId, { role: 'user' });
     store.shop('bigw').clientSearch = false;
-    sweeper.save({ stores: off }, null);
+    sweeper.save({ stores: off, keywords }, null);
   }
 });
 

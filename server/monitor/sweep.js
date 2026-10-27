@@ -579,8 +579,9 @@ export class Sweeper {
   paceFor(r, browser = false) {
     const s = this.settings;
     // (A store with a budget for what a browser reads of it — BIG W's, monitor/access.js: searched at its target pace, and
-    //  the budget, shared with its product pages and pages watched, decides how often a browser really does.)
-    if (browser && this.access && this.access.limited(r)) return this.access.targetMs(r);
+    //  the budget, shared with its product pages and pages watched, decides how often a browser really does. While its
+    //  searches fail, backed off from its own pace, as ever — never sooner than before.)
+    if (browser && this.access && this.access.limited(r) && !this.stat(r.id).fails) return this.access.targetMs(r);
     const shared = browser && r.sweep.sharedWindowSeconds && !this.inPrivate(r) ? r.sweep.sharedWindowSeconds : 0;
     const every = Math.max(browser ? s.browserEverySeconds : s.everySeconds, r.sweep.minSeconds || 0, shared) * 1000;
     // A VIP drop in its window (monitor/vip.js): its words, every few seconds — at a store whose search is one big
