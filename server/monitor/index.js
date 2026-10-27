@@ -520,19 +520,20 @@ export class Monitor {
    * A page to read as soon as the monitor may (a drop watch's find whose stock its search didn't say, another website's
    * new listing): next in the monitor's round — and now, without waiting for it, when its store can be asked this
    * moment. Never a store the server doesn't ask (BIG W, EB Games, an admin's switch: browsers read it), never inside
-   * its gap, never twice at once — and never a page that's backing off (the store refused it): that waits its turn.
+   * its gap, never twice at once — and never sooner than a page that's backing off (the store refused it) is due: that
+   * waits its turn. Returns the read started now (to wait for it), or null.
    */
   checkNow(url) {
     const page = url && this.db.get('SELECT * FROM page_checks WHERE url = :url', { url });
-    if (!page) return;
+    if (!page) return null;
+    const now = this.now();
     // (Backing off — the store refused it: read at its turn, never sooner.)
-    if (page.fail_count > 0) return;
+    if (page.fail_count > 0 && page.next_check_at > now) return null;
     this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
     const retailer = this.retailers.get(page.store) || this.retailers.forUrl(url);
-    if (retailer && !this.retailers.settings(retailer).serverChecks) return;
-    const now = this.now();
+    if (retailer && !this.retailers.settings(retailer).serverChecks) return null;
     const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
-    if (this.inFlight.has(url) || this.inFlight.size >= 4 || (this.hostNext.get(page.host) || 0) > now || (gap > 0 && (this.hostBusy.get(page.host) || 0) > 0)) return;
+    if (this.inFlight.has(url) || this.inFlight.size >= 4 || (this.hostNext.get(page.host) || 0) > now || (gap > 0 && (this.hostBusy.get(page.host) || 0) > 0)) return null;
     this.hostNext.set(page.host, now + gap * 1000);
     this.hostGap.set(page.host, gap);
     this.hostBusy.set(page.host, (this.hostBusy.get(page.host) || 0) + 1);
@@ -544,6 +545,7 @@ export class Monitor {
       this.going.delete(p);
     });
     this.going.add(p);
+    return p;
   }
 
   /** later: a list to put this item's alerts on (sent by the caller), instead of sending them now. */

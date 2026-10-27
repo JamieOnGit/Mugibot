@@ -500,10 +500,14 @@ export class Drops {
     this.hub.publish(user.id, 'drop', { id: w.id });
     if (added && fresh) {
       // A new listing: their alert now (and Auto-checkout, when it's armed and on sale). The search's
-      // stock where it says; else (and at another website) its page, read in the monitor's turn — never holding up a
-      // search, never ahead of the store's gap between requests or its backing off.
+      // stock where it says; else (and at another website) its page, read in the monitor's turn — never ahead of the
+      // store's gap between requests or its backing off. A store's: never holding up its search; another website's read
+      // waited for (its look isn't a store's search).
       if (p.store !== 'other' && READ.has(status)) await this.applyNow(item.id, { status, title: p.name || null, price: p.price ?? null, variantId: p.variantId || null }, later);
-      else if (this.monitor) this.monitor.checkNow(p.url);
+      else if (this.monitor) {
+        const read = this.monitor.checkNow(p.url);
+        if (p.store === 'other' && read) await read;
+      }
     }
     return item;
   }
@@ -844,7 +848,7 @@ export class Drops {
       const t = this.now();
       this.catalog.updateProduct(product.id, { status: STATUS.NOT_LISTED, status_at: t, last_ok_at: t, confirmed: 1 });
       // (Read in the monitor's turn: never ahead of the website's gap between requests, nor while it's backing off.)
-      if (this.monitor) this.monitor.checkNow(url);
+      if (this.monitor) await this.monitor.checkNow(url);
     } else {
       this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url AND fail_count = 0', { url });
     }
