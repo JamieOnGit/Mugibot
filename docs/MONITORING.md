@@ -36,11 +36,11 @@ never searches BIG W now unless an admin sets it to **Server first** or **Server
   check), or its search fails, **3 times in a row** — once, at a store known to
   turn servers away (Amazon, EB Games, Pokémon Center, Premium Bandai, The
   Gamesmen). A store that's only **struggling** — too slow to answer, out of reach
-  a moment, another 5xx, a page without its list, all likeliest at a drop — isn't
-  turning anyone away: it's handed over only once it's gone **2 minutes** with no
-  answer ("Mugibot's server gets no answer from it (HTTP 502, for 2 min)"). The
-  server then tries again after **1 minute** (2, 4… while it's still struggling),
-  and takes back over at its full pace, not a third of it. Or the server's read has **no
+  a moment, another 5xx, a page without its list, all likeliest at a drop — is
+  handed over the same way ("Mugibot's server gets no answer from it (HTTP 502)"),
+  but it isn't turning anyone away: the server tries again after **1 minute** (2,
+  4… while it's still struggling), and takes back over at its full pace, not a
+  third of it. Or the server's read has **no
   products** where there are some: a page that only draws them once it's open
   (Pokémon Center's), or a search an admin's browser found products
   for in the last hour. That empty read sets no scene, so the browser's first
@@ -398,7 +398,9 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   Saved card words get the new ones once, on the update; what they let in for
   the first time is tracked quietly for the first 6 hours, so products on sale
   all along don't arrive as a burst of "new drops" — except one a VIP or drop
-  watch's words are in: that's the watch's drop as ever, alerted and armed.
+  watch's words are in: that's the watch's drop as ever, alerted and armed. A new
+  word you had among your own words already (say *blister*) counts as before,
+  not quietly.
 - **A refused or failed search never alerts** and keeps every product's last
   stock. A refused one (HTTP 401/403/429/503, a bot check) waits twice as long
   after each failure (up to 15 minutes), then tries again. A store that's only
@@ -406,9 +408,10 @@ client. Nothing is disguised: no fake browser, no stealth, no CAPTCHA solving.
   without its list) is searched again at half its pace three times, then twice as
   long each time, **a minute apart at most** (a search that took 15 s to time out
   counts as that much of the wait): during a drop a few slow answers no longer
-  leave it unsearched for minutes. A refusal before it still stands: for the 10
+  leave it unsearched for minutes. Three misses in a row still hand it to an
+  admin's browser, as before. A refusal before it still stands: for the 10
   minutes it's searched gently after one, a timeout counts as a refusal would
-  (three in a row hand the store over, the server back after 5 minutes). When a store says how long to wait (**HTTP 429** or 503
+  (the server back after 5 minutes, not 1). When a store says how long to wait (**HTTP 429** or 503
   with a `Retry-After`, like Shopify's), Mugibot waits at least that long (at
   most 15 minutes): "The store refused the search (HTTP 429) — it asked to
   wait 60 s". **Reset** (below) starts a failing store again.
@@ -639,7 +642,8 @@ posted in **`#vip-drop`** the moment they drop, and not in the store channels.
    - **A product page**: any shop's link (a "misc" site too). A monitor reads it.
 3. **Drops at** (optional, your time). From 15 minutes before to 3 hours after:
    - The store is searched for those words every **4 seconds** (every 10 at
-     Gamerholic and Games World, whose search is one heavy list or page):
+     Gamerholic and Games World, whose search is one heavy list or page, unless
+     the watch, or another one there, has Auto-checkout):
      - a watch that only alerts: **two searches in three**. The third is the
        store's own (its newest products, its keywords, members' drop watches),
        so nothing else there goes unsearched for 3 hours, and its newest
@@ -759,11 +763,11 @@ stock**, opens for **pre-order**, or its **price drops**. One box takes either
   At **Kmart**, whose card searches are kept to its Trading Cards, a watch's
   words (and a VIP watch's) are searched across the whole store.
   Mugibot's first look is the "before" picture: what's there already isn't a
-  drop. What shows up after it is. A store's newest products (JB Hi-Fi's, the
-  card shops') can show something the watch's own search didn't: what isn't a
-  card is a drop there only when the store says it put it up after the watch's
-  first look (one drafted earlier and put up since still is), so a plush a card
-  shop has had on sale for days isn't bought.
+  drop. What shows up after it is. JB Hi-Fi's newest products can show a drop
+  before the watch's own search does: it counts. The card shops' newest products
+  count only trading cards that way, as before. Anything else there (a plush) is
+  a drop for the watch only when the watch's own search finds it, so a plush a
+  card shop has had on sale for days isn't bought.
 
 **Refused by the server: read from a browser instead** (extension 1.26.0). A
 drop watch's page or website that turns Mugibot's server away (HTTP 403, 429 or

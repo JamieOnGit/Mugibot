@@ -285,7 +285,7 @@ export class Drops {
     const arm = this.armOf(w, product.store, product.url, status, baseline);
     this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, store: product.store, at: this.now(), base: !!baseline, ...(arm ? { arm } : {}) }]);
     this.repo.ensurePageFor({ store: product.store, sku: product.sku, url: product.url });
-    if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url AND fail_count = 0', { url: product.url });
+    if (product.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url: product.url });
     if (arm === 'armed') {
       const item = this.arm(w, product, status);
       // On sale the moment it's found: Auto-checkout starts now (not at the next check).
@@ -425,9 +425,8 @@ export class Drops {
     this.hub.publish(user.id, 'drop', { id: w.id });
     if (added && !baseline) {
       // A new listing: their alert now (and Auto-checkout, when it's armed and on sale). The search's
-      // stock where it says; else (and at another website) its page, read now — in a search, without holding it up.
+      // stock where it says; else (and at another website) its page, read now.
       if (p.store !== 'other' && READ.has(status)) await this.applyNow(item.id, { status, title: p.name || null, price: p.price ?? null, variantId: p.variantId || null }, later);
-      else if (this.monitor && later) this.monitor.checkNow(p.url);
       else if (this.monitor) await this.monitor.checkPage(p.url);
     }
     return item;
@@ -746,7 +745,7 @@ export class Drops {
       this.catalog.updateProduct(product.id, { status: STATUS.NOT_LISTED, status_at: t, last_ok_at: t, confirmed: 1 });
       if (this.monitor) await this.monitor.checkPage(url);
     } else {
-      this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url AND fail_count = 0', { url });
+      this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
     }
   }
 
@@ -906,7 +905,7 @@ export class Drops {
       for (const f of w.found) {
         const p = f.productId ? this.catalog.productById(f.productId) : this.db.get('SELECT * FROM items WHERE id = :id', { id: f.itemId || '' });
         if (!p) continue;
-        if (p.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url AND fail_count = 0', { url: p.url });
+        if (p.url) this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url: p.url });
         if (f.itemId) this.db.run('UPDATE items SET browser_next_at = 0 WHERE id = :id', { id: f.itemId });
         else this.db.run('UPDATE products SET browser_next_at = 0 WHERE id = :id', { id: f.productId });
       }
