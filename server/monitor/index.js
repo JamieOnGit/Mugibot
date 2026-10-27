@@ -382,9 +382,10 @@ export class Monitor {
         if (prev.kind === 'search' && r.foundUrl) continue;
         // What this check really saw: the feed keeps the last confirmed status itself.
         await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
-        // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js).
-        if (this.vip) this.vip.checked(this.catalog.productById(product.id));
-        if (this.drops) this.drops.checked(this.catalog.productById(product.id));
+        // A VIP or drop watch waiting to see whether this is on sale yet (monitor/vip.js, monitor/drops.js): by what this
+        // read itself saw — never a refused or failed one (the catalogue keeps its last status then: perhaps an old one).
+        if (!failed && this.vip) this.vip.checked(this.catalog.productById(product.id), r.status);
+        if (!failed && this.drops) this.drops.checked(this.catalog.productById(product.id), r.status);
       }
     } finally {
       // (Even when the shared feed's failed. Going out while the next pages are checked: deliver.)
@@ -813,6 +814,11 @@ export class Monitor {
     }, { source: 'browser', url: product.url || '' });
     // A product the searches found that nobody monitors, on sale on its own page now: alerted by the searches' rules.
     if (this.sweeper && fresh && !failed) await this.sweeper.pageRead(product, fresh).catch((e) => this.cfg.log('[sweep]', e.message));
+    // (A VIP or drop watch waiting on its page — at a store only browsers read, BIG W's, EB Games': this read decides it.)
+    if (fresh && !failed) {
+      if (this.vip) this.vip.checked(fresh, status);
+      if (this.drops) this.drops.checked(fresh, status);
+    }
     return true;
   }
 

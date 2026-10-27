@@ -156,6 +156,15 @@ export class Vip {
       this.changed();
       throw e;
     }
+    // (Words with Auto-checkout: what the catalogue has for them off sale now is looked at straight away — Target leaves
+    //  sold-out products out of its results, so the watch's own search may never see one before it's back. Its page read
+    //  decides: not on sale, armed for its return; on sale after all (an old reading), left alone. At most 10, read at the
+    //  store's usual page pace.)
+    if (!url && aco) {
+      const off = this.db.all(`SELECT * FROM products WHERE store = :s AND url <> '' AND status IN ('${STATUS.OUT_OF_STOCK}', '${STATUS.COMING_SOON}', '${STATUS.IN_STORE}')
+        ORDER BY updated_at DESC LIMIT 500`, { s: store });
+      for (const p of off.filter((x) => mentions(norm(x.name || ''), words)).slice(0, 10)) this.found(this.get(id), p, { baseline: true });
+    }
     if (user) this.repo.audit(user.id, null, 'vip-add', url || `${store}: ${words}`);
     return this.view().find((w) => w.id === id);
   }
@@ -216,16 +225,17 @@ export class Vip {
    * listed is on sale yet arms it when it isn't — and leaves it when it is (it was on sale before
    * the watch: not a drop; ⚡ Buy it yourself if you want it).
    */
-  checked(product) {
-    if (!product || !READ.has(product.status) || !this.watches().length) return;
+  checked(product, seen = product && product.status) {
+    // (seen: what the page read that's just happened said — the catalogue's own status may be the sweeps' older one.)
+    if (!product || !READ.has(seen) || !this.watches().length) return;
     for (const w of this.watches()) {
       const f = w.found.find((x) => x.productId === product.id && x.arm === 'pending');
       if (!f) continue;
-      const onSale = isOrderable(product.status);
+      const onSale = isOrderable(seen);
       this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm: onSale ? 'skipped' : 'armed' } : x)));
-      if (!onSale) this.arm(w, product, product.status);
+      if (!onSale) this.arm(w, product, seen);
       else if (w.acoUser) {
-        this.repo.addEvent(w.acoUser, { type: 'aco', level: 'info', message: `VIP watch: ${product.name || product.sku} was on sale already when the watch was added, so it isn't armed — ⚡ Buy it yourself if you want it`, name: product.name, sku: product.sku, url: product.url || null });
+        this.repo.addEvent(w.acoUser, { type: 'aco', level: 'info', message: `VIP watch: ${product.name || product.sku} was on sale when its page was read — listed before, not a drop for this watch, so it isn't armed — ⚡ Buy it yourself if you want it`, name: product.name, sku: product.sku, url: product.url || null });
       }
     }
   }

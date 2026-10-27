@@ -49,7 +49,7 @@ const sweep = (id, keyword = 'pokemon', page = 1) => sw.sweepTerm(R(id), { keywo
 const card = (id) => sw.live().stores.find((s) => s.id === id);
 const due = (id) => sw.browserDue(admin, { version: '99.0.0' }).terms.find((t) => t.store === id);
 const sys = (re) => sw.events.some((e) => e.type === 'sys' && re.test(e.message));
-const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, transientSince: 0, fails: 0, failKind: '', slowUntil: 0, refusedUntil: 0, retryAt: 0, browserNext: 0, lastError: '' });
+const fresh = (id) => Object.assign(sw.stat(id), { backup: null, serverMisses: 0, transientSince: 0, fails: 0, failKind: '', slowUntil: 0, refusedUntil: 0, resetAt: 0, retryAt: 0, browserNext: 0, lastError: '' });
 
 /** What an admin's browser reads at a store (the dummy store lets browsers in): the same code the server uses. */
 async function browserRead(id, keyword = 'pokemon') {

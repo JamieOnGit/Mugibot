@@ -195,7 +195,7 @@ test('⭐ a broad watch with Auto-checkout arms only what drops: what was alread
   assert.equal(posts(vipChannel).length, vipPosted, 'no alerts for what was there already');
   const view = (await boss.get('/api/monitor/vip')).body.watches.find((x) => x.id === w.id);
   assert.deepEqual(view.found.map((p) => [p.name, p.arm]), [['Pokémon Beach Towel', 'skipped'], ['Pokémon Beach Bag', 'armed']]);
-  assert.ok(env.app.repo.listEvents(boss.user.id).some((e) => /Pokémon Beach Towel was on sale already when the watch was added/.test(e.message)));
+  assert.ok(env.app.repo.listEvents(boss.user.id).some((e) => /Pokémon Beach Towel was on sale when its page was read — listed before, not a drop for this watch/.test(e.message)));
   // The bag goes on sale: 🟢 in #vip-drop, and Auto-checkout starts.
   store.set('citybeach', '20482222-01', { status: 'in_stock' });
   await env.app.monitor.checkPage(bag.url);
