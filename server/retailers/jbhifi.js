@@ -32,8 +32,14 @@ export default {
   searchPath: '/search?query={q}',
   // Live sweeps: Shopify's search suggestions (10 products a search, with stock). "pokemon" alone
   // finds plushies and games, so "tcg" is added unless the keyword already says cards.
+  // And every other search, its whole range by when each product was published, newest first
+  // (/products.json: the top 30 are the last 20 minutes or so of what it put on sale, Oct 2026) —
+  // a drop is in it the moment JB publishes it, however far down the 10 a search returns it'd
+  // sit (the Unova Heavy Hitters drop, Oct 2026, was in none of them). Its collections' own lists
+  // are empty (its pages draw them with their own code).
   sweep: {
-    from: 'server', parser: 'shopify-suggest', path: '/search/suggest.json?q={q}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last', addWord: 'tcg',
+    from: 'server', parser: 'shopify', path: '/search/suggest.json?q={q}&resources%5Btype%5D=product&resources%5Blimit%5D=10&resources%5Boptions%5D%5Bunavailable_products%5D=last', addWord: 'tcg',
+    newestPath: '/products.json?limit=30', newestEvery: 2,
     // JB Hi-Fi Marketplace: other sellers' products are listed alongside JB's own, and the search
     // doesn't say which is which. The product's own data does: a "Seller" option naming the
     // marketplace seller(s) ("Gameology"), where JB's own products have none. Asked once per
@@ -47,12 +53,15 @@ export default {
   monitor: { server: true, browser: true },
   // Its checkpoint (Shopify's bot check: an hCaptcha page at /checkpoint), switched on before big
   // drops, then off again (docs/MONITORING.md, "Checkpoints and virtual queues"). The server looks
-  // at /checkpoint once a minute: up = the page with its hCaptcha; down = gone, or sent elsewhere.
+  // at /checkpoint every 5 seconds (off, it's a tiny "not found"): up = the page with its hCaptcha;
+  // down = gone, or sent elsewhere. Seen up, it's looked at again 2 seconds later to be sure, so it's
+  // posted within seconds of JB switching it on (other groups' monitors had it 4 minutes before
+  // Mugibot's once-a-minute look, Oct 2026).
   // ⚡ Buy and Auto-checkout never touch the check: they wait for you to solve it, then carry on.
   gate: {
     kind: 'checkpoint', title: 'Checkpoint Monitor', label: 'hcaptcha Checkpoint', module: 'Shopify', url: '/checkpoint',
     page: { path: /\/checkpoint\/?$/i, markers: [/h-captcha|hcaptcha/i] },
-    probe: { path: '/checkpoint', intervalSeconds: 60 },
+    probe: { path: '/checkpoint', intervalSeconds: 5 },
   },
   flow: {
     product: {

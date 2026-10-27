@@ -26,6 +26,7 @@ import { DEFAULT_ALERTS } from '../schema.js';
 import { serialize } from '../retailers/index.js';
 import { CART_LINK, cartLines } from '../retailers/shoplink.js';
 import { extractProduct, extractProductLinks } from './extract.js';
+import { parseListing } from './listing.js';
 import { SWEEP_FRESH_MS } from './feed.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
@@ -94,7 +95,8 @@ export class Monitor {
   }
 
   /**
-   * A store the server never asks (monitor.server 'never': BIG W, which resets every server's connection):
+   * A store the server never asks (monitor.server 'never': BIG W, which resets every server's connection; EB Games,
+   * whose Cloudflare turns every server away):
    * what the server's own tries said there — "Error", on every BIG W watchlist item — is forgotten, for
    * members' browsers (and the live searches) to say instead. "Checking soon" meanwhile.
    */
@@ -202,6 +204,9 @@ export class Monitor {
     const u = new URL(url);
     const lines = retailer && retailer.cartLinks ? cartLines(u.pathname) : null;
     if (lines) return this.readCartLink(u, lines);
+    // A store whose pages turn servers away, looked up at its search provider by the product's code (Kmart's).
+    const code = retailer && retailer.monitor && retailer.monitor.lookup && retailer.skuFromPath ? (u.pathname.match(retailer.skuFromPath) || [])[1] : null;
+    if (code) return this.lookup(retailer, code);
     if (/\/products\/[^/]+\/?$/.test(u.pathname) && (!retailer || retailer.platform === 'shopify' || retailer.id === 'other')) {
       try {
         const res = await this.get(`${u.origin}${u.pathname.replace(/\/$/, '')}.js`);
@@ -276,8 +281,31 @@ export class Monitor {
     return { status: STATUS.BLOCKED, error: `${retailer.name}'s ${retailer.gate.kind === 'queue' ? 'virtual queue' : 'checkpoint'} was there instead of the page` };
   }
 
+  /**
+   * One product at a store whose pages turn servers away, looked up by its code at the search provider its own pages
+   * ask (retailer monitor.lookup: Kmart's Constructor.io) — its stock, price and picture as the store shows them, and
+   * its link (for a SKU with none yet). Not there: not listed (yet).
+   */
+  async lookup(retailer, sku) {
+    const how = retailer.monitor.lookup;
+    const res = await this.get(`${(retailer.sweep && retailer.sweep.apiBase) || retailer.base}${how.path.replace('{sku}', encodeURIComponent(sku))}`);
+    if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store's search provider refused the server check (HTTP ${res.status})` };
+    if (!res.ok) return { status: STATUS.ERROR, error: `HTTP ${res.status}` };
+    const parsed = parseListing(how.parser, (await res.text()).slice(0, 3_000_000), { base: retailer.base, storeBase: retailer.base });
+    if (parsed.problem) return { status: STATUS.ERROR, error: "The store's search provider didn't answer with its product list" };
+    const p = parsed.products.find((x) => String(x.sku) === String(sku));
+    if (!p) return { status: STATUS.NOT_LISTED };
+    const status = p.inStock === true ? (p.inStoreOnly ? STATUS.IN_STORE : p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : STATUS.OUT_OF_STOCK;
+    return { status, title: p.title || null, price: p.price ?? null, image: p.image || null, foundUrl: p.url || null, decidedBy: 'lookup' };
+  }
+
   /** Look for a SKU on the store's search page. */
   async readSearch(page, retailer) {
+    // (A store whose products are looked up by code: the lookup says where its page is.)
+    if (retailer && retailer.monitor && retailer.monitor.lookup) {
+      const r = await this.lookup(retailer, page.sku);
+      return r.foundUrl ? { status: STATUS.NOT_LISTED, foundUrl: r.foundUrl, title: r.title } : { status: r.status === STATUS.NOT_LISTED ? STATUS.NOT_LISTED : r.status, error: r.error || '' };
+    }
     const res = await this.get(page.url);
     if (res.status === 404 || res.status === 410) return { status: STATUS.NOT_LISTED };
     if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store refused the server check (HTTP ${res.status})` };

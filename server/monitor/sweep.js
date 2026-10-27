@@ -144,7 +144,7 @@ function seenText(seen) {
 
 /** A search, as a note says it: its words (not a member's own drop watch's: theirs alone), and its page after the first. */
 function searchName(term) {
-  const words = term.drop === 'private' ? "a drop watch's words" : `"${term.keyword === ALL ? ALL_LABEL : term.keyword}"`;
+  const words = term.drop === 'private' ? "a drop watch's words" : `"${termLabel(term.keyword)}"`;
   return `${words}${term.page > 1 ? ` (page ${term.page})` : ''}`;
 }
 
@@ -202,6 +202,17 @@ const ORDERABLE_FROM = new Set([STATUS.OUT_OF_STOCK, STATUS.COMING_SOON]);
 // instead, for a while.
 export const ALL = '*';
 const ALL_LABEL = 'every trading card';
+// A store that lists what it has just put on sale, newest first (sweep.newestPath: JB Hi-Fi's whole range by when each
+// product was published): that list every few searches, between the keywords' searches — a drop is in it the moment
+// the store publishes it, however far down any search it would sit (JB's search answers with its 10 most relevant: a new
+// Pokémon product can miss them, Oct 2026). It holds every keyword's products, like the whole-range list, and this is its
+// keyword. A product in it the store made long ago (republished, as JB does with older ones all day) and new to the
+// catalogue is only noted, never alerted as a drop: it isn't one.
+export const NEWEST = '+';
+const NEWEST_LABEL = 'newest products';
+const NEWEST_FRESH_MS = 14 * 24 * 3600 * 1000;
+/** A search's keyword, as it's said: the whole-range and newest lists by name. */
+const termLabel = (k) => (k === ALL ? ALL_LABEL : k === NEWEST ? NEWEST_LABEL : k);
 const ALL_OFF_MS = 15 * 60 * 1000;
 // Searches start on the set pace, however long the last one took to answer — at least this far apart.
 const MIN_GAP_MS = 500;
@@ -345,8 +356,8 @@ export class Sweeper {
       this.db.run('UPDATE sweep_terms SET baseline_at = NULL');
       this.prune();
     }
-    // (A store's whole-range list is kept: it holds every keyword's products.)
-    this.db.run(`DELETE FROM sweep_terms WHERE keyword <> '${ALL}' AND keyword NOT IN (${next.keywords.map((_, i) => `:k${i}`).join(', ') || "''"})`, Object.fromEntries(next.keywords.map((k, i) => [`k${i}`, k])));
+    // (A store's whole-range and newest lists are kept: they hold every keyword's products.)
+    this.db.run(`DELETE FROM sweep_terms WHERE keyword NOT IN ('${ALL}', '${NEWEST}') AND keyword NOT IN (${next.keywords.map((_, i) => `:k${i}`).join(', ') || "''"})`, Object.fromEntries(next.keywords.map((k, i) => [`k${i}`, k])));
     this.repo.audit(user ? user.id : null, null, 'sweep-settings', `${next.enabled ? 'on' : 'off'}: ${next.keywords.join(', ')}`);
     // (A store no longer server first: nothing stands in for the server there.)
     for (const { retailer: r, mode } of this.stores()) {
@@ -461,6 +472,7 @@ export class Sweeper {
   /** vip: a VIP or drop watch's words (monitor/vip.js, monitor/drops.js) — searched as they are, never "+ tcg". */
   urlFor(r, keyword, page = 1, { vip = false } = {}) {
     // The store's whole range in one list (Kmart's: from its search provider, like its own keyword searches).
+    if (keyword === NEWEST && r.sweep.newestPath) return `${r.base}${r.sweep.newestPath}`;
     if (keyword === ALL && r.sweep.allPath) {
       const p = `${r.sweep.allPath}${page > 1 && r.sweep.pagePath ? r.sweep.pagePath.replace('{page}', String(page)) : ''}`;
       return `${r.sweep.apiBase || r.base}${p}`;
@@ -525,6 +537,12 @@ export class Sweeper {
     // Drop watches' words at this store (monitor/drops.js): one search in three at most.
     const drop = this.drops ? this.drops.nextTerm(r, st) : null;
     if (drop) return drop;
+    // The store's newest products (sweep.newestPath): every other search (newestEvery), the keywords' in between.
+    // (The server's: an admin's browser searches each keyword, as it always has.)
+    if (all && r.sweep.newestPath) {
+      st.newestTurn = ((st.newestTurn || 0) + 1) % Math.max(2, r.sweep.newestEvery || 2);
+      if (st.newestTurn === 1) return { keyword: NEWEST, page: 1 };
+    }
     // A store whose whole range comes back as one list (sweep.allPath): that list, every search — each
     // product looked at every time, not one keyword in turn. Its later pages, when it has more than one,
     // one search in four. (Off for a while after it fails as a list — sweepTerm: each keyword instead.)
@@ -684,8 +702,9 @@ export class Sweeper {
     const edge = !!r.sweep.followNext && term.page > 1 && term.page >= Math.min(10, r.sweep.pages || 1);
     const counts_ = this.filters(s);
     const counts = { found: parsed.products.length, kept: 0, new: 0, restock: 0, price: 0 };
-    // The whole range in one list: each product counts for the first keyword in its name.
-    const all = term.keyword === ALL;
+    // The whole range (or its newest products) in one list: each product counts for the first keyword in its name.
+    const all = term.keyword === ALL || term.keyword === NEWEST;
+    const newest = term.keyword === NEWEST;
     const st = this.stat(r.id);
     if (all && st.allOffUntil) {
       st.allOffUntil = 0;
@@ -701,6 +720,12 @@ export class Sweeper {
         const status = p.inStock === true ? (p.inStoreOnly ? STATUS.IN_STORE : p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
         // Members' own SKUs, whatever they are.
         await this.members(r, p, status, later);
+        // A store whose list says who sells it (JB Hi-Fi's newest products: a "Seller" option naming its marketplace
+        // seller(s), none on its own): that — no asking its product page before the alert, in a drop.
+        if (r.sweep.sellers && Array.isArray(p.sellers)) {
+          p.marketplace = p.sellers.length > 0 && !p.sellers.some((n) => r.sweep.sellers.own.test(n));
+          p.seller = p.marketplace ? p.sellers.join(', ').slice(0, 200) : '';
+        }
         // A store whose search doesn't say who sells what (JB Hi-Fi): what Mugibot found out before.
         if (r.sweep.sellers && !p.marketplace) {
           const known = this.catalog.productFor(r.id, p.sku);
@@ -712,7 +737,12 @@ export class Sweeper {
         const cards = !term.vip && !term.drop && (all ? !!keyword : counts_(p, term.keyword));
         // (A card search's new listing — new to the catalogue, in a read that isn't setting its scene: a drop for a
         //  drop watch whose words are in its name too, whichever search found it first.)
-        const newListing = this.drops && cards && !baseline && !edge && !mkt && ![p.sku, ...(p.aliases || [])].some((k) => this.catalog.productFor(r.id, k));
+        const known = [p.sku, ...(p.aliases || [])].some((k) => this.catalog.productFor(r.id, k));
+        // (In the newest products, one the store made long ago — republished — and new to the catalogue: noted, not a drop.)
+        const republished = newest && !known && typeof p.createdAt === 'number' && now - p.createdAt > NEWEST_FRESH_MS;
+        // (…and one it's just published, cards or not: a drop for a drop watch whose words are in its name — the newest
+        //  products may see it before the watch's own search does.)
+        const newListing = this.drops && (cards || newest) && !republished && !baseline && !edge && !mkt && !known;
         const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id) || (term.keyword !== w.words && !newListing);
         // Someone's own drop watch's words in the name (monitor/drops.js): on their watchlist, theirs
         // alone. (Found by another search, it was listed already as far as that watch knows — unless it's new.)
@@ -732,8 +762,8 @@ export class Sweeper {
         const dropBaseline = !!drop && dropDone(drop);
         const dropOnly = !!drop && !cards && !watch;
         // (Found by its words alone in the whole-range list: those words, as their own search would say.)
-        const found = keyword || (watch && watch.words) || (drop && drop.words) || ALL_LABEL;
-        const ev = await this.track(r, p, { status, keyword: found, baseline: dropOnly ? dropBaseline : baseline || edge, gapNew: dropOnly || edge ? null : gapNew, now, vip: !!watch, drop: dropOnly, category: drop && !cards ? drop.category : null, dropWatch: drop ? drop.id : null, posting });
+        const found = keyword || (watch && watch.words) || (drop && drop.words) || termLabel(term.keyword);
+        const ev = await this.track(r, p, { status, keyword: found, baseline: dropOnly ? dropBaseline : baseline || edge || republished, gapNew: dropOnly || edge || republished ? null : gapNew, now, vip: !!watch, drop: dropOnly, category: drop && !cards ? drop.category : null, dropWatch: drop ? drop.id : null, posting });
         for (const k of ev) counts[k] += 1;
         const product = () => [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
         // (Found in the watch's first search: listed already, so armed only if it isn't on sale yet.)
@@ -873,6 +903,8 @@ export class Sweeper {
     }
     if (p.image && p.image !== product.image) set.image = p.image.slice(0, 1000);
     if (p.variantId && p.variantId !== product.variant_id) set.variant_id = String(p.variantId).slice(0, 40);
+    // (Who sells it, where the list said: JB Hi-Fi's newest products.)
+    if (typeof p.seller === 'string' && p.seller !== product.seller) set.seller = p.seller;
     if (product.category === 'other') {
       const c = category || categoryFor(p.title);
       if (c !== 'other') set.category = c;
@@ -1141,7 +1173,7 @@ export class Sweeper {
     if (keep) Object.assign(st, keep);
     if (info.source === 'browser') st.browserAt = now;
     if (info.source === 'server' && this.modeFor(r) === 'auto') this.serverFirst(r, st, info, now, trying);
-    const out = { store: r.id, keyword: term.keyword === ALL ? ALL_LABEL : term.keyword, page: term.page, ok: info.ok, blocked: !!info.blocked, ...(info.unread ? { unread: true } : {}), error: info.error || '', found: info.found || 0, kept: info.kept || 0, new: info.new || 0, restock: info.restock || 0, price: info.price || 0, baseline: !!info.baseline, ms: info.ms ?? null };
+    const out = { store: r.id, keyword: termLabel(term.keyword), page: term.page, ok: info.ok, blocked: !!info.blocked, ...(info.unread ? { unread: true } : {}), error: info.error || '', found: info.found || 0, kept: info.kept || 0, new: info.new || 0, restock: info.restock || 0, price: info.price || 0, baseline: !!info.baseline, ms: info.ms ?? null };
     // A drop watch's words (monitor/drops.js): how it went shows on the watch. ('private': someone's own
     // watch's words — members never see them in the live log: monitor/public.js.)
     if (term.drop && this.drops) this.drops.searched(r.id, term.keyword, info);
@@ -1681,7 +1713,7 @@ export class Sweeper {
         lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastError: st.lastError, lastNote: st.lastNote || '', fails: st.fails, nextAt: mode === 'off' ? null : st.nextAt,
         slowedUntil: st.slowUntil > now ? st.slowUntil : null,
         products24h: products ? products.n : 0,
-        terms: terms.map((t) => ({ keyword: t.keyword === ALL ? ALL_LABEL : t.keyword, page: t.page, url: t.url, source: t.source, lastAt: t.last_at, lastOkAt: t.last_ok_at, found: t.found, kept: t.kept, total: t.total, fails: t.fails, error: t.error, ms: t.ms, baselineAt: t.baseline_at })),
+        terms: terms.map((t) => ({ keyword: termLabel(t.keyword), page: t.page, url: t.url, source: t.source, lastAt: t.last_at, lastOkAt: t.last_ok_at, found: t.found, kept: t.kept, total: t.total, fails: t.fails, error: t.error, ms: t.ms, baselineAt: t.baseline_at })),
       };
     });
   }

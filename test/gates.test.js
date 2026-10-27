@@ -169,19 +169,28 @@ test("🛡️ JB Hi-Fi's checkpoint: the server looks (honestly itself), a chang
   await waitFor(() => discord.dmsTo('d-ash').some((m) => /checkpoint is off/.test(m.body.embeds[0].title)), { message: 'Ash hears it went' });
 });
 
-test('the server keeps looking by itself: once a minute, and again 10 seconds after a change to be sure', async () => {
+test("the server keeps looking by itself: JB Hi-Fi's checkpoint every 5 seconds, and again 2 seconds after a change to be sure — up and posted within seconds of JB switching it on", async () => {
   const g = env.app.gates;
   const cfg = env.app.cfg.monitor;
-  Object.assign(cfg, { enabled: true, gateProbeSeconds: 2, gateConfirmSeconds: 1 });
+  // (Its own pace, from its file: no setting needed.)
+  assert.equal(g.probeSeconds(env.app.retailers.get('jbhifi')), 5);
+  assert.equal(cfg.gateConfirmSeconds, 2);
+  const before = gatePosts().length;
+  Object.assign(cfg, { enabled: true });
   try {
     g.start();
+    await waitFor(() => store.state.requests.some((r) => r.path === '/jbhifi/checkpoint'), { timeout: 5000, message: 'its first look' });
     store.shop('jbhifi').checkpoint.on = true;
-    await waitFor(() => g.get('demo-jbhifi').status === 'up', { timeout: 15000, message: 'up, from the loop' });
+    const on = Date.now();
+    await waitFor(() => g.get('demo-jbhifi').status === 'up', { timeout: 15000, interval: 100, message: 'up, from the loop' });
+    const tookMs = Date.now() - on;
+    assert.ok(tookMs <= 9000, `up ${tookMs} ms after JB switched it on (5 s between looks, 2 s to be sure)`);
+    await waitFor(() => gatePosts().length === before + 1, { timeout: 5000, message: 'posted' });
     store.shop('jbhifi').checkpoint.on = false;
     await waitFor(() => g.get('demo-jbhifi').status === 'down', { timeout: 15000, message: 'down, from the loop' });
   } finally {
     g.stop();
-    Object.assign(cfg, { enabled: false, gateProbeSeconds: 0, gateConfirmSeconds: 10 });
+    Object.assign(cfg, { enabled: false });
   }
 });
 
@@ -437,4 +446,51 @@ test("Discord's ⚡ Buy reply while a run waits says where it is", () => {
   const base = { name: 'Elite Trainer Box', store: 'demo-ebgames', status: 'waiting' };
   assert.match(aco.remoteText({ ...base, reason: 'queue', message: 'In the queue — about 23 min' }, 'Ash desktop'), /🚦 In EB Games \(dummy store\)'s virtual queue in \*\*Ash desktop\*\* — about 23 min\. It waits its turn \(never refreshing the page\), then checks out\./);
   assert.match(aco.remoteText({ ...base, store: 'demo-jbhifi', reason: 'checkpoint', message: '' }, 'Ash desktop'), /🛡️ JB Hi-Fi \(dummy store\)'s checkpoint wants a human, in \*\*Ash desktop\*\* \(its tab is in front, waiting\)\. .*\*\*🖥️ Solve it on my computer\*\* \(Chrome Remote Desktop\) and it carries on to checkout — or \*\*📱 Finish on this phone\*\*/);
+});
+
+test("🛡️ a checkpoint going up reaches everyone at once: its post first in Discord's line, the members' DMs side by side — a pool's leader's first — and nobody's email holds up anyone's DM", async () => {
+  const g = env.app.gates;
+  const jb = env.app.retailers.get('demo-jbhifi');
+  const url = store.productUrl('jbhifi', 'pokemon-tcg-30th-celebration-etb');
+  // Members watching JB Hi-Fi — one whose email never finishes sending.
+  const names = ['brock', 'gary', 'dawn', 'iris', 'cilan'];
+  for (const n of names) {
+    const c = await Client.signup(env.url, n);
+    makeMember(env, c);
+    await connect(c, `d-${n}`);
+    assert.equal((await c.post('/api/items', { url })).status, 200);
+    env.app.repo.updateUser(c.user.id, { email: `${n}@example.com` });
+    env.app.repo.setData(c.user.id, 'alerts', { emailOnRestock: true });
+  }
+  await connect(boss, 'd-boss');
+  const n = env.app.notifier;
+  const discordApi = env.app.discord;
+  const { pools } = g;
+  const send = n.mailer.send.bind(n.mailer);
+  const notify = n.notify.bind(n);
+  const post = discordApi.post.bind(discordApi);
+  const order = [];
+  const posted = [];
+  // (The admin leads a pool with a group, as far as the checkpoint's DMs go.)
+  g.pools = { leaderIds: () => new Set([boss.user.id]), leadsGroup: (id) => id === boss.user.id, group: (id) => (id === boss.user.id ? [{ userId: ash.user.id }] : []) };
+  n.mailer.send = (m) => (m.to === 'gary@example.com' ? new Promise(() => {}) : send(m));
+  n.notify = (id, ev, o) => { order.push(id); return notify(id, ev, o); };
+  discordApi.post = (ch, msg, o = {}) => { posted.push(!!o.urgent); return post(ch, msg, o); };
+  try {
+    g.flip(jb, 'up', { source: 'server' });
+    const done = await Promise.race([g.settled().then(() => true), new Promise((r) => setTimeout(() => r(false), 8000))]);
+    assert.ok(done, "everyone told — an email that never finishes holds up nobody's DM");
+    assert.deepEqual(posted, [true], 'the post in #virtual-queue-detection: first in line');
+    assert.equal(order[0], boss.user.id, "the pool's leader first");
+    for (const who of ['d-boss', 'd-ash', ...names.map((x) => `d-${x}`)]) {
+      assert.ok(discord.dmsTo(who).some((m) => /JB Hi-Fi \(dummy store\)'s checkpoint is up/.test(m.body.embeds[0].title)), `${who}'s DM`);
+    }
+  } finally {
+    Object.assign(n, { notify });
+    n.mailer.send = send;
+    discordApi.post = post;
+    g.pools = pools;
+    g.flip(jb, 'down', { source: 'server' });
+    await Promise.race([g.settled(), new Promise((r) => setTimeout(r, 3000))]);
+  }
 });

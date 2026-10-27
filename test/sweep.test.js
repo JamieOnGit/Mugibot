@@ -14,7 +14,7 @@ import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, wa
 import { startMockStore } from '../devtools/mockstore.js';
 import { mentions, parseAmazon, parseConstructor, parseEbGames, parseGeneric, parseListing, parseMagento, parseShopifyProducts, parseShopifySuggest, parseTarget, parseWoo, searchSays, termsRegex } from '../server/monitor/listing.js';
 import { storeFetch } from '../server/monitor/http.js';
-import { Sweeper, olderVersion, retryAfterMs, statesNote } from '../server/monitor/sweep.js';
+import { NEWEST, Sweeper, olderVersion, retryAfterMs, statesNote } from '../server/monitor/sweep.js';
 
 // --- reading results -----------------------------------------------------------
 function targetPage(products, total = products.length) {
@@ -999,6 +999,60 @@ test("🛒 JB Hi-Fi Marketplace: a seller's product never alerts and leaves the 
   // Stores whose search says who sells (Kmart) are never asked.
   assert.equal(R('demo-kmart').sweep.sellers, undefined);
   assert.equal(R('toysrus').sweep.sellers, null, 'Toys"R"Us has no marketplace');
+});
+
+test("🆕 JB Hi-Fi's newest products, every other search: a drop is seen the moment JB publishes it, however far down its search it'd sit — one made long ago and republished is only noted, a marketplace seller's never alerts (the list says who sells it: nothing more asked)", async () => {
+  const jbr = R('demo-jbhifi');
+  const jb = store.shop('jbhifi');
+  const add = (sku, name, extra = {}) => jb.products.push({ sku, name, price: 119.95, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'input', lateMs: 0, id: 4510000 + jb.products.length, ...extra });
+  // Its newest products: JB's whole range by when each was published (30 of them), from the server.
+  assert.equal(sw.urlFor(R('jbhifi'), NEWEST), 'https://www.jbhifi.com.au/products.json?limit=30');
+  assert.equal(sw.urlFor(jbr, NEWEST), `${store.url}/jbhifi/products.json?limit=30`);
+  // Every other search, between the keywords' (and only from the server: an admin's browser searches each keyword).
+  const turns = Array.from({ length: 8 }, () => sw.nextTerm(jbr));
+  assert.equal(turns.filter((t) => t.keyword === NEWEST).length, 4, JSON.stringify(turns));
+  assert.ok(turns.filter((t) => t.keyword !== NEWEST).every((t) => sw.settings.keywords.includes(t.keyword)));
+  assert.ok(Array.from({ length: 6 }, () => sw.nextTerm(jbr, { all: false })).every((t) => t.keyword !== NEWEST));
+  // The first read sets the scene.
+  let r = await sweep('demo-jbhifi', NEWEST);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.baseline, true);
+  assert.equal(r.keyword, 'newest products');
+  // JB publishes a drop its "pokemon tcg" search wouldn't show in its 10 (the search is by relevance): the newest products have it.
+  add('pokemon-tcg-unova-heavy-hitters-premium-collection', 'Pokemon TCG: Unova Heavy Hitters Premium Collection', { price: 120 });
+  // …a product it made long ago, republished (JB does that all day): not a drop.
+  add('pokemon-tcg-mini-portfolio-card-game-1', 'Pokemon TCG: Mini Portfolio', { price: 11, createdDaysAgo: 400 });
+  // …and a marketplace seller's new one: never alerts.
+  add('pokemon-tcg-151-booster-bundle-gameology', 'Pokemon TCG: Scarlet & Violet 151 Booster Bundle', { price: 89, seller: 'Gameology' });
+  const asked = () => store.state.requests.filter((x) => /^\/jbhifi\/products\/[^/]+\.js$/.test(x.path)).length;
+  const n = asked();
+  const before = channel().length;
+  r = await sweep('demo-jbhifi', NEWEST);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.new, 1, 'the drop, and only the drop');
+  const drop = alerts('listed').find((a) => a.sku === 'pokemon-tcg-unova-heavy-hitters-premium-collection');
+  assert.ok(drop, 'alerted as a new drop');
+  assert.match(drop.note || '', /New in "pokemon" at JB Hi-Fi/, 'counted for the keyword in its name');
+  assert.ok(channel().length > before && channel().some((m) => /Unova Heavy Hitters/.test(m.body.embeds[0].title)), 'in Discord');
+  assert.equal(product('demo-jbhifi', 'pokemon-tcg-unova-heavy-hitters-premium-collection').seller, '', "JB's own: the list said so");
+  assert.equal(asked() - n, 0, "nothing more asked of JB before the alert: the list says who sells it");
+  const old = product('demo-jbhifi', 'pokemon-tcg-mini-portfolio-card-game-1');
+  assert.ok(old, 'the republished one is tracked…');
+  assert.ok(!alerts('listed').some((a) => a.sku === old.sku), '…but never a drop');
+  assert.ok(!alerts('listed').some((a) => a.sku === 'pokemon-tcg-151-booster-bundle-gameology'), "a marketplace seller's: never");
+  // Sold out, then back on the shelf: a restock from the newest products too.
+  store.set('jbhifi', 'pokemon-tcg-unova-heavy-hitters-premium-collection', { status: 'out_of_stock' });
+  await sweep('demo-jbhifi', NEWEST);
+  store.set('jbhifi', 'pokemon-tcg-unova-heavy-hitters-premium-collection', { status: 'in_stock' });
+  r = await sweep('demo-jbhifi', NEWEST);
+  assert.equal(r.restock, 1);
+  // Its keyword searches carry on as before.
+  assert.equal((await sweep('demo-jbhifi', 'pokemon')).ok, true);
+  // The newest products' row is kept when the keywords change (it holds every keyword's products).
+  const saved = sw.settings.keywords;
+  sw.save({ keywords: [...saved, 'lorcana'] }, null);
+  sw.save({ keywords: saved }, null);
+  assert.ok(env.app.db.get("SELECT 1 AS y FROM sweep_terms WHERE store = 'demo-jbhifi' AND keyword = :k", { k: NEWEST }));
 });
 
 test('↻ Reset: a store asking to wait (429, Retry-After) is waited for; Reset (one store, or all) starts it again gently; a browser store gets a fresh tab', async () => {

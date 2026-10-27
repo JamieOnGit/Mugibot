@@ -70,9 +70,11 @@ export class Notifier {
    * ev: { type, level ('info'|'success'|'warn'|'urgent'), message, title?, name?, sku?, url?, buttons?: [{label, url}],
    *       channel?: 'restock' | 'listed' | 'checkout' | 'aco' — also DM / webhook / email per the member's settings;
    *                 'account' — membership news, DM'd if Discord is connected }
+   * emailAfter: back once the DM (and webhook) are out — the email still going, never holding up the next
+   * member's DM in a drop (sent then says nothing of the email).
    * Returns { event, sent: ['discord-dm', 'webhook', 'email'] }.
    */
-  async notify(userId, ev) {
+  async notify(userId, ev, { emailAfter = false } = {}) {
     // The feed keeps one line: "In stock: Day UPC — Kmart · SKU 43818648 · $360.00".
     const firstLine = String(ev.message).split('\n')[0];
     const saved = this.repo.addEvent(userId, { ...ev, message: ev.title ? `${ev.title} — ${firstLine}` : ev.message });
@@ -92,11 +94,13 @@ export class Notifier {
     const wantsEmail = { checkout: settings.emailOnCheckout, aco: settings.emailOnCheckout, restock: settings.emailOnRestock, listed: settings.emailOnRestock, account: true }[ev.channel];
     if (wantsEmail && user.email) {
       const links = (ev.buttons || []).map((b) => `${b.label}: ${b.url}`).join('\n');
-      jobs.push(this.mailer.send({
+      const mail = this.mailer.send({
         to: user.email,
         subject: `${this.cfg.appName}: ${ev.title || ev.message}`,
         text: `${ev.title || ''}\n${ev.message}\n${ev.url || ''}\n${links}\n\nOpen your dashboard: ${this.cfg.baseUrl}/app\nChange alert settings: ${this.cfg.baseUrl}/app#discord`,
-      }).then((ok) => ok && sent.push('email')));
+      });
+      if (emailAfter) mail.catch(() => null);
+      else jobs.push(mail.then((ok) => ok && sent.push('email')));
     }
     await Promise.allSettled(jobs);
     return { event: saved, sent };
@@ -189,7 +193,7 @@ export class Notifier {
         type: 'listed', level: 'success', color: 'listed', channel: 'listed',
         title: `Listed: ${item.name}`, message: `${meta}\nThe product page is up — now ${label.toLowerCase()}.`,
         name: item.name, sku: item.sku, url: item.url || null, buttons,
-      });
+      }, { emailAfter: true });
     }
     // Your own drop watch's find, cheaper than the read before (monitor/drops.js): at any store or website.
     if (kind === 'price_drop') {
@@ -207,6 +211,6 @@ export class Notifier {
       title: `${info.status === 'preorder' ? '🟣' : '🟢'} ${label}: ${item.name}`,
       message: `${meta}${info.note ? `\n${info.note}` : ''}\n${who}. ${buyable ? this.pressText(buy) : 'Open the product to buy it there.'}`,
       name: item.name, sku: item.sku, url: item.url || null, buttons,
-    });
+    }, { emailAfter: true });
   }
 }

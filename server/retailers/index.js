@@ -102,6 +102,8 @@ function demoCopy(def, demoUrl) {
       ...(def.monitor && def.monitor.render ? { render: true, browserSeconds: def.monitor.browserSeconds, ...(def.monitor.privateWindow ? { privateWindow: true } : {}) } : {}),
       // (…or asked for from inside a tab of the store: the dummy store's copy too.)
       ...(def.monitor && def.monitor.inPage ? { inPage: true } : {}),
+      // (…or the product looked up at the store's search provider, by its code: the dummy store's copy of it too.)
+      ...(def.monitor && def.monitor.lookup ? { lookup: def.monitor.lookup } : {}),
     },
   };
 }

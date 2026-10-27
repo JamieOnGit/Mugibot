@@ -55,7 +55,13 @@ export default {
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
   account: { signIn: '' },
-  monitor: { server: true, browser: true },
+  // Its product pages turn servers away (the admin console's page checks showed Kmart at 0%, Oct 2026): the server asks
+  // its search provider for the one product by its keycode instead — its stock, price, pre-order and "In store only",
+  // as Kmart's own pages show them (Constructor.io's item lookup; an unknown keycode: not listed yet).
+  monitor: {
+    server: true, browser: true,
+    lookup: { path: '/browse/items?key=key_GZTqlLr41FS2p7AY&c=mugibot-1.0&i=mugibot-monitor&s=1&section=Products&ids=P_{sku}', parser: 'constructor' },
+  },
   flow: {
     product: {
       add: ADD_WORDS,

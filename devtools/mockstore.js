@@ -3084,12 +3084,19 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     // Kmart's search provider (Constructor.io) — what Mugibot's live sweeps read for Kmart: each
     // product with its sellers and the states it's out of stock in (every state: sold out online). Its
     // browse of the Trading Cards group is every listed product, with no keyword.
-    const cio = shop === 'kmart' && (sub.match(/^\/cnstrc\/search\/([^/]+)$/) || sub.match(/^\/cnstrc\/browse\/group_id\/([^/]+)$/));
+    // Its item lookup (/browse/items?ids=P_<keycode>): those products, by keycode — what Mugibot's server reads a Kmart
+    // product's stock from (its pages turn servers away). (lookupDown: the provider refusing, HTTP 503.)
+    const cio = shop === 'kmart' && (sub.match(/^\/cnstrc\/search\/([^/]+)$/) || sub.match(/^\/cnstrc\/browse\/group_id\/([^/]+)$/) || (sub === '/cnstrc/browse/items' && ['items']));
     if (cio) {
-      const browse = sub.startsWith('/cnstrc/browse/');
+      const items = sub === '/cnstrc/browse/items';
+      if (items) S.lookups = (S.lookups || 0) + 1;
+      if (items && S.lookupDown) return json(503, { message: 'Service unavailable' });
+      const browse = !items && sub.startsWith('/cnstrc/browse/');
       if (browse && state.cioBrowse === 'missing') return json(404, { message: 'Unknown group' });
       if (browse && state.cioBrowse === 'odd') return json(200, { nothing: 'here' });
-      const all = browse ? shopOf(shop).products.filter((x) => x.listed) : searchHits(shop, decodeURIComponent(cio[1]));
+      const ids = new Set(u.searchParams.getAll('ids'));
+      const all = items ? shopOf(shop).products.filter((x) => x.listed && ids.has(`P_${x.sku}`))
+        : browse ? shopOf(shop).products.filter((x) => x.listed) : searchHits(shop, decodeURIComponent(cio[1]));
       const per = Number(u.searchParams.get('num_results_per_page')) || 20;
       const pg = Number(u.searchParams.get('page')) || 1;
       const states = ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'];
@@ -3110,7 +3117,7 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
             },
           })),
         },
-        request: { term: decodeURIComponent(cio[1]), page: pg },
+        request: { term: items ? '' : decodeURIComponent(cio[1]), page: pg },
       });
     }
     // JB Hi-Fi's collection pages: drawn by its own code once the page is open (none of its products in the page), and
@@ -3175,11 +3182,16 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
       });
     }
 
-    // Shopify's whole product list, newest first (what Mugibot's live sweeps read at Gamerholic).
+    // Shopify's whole product list, newest first (what Mugibot's live sweeps read at Gamerholic, and JB Hi-Fi's newest
+    // products): the last listed first, each with when it was made (createdDaysAgo: one made long ago and republished —
+    // JB does that all day) and, a marketplace seller's (JB's: seller), its "Seller" option.
     if (SHOPIFY.has(shop) && sub === '/products.json') {
       const listed = shopOf(shop).products.filter((x) => x.listed).slice().reverse();
+      const day = 24 * 3600 * 1000;
       return json(200, { products: listed.slice(0, Number(u.searchParams.get('limit')) || 30).map((x) => ({
           id: x.id, title: x.name, handle: x.sku, body_html: '<p>Dummy</p>', product_type: 'Trading Cards', tags: x.status === 'preorder' ? ['Pre-Order'] : [],
+          created_at: new Date(Date.now() - (x.createdDaysAgo ?? 1) * day).toISOString(), published_at: new Date().toISOString(),
+          options: [x.seller ? { name: 'Seller', position: 1, values: [x.seller] } : { name: 'Title', position: 1, values: ['Default Title'] }],
           variants: [{ id: x.id, title: 'Default Title', price: x.price.toFixed(2), compare_at_price: x.was ? x.was.toFixed(2) : null, available: x.status === 'in_stock' || x.status === 'preorder' }],
           images: [{ src: `http://${req.headers.host}${imagePath(shop, x)}` }],
         })) });
