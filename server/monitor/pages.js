@@ -472,8 +472,11 @@ export class PageWatches {
     if (scene) st.seen = new Set();
     const fresh = scene ? null : new Set(products.map(keyOf).filter((k) => k && !st.seen.has(k)));
     const peers = g.watches;
+    // (The server's empty answer where an admin's browser draws the page: not part of the watches' first look — the page
+    //  as the browser reads it is.)
+    const look = !(serverEmpty && !products.length && this.browserAround());
     try {
-      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now, whole, how });
+      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now, whole, how, look });
       else await this.settleSite(peers, products, { fresh });
     } finally {
       for (const p of products) { const k = keyOf(p); if (k && st.seen.size < 5000) st.seen.add(k); }

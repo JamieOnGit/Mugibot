@@ -38,6 +38,10 @@ const MAX_BACKOFF_MS = 30 * 60 * 1000;
 // The oldest extension that reads a store's page by opening it in its window (monitor.render: BIG W's).
 export const RENDER_EXTENSION_VERSION = '1.27.0';
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
+// Not at its store (yet): a page that's not found, a code its store's search provider doesn't have — said by reads this
+// far apart at least before it counts as not on sale (one empty answer may be the store's hiccup).
+const UNLISTED = new Set([STATUS.NOT_LISTED, STATUS.NOT_FOUND]);
+const UNLISTED_FOR_MS = 60 * 1000;
 const KNOWN = new Set(Object.values(STATUS));
 
 // An armed item's page (Auto-checkout): checked this far ahead of its turn at its store.
@@ -384,8 +388,8 @@ export class Monitor {
         if (prev.kind === 'search' && r.foundUrl) continue;
         // What this check really saw: the feed keeps the last confirmed status itself.
         await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
-        // What every VIP and drop watch that's seen it saw (monitor/sightings.js) — a read that worked only. (A product the
-        // store's search provider doesn't have yet — Kmart's "not listed" — isn't on sale yet.)
+        // What every VIP and drop watch that's seen it saw (monitor/sightings.js) — a read that worked only. (A product not
+        // at its store yet — a page not found, Kmart's "not listed" — isn't on sale yet.)
         if (!failed && prev.kind === 'product') await this.watchReading(product.id, r.status, 'page', { later, notListed: true });
       }
     } finally {
@@ -403,8 +407,8 @@ export class Monitor {
    * A product's page read that worked (status: what it said): what every VIP and drop watch that's seen the product saw
    * (monitor/sightings.js), and a find of theirs waiting on its page settled. Where a live search saw it in the last
    * few minutes, the search's reading is the one the catalogue keeps (feed.applyCheck) and the one a watch goes by: a
-   * page that disagrees with a fresh search never decides. later: the read's list for the alerts. notListed: "not
-   * listed" is a reading (the server's read of a product its store's search provider doesn't have yet: not on sale).
+   * page that disagrees with a fresh search never decides. later: the read's list for the alerts. notListed: a product
+   * page read — "not at the store yet" is a reading (Monitor.unlisted).
    */
   async watchReading(productId, status, how, { later = null, notListed = false } = {}) {
     const product = this.catalog.productById(productId);
@@ -414,11 +418,21 @@ export class Monitor {
       this.pageSaid.set(product.id, { on: isOrderable(status), at: now });
       if (this.pageSaid.size > 5000) for (const [id, x] of this.pageSaid) if (now - x.at > SWEEP_FRESH_MS) this.pageSaid.delete(id);
     }
-    const reading = readingOf(product.status) || (notListed && product.status === STATUS.NOT_LISTED ? 'off' : '');
+    const reading = readingOf(product.status) || (notListed && this.unlisted(product) ? 'off' : '');
     if (!reading || !this.sightings) return;
     this.sightings.read(product.store, [product.sku], reading, how);
     if (this.vip) await this.vip.checked(product, reading, later).catch((e) => this.cfg.log('[vip]', e.message));
     if (this.drops) await this.drops.checked(product, reading, later).catch((e) => this.cfg.log('[drops]', e.message));
+  }
+
+  /**
+   * Not on sale because it's not at its store yet (a page not found; Kmart's code its search provider doesn't have):
+   * its page's reads have said so for a minute at least, and none has ever said it's on sale (a page the server can't
+   * see that a browser can isn't one that's not there).
+   */
+  unlisted(product) {
+    return !!product && UNLISTED.has(product.status) && typeof product.status_at === 'number' && typeof product.last_ok_at === 'number'
+      && product.last_ok_at - product.status_at >= UNLISTED_FOR_MS && !this.catalog.everOnSale(product.id);
   }
 
   /** Did this product's own page say it's on sale in the last few minutes (a search saying it isn't disagrees with it)? */
@@ -850,7 +864,7 @@ export class Monitor {
     // browsers read — BIG W's, EB Games' — settles a find waiting on its page this way).
     if (fresh && !failed && product.url) {
       const later = [];
-      await this.watchReading(product.id, status, 'browser', { later });
+      await this.watchReading(product.id, status, 'browser', { later, notListed: true });
       await this.deliver(later, product.store);
     }
     // A product the searches found that nobody monitors, on sale on its own page now: alerted by the searches' rules.

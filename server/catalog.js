@@ -367,6 +367,11 @@ export class Catalog {
     return row ? row.status : null;
   }
 
+  /** Has a read of this product (as far as the check log goes back) ever said it's on sale? */
+  everOnSale(productId) {
+    return !!this.db.get("SELECT 1 AS x FROM check_log WHERE product_id = :p AND status IN ('in_stock', 'preorder') LIMIT 1", { p: productId });
+  }
+
   listLog({ productId = null, store = '', errorsOnly = false, limit = 100 } = {}) {
     const where = ['1 = 1'];
     const params = { limit: Math.min(500, limit) };

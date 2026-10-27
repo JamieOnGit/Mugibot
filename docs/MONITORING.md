@@ -856,13 +856,23 @@ available online" on its page). So each watch decides by **what it saw itself**
 - **Its first look there.** The watch's own search (or its page) at that store:
   its first read, and every product in it, whatever it was called then. When the
   first read has no products, the look runs until there have been two reads a
-  minute apart (an empty answer may be the store's hiccup).
+  minute apart (an empty answer may be the store's hiccup). A page watch's empty
+  answers from the server, where an admin's browser draws the page instead (a JB
+  Hi-Fi collection, whose product list is shut to servers), aren't part of it:
+  the browser's first read is.
 - **The first stock reading it got.** A search that says the stock, or a page
   read that worked (one the store refused says nothing). Every watch whose words
   are in the product's name gets it, whichever search read it, under every code
   the store gives the product. Where a page and a search said otherwise within the
-  last 3 minutes, it counts as on sale. Kmart's "not listed yet" (its search
-  provider doesn't have it) counts as not on sale.
+  last 3 minutes, it counts as on sale. A product **not at its store yet** (its
+  page not found, or Kmart's "not listed yet": its search provider doesn't have
+  it) counts as not on sale once its page's reads have said so a minute apart (one
+  empty answer may be the store's hiccup), and never when a read of its page has
+  said it's on sale before (a page the server can't see may be one a browser can).
+  A reading that it's not on sale, taken more than **5 minutes** after the watch
+  first saw the product (its page's read waiting while the store refused the
+  server), doesn't say it wasn't on sale then: it may have sold out since. That
+  find is treated as on sale.
 - **Whether a read showed it's new since you added the watch.** One of these:
   - the watch's own search shows it, and its first look didn't. This only counts
     when every read of that first look held **every result** the store has (the
@@ -885,14 +895,21 @@ available online" on its page). So each watch decides by **what it saw itself**
       (as for every watch from before this release), unless the catalogue has
       never had the product at all.
   - the store made it after you added the watch (the creation time in a Shopify
-    store's product list: JB Hi-Fi's newest products, the card shops');
+    store's product list: JB Hi-Fi's newest products, the card shops'); or put it
+    up for sale after that, and the watch hadn't seen it before (the time a Shopify
+    store published it: card shops draft drops weeks ahead. Not at JB Hi-Fi or
+    Toys"R"Us, which republish what's on sale all day);
+  - its own page's reads said it wasn't at the store (a link monitored ahead of
+    its drop: not found, or not listed yet, a minute apart) after you added the
+    watch, until a search showed it;
   - it's a **new card listing**, new to the catalogue in a card search that isn't
     setting its scene (the same 🆕 the channels get), in a read where it can't be
     an old product moving up into view: one that holds every result; a card shop's
     newest products (they never republish old ones); or a search the store sorts
-    newest first (Target, Kmart, EB Games, Amazon, The Gamesmen, City Beach, Games
-    World, Premium Bandai), above a product the catalogue already had, and not on
-    the last page read. It counts for every watch added before that search last
+    newest first (Target, Kmart, EB Games, The Gamesmen, City Beach, Games World,
+    Premium Bandai), above a product the catalogue already had, and not on the
+    last page read (not Amazon: its sponsored results sit at the top whatever the
+    sort). It counts for every watch added before that search last
     read. (JB Hi-Fi's searches show their top 10 by relevance: a card listing new
     to the catalogue there isn't taken as new on that alone.)
   - another watch's whole first look at the store didn't have it, and that look
@@ -903,9 +920,11 @@ available online" on its page). So each watch decides by **what it saw itself**
 What it does with that:
 
 - **New** (any of the above): armed, and bought at once if it's on sale.
-- **First read not on sale** (sold out, coming soon, in the store's shops only):
-  armed for its return.
-- **First read on sale**: never bought (the Activity log says so). It's armed only
+- **First read not on sale** (sold out, coming soon, in the store's shops only,
+  not at the store yet), within 5 minutes of the watch first seeing it: armed for
+  its return.
+- **First read on sale**, or read too late to tell: never bought (the Activity log
+  says so). It's armed only
   if a read later shows it's new after all. For example, Target hides a product
   while it's sold out: one sold out before you added the watch, and back, is
   missing from the watch's whole first look. The card search may see it first, on
@@ -919,7 +938,7 @@ So these are never bought: something on sale all along that only moved up into
 a search's view (JB Hi-Fi's search shows its top 10), whatever a first look saw
 beyond what the watch keeps (10 or 20 finds), a product Mugibot never tracked (a
 hat, a skateboard) that another search sees first, something renamed or put on a
-page that only now has the watch's words, what was on a page before its key
+page that only now has the watch's words (but see the rare cases below), what was on a page before its key
 phrases were changed, and anything whose only "sold out" was the catalogue's own
 old one. A find made before this release that was skipped stays skipped.
 
@@ -941,12 +960,33 @@ What's still missed (failing safe):
 - At a watch from before this release, something the card search has seen since
   isn't taken as new from its own search (its first look was long after it was
   added).
+- A VIP link to a page that isn't up yet, whose drop comes within a minute of
+  adding it (its reads haven't said "not there" a minute apart yet); and a link
+  whose page was once read on sale, then "not there".
+- A find not on sale whose page's first read comes more than 5 minutes after the
+  watch first saw it (the store refusing the server meanwhile): not armed for its
+  return.
+- A page read in an admin's browser only holds every result where the extension
+  passes on the store's count (EB Games', Kmart's): a JB Hi-Fi collection page it
+  draws doesn't, so a drop there is bought only when JB's newest products or the
+  card searches show it's new.
 
 What could still be bought though it was on sale before (rare):
 
 - A product whose page was up before you added the watch but that the store's
   search didn't have yet (its search catching up minutes later).
-- At Target, a product on sale that the store renames to have the watch's words.
+- A product on sale that the store renames (or re-tags) to have the watch's words
+  after the watch's first look: at Target; and, where the store's results don't
+  say when it was made (everywhere but the Shopify stores), one Mugibot's catalogue
+  never had (not a trading card product: the card searches see those).
+- A product on sale when you added the watch that sold out within 5 minutes,
+  before its page's first read, at a store whose search doesn't say the stock
+  (City Beach): armed by its sold-out reading.
+- A product out of the watch's view when you added it (below its search's top
+  results), on sale then, that sold out before coming into view: armed by its
+  sold-out reading.
+- At EB Games (its searches sorted by release date), an old product the card
+  searches never saw, whose release date the store moves to the newest.
 
 Searches and page reads from an admin's browser only say they held every result
 from extension **1.38.0** (it passes on the store's own count of results, and how

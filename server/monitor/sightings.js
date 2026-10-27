@@ -9,7 +9,9 @@
 //   them, whatever its name said then. Done once a read in it had products, or once there have been two reads a minute
 //   apart (an empty answer may be the store's hiccup).
 // - the first stock reading the watch got of it: a search that says the stock, or a page read that worked — on sale
-//   ('on') or not on sale yet ('off': sold out, coming soon, in the store's shops only).
+//   ('on') or not on sale yet ('off': sold out, coming soon, in the store's shops only; or not at the store yet, its own
+//   page reads said, a minute apart). One saying it's not on sale, taken long after the watch first saw it (its page's
+//   read waiting while the store refused the server), doesn't say it wasn't then — it may have sold out since: 'late'.
 // - whether a read showed it's new since the watch was added (new_at) — never for a product the watch saw before that:
 //   - the watch's own search shows it, and its first look — whose every read held all the results the store has for
 //     those words, read the same way — didn't; and it's not something the store made before the watch was added, nor
@@ -18,13 +20,16 @@
 //     that leaves sold-out products out of its results, Target's, one missing from the look was sold out then: its
 //     return is a restock.) A look long after the watch was added (a watch from before this release) says so only of
 //     what the catalogue has never known (one that sold out since, and was left out of the results, could seem new).
-//   - the store made it after the watch was added (its creation time, where its list says it);
+//   - the store made it after the watch was added (its creation time, where its list says it) — or put it up for sale
+//     after that, and the watch hadn't seen it before (when it was published, at a store that never republishes what's
+//     on sale);
 //   - new_listings: it's known not to have been listed at a store at a time after the watch was added — a new card
 //     listing (new to the catalogue in a card read that can't be an old product moving into view), or another watch's
 //     first look, made soon after this one was added, said so.
 //
 // Its verdict: 'new' — armed, and bought at once when it's on sale; 'armed' — not on sale when the watch first read
-// it: armed for its return; 'skipped' — on sale when the watch first read it (there before it, as far as it knows);
+// it: armed for its return; 'skipped' — on sale when the watch first read it (there before it, as far as it knows), or
+// read too late to tell;
 // 'pending' — no reading yet (its page is read, at the store's usual pace).
 
 import { STATUS, isOrderable } from './status.js';
@@ -41,6 +46,8 @@ const LOOK_NEAR_MS = 15 * 60 * 1000;
 const SEEN_LATELY_MS = 10 * 60 * 1000;
 // What one first look keeps of the products it saw.
 const LOOK_CODES = 3000;
+// A first reading this long after the watch first saw a product: one saying it's not on sale is 'late'.
+const FIRST_SOON_MS = 5 * 60 * 1000;
 
 /** What a status says about being on sale: 'on', 'off' (not on sale yet) or '' (nothing either way). */
 export function readingOf(status) {
@@ -53,8 +60,13 @@ export function verdictOf(row) {
   if (!row) return 'pending';
   if (row.new_at) return 'new';
   if (row.first === 'off') return 'armed';
-  if (row.first === 'on') return 'skipped';
+  if (row.first === 'on' || row.first === 'late') return 'skipped';
   return 'pending';
+}
+
+/** A watch's first reading of a product it first saw at `seenAt`, taken now. */
+function firstOf(reading, seenAt, now) {
+  return reading === 'off' && now - seenAt > FIRST_SOON_MS ? 'late' : reading;
 }
 
 const low = (c) => String(c).toLowerCase();
@@ -147,12 +159,12 @@ export class Sightings {
   /**
    * The watch saw a product at a store. codes: its SKU (kept) and aliases. reading: what this read says of its stock
    * ('on', 'off' or ''); how: what read it. own: the watch's own read (its words' search, its page) — way: how it was
-   * read (as ownRead's how). created: when the store made it (null: not said). knownAt: when Mugibot's catalogue first
-   * had it at this store, before this read (null: it didn't). hides: the store leaves sold-out products out of its
-   * results.
+   * read (as ownRead's how). created: when the store made it (null: not said). published: when it put it up for sale,
+   * at a store that never republishes what's on sale (null: not said). knownAt: when Mugibot's catalogue first had it
+   * at this store, before this read (null: it didn't). hides: the store leaves sold-out products out of its results.
    * Returns { verdict, before } — before: its verdict until now (null: never seen by the watch).
    */
-  see(w, store, codes, { reading = '', how = '', own = false, way = '', created = null, knownAt = null, hides = false } = {}) {
+  see(w, store, codes, { reading = '', how = '', own = false, way = '', created = null, published = null, knownAt = null, hides = false } = {}) {
     codes = codes.filter(Boolean).map(String);
     if (!codes.length) return { verdict: 'pending', before: null };
     const now = this.now();
@@ -187,15 +199,16 @@ export class Sightings {
         && !(typeof created === 'number' && created < w.createdAt) && !(!hides && typeof knownAt === 'number' && knownAt <= look.done_at)
         // …and a look soon after the watch was added — or else something the catalogue never had at all.
         && (look.at - w.createdAt <= LOOK_NEAR_MS || typeof knownAt !== 'number');
-      // (Made by the store after the watch was added: nothing the watch saw can be from before that.)
-      const made = typeof created === 'number' && created >= w.createdAt;
+      // (Made by the store after the watch was added: nothing the watch saw can be from before that. Or put up for sale
+      //  since, and not seen by the watch before: not on sale when it was added.)
+      const made = (typeof created === 'number' && created >= w.createdAt) || fresh(published);
       const listed = this.newListing(store, codes);
       const told = !!listed && fresh(listed.since) && (!listed.look || listed.since - w.createdAt <= LOOK_NEAR_MS);
       if (missed || made || told) set.new_at = now;
       // (…and not listed then for any watch added soon before.)
       if (missed && look.at - w.createdAt <= LOOK_NEAR_MS) this.listed(store, row.sku, look.done_at, { look: true });
     }
-    if (!row.first && reading) Object.assign(set, { first: reading, first_at: now, first_how: how });
+    if (!row.first && reading) Object.assign(set, { first: firstOf(reading, row.at, now), first_at: now, first_how: how });
     const keys = Object.keys(set);
     if (keys.length) {
       this.db.run(`UPDATE watch_sightings SET ${keys.map((k) => `${k} = :${k}`).join(', ')} WHERE watch = :w AND store = :s AND sku = :sku`, { ...set, w: w.id, s: store, sku: row.sku });
@@ -213,13 +226,14 @@ export class Sightings {
     const now = this.now();
     const ids = [];
     for (const code of codes.filter(Boolean)) {
-      const rows = this.db.all(`SELECT watch, sku FROM watch_sightings WHERE store = :s AND first = ''
+      const rows = this.db.all(`SELECT watch, sku, at FROM watch_sightings WHERE store = :s AND first = ''
         AND (sku = :k OR (' ' || codes || ' ') LIKE :like)`, { s: store, k: code, like: `% ${low(code).replace(/[%_]/g, '')} %` });
       for (const r of rows) {
-        this.db.run("UPDATE watch_sightings SET first = :f, first_at = :t, first_how = :h WHERE watch = :w AND store = :s AND sku = :k AND first = ''", { f: reading, t: now, h: how, w: r.watch, s: store, k: r.sku });
+        const first = firstOf(reading, r.at, now);
+        this.db.run("UPDATE watch_sightings SET first = :f, first_at = :t, first_how = :h WHERE watch = :w AND store = :s AND sku = :k AND first = ''", { f: first, t: now, h: how, w: r.watch, s: store, k: r.sku });
         const cached = this.rows.get(r.watch);
         const row = cached && cached.get(keyOf(store, r.sku));
-        if (row) Object.assign(row, { first: reading, first_at: now, first_how: how });
+        if (row) Object.assign(row, { first, first_at: now, first_how: how });
         if (!ids.includes(r.watch)) ids.push(r.watch);
       }
     }

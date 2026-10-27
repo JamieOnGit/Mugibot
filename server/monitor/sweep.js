@@ -1010,7 +1010,7 @@ export class Sweeper {
    * not on sale and is on sale now. What's bought is what the watch saw (monitor/sightings.js): this read is
    * the page's watches' own — whole: it holds every result the store has for the page.
    */
-  async ingestPage(r, watches, products, { fresh = null, whole = false, how = '', now = this.now() } = {}) {
+  async ingestPage(r, watches, products, { fresh = null, whole = false, how = '', look = true, now = this.now() } = {}) {
     const s = this.settings;
     const counted = { found: products.length, kept: 0, new: 0, restock: 0, price: 0 };
     const counts = this.filters(s);
@@ -1062,7 +1062,7 @@ export class Sweeper {
         }
       }
       // (One more read of each watch's first look, while that's going.)
-      if (this.sightings) for (const w of watches) this.sightings.ownRead(w, r.id, { whole, codes: codesIn, how });
+      if (this.sightings && look) for (const w of watches) this.sightings.ownRead(w, r.id, { whole, codes: codesIn, how });
       await Promise.allSettled(posting);
       return counted;
     } finally {
@@ -1089,13 +1089,19 @@ export class Sweeper {
     if (!this.sightings) return out;
     const codes = [p.sku, ...(p.aliases || [])];
     if (newSince) this.sightings.listed(r.id, p.sku, newSince);
+    // (Its own page's reads said it wasn't at the store, till this read: not listed then — new to every watch added by
+    //  then that hadn't seen it. A link monitored ahead of its drop.)
+    if (before && this.monitor && this.monitor.unlisted(before)) this.sightings.listed(r.id, p.sku, before.last_ok_at);
     const list = [...(this.vip ? this.vip.watchesFor(r.id, title) : []), ...(this.drops ? this.drops.watchesFor(r.id, title) : [])];
     if (!list.length) return out;
     // (A search saying it isn't on sale where its own page said it is a moment ago: they disagree — on sale, as far as a
     //  watch goes, so it's never armed on that.)
     let reading = readingOf(status);
     if (reading === 'off' && before && this.monitor.pageSaysOn(before.id, now)) reading = 'on';
-    const opts = { reading, how: 'search', created: typeof p.createdAt === 'number' ? p.createdAt : null, knownAt: before ? before.created_at : null, hides: !!r.sweep.goneMeansSoldOut };
+    // (When it was put up for sale — Shopify's published_at — only where the store never republishes what's on sale: JB
+    //  Hi-Fi's newest products, republished all day, aren't new.)
+    const published = typeof p.publishedAt === 'number' && !(r.sweep.newestPath && r.sweep.newestFresh !== false) ? p.publishedAt : null;
+    const opts = { reading, how: 'search', created: typeof p.createdAt === 'number' ? p.createdAt : null, published, knownAt: before ? before.created_at : null, hides: !!r.sweep.goneMeansSoldOut };
     // (Each watch's own read first: a product its whole first look didn't have is new to the others too.)
     const mine = list.filter(own);
     for (const w of mine) out.set(w.id, this.sightings.see(w, r.id, codes, { ...opts, own: true, way }));

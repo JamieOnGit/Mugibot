@@ -1,6 +1,7 @@
-// What an Auto-checkout watch buys (docs/MONITORING.md → What an Auto-checkout watch buys), the cases two adversarial
-// reviews of the design found: each a wrong buy (something on sale when the watch was added, bought) or a lost one (a
-// drop after it was added, not bought). Against the dummy stores (tests never touch real stores).
+// What an Auto-checkout watch buys (docs/MONITORING.md → What an Auto-checkout watch buys), the cases adversarial reviews
+// of the design found (two rounds, each one reviewer for wrong buys and one for lost ones): each a wrong buy (something
+// on sale when the watch was added, bought) or a lost one (a drop after it was added, not bought). Against the dummy
+// stores (tests never touch real stores).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client, discordOpts, makeMember, startApp, startFakeDiscord } from './helpers.js';
@@ -12,6 +13,8 @@ let discord;
 let boss;
 let ash;
 let clock;
+// The stores searched (each test's changes put back after it).
+const STORES = { 'demo-citybeach': 'server', 'demo-jbhifi': 'server', 'demo-kmart': 'server', 'demo-target': 'server', 'demo-bigw': 'browser', 'demo-fromthedeep': 'server', 'demo-amazon': 'browser', 'demo-trainertown': 'server' };
 
 before(async () => {
   store = await startMockStore();
@@ -27,8 +30,7 @@ before(async () => {
     assert.equal((await c.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 5000, perDay: 50, spendPerDay: 50000 })).status, 200);
     env.app.repo.addDevice(c.user.id, 'Chrome on Mac', '1.37.0');
   }
-  const stores = { 'demo-citybeach': 'server', 'demo-jbhifi': 'server', 'demo-kmart': 'server', 'demo-target': 'server', 'demo-bigw': 'browser', 'demo-fromthedeep': 'server' };
-  assert.equal((await boss.put('/api/monitor/sweep', { stores })).status, 200);
+  assert.equal((await boss.put('/api/monitor/sweep', { stores: STORES })).status, 200);
 });
 after(async () => {
   await env.close();
@@ -257,6 +259,9 @@ test("💸 a VIP link added before the product is listed (Kmart: not listed yet)
   const v = r.body.watch;
   await env.app.monitor.checkPage(url);
   assert.equal(product('demo-kmart', SKU).status, 'not_listed');
+  // (Said again a minute on: not listed — one answer alone may be its search provider's hiccup.)
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url);
   // Listed, on sale: the drop.
   store.set('kmart', SKU, { listed: true });
   clock.offset += 60 * 1000;
@@ -294,7 +299,7 @@ test("💸 JB Hi-Fi searched from an admin's browser (the same address as the se
   const v = (await boss.post('/api/monitor/vip', { store: 'demo-jbhifi', words: 'game boy color', aco: true, maxPrice: 400 })).body.watch;
   await sw().sweepTerm(jb, { keyword: 'game boy color', page: 1, vip: v.id });
   // The store refuses the server under the drop's load: an admin's browser searches it.
-  assert.equal((await boss.put('/api/monitor/sweep', { stores: { 'demo-jbhifi': 'browser' } })).status, 200);
+  assert.equal((await boss.put('/api/monitor/sweep', { stores: { ...STORES, 'demo-jbhifi': 'browser' } })).status, 200);
   const tile = (sku, title, price) => ({ sku, title, price, inStock: true, url: store.productUrl('jbhifi', sku) });
   const admin = env.app.repo.userById(boss.user.id);
   // The browser's first read of it (nothing new yet).
@@ -307,6 +312,214 @@ test("💸 JB Hi-Fi searched from an admin's browser (the same address as the se
   await env.app.monitor.checkPage(url);
   await env.app.monitor.delivered();
   assert.equal(runsFor(itemOf(boss, 'demo-jbhifi', NEW)).length, 1, 'bought');
-  assert.equal((await boss.put('/api/monitor/sweep', { stores: { 'demo-jbhifi': 'server' } })).status, 200);
+  assert.equal((await boss.put('/api/monitor/sweep', { stores: STORES })).status, 200);
+  assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
+});
+
+// ---------------------------------------------------------------------------
+// The second round
+// ---------------------------------------------------------------------------
+const now = () => Date.now() + clock.offset;
+
+test("🛡️ a VIP link to a Kmart product on sale: one empty answer from its search provider (a hiccup) isn't \"not listed yet\" — never bought", async () => {
+  const SKU = '44900101';
+  const url = store.addProduct('kmart', { sku: SKU, name: 'Nintendo Switch 2 Donkey Kong Bananza Bundle', price: 649, status: 'in_stock' });
+  const v = (await boss.post('/api/monitor/vip', { url, aco: true, maxPrice: 800 })).body.watch;
+  // Its first page read: the lookup comes back without it — "not listed".
+  store.set('kmart', SKU, { listed: false });
+  await env.app.monitor.checkPage(url);
+  // A minute later it has it again: on sale, as it was all along.
+  store.set('kmart', SKU, { listed: true });
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url);
+  await env.app.monitor.delivered();
+  assert.equal(armed(boss, 'demo-kmart', SKU), false, 'on sale when the watch was added: not armed');
+  assert.equal(runsFor(itemOf(boss, 'demo-kmart', SKU)).length, 0, 'never bought');
+  assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
+});
+
+test("🛡️ a Kmart link read on sale before, then \"not listed\" for minutes (its search provider dropping it — the page may be on sale all along): a VIP link added meanwhile never buys it", async () => {
+  const SKU = '44900201';
+  const url = store.addProduct('kmart', { sku: SKU, name: 'Nintendo Switch 2 Pokemon Legends Z-A Bundle', price: 649, status: 'in_stock' });
+  assert.equal((await boss.post('/api/monitor/monitors', { url })).status, 200);
+  await env.app.monitor.checkPage(url);
+  assert.equal(product('demo-kmart', SKU).status, 'in_stock');
+  store.set('kmart', SKU, { listed: false });
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url);
+  const v = (await boss.post('/api/monitor/vip', { url, aco: true, maxPrice: 800 })).body.watch;
+  clock.offset += 61 * 1000;
+  await env.app.monitor.checkPage(url); // "not listed" a minute on: but its page's read said on sale before
+  store.set('kmart', SKU, { listed: true });
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url);
+  await env.app.monitor.delivered();
+  assert.equal(runsFor(itemOf(boss, 'demo-kmart', SKU)).length, 0, 'never bought');
+  assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
+});
+
+test("🛡️ Amazon: a sponsored result for an old listing, at the top of the card search above a known product, isn't a new listing — never bought", async () => {
+  const admin = env.app.repo.userById(boss.user.id);
+  const tile = (sku, title, price) => ({ sku, title, price, inStock: true, url: `${store.url}/amazon/dp/${sku}` });
+  const K1 = tile('B0KNOWN001', 'Pokemon TCG Surging Sparks Booster Bundle', 59);
+  const K2 = tile('B0KNOWN002', 'Pokemon TCG Stellar Crown Booster Box', 229);
+  const card = (products) => sw().browserResults(admin, [{ store: 'demo-amazon', keyword: 'pokemon', page: 1, ok: true, products }]);
+  await card([K1, K2]);
+  clock.offset += 30 * 1000;
+  await card([K1, K2]);
+  assert.ok(product('demo-amazon', 'B0KNOWN001'), 'the card search knows its products');
+  const v = (await boss.post('/api/monitor/vip', { store: 'demo-amazon', words: 'elite trainer box', aco: true, maxPrice: 300 })).body.watch;
+  clock.offset += 30 * 1000;
+  await card([K1, K2]);
+  // Amazon's ads sit at the top whatever the sort: an ETB on sale since last year.
+  const AD = tile('B0OLDETB01', 'Pokemon TCG Paldean Fates Elite Trainer Box', 129);
+  clock.offset += 30 * 1000;
+  await card([AD, K1, K2]);
+  await env.app.monitor.delivered();
+  assert.equal(armed(boss, 'demo-amazon', 'B0OLDETB01'), false, 'not armed');
+  assert.equal(runsFor(itemOf(boss, 'demo-amazon', 'B0OLDETB01')).length, 0, 'never bought');
+  assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
+});
+
+test("🛡️ City Beach (no stock in its search): on sale when the watch was added, sold out by its page's first read 20 minutes on (the store refusing the server meanwhile), restocked — never bought", async () => {
+  const cb = R('demo-citybeach');
+  const SKU = '20499901-01';
+  const url = store.addProduct('citybeach', { sku: SKU, name: 'Pokemon Gengar Hoodie', price: 89, status: 'in_stock' });
+  const w = (await ash.post('/api/drops', { store: 'demo-citybeach', words: 'gengar hoodie', aco: true, maxPrice: 200 })).body.watch;
+  await sw().sweepTerm(cb, { keyword: 'gengar hoodie', page: 1, drop: 'private' }); // its first look: in it, its stock not said
+  store.set('citybeach', SKU, { status: 'out_of_stock' });
+  clock.offset += 20 * 60 * 1000;
+  await env.app.monitor.checkPage(url); // its first reading: sold out — but long after the watch first saw it
+  store.set('citybeach', SKU, { status: 'in_stock' });
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url);
+  await env.app.monitor.delivered();
+  assert.equal(armed(ash, 'demo-citybeach', SKU), false, 'not armed');
+  assert.equal(runsFor(itemOf(ash, 'demo-citybeach', SKU)).length, 0, 'never bought');
+  assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
+});
+
+test("💸 City Beach: what wasn't on sale at the watch's first look, its page's first read says so soon after — armed, and bought when it comes on sale", async () => {
+  const cb = R('demo-citybeach');
+  const SKU = '20499902-01';
+  const url = store.addProduct('citybeach', { sku: SKU, name: 'Pokemon Mimikyu Hoodie', price: 89, status: 'out_of_stock' });
+  const w = (await ash.post('/api/drops', { store: 'demo-citybeach', words: 'mimikyu hoodie', aco: true, maxPrice: 200 })).body.watch;
+  await sw().sweepTerm(cb, { keyword: 'mimikyu hoodie', page: 1, drop: 'private' });
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url); // a minute on: sold out
+  assert.equal(armed(ash, 'demo-citybeach', SKU), true, 'armed');
+  store.set('citybeach', SKU, { status: 'in_stock' });
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url);
+  await env.app.monitor.delivered();
+  assert.equal(runsFor(itemOf(ash, 'demo-citybeach', SKU)).length, 1, 'bought');
+  assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
+});
+
+test("💸 a page watch whose server reads are empty (JB Hi-Fi's collection: its products.json shut), read in an admin's browser: the browser's first read is its first look — a new listing after it is bought", async () => {
+  assert.equal((await boss.put('/api/monitor/sweep', { stores: { ...STORES, 'demo-jbhifi': 'auto' } })).status, 200);
+  const OLD = 'lorcana-archazia-island-booster-box';
+  store.addProduct('jbhifi', { sku: OLD, name: 'Disney Lorcana Archazias Island Booster Box', price: 199, status: 'in_stock' });
+  const page = `${store.url}/jbhifi/collections/disney-lorcana`;
+  const r = await boss.post('/api/drops', { page, phrases: ['disney lorcana'], every: 3, shared: false, aco: true, maxPrice: 300 });
+  assert.equal(r.status, 200, r.text);
+  const w = r.body.watch;
+  const pages = env.app.pages;
+  const admin = () => env.app.repo.userById(boss.user.id);
+  const about = () => pages.browserDue(admin(), { version: '1.38.0' });
+  about();
+  await tick();
+  about();
+  await tick(); // the server's answer empty twice: an admin's browser reads it
+  const look = () => env.app.db.get('SELECT * FROM watch_looks WHERE watch = :w', { w: w.id });
+  assert.ok(!look() || !look().done_at, "the server's empty answers aren't its first look");
+  const tile = (sku, title, price) => ({ sku, title, price, inStock: true, url: `${store.url}/jbhifi/products/${sku}` });
+  let t = about().pages.find((x) => x.store === 'demo-jbhifi');
+  assert.ok(t, 'handed to the browser');
+  // (A browser read that says it holds every result: the store's count and its page size.)
+  await pages.browserResults(admin(), [{ id: t.id, ok: true, how: 'page', total: 1, perPage: 24, products: [tile(OLD, 'Disney Lorcana Archazias Island Booster Box', 199)] }]);
+  assert.equal(look().how, 'browser:page', "the browser's read is");
+  assert.equal(runsFor(itemOf(boss, 'demo-jbhifi', OLD)).length, 0, 'there already: never bought');
+  const NEW = 'disney-lorcana-whispers-in-the-well-booster-box';
+  store.addProduct('jbhifi', { sku: NEW, name: 'Disney Lorcana Whispers in the Well Booster Box', price: 209, status: 'in_stock' });
+  clock.offset += 3100;
+  t = about().pages.find((x) => x.store === 'demo-jbhifi');
+  assert.ok(t);
+  await pages.browserResults(admin(), [{ id: t.id, ok: true, how: 'page', total: 2, perPage: 24, products: [tile(NEW, 'Disney Lorcana Whispers in the Well Booster Box', 209), tile(OLD, 'Disney Lorcana Archazias Island Booster Box', 199)] }]);
+  await env.app.monitor.delivered();
+  assert.equal(runsFor(itemOf(boss, 'demo-jbhifi', NEW)).length, 1, 'listed after its first look: bought');
+  assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
+  assert.equal((await boss.put('/api/monitor/sweep', { stores: STORES })).status, 200);
+});
+
+test("💸 a Shopify collection page watch (Trainer Town): a drop the shop drafted weeks before the watch, put up for sale after it, is bought", async () => {
+  const drafted = now() - 21 * 86400000;
+  store.addProduct('trainertown', { sku: 'one-piece-tcg-op-13-booster-box', name: 'One Piece - TCG - OP-13 Booster Box', price: 189, status: 'in_stock', createdAt: drafted });
+  const page = `${store.url}/trainertown/collections/one-piece-trading-card-game`;
+  const r = await ash.post('/api/drops', { page, phrases: ['one piece op 16'], every: 15, aco: true, maxPrice: 300 });
+  assert.equal(r.status, 200, r.text);
+  const w = r.body.watch;
+  await tick();
+  await tick(); // its first look
+  const NEW = 'one-piece-tcg-op-16-booster-box';
+  store.addProduct('trainertown', { sku: NEW, name: 'One Piece - TCG - OP-16 Booster Box', price: 199.95, status: 'in_stock', createdAt: drafted, publishedAt: now() - 1000 });
+  await tick();
+  const it = itemOf(ash, 'demo-trainertown', NEW);
+  assert.ok(it, 'on the watchlist');
+  assert.equal(runsFor(it).length, 1, 'put up for sale after the watch was added: bought');
+  assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
+});
+
+test("🛡️ a Shopify collection page watch (Trainer Town): what was on the page, on sale, at its first look, republished since — never bought", async () => {
+  const OLD = 'one-piece-tcg-op-15-booster-box';
+  const made = now() - 30 * 86400000;
+  store.addProduct('trainertown', { sku: OLD, name: 'One Piece - TCG - OP-15 Booster Box', price: 189, status: 'in_stock', createdAt: made });
+  const page = `${store.url}/trainertown/collections/one-piece-trading-card-game`;
+  const w = (await ash.post('/api/drops', { page, phrases: ['one piece op 15'], every: 15, aco: true, maxPrice: 300 })).body.watch;
+  await tick();
+  await tick(); // its first look: on sale
+  store.set('trainertown', OLD, { publishedAt: now() - 1000 });
+  await tick();
+  assert.equal(armed(ash, 'demo-trainertown', OLD), false, 'not armed');
+  assert.equal(runsFor(itemOf(ash, 'demo-trainertown', OLD)).length, 0, 'never bought');
+  assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
+});
+
+test("💸 a VIP keyword watch at Kmart; the drop's link monitored ahead (not listed yet): when it's listed, on sale, its own search sees it — bought", async () => {
+  const km = R('demo-kmart');
+  const SKU = '44399001';
+  const url = store.addProduct('kmart', { sku: SKU, name: 'Pokemon TCG Ascended Zenith Elite Trainer Box', price: 89, status: 'in_stock', listed: false });
+  assert.equal((await boss.post('/api/monitor/monitors', { url })).status, 200);
+  await env.app.monitor.checkPage(url);
+  assert.equal(product('demo-kmart', SKU).status, 'not_listed');
+  clock.offset += 60 * 1000;
+  const v = (await boss.post('/api/monitor/vip', { store: 'demo-kmart', words: 'ascended zenith', aco: true, maxPrice: 150 })).body.watch;
+  for (let i = 0; i < 2; i++) {
+    assert.equal((await sw().sweepTerm(km, { keyword: 'ascended zenith', page: 1, vip: v.id })).found, 0);
+    clock.offset += 61 * 1000;
+  }
+  await env.app.monitor.checkPage(url); // still not listed, since the watch was added
+  store.set('kmart', SKU, { listed: true });
+  await sw().sweepTerm(km, { keyword: 'ascended zenith', page: 1, vip: v.id });
+  await env.app.monitor.checkPage(url);
+  await env.app.monitor.delivered();
+  assert.equal(runsFor(itemOf(boss, 'demo-kmart', SKU)).length, 1, 'not listed when the watch was added: bought');
+  assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
+});
+
+test("💸 a VIP link added before the product is published (JB Hi-Fi: its page not found till then): bought when it goes on sale", async () => {
+  const SKU = 'pokemon-tcg-ascended-heroes-premium-poster-collection';
+  const url = store.addProduct('jbhifi', { sku: SKU, name: 'Pokemon TCG Ascended Heroes Premium Poster Collection', price: 69, status: 'in_stock', listed: false });
+  const v = (await boss.post('/api/monitor/vip', { url, aco: true, maxPrice: 100 })).body.watch;
+  await env.app.monitor.checkPage(url);
+  assert.equal(product('demo-jbhifi', SKU).status, 'not_found');
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url);
+  store.set('jbhifi', SKU, { listed: true });
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url);
+  await env.app.monitor.delivered();
+  assert.equal(armed(boss, 'demo-jbhifi', SKU), true, 'armed');
+  assert.equal(runsFor(itemOf(boss, 'demo-jbhifi', SKU)).length, 1, 'bought');
   assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
 });
