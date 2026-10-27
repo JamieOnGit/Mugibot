@@ -54,7 +54,8 @@ const runsFor = (itemId) => env.app.db.all('SELECT * FROM aco_runs WHERE item_id
 const watchOf = async (c, id) => (await c.get('/api/drops')).body.watches.find((w) => w.id === id);
 const admin = () => env.app.repo.userById(boss.user.id);
 // The next read of every page due (the timer's job, every second): from the server, waited for.
-const tick = async () => { clock.offset += 61 * 1000; return pages().tick(); };
+// (Members' DMs go out while the reads carry on: a tick here is done once they're out.)
+const tick = async () => { clock.offset += 61 * 1000; const n = await pages().tick(); await env.app.monitor.delivered(); return n; };
 
 test('🔎 how each store\'s search page is read: from the server where the store answers it — its own page, or what the page is built from — else drawn in an admin\'s browser; never faster than the store allows', () => {
   const real = new Retailers({ demoStoreUrl: '' });
@@ -291,6 +292,7 @@ test("🔎 EB Games' \"Trading cards, pre-order\" page, read from an admin's bro
   assert.equal(item.aco, true);
   assert.equal(item.maxPrice, 250);
   assert.equal(runsFor(item.id).length, 1, 'bought the moment it was found');
+  await env.app.monitor.delivered();
   assert.ok(dms('d-ash').slice(dmsBefore).some((m) => /Lorwyn Eclipsed Collector Booster Box/.test(m.body.embeds[0].title)), "DM'd at once");
   assert.equal(env.app.repo.itemBySku(ash.user.id, 'demo-ebgames', '312402'), null, 'no phrase: left alone');
   assert.equal(env.app.catalog.productFor('demo-ebgames', '312401'), null, "a member's own: never in everyone's catalogue");

@@ -536,7 +536,7 @@ export class Pools {
       message: `${r.name}'s checkpoint is up: ${reason}.\nYour checkout browser (${ok.device.name}) has opened ${r.name}'s check page in a tab — solve the human check there now, and your checkout goes straight through when it drops. It has to be solved in that browser: away from the computer, 🖥️ Open my computer (Chrome Remote Desktop).${ok.listening ? '' : `\n⚠️ ${ok.device.name} isn't open right now — the page opens as soon as it is.`}`,
       url: this.ctx.gates ? this.ctx.gates.link(r) : r.base,
       buttons: [{ label: '🖥️ Open my computer', url: REMOTE_DESKTOP_URL }, { label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
-    }).catch((e) => this.cfg.log('[pools]', e.message));
+    }, { urgent: true }).catch((e) => this.cfg.log('[pools]', e.message));
     return true;
   }
 

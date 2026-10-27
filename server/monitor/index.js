@@ -44,11 +44,11 @@ const ARMED_AHEAD_MS = 15 * 1000;
 const ITEMS_FOR_PAGE = `(c.kind = 'product' AND i.url = c.url) OR (c.kind = 'search' AND i.url = '' AND i.store = c.store AND i.sku = c.sku COLLATE NOCASE)`;
 
 /**
- * Alerts waiting to go out (members' DMs, webhooks, emails): a few at a time — each member's own
- * arrives in a fraction of a second, not after everyone before them has had theirs. A failed one is
- * logged and the rest still go.
+ * Alerts waiting to go out (members' DMs): ten at a time (as many as Discord takes at once for DMs) — each
+ * member's own arrives in a fraction of a second, not after everyone before them has had theirs. A failed one
+ * is logged and the rest still go.
  */
-export async function sendAll(list, onError, atOnce = 5) {
+export async function sendAll(list, onError, atOnce = 10) {
   let next = 0;
   const lane = async () => {
     while (next < list.length) {
@@ -78,6 +78,8 @@ export class Monitor {
     Object.assign(this, { cfg, repo, retailers, notifier, hub, catalog, feed, fetch: fetchImpl, now });
     this.db = repo.db;
     this.hostNext = new Map();
+    this.going = new Set(); // members' alerts still going out (deliver)
+    this.lines = new Map(); // store → its lots of alerts going out (two at most)
     this.hostBusy = new Map(); // host → checks still going there
     this.hostGap = new Map(); // host → its gap between checks (seconds)
     this.inFlight = new Set();
@@ -385,8 +387,8 @@ export class Monitor {
         if (this.drops) this.drops.checked(this.catalog.productById(product.id));
       }
     } finally {
-      // (Even when the shared feed's failed.)
-      await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
+      // (Even when the shared feed's failed. Going out while the next pages are checked: deliver.)
+      await this.deliver(later, prev.store);
     }
     if (prev.kind === 'search' && r.foundUrl) {
       this.resolveSku(prev.store, prev.sku, r.foundUrl);
@@ -421,7 +423,59 @@ export class Monitor {
     const later = theirs || [];
     const order = [...items].sort((a, b) => (b.aco ? 1 : 0) - (a.aco ? 1 : 0));
     for (const item of order) await this.applyResult(item, r, source, { later });
-    if (!theirs) await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
+    if (!theirs) await this.deliver(later, order.length ? order[0].store : '');
+  }
+
+  /**
+   * Members' alerts (ten at a time: sendAll), sent while the monitor and the sweeps carry on — a store's next search
+   * or page check never waits for a drop's DMs to be out (they took seconds with a hundred members watching). Every
+   * Auto-checkout run is made before, and the channel posts went first. Each store's (key) apart from the others',
+   * never in a line behind them — and at most two lots going at a store whose alerts keep coming faster than they go
+   * out (its stock flapping): a third waits for the first, as every search did before. delivered(): once all are out.
+   */
+  async deliver(list, key = '') {
+    if (!list || !list.length) return;
+    let line = this.lines.get(key);
+    if (!line) this.lines.set(key, (line = []));
+    while (line.length >= 2) await Promise.allSettled([line[0]]);
+    const p = sendAll(list, (e) => this.cfg.log('[alerts]', e.message)).catch((e) => this.cfg.log('[alerts]', e.message)).finally(() => {
+      this.going.delete(p);
+      line.splice(line.indexOf(p), 1);
+      if (!line.length && this.lines.get(key) === line) this.lines.delete(key);
+    });
+    line.push(p);
+    this.going.add(p);
+  }
+
+  async delivered() {
+    while (this.going.size) await Promise.allSettled([...this.going]);
+  }
+
+  /**
+   * A page to read as soon as the monitor may (a drop watch's find whose stock its search didn't say): next in the
+   * monitor's round — and now, without waiting for it, when its store can be asked this moment. Never a store the
+   * server doesn't ask (BIG W, EB Games, an admin's switch: browsers read it), never inside its gap, never twice at once.
+   */
+  checkNow(url) {
+    const page = url && this.db.get('SELECT * FROM page_checks WHERE url = :url', { url });
+    if (!page) return;
+    this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
+    const retailer = this.retailers.get(page.store) || this.retailers.forUrl(url);
+    if (retailer && !this.retailers.settings(retailer).serverChecks) return;
+    const now = this.now();
+    const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
+    if (this.inFlight.has(url) || this.inFlight.size >= 4 || (this.hostNext.get(page.host) || 0) > now || (gap > 0 && (this.hostBusy.get(page.host) || 0) > 0)) return;
+    this.hostNext.set(page.host, now + gap * 1000);
+    this.hostGap.set(page.host, gap);
+    this.hostBusy.set(page.host, (this.hostBusy.get(page.host) || 0) + 1);
+    this.inFlight.add(url);
+    const p = this.checkPage(url).catch((e) => this.cfg.log('[monitor]', e.message)).finally(() => {
+      this.inFlight.delete(url);
+      const n = (this.hostBusy.get(page.host) || 1) - 1;
+      if (n > 0) this.hostBusy.set(page.host, n); else this.hostBusy.delete(page.host);
+      this.going.delete(p);
+    });
+    this.going.add(p);
   }
 
   /** later: a list to put this item's alerts on (sent by the caller), instead of sending them now. */

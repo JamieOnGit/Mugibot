@@ -51,6 +51,8 @@ const sw = () => env.app.sweeper;
 const drops = () => env.app.drops;
 const posts = (id) => discord.channelPosts(id);
 const dms = (id) => discord.dmsTo(id);
+// (Members' DMs go out while the monitor carries on: the ones on their way, out.)
+const settle = () => env.app.monitor.delivered();
 const buttons = (msg) => (msg.body.components ? msg.body.components[0].components.map((b) => b.label) : []);
 const runsFor = (itemId) => env.app.db.all('SELECT * FROM aco_runs WHERE item_id = :i', { i: itemId });
 const channelId = (name) => discord.state.channels.find((c) => c.name === name).id;
@@ -118,6 +120,7 @@ test('🎯 an admin\'s link — an Xbox at JB Hi-Fi: monitored for everyone, pos
   assert.equal(post.body.embeds[0].fields.find((f) => f.name === 'Category').value, 'Non-TCG');
   assert.equal(posts(ch.jbPokemon).length, 0, 'not in the store\'s channels');
   assert.equal(posts(ch.misc).length, 0);
+  await settle();
   assert.ok(dms('d-ash').some((m) => /In stock: Xbox 25/.test(m.body.embeds[0].title)), 'Ash\'s own DM');
   const runs = runsFor(item.id);
   assert.equal(runs.length, 1, 'Auto-checkout started');
@@ -327,6 +330,7 @@ test('🎯 a member\'s own words: what has them goes on their watchlist — thei
   assert.equal((await ash.post(`/api/drops/${w.id}/check`, {})).status, 200);
   assert.deepEqual(sw().nextTerm(jb), { keyword: 'nintendo switch 2', page: 1, drop: 'private' }, 'Check now: its words next');
   await sw().sweepTerm(jb, { keyword: 'nintendo switch 2', page: 1, drop: 'private' });
+  await settle();
   assert.ok(dms('d-ash').some((m) => /🟢 In stock: Nintendo Switch 2 Console/.test(m.body.embeds[0].title)));
   assert.equal(runsFor(item.id).length, 1);
   // Something new with the words drops: on the watchlist, DM'd and bought at once (under the max price).
@@ -334,6 +338,8 @@ test('🎯 a member\'s own words: what has them goes on their watchlist — thei
   await sw().sweepTerm(jb, { keyword: 'nintendo switch 2', page: 1, drop: 'private' });
   const bundle = env.app.repo.itemBySku(ash.user.id, 'demo-jbhifi', 'nintendo-switch-2-mario-kart-bundle');
   assert.equal(bundle.aco, true);
+  assert.equal(runsFor(bundle.id).length, 1, 'bought by the time the search is done');
+  await settle();
   assert.ok(dms('d-ash').some((m) => /Nintendo Switch 2 Mario Kart World Bundle/.test(m.body.embeds[0].title)));
   assert.equal(runsFor(bundle.id).length, 1);
   assert.equal(posts(ch.nontcg).length, before.nontcg, 'never posted for everyone');
@@ -379,6 +385,7 @@ test('🔑 key phrases pasted at once, watched at every store Mugibot searches: 
     const fresh = env.app.repo.itemBySku(ash.user.id, 'demo-pokebox', 'pb-heavy-hitters-premium-box');
     assert.ok(fresh, 'on the watchlist');
     assert.equal(fresh.aco, true);
+    await settle();
     assert.ok(dms('d-ash').slice(dmsBefore).some((m) => /Heavy Hitters Premium Collection Box/.test(m.body.embeds[0].title)), 'DM\'d at once');
     assert.equal(runsFor(fresh.id).length, 1, 'Auto-checkout started');
     // The phrase's own search there next: nothing new (it's found already).
@@ -416,6 +423,7 @@ test('🎯 a link at another website: its page read for stock, the member DM\'d 
   assert.equal(dms('d-ash').length, before, 'sold out: nothing to say');
   store.setAcme('xbox-series-x-console-1tb', { status: 'in_stock' });
   await env.app.monitor.checkPage(url);
+  await settle();
   const dm = dms('d-ash').at(-1);
   assert.match(dm.body.embeds[0].title, /^🟢 In stock: Xbox from Acme/);
   assert.ok(!buttons(dm).includes('⚡ Buy'), 'no ⚡ Buy at another website');
@@ -442,15 +450,18 @@ test('🎯 another website (a Garmin, say): your own watch tells you when it dro
   const last = () => dms('d-ash').at(-1);
   // Not up yet (its page isn't there): nothing to say. Then it drops — the page is up, in stock: 🟢.
   await env.app.monitor.checkPage(url);
+  await settle();
   assert.equal(dms('d-ash').length, n0, 'not listed yet: quiet');
   store.setAcme('garmin-forerunner-265', { listed: true });
   await env.app.monitor.checkPage(url);
+  await settle();
   assert.equal(dms('d-ash').length, n0 + 1, 'it dropped: one DM');
   assert.match(last().body.embeds[0].title, /^🟢 In stock: Garmin Forerunner 265/);
   assert.equal(row().price_alert_price, 649, 'its first read notes the price — no price alert for it');
   // Cheaper: 📉, with the price it was, how much lower, and its page (no ⚡ Buy at another website).
   store.setAcme('garmin-forerunner-265', { price: 549 });
   await env.app.monitor.checkPage(url);
+  await settle();
   assert.equal(dms('d-ash').length, n0 + 2, 'a price drop: a DM');
   const drop = last();
   assert.match(drop.body.embeds[0].title, /^📉 Price drop: Garmin Forerunner 265/);
@@ -463,34 +474,43 @@ test('🎯 another website (a Garmin, say): your own watch tells you when it dro
   assert.ok(ev, 'in their activity too');
   // The same price again, a little higher, then back to it: nothing new to say (told at $549 already).
   await env.app.monitor.checkPage(url);
+  await settle();
   store.setAcme('garmin-forerunner-265', { price: 559 });
   await env.app.monitor.checkPage(url);
+  await settle();
   store.setAcme('garmin-forerunner-265', { price: 549 });
   await env.app.monitor.checkPage(url);
+  await settle();
   assert.equal(dms('d-ash').length, n0 + 2, 'back to the price it was told about: quiet');
   // Lower than that: told again.
   store.setAcme('garmin-forerunner-265', { price: 499 });
   await env.app.monitor.checkPage(url);
+  await settle();
   assert.equal(dms('d-ash').length, n0 + 3);
   assert.match(last().body.embeds[0].description, /Was \$549\.00 — now \$499\.00 \(9\.1% lower\)/);
   // Less than a dollar off (or under 1%): not a drop.
   store.setAcme('garmin-forerunner-265', { price: 498.5 });
   await env.app.monitor.checkPage(url);
+  await settle();
   assert.equal(dms('d-ash').length, n0 + 3, 'fifty cents off: quiet');
   // Half a day later, the same lower price after a rise: told again.
   store.setAcme('garmin-forerunner-265', { price: 520 });
   await env.app.monitor.checkPage(url);
+  await settle();
   clock.offset += 13 * 60 * 60 * 1000;
   try {
     store.setAcme('garmin-forerunner-265', { price: 499 });
     await env.app.monitor.checkPage(url);
+  await settle();
     assert.equal(dms('d-ash').length, n0 + 4, 'half a day on: told again');
     // Sold out (quiet), then pre-orders open: 🟣.
     store.setAcme('garmin-forerunner-265', { status: 'out_of_stock' });
     await env.app.monitor.checkPage(url);
+  await settle();
     assert.equal(dms('d-ash').length, n0 + 4, 'sold out: nothing to say');
     store.setAcme('garmin-forerunner-265', { status: 'preorder' });
     await env.app.monitor.checkPage(url);
+  await settle();
     assert.equal(dms('d-ash').length, n0 + 5);
     assert.match(last().body.embeds[0].title, /^🟣 Pre-order open: Garmin Forerunner 265/);
   } finally {
@@ -622,6 +642,7 @@ test('🎯 a broad watch whose first look finds plenty still hears of what drops
     const fresh = found.find((f) => /quickfit-22/.test(f.sku));
     assert.ok(fresh, 'the new drop is found');
     assert.equal(fresh.base, false);
+    await settle();
     assert.ok(dms('d-ash').length > n0, 'and its owner is told');
     assert.match(dms('d-ash').at(-1).body.embeds[0].title, /Garmin Watch Band QuickFit 22/);
     // Ten new ones: the most it keeps — said once in their activity.
@@ -751,6 +772,7 @@ test('🎯 words at another website: read as Mugibot every couple of minutes —
   assert.ok(!buttons(post).includes('⚡ Buy with Mugibot'), 'no ⚡ Buy at another website');
   assert.ok(buttons(post).includes('Open product'));
   assert.equal(post.body.embeds[0].fields.find((f) => f.name === 'Store').value, new URL(store.url).host);
+  await settle();
   const dm = dms('d-misty').at(-1);
   assert.match(dm.body.embeds[0].title, /🟢 In stock: Xbox Series X 25th Anniversary Limited Edition Console/);
   assert.ok(!buttons(dm).includes('⚡ Buy'));

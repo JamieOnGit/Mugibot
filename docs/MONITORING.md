@@ -493,7 +493,27 @@ one check going at a time: one slow to answer holds one of the four at most.
    gets it at once, ahead of any members' DMs still going out (Mugibot's line to
    Discord puts a drop's channel post first). It never waits for the rest of the
    search or for another product's alerts.
-3. The watching members' own **DMs**, webhooks and emails, five at a time.
+3. The watching members' own **DMs**, ten at a time. Each member's own webhook
+   and email go out alongside, never holding up anyone's DM (a dead webhook
+   used to take 8 seconds, an email up to 10). A member's own drop watch's find
+   is DM'd here too, after the channel post, never before it.
+
+The store's next search doesn't wait for the members' DMs: they go out while it's
+on its way, so a store dropping a second product seconds after the first is
+still seen at its usual pace. The same for page checks and admins' browsers.
+
+Each store's DMs go out apart from the others', and a store whose alerts keep
+coming faster than they go out (its stock flapping) has at most two lots going:
+a third waits for the first.
+
+**Mugibot's line to Discord**: twelve requests at once, two of them kept for
+what can't wait (a drop's channel posts; a member's "🏦 Approve the payment in
+your bank's app", "🛒 Checkout ready" and "🛡️ Solve the check now" DMs, which go
+ahead of a drop's other DMs), and never more than 45 a second in all (48 for
+what can't wait): Discord's own limit is 50 a second per bot, and over it every
+request is turned away for a while. If Discord says the whole bot must slow
+down, every request waits as long as it says. First-time DMs open their DM
+channel two at a time; members' own webhooks go eight at a time.
 
 The dashboards' live feed has it before Discord does. **Alert speed** on the
 live monitor shows the latest alerts' time from the store's answer to your

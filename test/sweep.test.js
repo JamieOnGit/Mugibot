@@ -555,6 +555,7 @@ test("members' own SKUs update straight away: a restock DM from a sweep, and a p
   const dms = discord.dmsTo('d-ash').length;
   store.set('bigw', '6012345', { status: 'in_stock' });
   await sweep('demo-bigw');
+  await env.app.monitor.delivered();
   const it = env.app.repo.getItem(ash.user.id, id);
   assert.equal(it.status, 'in_stock');
   assert.equal(it.statusSource, 'sweep');
@@ -1629,12 +1630,21 @@ test("⚡ a drop's channel ping comes first: in Discord as soon as the store ans
   const took = Date.now() - t0;
   assert.equal(r.restock, 1);
   const post = channel().slice(posts).find((m) => /Speed Test Elite Trainer Box/.test(m.body.embeds[0].title));
-  assert.ok(post, 'posted in the restock channel');
+  assert.ok(post, 'posted in the restock channel by the time the search is done');
+  // The search is done once its channel ping is out — its members' DMs go out while the store's next search is on its way.
+  assert.ok(took < 1000, `the search back in ${took} ms, not waiting for every DM`);
+  discord.state.delayMs = 150;
+  try {
+    await env.app.monitor.delivered();
+  } finally {
+    discord.state.delayMs = 0;
+  }
+  const all = Date.now() - t0;
   const dms = watchers.map((_, i) => discord.dmsTo(`d-speedy-${i}`).find((m) => /Speed Test ETB/.test(m.body.embeds[0].title)));
-  assert.ok(dms.every(Boolean), 'every watching member has their DM by the time the search is done');
+  assert.ok(dms.every(Boolean), 'every watching member has their DM');
   assert.ok(dms.every((m) => m.at >= post.at), 'the channel ping before any member\'s DM');
   assert.ok(post.at - t0 < 1000, `in Discord ${post.at - t0} ms after the search began`);
-  assert.ok(took < 2500, `the DMs a few at a time: ${took} ms for the search and every alert`);
+  assert.ok(all < 2500, `the DMs ten at a time: ${all} ms for the search and every alert`);
   const run = env.app.db.get('SELECT * FROM aco_runs WHERE item_id = :i', { i: armed.item.id });
   assert.ok(run, 'the armed member\'s Auto-checkout run');
   assert.ok(run.created_at - clock.offset <= post.at, 'made before the channel ping went out');
@@ -1664,6 +1674,7 @@ test("⚡ a search whose reading fails partway through its list still sends the 
   } finally {
     sw.track = track;
   }
+  await env.app.monitor.delivered();
   assert.ok(discord.dmsTo('d-partway').some((m) => /Partway Bundle/.test(m.body.embeds[0].title)), "the watching member's DM went out all the same");
   await c.del(`/api/items/${add.body.id}`);
 });

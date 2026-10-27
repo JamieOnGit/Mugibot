@@ -53,7 +53,6 @@ import { serialize } from '../retailers/index.js';
 import { bad, bool, num, str } from '../schema.js';
 import { decodeEntities } from './html.js';
 import { dropConnections, storeFetch } from './http.js';
-import { sendAll } from './index.js';
 import { AU_STATES, mentions, norm, parseListing, termsRegex } from './listing.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
@@ -846,7 +845,7 @@ export class Sweeper {
         // alone. (Found by another search, it was listed already as far as that watch knows — unless it's new.)
         if (this.drops && !mkt) {
           for (const w of this.drops.ownFor(r.id, title)) {
-            await this.drops.foundOwn(w, r, p, status, { baseline: dropDone(w) }).catch((e) => this.cfg.log('[drops]', e.message));
+            await this.drops.foundOwn(w, r, p, status, { baseline: dropDone(w), later }).catch((e) => this.cfg.log('[drops]', e.message));
           }
         }
         // A VIP watch's words in the name (monitor/vip.js): it counts, trading cards or not.
@@ -868,7 +867,7 @@ export class Sweeper {
         // (Found in the watch's first search, or listed already when another search found it: armed only if it isn't on
         //  sale yet. Something on sale before the watch is never bought, whichever search comes first.)
         if (watch) this.vip.found(watch, product(), { baseline: baseline || edge || republished || listedBefore });
-        if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, status }).catch((e) => this.cfg.log('[drops]', e.message));
+        if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, status, later }).catch((e) => this.cfg.log('[drops]', e.message));
       }
       // A new card listing in a read that isn't setting its scene (not a VIP or drop watch's own search): drop mode.
       if (cardsNew && !baseline && !term.vip && !term.drop) this.heat(r, all ? null : term.keyword, now);
@@ -880,9 +879,10 @@ export class Sweeper {
       out.gone = all ? 0 : await this.markGone(r, term.keyword, now);
       return out;
     } finally {
-      // (Members' own alerts once the channel's are out — even when reading the rest of the list failed.)
+      // (Members' own alerts once the channel's are out — even when reading the rest of the list failed — going out
+      //  while the store's next search is on its way: monitor.deliver.)
       await Promise.allSettled(posting);
-      await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
+      await this.monitor.deliver(later, r.id);
     }
   }
 
@@ -923,7 +923,7 @@ export class Sweeper {
         const dropFor = (w) => !!w.baselineAt && isFresh && (!before || cameOnSale);
         // Someone's own watch: on their watchlist, theirs alone.
         for (const { w } of hits.filter((x) => !x.w.shared)) {
-          await this.drops.foundOwn(w, r, p, status, { baseline: !dropFor(w) }).catch(log);
+          await this.drops.foundOwn(w, r, p, status, { baseline: !dropFor(w), later }).catch(log);
         }
         // An admin's watch for everyone: in the catalogue, its alerts where the watch's go (the first watch's channel).
         const shared = hits.filter((x) => x.w.shared);
@@ -937,7 +937,7 @@ export class Sweeper {
         for (const { w } of shared) {
           const drop = dropFor(w);
           // (Not a drop: armed by how it was before this read — on sale already, it isn't bought; not on sale yet, it's armed.)
-          await this.drops.foundShared(w, product, { baseline: !drop, status: drop || !before ? status : before.status }).catch(log);
+          await this.drops.foundShared(w, product, { baseline: !drop, status: drop || !before ? status : before.status, later }).catch(log);
         }
       }
       await Promise.allSettled(posting);
@@ -945,7 +945,7 @@ export class Sweeper {
     } finally {
       // (Members' own alerts once the channel's are out.)
       await Promise.allSettled(posting);
-      await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
+      await this.monitor.deliver(later, r.id);
     }
   }
 
@@ -1199,7 +1199,7 @@ export class Sweeper {
       a = this.noteAlert(await this.feed.alert(fresh, 'restock', { sweep: true, detectedAt: now, note }));
       if (a) this.catalog.updateProduct(fresh.id, { restock_day: today });
     }
-    await sendAll(later, (e) => this.cfg.log('[alerts]', e.message));
+    await this.monitor.deliver(later, r.id);
     return a;
   }
 

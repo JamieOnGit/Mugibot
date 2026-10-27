@@ -507,6 +507,8 @@ test('a drop several members have armed: every member\'s run is made before anyo
   try {
     // Dawn's (not armed) comes first in the list: armed ones go first anyway.
     await env.app.monitor.applyAll([rows[2], rows[0], rows[1]], { status: 'in_stock', title: 'Prismatic ETB', price: 99, error: '' }, 'sweep');
+    // (Their alerts go out while the monitor carries on: once they're out.)
+    await env.app.monitor.delivered();
   } finally {
     notifier.itemAlert = itemAlert;
     notifier.notify = notify;

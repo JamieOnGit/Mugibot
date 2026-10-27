@@ -40,6 +40,8 @@ async function advance(seconds = 61) {
     n += done;
     if (!done) break;
   }
+  // (Members' alerts go out while the monitor carries on: done once they're out.)
+  await env.app.monitor.delivered();
   return n;
 }
 const hits = (fragment) => store.state.requests.filter((r) => r.path.includes(fragment)).length;
