@@ -250,6 +250,27 @@ export class Vip {
     else if (row && row.status === STATUS.UNKNOWN) this.db.run('UPDATE items SET status = :st WHERE id = :id', { st: STATUS.NOT_LISTED, id: item.id });
   }
 
+  /**
+   * Watches (ids) that armed a find on a search's "not on sale" its own page contradicts a moment later
+   * (Sightings.revise): on sale as far as they go — skipped, and the item they armed for it disarmed (never one armed
+   * before the find: someone's own arming).
+   */
+  unarm(ids, store, sku) {
+    const product = this.catalog.productFor(store, sku);
+    if (!product) return;
+    for (const w of this.watches().filter((x) => ids.includes(x.id))) {
+      const f = w.found.find((x) => x.productId === product.id);
+      if (!f || f.arm !== 'armed') continue;
+      this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm: 'skipped' } : x)));
+      const item = this.repo.itemBySku(w.acoUser, product.store, product.sku);
+      if (item && item.aco && (item.acoAt || 0) >= (f.at || 0)) {
+        this.db.run('UPDATE items SET aco = 0, aco_at = NULL WHERE id = :id', { id: item.id });
+        if (this.hub) this.hub.publish(w.acoUser, 'watch', { id: item.id, aco: false });
+      }
+      this.repo.addEvent(w.acoUser, { type: 'aco', level: 'info', message: `VIP watch: ${product.name || product.sku} — its page says it's on sale, its search said it wasn't a moment before: taken as on sale already, so it isn't armed — ⚡ Buy it yourself if you want it`, name: product.name, sku: product.sku, url: product.url || null });
+    }
+  }
+
   /** A new listing that's on sale as it's found: its Auto-checkout run now (its alerts on later), not at its next read. */
   async buyNow(item, product, status, later) {
     // (On the watchlist already as on sale: this read is its drop all the same.)

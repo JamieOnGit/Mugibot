@@ -570,3 +570,53 @@ test("💸 a VIP keyword watch at Kmart; the drop's link monitored ahead (not li
   assert.equal(runsFor(itemOf(boss, 'demo-kmart', SKU)).length, 1, 'not listed after the watch was added: bought');
   assert.equal((await boss.del(`/api/monitor/vip/${v.id}`)).status, 200);
 });
+
+// ---------------------------------------------------------------------------
+// Found merging main (JamieOnGit/Mugibot#54's cases)
+// ---------------------------------------------------------------------------
+
+test("🛡️ JB Hi-Fi's full top 10: one that moves into it later, sold out in the search but on sale on its page a moment later (they disagree) — never armed, never bought (own watch and an admin's)", async () => {
+  const jb = R('demo-jbhifi');
+  for (const p of store.shop('jbhifi').products) p.listed = false;
+  for (let i = 1; i <= 11; i++) store.addProduct('jbhifi', { sku: `zephyrine-foosball-${i}`, name: `Zephyrine Foosball ${i}`, price: 300 + i, status: i === 11 ? 'out_of_stock' : 'in_stock' });
+  const own = (await ash.post('/api/drops', { store: 'demo-jbhifi', words: 'zephyrine foosball', aco: true, maxPrice: 500 })).body.watch;
+  const shared = (await boss.post('/api/drops', { store: 'demo-jbhifi', words: 'zephyrine foosball', aco: true, maxPrice: 500 })).body.watch;
+  await sw().sweepTerm(jb, { keyword: 'zephyrine foosball', page: 1, drop: 'private' });
+  await sw().sweepTerm(jb, { keyword: 'zephyrine foosball', page: 1, drop: 'shared' });
+  // The eleventh moves into the page, its search tile saying sold out…
+  store.set('jbhifi', 'zephyrine-foosball-1', { listed: false });
+  await sw().sweepTerm(jb, { keyword: 'zephyrine foosball', page: 1, drop: 'private' });
+  await sw().sweepTerm(jb, { keyword: 'zephyrine foosball', page: 1, drop: 'shared' });
+  const SKU = 'zephyrine-foosball-11';
+  assert.equal(armed(ash, 'demo-jbhifi', SKU), true, "armed on the search's 'sold out'");
+  // …and its page, read a moment later, says on sale.
+  store.set('jbhifi', SKU, { status: 'in_stock' });
+  clock.offset += 30 * 1000;
+  await env.app.monitor.checkPage(store.productUrl('jbhifi', SKU));
+  await env.app.monitor.delivered();
+  assert.equal(armed(ash, 'demo-jbhifi', SKU), false, 'disarmed: on sale, as far as the watch goes');
+  assert.equal(armed(boss, 'demo-jbhifi', SKU), false);
+  assert.equal(runsFor(itemOf(ash, 'demo-jbhifi', SKU)).length, 0, 'never bought');
+  assert.equal(runsFor(itemOf(boss, 'demo-jbhifi', SKU)).length, 0, 'never bought');
+  assert.equal(env.app.drops.get(own.id).found.find((f) => f.itemId === itemOf(ash, 'demo-jbhifi', SKU).id).arm, 'skipped');
+  assert.equal((await ash.del(`/api/drops/${own.id}`)).status, 200);
+  assert.equal((await boss.del(`/api/drops/${shared.id}`)).status, 200);
+});
+
+test("💸 sold out in the watch's search and on its page, restocked ten minutes later: bought (a restock, not a disagreement)", async () => {
+  const jb = R('demo-jbhifi');
+  for (const p of store.shop('jbhifi').products) p.listed = false;
+  const SKU = 'quokkaroll-skeeball-deluxe';
+  const url = store.addProduct('jbhifi', { sku: SKU, name: 'Quokkaroll Skeeball Deluxe', price: 320, status: 'out_of_stock' });
+  const w = (await ash.post('/api/drops', { store: 'demo-jbhifi', words: 'quokkaroll skeeball', aco: true, maxPrice: 500 })).body.watch;
+  await sw().sweepTerm(jb, { keyword: 'quokkaroll skeeball', page: 1, drop: 'private' });
+  assert.equal(armed(ash, 'demo-jbhifi', SKU), true, 'sold out when the watch was added: armed');
+  clock.offset += 60 * 1000;
+  await env.app.monitor.checkPage(url); // its page agrees: sold out
+  store.set('jbhifi', SKU, { status: 'in_stock' });
+  clock.offset += 10 * 60 * 1000;
+  await env.app.monitor.checkPage(url);
+  await env.app.monitor.delivered();
+  assert.equal(runsFor(itemOf(ash, 'demo-jbhifi', SKU)).length, 1, 'bought');
+  assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
+});

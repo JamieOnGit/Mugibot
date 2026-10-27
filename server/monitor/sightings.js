@@ -48,6 +48,9 @@ const SEEN_LATELY_MS = 10 * 60 * 1000;
 const LOOK_CODES = 3000;
 // A first reading this long after the watch first saw a product: one saying it's not on sale is 'late'.
 const FIRST_SOON_MS = 5 * 60 * 1000;
+// A search saying it's not on sale and its own page saying it is, this close together: they disagree — on sale, as far
+// as a watch goes (the same window as a page said on sale before a search: Monitor.pageSaysOn).
+const DISAGREE_MS = 3 * 60 * 1000;
 
 /** What a status says about being on sale: 'on', 'off' (not on sale yet) or '' (nothing either way). */
 export function readingOf(status) {
@@ -235,6 +238,28 @@ export class Sightings {
         const cached = this.rows.get(r.watch);
         const row = cached && cached.get(keyOf(store, r.sku));
         if (row) Object.assign(row, { first, first_at: now, first_how: how });
+        if (!ids.includes(r.watch)) ids.push(r.watch);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * A page read that worked says it's on sale, moments after a search's "not on sale" was a watch's first reading of it
+   * (EB Games' search and its page disagreeing; a search's index behind): on sale, as far as those watches go — their
+   * first reading is 'on' (skipped). Not one shown new. Returns the ids of those watches.
+   */
+  revise(store, codes, now = this.now()) {
+    const ids = [];
+    for (const code of codes.filter(Boolean)) {
+      const rows = this.db.all(`SELECT watch, sku FROM watch_sightings WHERE store = :s AND first = 'off' AND first_how = 'search'
+        AND new_at IS NULL AND first_at >= :since AND (sku = :k OR (' ' || codes || ' ') LIKE :like)`,
+      { s: store, since: now - DISAGREE_MS, k: code, like: `% ${low(code).replace(/[%_]/g, '')} %` });
+      for (const r of rows) {
+        this.db.run("UPDATE watch_sightings SET first = 'on', first_how = 'page' WHERE watch = :w AND store = :s AND sku = :k", { w: r.watch, s: store, k: r.sku });
+        const cached = this.rows.get(r.watch);
+        const row = cached && cached.get(keyOf(store, r.sku));
+        if (row) Object.assign(row, { first: 'on', first_how: 'page' });
         if (!ids.includes(r.watch)) ids.push(r.watch);
       }
     }

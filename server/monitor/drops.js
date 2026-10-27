@@ -398,6 +398,27 @@ export class Drops {
     this.repo.addEvent(w.userId, { type: 'aco', level: 'info', message: `Drop watch: ${productName(p)} was on sale already when the watch first looked, so it isn't armed — ⚡ Buy it yourself if you want it`, name: p.name || null, sku: p.sku, url: p.url || null });
   }
 
+  /**
+   * Watches (ids) that armed a find on a search's "not on sale" its own page contradicts a moment later
+   * (Sightings.revise): on sale as far as they go — skipped, and the item they armed for it disarmed (never one armed
+   * before the find: someone's own arming).
+   */
+  unarm(ids, store, sku) {
+    const product = this.catalog.productFor(store, sku);
+    for (const w of this.watches().filter((x) => ids.includes(x.id))) {
+      // (Its find: the product, for an admin's watch for everyone; the item on your watchlist, for your own.)
+      const item = this.repo.itemBySku(w.userId, store, sku);
+      const f = w.found.find((x) => x.arm === 'armed' && ((product && x.productId === product.id) || (item && x.itemId === item.id)));
+      if (!f) continue;
+      this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm: 'skipped' } : x)));
+      if (item && item.aco && (item.acoAt || 0) >= (f.at || 0)) {
+        this.db.run('UPDATE items SET aco = 0, aco_at = NULL WHERE id = :id', { id: item.id });
+        this.hub.publish(w.userId, 'watch', { id: item.id, aco: false });
+      }
+      this.repo.addEvent(w.userId, { type: 'aco', level: 'info', message: `Drop watch: ${productName(item || product || { sku })} — its page says it's on sale, its search said it wasn't a moment before: taken as on sale already, so it isn't armed — ⚡ Buy it yourself if you want it`, name: (item || product || {}).name || null, sku, url: (item || product || {}).url || null });
+    }
+  }
+
   /** Someone's own watch has found as much as it keeps of what's dropped: said once a day (it's time to make it narrower). */
   noRoom(w) {
     const day = Math.floor(this.now() / 86400000);

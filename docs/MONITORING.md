@@ -864,7 +864,9 @@ available online" on its page). So each watch decides by **what it saw itself**
   read that worked (one the store refused says nothing). Every watch whose words
   are in the product's name gets it, whichever search read it, under every code
   the store gives the product. Where a page and a search said otherwise within the
-  last 3 minutes, it counts as on sale. A product **not at its store yet** (its
+  last 3 minutes, it counts as on sale, whichever said it first: a find armed on
+  a search's "sold out" is disarmed when its page says on sale a moment later,
+  before that read could count as a restock. A product **not at its store yet** (its
   page not found, or Kmart's "not listed yet": its search provider doesn't have
   it) counts as not on sale once its page's reads have said so a minute apart (one
   empty answer may be the store's hiccup), and never when a read of its page has
@@ -965,6 +967,8 @@ What's still missed (failing safe):
 - A VIP link to a page that isn't up yet, whose drop comes within a minute of
   adding it (its reads haven't said "not there" a minute apart yet); and a link
   whose page was once read on sale, then "not there".
+- A restock within 3 minutes of the watch's search first saying it's sold out:
+  its page and that search disagree, so it counts as on sale already.
 - A find not on sale whose page's first read comes more than 5 minutes after the
   watch first saw it: not armed for its return. That happens when the store is
   refusing the server meanwhile, and at a store only admins' browsers read (BIG

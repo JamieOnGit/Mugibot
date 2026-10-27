@@ -377,6 +377,8 @@ export class Monitor {
       checked_at = :now, next_check_at = :next, fail_count = :fails, error = :err, found_url = COALESCE(:found, found_url) WHERE url = :url`,
     { url, status, title: r.title || null, price: r.price ?? null, sig: r.decidedBy || null, now, next, fails: failCount, err: r.error || '', found: r.foundUrl || null });
 
+    // (On sale on its page, a moment after a search said it wasn't: never a restock for a watch that armed it on that.)
+    if (!failed && prev.kind === 'product' && isOrderable(r.status)) for (const p of this.catalog.productsForPage(url)) await this.disagreed(p.store, p.sku);
     // Members watching this page: each armed one's Auto-checkout run first; their alerts once the feed's are out.
     const later = [];
     const items = prev.kind === 'search' && r.foundUrl ? [] : this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id, page_checks c
@@ -439,6 +441,19 @@ export class Monitor {
   unlisted(product) {
     return !!product && UNLISTED.has(product.status) && typeof product.status_at === 'number' && typeof product.last_ok_at === 'number'
       && product.last_ok_at - product.status_at >= UNLISTED_FOR_MS && !this.catalog.everOnSale(product.id);
+  }
+
+  /**
+   * A page read that worked says this product's on sale: a watch whose first reading of it was a search's "not on sale"
+   * a moment ago disagrees with it — on sale, as far as it goes, and what it armed on the search's say disarmed
+   * (Sightings.revise), before this read's own news (a "restock") could start a run.
+   */
+  async disagreed(store, sku) {
+    if (!this.sightings || !sku) return;
+    const ids = this.sightings.revise(store, [sku], this.now());
+    if (!ids.length) return;
+    if (this.vip) this.vip.unarm(ids, store, sku);
+    if (this.drops) this.drops.unarm(ids, store, sku);
   }
 
   /** Did this product's own page say it's on sale in the last few minutes (a search saying it isn't disagrees with it)? */
@@ -536,6 +551,11 @@ export class Monitor {
     const now = this.now();
     const prev = item.status;
     const failed = FAILED.has(r.status);
+    // (A page read saying on sale, a moment after a search said it wasn't: Monitor.disagreed — before it's applied.)
+    if (source !== 'sweep' && isOrderable(r.status)) {
+      await this.disagreed(item.store, item.sku);
+      if (item.aco) item = this.db.get('SELECT * FROM items WHERE id = :id', { id: item.id }) || item;
+    }
     if (source !== 'sweep' && item.status_source === 'sweep' && item.checked_at && now - item.checked_at < SWEEP_FRESH_MS) return prev;
     if (source === 'server' && failed && item.status_source === 'browser' && item.browser_checked_at && now - item.browser_checked_at < 3 * this.browserInterval) {
       // The member's browser is doing the checking for this store; keep what it saw.
@@ -837,6 +857,7 @@ export class Monitor {
     const now = this.now();
     const status = KNOWN.has(res.status) ? res.status : STATUS.ERROR;
     const failed = FAILED.has(status);
+    if (!failed && isOrderable(status)) await this.disagreed(product.store, product.sku);
     // (Refused in the admin's browser too: asked again later each time, as members' own are.)
     this.browserFails ||= new Map();
     const fails = failed ? (this.browserFails.get(product.id) || 0) + 1 : 0;
