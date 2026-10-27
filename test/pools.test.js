@@ -159,7 +159,8 @@ test('🤝 checking out with boss is the member\'s own switch: agreed to, with t
   assert.equal((await copyOf(misty, a.id)).aco, false, "misty doesn't check out with boss");
   const list = (await boss.get('/api/admin/pools')).body.pools.find((p) => p.id === pool.id);
   assert.deepEqual(list.members.map((m) => [m.username, m.status, m.followAco]), [['ash', 'active', true], ['misty', 'active', false]]);
-  assert.equal(JSON.stringify(list).includes('350'), false, "what ash would spend is ash's");
+  // (Ash's most, as a value anywhere in it — not three digits inside a time or an id.)
+  assert.doesNotMatch(JSON.stringify(list), /(?<![\d.])350(?!\d)/, "what ash would spend is ash's");
 
   // Boss disarms: disarmed on ash's. Boss switches their Auto-checkout off: nothing of theirs armed on anyone's.
   await boss.put(`/api/items/${a.id}`, { aco: false });
