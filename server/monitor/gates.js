@@ -6,10 +6,10 @@
 // puts the checkout browsers of members armed at that store in line (aco.js: lobbies).
 //
 // Each store's gate is seen its own way (monitor/gate.js reads the pages):
-// - JB Hi-Fi's checkpoint: the server looks at /checkpoint once a minute (JB answers servers, as
+// - JB Hi-Fi's checkpoint: the server looks at /checkpoint every 5 seconds (JB answers servers, as
 //   it does the sweeps). Up: the page with its hCaptcha on it. Down: gone (404), sent on to the
-//   store, or no check there. A change is looked at again 10 seconds later, and counts when it's
-//   seen twice in a row.
+//   store, or no check there. A change is looked at again 2 seconds later, and counts when it's
+//   seen twice in a row: posted within seconds of JB switching it on.
 // - EB Games' and Pokémon Center's queues turn servers away, so browsers see them: a browser that
 //   lands in the queue (an admin's counts at once; members' when two of them say so), and an
 //   admin's browser asking for the store's front page as a new visitor — no cookies, so nobody's
@@ -27,8 +27,13 @@ import { num, str } from '../schema.js';
 import { classify } from './gate.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { storeFetch } from './http.js';
+import { sendAll } from './index.js';
 
 const MIN = 60 * 1000;
+// Members told at once when a gate goes up (each one's DM out without waiting on the one before).
+const DMS_AT_ONCE = 10;
+// A look at a checkpoint that hasn't answered in this long is given up: the next one's due seconds later.
+const PROBE_TIMEOUT_MS = 8000;
 // Two members' browsers in the queue within this long make it up (one admin's is enough).
 const REPORTERS_MS = 10 * MIN;
 // A queue's down only when a new visitor gets the store twice, this far apart.
@@ -313,12 +318,12 @@ export class Gates {
     return out;
   }
 
-  /** The post in #virtual-queue-detection (pinging the store channels' role, when they ping one). */
+  /** The post in #virtual-queue-detection (pinging the store channels' role, when they ping one): first in Discord's line. */
   async post(r, gate) {
     if (!this.discord || !this.discord.botReady) return;
     const ch = await this.channel();
     if (!ch) return;
-    const ok = await this.discord.post(ch.channelId, this.message(r, gate, { mention: ch.roleId ? `<@&${ch.roleId}>` : '' }));
+    const ok = await this.discord.post(ch.channelId, this.message(r, gate, { mention: ch.roleId ? `<@&${ch.roleId}>` : '' }), { urgent: true });
     if (ok) this.db.run('UPDATE gates SET posted_at = :t WHERE store = :s', { t: this.now(), s: r.id });
   }
 
@@ -326,18 +331,20 @@ export class Gates {
    * The members watching something at that store: their activity feed and DM (up; down, to those told it was up).
    * A pool's leader with a group hears it too, watching there or not — with the 🤝 Group Queue / 🤝 Group Checkpoint
    * button that starts it for the group, on their own DM (so nobody else sees it). skip: members told already, by a DM
-   * of its own (their pool's checkpoint opened for them).
+   * of its own (their pool's checkpoint opened for them). Leaders first, then the rest, several at once — each DM out
+   * without waiting on the one before, nor on anyone's email.
    */
   async tellMembers(r, gate, { skip = new Set() } = {}) {
     const up = gate.status === 'up';
     const leaders = up && this.pools ? [...this.pools.leaderIds()].filter((id) => this.pools.leadsGroup(id)) : [];
     const ids = up
-      ? [...new Set([...this.db.all('SELECT DISTINCT user_id FROM items WHERE store = :s LIMIT :n', { s: r.id, n: MAX_DMS }).map((x) => x.user_id), ...leaders])]
+      ? [...new Set([...leaders, ...this.db.all('SELECT DISTINCT user_id FROM items WHERE store = :s LIMIT :n', { s: r.id, n: MAX_DMS }).map((x) => x.user_id)])]
       : [...(this.told.get(r.id) || [])];
     if (up) this.told.set(r.id, new Set());
     else this.told.delete(r.id);
     const queue = r.gate.kind === 'queue';
     const wait = gate.wait !== null && gate.wait !== undefined ? ` — about ${gate.wait} minute${gate.wait === 1 ? '' : 's'}` : '';
+    const sends = [];
     for (const id of ids) {
       const u = this.repo.userById(id);
       if (!u || u.disabled || !entitlement(u, this.now()).active) continue;
@@ -367,8 +374,9 @@ export class Gates {
           message: queue ? `Anyone can go straight to ${r.name} again.` : `Checkout at ${r.name} is straight through again.`,
           url: this.link(r),
         };
-      await this.notifier.notify(id, ev).catch(() => null);
+      sends.push(() => this.notifier.notify(id, ev, { emailAfter: true }));
     }
+    await sendAll(sends, (e) => this.cfg.log('[gates]', e.message), DMS_AT_ONCE);
   }
 
   // ---------------------------------------------------------------------------
@@ -418,7 +426,7 @@ export class Gates {
     let res;
     let html = '';
     try {
-      const timeoutMs = Math.min(this.cfg.monitor.timeoutMs, 15000);
+      const timeoutMs = Math.min(this.cfg.monitor.timeoutMs, PROBE_TIMEOUT_MS);
       res = await safeFetch(this.fetch, url, {
         headers: { 'user-agent': this.cfg.monitor.userAgent, accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8', 'accept-language': 'en-AU,en;q=0.9' },
         timeoutMs, signal: AbortSignal.timeout(timeoutMs), maxBytes: 2 * 1024 * 1024,

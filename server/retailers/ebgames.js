@@ -38,8 +38,10 @@ export default {
   // In-browser checks of its items: its Cloudflare refuses what the extension asks for in the background too ("HTTP
   // 403" on every watchlist item, Oct 2026) while your own visits, ⚡ Buy and Auto-checkout go through — so each item's
   // page is asked for from inside a tab of the store kept in the extension's window, the way its own pages ask it for
-  // things (the page opened there, as you'd open it, when that's refused too).
-  monitor: { server: true, browser: true, inPage: true },
+  // things (the page opened there, as you'd open it, when that's refused too). The server never asks: its Cloudflare
+  // refuses every server, every time (the admin console's page checks showed EB Games at 0%, Oct 2026) — members'
+  // browsers check their own items, admins' the shared monitors, and its searches come from an admin's browser.
+  monitor: { server: 'never', browser: true, inPage: true },
   // Its virtual queue before big drops ("You're in the queue!", an estimated wait, a page that
   // refreshes itself — refresh it yourself and you lose your place). Seen by any browser that lands
   // on it; its going down, by an admin's browser asking for the front page as a new visitor (no

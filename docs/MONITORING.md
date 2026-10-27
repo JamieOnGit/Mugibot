@@ -93,6 +93,23 @@ read their own BIG W items instead, and admins' browsers the shared monitors:
 - **Older extensions** (before 1.27.0) aren't given BIG W pages: they'd fetch them
   in the background.
 
+**EB Games: never from the server.** EB's Cloudflare turns away every server,
+every time (the admin console's page checks showed EB Games at 0% in October
+2026), so the server never asks it (`monitor.server: 'never'`, as at BIG W),
+whatever an admin saved. Members' browsers check their own EB items, admins'
+browsers the shared monitors, and its searches come from an admin's browser.
+The console's **Server checks** column says **Off** for it.
+
+**Kmart: its search provider, by keycode.** Kmart's product pages turn servers
+away too (the same console showed Kmart at 0%). Its search provider doesn't:
+the server reads each Kmart product from Constructor.io's item lookup by its
+keycode (`monitor.lookup`: `/browse/items?ids=P_<keycode>`) — its stock (in
+stock somewhere, or out in every state), price, picture, pre-order and "In
+store only", as Kmart's own pages show them — and never asks for the page. A
+keycode it doesn't know is **not listed yet**; once it is, its link comes from
+the lookup too. Refused there, the item says so and the next check backs off, as
+for any store.
+
 **EB Games' product pages: from inside an EB tab** (extension **1.35.0**). In
 October 2026 every EB Games item on a watchlist said **Blocked by site**: EB's
 Cloudflare refuses the server ("The store refused the server check (HTTP 403)")
@@ -229,7 +246,7 @@ stick.
 | Store | Searched from | What's read |
 |---|---|---|
 | Target | Server first | Target's search page, newest first: every page with results (up to 4 pages of 48), with stock for every colour and size |
-| JB Hi-Fi | Server first | JB Hi-Fi's search suggestions (Shopify): 10 products a search, with stock. "tcg" is added to each keyword ("pokemon tcg"), because "pokemon" alone finds plushies and games |
+| JB Hi-Fi | Server first | JB Hi-Fi's search suggestions (Shopify): 10 products a search, with stock. "tcg" is added to each keyword ("pokemon tcg"), because "pokemon" alone finds plushies and games. **Every other search, its newest products** (`sweep.newestPath`: `/products.json?limit=30`, its whole range by when each was published, newest first — the top 30 are the last 20 minutes or so of what it put on sale): a drop is in it the moment JB publishes it, however far down the 10 a search returns it'd sit. Each product in it counts for the keyword in its name; one JB made more than 14 days before (JB republishes older products all day) and new to the catalogue is only noted, never alerted as a drop; and the list says who sells each one (a "Seller" option for marketplace sellers), so nothing more is asked of JB before a drop's alert. Its collections' own lists are empty: its pages draw them with their own code |
 | Toys"R"Us | Server first | Same as JB Hi-Fi (also a Shopify store) |
 | Trainer Town | Server first | Each game's whole collection (Shopify's product list for it): every product, sold-out ones too, with stock, price and the option to add to the cart, in one read. A keyword with no collection of its own is searched instead (search suggestions, like JB Hi-Fi). At most one read every 15 seconds: reading the whole collection every 5 seconds made Shopify answer **HTTP 429** (too many requests) |
 | Kmart | Server first | Kmart's search provider, Constructor.io: each keyword within Kmart's **Trading Cards** category, sold by Kmart or Target (not marketplace sellers), newest first. Every product's code, price, picture, pre-order flag and the states it's out of stock in: out of stock in every state = sold out online. Its loop reads **every trading card it sells in one list** (its Trading Cards browse, newest first, 200 to a page — 177 products in October 2026): each product every few seconds, whatever the keywords. A VIP or drop watch's words are searched on their own, across the whole store |
@@ -806,7 +823,7 @@ up and coming down, and tells everyone so they can get ready:
 
 | Store | Its gate | How Mugibot sees it |
 |---|---|---|
-| **JB Hi-Fi** | Shopify's **checkpoint**: an hCaptcha page at `https://www.jbhifi.com.au/checkpoint` that checkout goes through | The **server** looks at `/checkpoint` once a minute, as `Mugibot/1.0` (JB answers servers; it's swept from there too). Up: the page with its hCaptcha. Down: gone (404), sent on to the store, or no check there. A change is looked at again 10 seconds later and counts once it's seen twice. |
+| **JB Hi-Fi** | Shopify's **checkpoint**: an hCaptcha page at `https://www.jbhifi.com.au/checkpoint` that checkout goes through | The **server** looks at `/checkpoint` **every 5 seconds**, as `Mugibot/1.0` (JB answers servers; it's swept from there too; while it's off, the answer is a tiny "not found"). Up: the page with its hCaptcha. Down: gone (404), sent on to the store, or no check there. A change is looked at again **2 seconds** later and counts once it's seen twice, so it's posted within about 7 seconds of JB switching it on. A look JB doesn't answer within 8 seconds (its error page under a drop's load) counts for nothing, and the next one is seconds away. (It was once a minute, confirmed 10 seconds later: in October 2026 other groups had JB's checkpoint 4 minutes before Mugibot.) |
 | **EB Games** | A **virtual queue**: "You're in the queue!", an estimated wait, a page that refreshes itself | **Browsers**. Any member's browser that lands in the queue says so (two members, or one admin, make it up). An **admin's browser** asks for the front page as a **new visitor**, with no cookies, every 3 minutes (every minute while it's up). Down: that new visitor gets the store, twice in a row, at least 45 seconds apart. |
 | **Pokémon Center** | A **virtual queue** at `https://www.pokemoncenter.com/?queue` | The same as EB Games. |
 
@@ -847,6 +864,13 @@ is down 30 minutes after anyone last saw its checkpoint.
 - **Members watching something at that store** get a DM and an activity entry
   when it goes up, and again when it comes down. It goes by their restock DM
   setting.
+- **All at once.** The post is first in line for Discord, ahead of anything else
+  Mugibot is sending. The DMs go out 10 at a time, side by side, never one after
+  another, and a pool's leaders (with members who check out with them) are first.
+  Nobody's email holds up anyone's DM: it's sent alongside, and the next DM
+  doesn't wait for it. (Before, they went one member at a time, each waiting
+  for that member's email: a long list took minutes.) Members' own restock and
+  listing DMs don't wait on their emails either.
 - **Every dashboard** shows a banner while it's up: what to do, and a link to
   the store. The live monitor's event log says it too.
 

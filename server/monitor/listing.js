@@ -157,6 +157,10 @@ export function parseShopifyProducts(text, { base } = {}) {
     else if (vars.length && vars.every((v) => v.available === false)) inStock = false;
     const images = Array.isArray(p.images) ? p.images : [];
     const tags = Array.isArray(p.tags) ? p.tags : typeof p.tags === 'string' ? p.tags.split(',') : [];
+    // (A marketplace's sellers, where the store names them in an option of the product's own — JB Hi-Fi's "Seller":
+    //  its own products have none. The store says which names are its own: sweep.sellers.)
+    const sellerOption = (Array.isArray(p.options) ? p.options : []).find((o) => o && typeof o === 'object' && /^sellers?$/i.test(String(o.name || '')));
+    const created = Date.parse(p.created_at || '');
     products.push({
       sku: String(p.handle), aliases: p.id ? [String(p.id)] : [], title: clean(p.title), price,
       wasPrice: was && price && was > price ? was : null, inStock,
@@ -166,6 +170,9 @@ export function parseShopifyProducts(text, { base } = {}) {
       oneVariant: vars.length === 1,
       preorder: PREORDER_RE.test(`${p.title} ${tags.join(' ')} ${p.product_type || ''}`),
       url: httpsUrl(`${shop}/products/${encodeURIComponent(p.handle)}`, base), image: httpsUrl(images[0] && images[0].src, base), marketplace: false,
+      // When the store made it (a product republished long after: not a new drop) — and who sells it, when it says.
+      ...(Number.isFinite(created) ? { createdAt: created } : {}),
+      sellers: sellerOption && Array.isArray(sellerOption.values) ? sellerOption.values.map((v) => String(v).trim()).filter(Boolean).slice(0, 10) : [],
     });
   }
   return { products, total: products.length, problem: null };

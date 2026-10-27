@@ -349,6 +349,83 @@ test("EB Games (its Cloudflare refuses the server and the extension's background
   }
 });
 
+test("Kmart (its pages turn servers away): the server reads each product from Kmart's search provider by its keycode — never its page — in stock, in some states, pre-order, \"In store only\" and not listed yet as Kmart says; refused there, it's said and backed off", async () => {
+  const c = await member('kmartlookup');
+  // (Products of its own: no other test's checks of them due at another time.)
+  const KC = '43819901';
+  const KE = '43819902';
+  store.addProduct('kmart', { sku: KC, name: 'Pokemon TCG Lookup Elite Trainer Box', price: 89, status: 'out_of_stock' });
+  store.addProduct('kmart', { sku: KE, name: 'Pokemon TCG Lookup Booster Bundle', price: 49, status: 'in_stock', listed: false });
+  const r = await c.post('/api/items', { url: store.productUrl('kmart', KC), name: 'Kmart Lookup ETB' });
+  assert.equal(r.status, 200, r.text);
+  const S = store.shop('kmart');
+  const pages = () => hits('/kmart/product/');
+  const lookups = () => S.lookups || 0;
+  const [p0, l0] = [pages(), lookups()];
+  await advance();
+  let it = (await c.get('/api/items')).body.items.find((x) => x.id === r.body.id);
+  assert.equal(it.status, 'out_of_stock');
+  assert.equal(it.statusSource, 'server');
+  assert.equal(pages() - p0, 0, 'its page never asked for');
+  assert.equal(lookups() - l0, 1, 'looked up once, by keycode');
+  assert.ok(store.state.requests.some((x) => x.path === '/kmart/cnstrc/browse/items' && /^Mugibot\/1\.0/.test(x.ua)), 'honestly Mugibot');
+  // Back in stock: the restock ping, from the lookup.
+  store.set('kmart', KC, { status: 'in_stock' });
+  await advance();
+  it = (await c.get('/api/items')).body.items.find((x) => x.id === r.body.id);
+  assert.equal(it.status, 'in_stock');
+  assert.equal(await alerted(c, 'Kmart Lookup ETB'), true);
+  // Pre-order, and in Kmart's shops only: as Kmart says.
+  store.set('kmart', KC, { status: 'preorder' });
+  await advance();
+  assert.equal((await c.get('/api/items')).body.items.find((x) => x.id === r.body.id).status, 'preorder');
+  store.set('kmart', KC, { status: 'in_stock', inStoreOnly: true });
+  await advance();
+  assert.equal((await c.get('/api/items')).body.items.find((x) => x.id === r.body.id).status, 'in_store');
+  store.set('kmart', KC, { inStoreOnly: false });
+  // A keycode Kmart hasn't listed yet: not listed — then its link, once it is.
+  const early = await c.post('/api/items', { store: 'demo-kmart', sku: KE, name: 'Kmart Early' });
+  assert.equal(early.status, 200, early.text);
+  await advance();
+  let e = (await c.get('/api/items')).body.items.find((x) => x.id === early.body.id);
+  assert.equal(e.status, 'not_listed');
+  store.set('kmart', KE, { listed: true });
+  await advance();
+  e = (await c.get('/api/items')).body.items.find((x) => x.id === early.body.id);
+  assert.equal(e.url, store.productUrl('kmart', KE), 'its link, from the lookup');
+  await advance();
+  e = (await c.get('/api/items')).body.items.find((x) => x.id === early.body.id);
+  assert.equal(e.status, 'in_stock');
+  // The search provider refusing: said, backed off, the last stock kept.
+  S.lookupDown = true;
+  try {
+    await advance();
+    it = (await c.get('/api/items')).body.items.find((x) => x.id === r.body.id);
+    assert.match(it.error, /search provider refused the server check \(HTTP 503\)/);
+    assert.equal(it.status, 'in_stock', 'a refusal never reads as a change');
+    assert.equal(pages() - p0, 0, 'its page still never asked for');
+  } finally {
+    S.lookupDown = false;
+  }
+  // The admin console's page checks: Kmart's reads count as fine.
+  const kmart = env.app.catalog.health().find((h) => h.store === 'demo-kmart');
+  if (kmart) assert.ok(kmart.ok > 0);
+  for (const id of [r.body.id, early.body.id]) await c.del(`/api/items/${id}`);
+});
+
+test("EB Games (its Cloudflare turns away every server): the server never asks it, whatever an admin saved — browsers do — and the admin console says server checks are off there", async () => {
+  const eb = env.app.retailers.get('ebgames');
+  assert.equal(eb.monitor.server, 'never');
+  assert.equal(env.app.retailers.settings(eb).serverChecks, false);
+  env.app.repo.setSetting('retailer:ebgames', { serverChecks: true });
+  try {
+    assert.equal(env.app.retailers.settings(eb).serverChecks, false, 'whatever was saved');
+    assert.equal(env.app.retailers.settings(eb).browserChecks, true);
+  } finally {
+    env.app.repo.setSetting('retailer:ebgames', {});
+  }
+});
+
 test('announced SKUs (an admin\'s): restocks are posted in the Discord channel once', async () => {
   const boss = new Client(env.url);
   await boss.post('/api/auth/login', { username: 'boss', password: 'correct horse battery staple' });

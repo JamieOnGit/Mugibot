@@ -6,9 +6,10 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord } from './helpers.js';
+import { Client, Device, discordOpts, makeMember, startApp, startFakeDiscord, waitFor } from './helpers.js';
 import { startMockStore } from '../devtools/mockstore.js';
 import { hasWords, otherSku } from '../server/monitor/drops.js';
+import { NEWEST } from '../server/monitor/sweep.js';
 import { item as checkItem } from '../server/schema.js';
 
 let env;
@@ -170,10 +171,36 @@ test('🎯 an admin\'s words at a store: searched as typed in the sweeps\' turn;
   clock.offset += 31 * 1000;
   const turns = Array.from({ length: 9 }, () => sw().nextTerm(jb));
   assert.equal(turns.filter((t) => t.drop).length, 1, 'once its turn has come');
-  assert.ok(turns.filter((t) => !t.drop).every((t) => sw().settings.keywords.includes(t.keyword)), 'the card keywords keep the rest');
+  // (…and JB Hi-Fi's newest products, every other search of the rest.)
+  assert.ok(turns.filter((t) => !t.drop).every((t) => sw().settings.keywords.includes(t.keyword) || t.keyword === NEWEST), 'the card keywords (and the newest products) keep the rest');
   clock.offset += 31 * 1000;
   const more = Array.from({ length: 3 }, () => sw().nextTerm(jb));
   assert.equal(more.filter((t) => t.drop).length, 1);
+});
+
+test("🎯 a drop watch at JB Hi-Fi whose drop JB's newest products show first (before the watch's own search): still a drop — posted, bought for the admin — and the watch's own search doesn't post it again", async () => {
+  const jb = R('demo-jbhifi');
+  const before = posts(ch.nontcg).length;
+  const r = await boss.post('/api/drops', { store: 'demo-jbhifi', words: 'Nintendo Switch 3', label: 'Switch 3', aco: true, maxPrice: 900 });
+  assert.equal(r.status, 200, r.text);
+  const w = r.body.watch;
+  // Its first search sets its scene; the newest products' first read sets theirs.
+  assert.equal((await sw().sweepTerm(jb, { keyword: 'nintendo switch 3', page: 1, drop: 'shared' })).ok, true);
+  assert.equal((await sw().sweepTerm(jb, { keyword: NEWEST, page: 1 })).ok, true);
+  // JB publishes it: the newest products see it first.
+  store.addProduct('jbhifi', { sku: 'nintendo-switch-3-console-launch-edition', name: 'Nintendo Switch 3 Console Launch Edition', price: 799, status: 'in_stock' });
+  const s = await sw().sweepTerm(jb, { keyword: NEWEST, page: 1 });
+  assert.equal(s.ok, true, s.error);
+  await waitFor(() => posts(ch.nontcg).length > before, { message: 'posted in #non-tcg-alerts' });
+  assert.match(posts(ch.nontcg).at(-1).body.embeds[0].title, /^🆕 New drop: Nintendo Switch 3 Console Launch Edition/);
+  const item = env.app.repo.itemBySku(boss.user.id, 'demo-jbhifi', 'nintendo-switch-3-console-launch-edition');
+  assert.ok(item && item.aco && item.dropWatch === w.id, 'armed for the admin, as the watch says');
+  assert.equal(runsFor(item.id).length, 1, 'bought the moment it was found');
+  // The watch's own search finds it known: no second post.
+  const n = posts(ch.nontcg).length;
+  await sw().sweepTerm(jb, { keyword: 'nintendo switch 3', page: 1, drop: 'shared' });
+  assert.equal(posts(ch.nontcg).length, n);
+  await boss.del(`/api/drops/${w.id}`);
 });
 
 test('🎯 an admin picks the channel a watch for everyone posts in, and the role it pings: its drops and restocks go there instead of #non-tcg-alerts', async () => {
