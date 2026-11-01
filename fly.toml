@@ -1,6 +1,9 @@
 # Fly.io — see docs/SETUP.md, step 3.
 app = "mugibot-live"   # must match the name in `fly apps create` (docs/SETUP.md, step 3b)
 primary_region = "syd"   # Sydney
+# On a release or restart: time to finish what's going out (members' alerts, Auto-checkout runs) before it's stopped.
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
 
 [build]
 

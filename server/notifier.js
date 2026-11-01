@@ -94,7 +94,11 @@ export class Notifier {
     // 'aco': Auto-checkout (it spends their money): always DM'd.
     const wantsDm = { restock: settings.discordDm, listed: settings.discordDmListed, checkout: settings.discordDmCheckout, aco: true, account: true, signin: true }[ev.channel];
     if (wantsDm && user.discord_id && this.discord.botReady) {
-      jobs.push(this.discord.dm(user, this.message(ev), { urgent }).then((ok) => ok && sent.push('discord-dm')));
+      const t0 = Date.now();
+      jobs.push(this.discord.dm(user, this.message(ev), { urgent }).then((ok) => {
+        if (this.metrics) this.metrics.observe('dm_ms', Date.now() - t0, { ok: !!ok });
+        return ok && sent.push('discord-dm');
+      }));
     }
     const after = (job, what) => {
       const done = job.then((ok) => ok && sent.push(what));

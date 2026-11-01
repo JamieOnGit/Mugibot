@@ -131,6 +131,8 @@ export function loadConfig(overrides = {}, env = process.env) {
       // How often a member's own browser re-checks one of their own SKUs (stores that refuse server checks).
       browserIntervalSeconds: o.browserIntervalSeconds ?? int(env.BROWSER_CHECK_INTERVAL, 60),
       tickMs: o.monitorTickMs ?? 1000,
+      // Server page reads at once across every store (Mugibot 2.0: each store in its own lane, at most 4 of them its own).
+      maxInFlight: o.monitorMaxInFlight ?? int(env.MONITOR_MAX_IN_FLIGHT, 12),
       timeoutMs: o.monitorTimeoutMs ?? 15000,
       userAgent: o.userAgent ?? `Mugibot/1.0 (restock alerts; +${baseUrl})`,
       // Only for testing with a store on your own computer: lets the monitor fetch private addresses.

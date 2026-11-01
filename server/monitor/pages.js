@@ -492,7 +492,7 @@ export class PageWatches {
     //  as the browser reads it is.)
     const look = !(serverEmpty && !products.length && this.browserAround());
     try {
-      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now, whole, how, look });
+      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now, whole, how, look, wait: how !== 'server' });
       else await this.settleSite(peers, products, { fresh });
     } finally {
       for (const p of products) { const k = keyOf(p); if (k && st.seen.size < 5000) st.seen.add(k); }

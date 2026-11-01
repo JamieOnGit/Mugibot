@@ -4,6 +4,7 @@
 // people per SKU), not who. Every change is written to the audit log.
 
 import { sendResetLink } from './auth.js';
+import { dropWindows, readiness, reliability } from '../health.js';
 import { serialize } from '../retailers/index.js';
 import { commandDefinitions } from './discord.js';
 import { EXTENSION_VERSION, isStoreUrl, storeUrl, storeZip } from '../extension.js';
@@ -22,6 +23,15 @@ export function register(router, ctx) {
   const opts = { auth: 'admin' };
 
   router.get('/api/admin/stats', async () => repo.stats(), opts);
+  // Mugibot 2.0's health panel: each store's reliability score (server/health.js), its breaker, the P50/P95/P99 of page
+  // reads, Discord's requests, drops to Discord and members' DMs, what failed and what was tried again — and /readyz's checks.
+  router.get('/api/admin/health', async () => ({
+    ready: readiness(ctx, { lagMs: ctx.lag ? ctx.lag.lagMs : 0 }),
+    stores: reliability(ctx),
+    drops: dropWindows(ctx),
+    breakers: ctx.monitor.breakers.snapshot(),
+    metrics: ctx.metrics ? ctx.metrics.snapshot() : null,
+  }), opts);
 
   router.get('/api/admin/users', async (req) => repo.listUsers({
     q: str(req.query.get('q'), 100),

@@ -273,7 +273,8 @@ export class Aco {
       const out = await this.test(d.user_id, d.id, { queue: true }).catch((e) => ({ error: e.message }));
       if (out.error) {
         this.repo.addEvent(d.user_id, { type: 'aco', level: 'warn', message: `⏰ ${d.name}: 🚦 Wait for queue, then ACO didn't start at the time you picked — ${out.error}`, name: d.name, sku: d.sku, url: d.url || null });
-        await this.notifier.notify(d.user_id, {
+        // (Not waited for: the next member's start never waits behind this DM — Mugibot 2.0.)
+        this.notifier.notify(d.user_id, {
           type: 'aco', level: 'urgent', channel: 'aco', title: `⏰ Wait for queue, then ACO didn't start: ${d.name}`, message: out.error,
           name: d.name, sku: d.sku, url: d.url || null, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
         }).catch(() => null);

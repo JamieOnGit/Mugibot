@@ -20,6 +20,7 @@
 // members' SKUs they come across straight away; while a sweep has seen a SKU
 // lately, these slower checks leave it alone.
 
+import { Breakers, retryAfterMs } from './breaker.js';
 import { PRODUCTS_FOR_PAGE } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { DEFAULT_ALERTS } from '../schema.js';
@@ -43,6 +44,9 @@ export const RENDER_EXTENSION_VERSION = '1.27.0';
 export const GAP_EXTENSION_VERSION = '1.39.0';
 const ROUND_WAIT_MS = 15 * 1000;
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
+// Each store's lane (Mugibot 2.0): its due pages looked at a tick, and its reads at once (unless its monitor.hostConcurrency says).
+const LANE_CANDIDATES = 3;
+const LANE_MAX = 4;
 // Not at its store (yet): a page that's not found, a code its store's search provider doesn't have — said by reads this
 // far apart at least before it counts as not on sale (one empty answer may be the store's hiccup).
 const UNLISTED = new Set([STATUS.NOT_LISTED, STATUS.NOT_FOUND]);
@@ -91,6 +95,11 @@ export class Monitor {
     this.going = new Set(); // members' alerts still going out (deliver)
     this.lines = new Map(); // store → its lots of alerts going out (two at most)
     this.inFlight = new Set();
+    // Each store's lane (Mugibot 2.0): its reads in flight (a store never holds more than its share of the pool), its
+    // circuit breaker, and the pages whose alerts are still going out (their read done, their slot free).
+    this.laneBusy = new Map();
+    this.applying = new Set();
+    this.breakers = new Breakers({ now, log: (line) => this.cfg.log(line) });
     this.pageSaid = new Map(); // product → what its page last said, when (a read that worked): { on, at }
     this.timer = null;
     this.ticks = 0;
@@ -164,16 +173,23 @@ export class Monitor {
       this.db.run(`DELETE FROM page_checks WHERE kind = 'search' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = '' AND i.store = page_checks.store AND i.sku = page_checks.sku COLLATE NOCASE) AND NOT ${monitored}`);
       this.catalog.prune(this.cfg.monitor.logDays);
     }
-    // Oldest first — an armed item's page 15 seconds ahead of its place (its restock starts members' checkouts).
-    const due = this.db.all(`SELECT c.* FROM page_checks c
-      WHERE c.next_check_at <= :now AND (EXISTS (
-        SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
-        WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
-        OR EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id WHERE m.paused = 0 AND ${PRODUCTS_FOR_PAGE}))
-      ORDER BY c.next_check_at - CASE WHEN EXISTS (SELECT 1 FROM items i WHERE (${ITEMS_FOR_PAGE}) AND i.aco = 1 AND i.monitor = 1) THEN ${ARMED_AHEAD_MS} ELSE 0 END
-      LIMIT 50`, { now });
+    // Oldest first — an armed item's page 15 seconds ahead of its place (its restock starts members' checkouts) — and
+    // each store's lane apart (Mugibot 2.0): at most LANE_CANDIDATES of a store's due pages looked at a tick, so a store
+    // with hundreds due (or waiting out its gap, or its breaker open) never keeps another store's pages from being read.
+    const due = this.db.all(`SELECT * FROM (
+        SELECT d.*, ROW_NUMBER() OVER (PARTITION BY d.store, d.host ORDER BY d.prio) AS lane_rank FROM (
+          SELECT c.*, c.next_check_at - CASE WHEN EXISTS (SELECT 1 FROM items i WHERE (${ITEMS_FOR_PAGE}) AND i.aco = 1 AND i.monitor = 1) THEN ${ARMED_AHEAD_MS} ELSE 0 END AS prio
+          FROM page_checks c
+          WHERE c.next_check_at <= :now AND (EXISTS (
+            SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
+            WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
+            OR EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id WHERE m.paused = 0 AND ${PRODUCTS_FOR_PAGE}))
+        ) d
+      ) WHERE lane_rank <= ${LANE_CANDIDATES} ORDER BY prio LIMIT 400`, { now });
     const jobs = [];
+    const pool = this.cfg.monitor.maxInFlight;
     for (const page of due) {
+      if (this.inFlight.size >= pool) break;
       if (this.sweptLately(page.url, now)) {
         // A live sweep has just seen this product: no need to fetch its page as well.
         this.db.run('UPDATE page_checks SET next_check_at = :next WHERE url = :url', { url: page.url, next: now + this.pageInterval(page.url) });
@@ -185,15 +201,48 @@ export class Monitor {
         this.db.run("UPDATE page_checks SET next_check_at = :next, error = 'Server checks are off for this store' WHERE url = :url", { url: page.url, next: now + 10 * 60 * 1000 });
         continue;
       }
-      if (this.inFlight.has(page.url) || this.inFlight.size >= 4) continue;
-      if ((this.hostNext.get(page.host) || 0) > now) continue;
-      const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
-      this.hostNext.set(page.host, now + gap * 1000);
-      this.inFlight.add(page.url);
-      jobs.push(this.checkPage(page.url).finally(() => this.inFlight.delete(page.url)));
+      if (this.inFlight.has(page.url) || this.applying.has(page.url)) continue;
+      const free = this.take(page, retailer, now);
+      if (!free) continue;
+      jobs.push(this.checkPage(page.url, { onRead: free }).finally(free));
     }
     await Promise.all(jobs);
     return jobs.length;
+  }
+
+  /** A store's lane key: the store (any other website: its host). */
+  laneOf(page, retailer) {
+    return retailer && retailer.id !== 'other' ? retailer.id : page.host;
+  }
+
+  /**
+   * A slot for a server read of this page, if one's free now — the pool's (cfg.monitor.maxInFlight), the store's lane's
+   * (its monitor.hostConcurrency, else LANE_MAX), the gap between two requests to the host, the store's breaker closed
+   * (or half-open, letting one read try). Returns the function that frees it (once), or null.
+   */
+  take(page, retailer, now = this.now()) {
+    if (this.inFlight.has(page.url) || this.inFlight.size >= this.cfg.monitor.maxInFlight) return null;
+    const lane = this.laneOf(page, retailer);
+    const max = (retailer && retailer.monitor && retailer.monitor.hostConcurrency) || LANE_MAX;
+    if ((this.laneBusy.get(lane) || 0) >= max) return null;
+    if ((this.hostNext.get(page.host) || 0) > now) return null;
+    if (!this.breakers.allow(lane)) return null;
+    const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
+    this.hostNext.set(page.host, now + gap * 1000);
+    this.inFlight.add(page.url);
+    this.laneBusy.set(lane, (this.laneBusy.get(lane) || 0) + 1);
+    let freed = false;
+    return () => {
+      if (freed) return;
+      freed = true;
+      this.inFlight.delete(page.url);
+      const n = (this.laneBusy.get(lane) || 1) - 1;
+      if (n > 0) this.laneBusy.set(lane, n);
+      else this.laneBusy.delete(lane);
+      // (A half-open breaker's read that never said how it went — the page gone meanwhile: the next may try.)
+      const b = this.breakers.map.get(lane);
+      if (b) b.probing = false;
+    };
   }
 
   /** Has a live sweep seen what's on this product page in the last few minutes (the shared product, or members' SKUs)? */
@@ -250,7 +299,7 @@ export class Monitor {
     }
     const res = await this.get(url);
     if (res.status === 404 || res.status === 410) return { status: STATUS.NOT_FOUND };
-    if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store refused the server check (HTTP ${res.status})` };
+    if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store refused the server check (HTTP ${res.status})`, retryAfterMs: retryAfterMs(res.headers.get('retry-after'), this.now()) };
     if (!res.ok) return { status: STATUS.ERROR, error: `HTTP ${res.status}` };
     const html = (await res.text()).slice(0, 3_000_000);
     const queued = this.gateSeen(retailer, res.url || url, html);
@@ -343,7 +392,7 @@ export class Monitor {
     return { status: STATUS.NOT_LISTED };
   }
 
-  async checkPage(url) {
+  async checkPage(url, { onRead = null } = {}) {
     const prev = this.db.get('SELECT * FROM page_checks WHERE url = :url', { url });
     if (!prev) return null;
     const retailer = this.retailers.get(prev.store) || this.retailers.forUrl(url);
@@ -366,11 +415,31 @@ export class Monitor {
     this.db.run(`UPDATE page_checks SET status = :status, title = COALESCE(:title, title), price = COALESCE(:price, price), signals = :sig,
       checked_at = :now, next_check_at = :next, fail_count = :fails, error = :err, found_url = COALESCE(:found, found_url) WHERE url = :url`,
     { url, status, title: r.title || null, price: r.price ?? null, sig: r.decidedBy || null, now, next, fails: failCount, err: r.error || '', found: r.foundUrl || null });
+    // The store's breaker: a read that failed counts toward opening it (a Retry-After at once), one that worked closes it.
+    const lane = this.laneOf(prev, retailer);
+    if (failed) this.breakers.failure(lane, { retryAfterMs: r.retryAfterMs || 0, error: r.error || r.status });
+    else this.breakers.success(lane);
+    if (this.metrics) this.metrics.observe('page_read_ms', ms, { store: lane, ok: !failed });
+    // The read's done: its slot's free for the next page while this one's news goes out (Mugibot 2.0 — a Discord 429
+    // never holds up the monitor). (This page isn't read again till its news is out: applying.)
+    this.applying.add(url);
+    if (onRead) onRead();
+    try {
+      return await this.applyRead(url, prev, r, { failed, status, ms });
+    } finally {
+      this.applying.delete(url);
+    }
+  }
 
+  /** A page read's news: members' Auto-checkout runs, their alerts, the shared feed, VIP and drop watches (checkPage). */
+  async applyRead(url, prev, r, { failed, status, ms }) {
+    const now = this.now();
     // (On sale on its page, a moment after a search said it wasn't: never a restock for a watch that armed it on that.)
     if (!failed && prev.kind === 'product' && isOrderable(r.status)) for (const p of this.catalog.productsForPage(url)) await this.disagreed(p.store, p.sku);
-    // Members watching this page: each armed one's Auto-checkout run first; their alerts once the feed's are out.
+    // Members watching this page: each armed one's Auto-checkout run first; their alerts with the feed's (Mugibot 2.0:
+    // the channel posts first in Discord's line, never waited for).
     const later = [];
+    const posting = [];
     const items = prev.kind === 'search' && r.foundUrl ? [] : this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id, page_checks c
       WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { url, now });
     await this.applyAll(items, { status, title: r.title || null, price: r.price ?? null, error: r.error || '' }, 'server', { later });
@@ -381,14 +450,17 @@ export class Monitor {
         // (Not at its store till this read, as its page's reads said: when it was last said — Monitor.unlisted.)
         const unlistedAt = !failed && this.unlisted(product) ? product.last_ok_at : null;
         // What this check really saw: the feed keeps the last confirmed status itself.
-        await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
+        await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms, posting });
         // What every VIP and drop watch that's seen it saw (monitor/sightings.js) — a read that worked only. (A product not
         // at its store yet — a page not found, Kmart's "not listed" — isn't on sale yet.)
         if (!failed && prev.kind === 'product') await this.watchReading(product.id, r.status, 'page', { later, notListed: true, unlistedAt });
       }
     } finally {
       // (Even when the shared feed's failed. Going out while the next pages are checked: deliver.)
+      const posted = this.follow(Promise.allSettled(posting));
       await this.deliver(later, prev.store);
+      // (Answered once its channel posts are in — its slot was freed the moment the store answered: onRead.)
+      await posted;
     }
     if (prev.kind === 'search' && r.foundUrl) {
       this.resolveSku(prev.store, prev.sku, r.foundUrl);
@@ -507,6 +579,13 @@ export class Monitor {
     while (this.going.size) await Promise.allSettled([...this.going]);
   }
 
+  /** Something going out (a read's channel posts) that delivered() waits for too — nothing else does. */
+  follow(p) {
+    const q = Promise.resolve(p).catch(() => null).finally(() => this.going.delete(q));
+    this.going.add(q);
+    return q;
+  }
+
   /**
    * A page to read as soon as the monitor may (a drop watch's find whose stock its search didn't say, another website's
    * new listing): next in the monitor's round — and now, without waiting for it, when its store can be asked this
@@ -523,13 +602,12 @@ export class Monitor {
     this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
     const retailer = this.retailers.get(page.store) || this.retailers.forUrl(url);
     if (retailer && !this.retailers.settings(retailer).serverChecks) return null;
-    if (this.inFlight.has(url) || this.inFlight.size >= 4 || (this.hostNext.get(page.host) || 0) > now) return null;
-    const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
-    this.hostNext.set(page.host, now + gap * 1000);
-    this.inFlight.add(url);
+    if (this.applying.has(url)) return null;
+    const free = this.take(page, retailer, now);
+    if (!free) return null;
     // (Waited for by delivered(), as the alerts it sends are.)
-    const p = this.checkPage(url).catch((e) => this.cfg.log('[monitor]', e.message)).finally(() => {
-      this.inFlight.delete(url);
+    const p = this.checkPage(url, { onRead: free }).catch((e) => this.cfg.log('[monitor]', e.message)).finally(() => {
+      free();
       this.going.delete(p);
     });
     this.going.add(p);
@@ -641,9 +719,13 @@ export class Monitor {
     const items = this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id
       WHERE i.store = :s AND i.sku = :k COLLATE NOCASE AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { s: store, k: sku, now });
     let pinged = 0;
-    for (const item of items) {
-      if (await this.alertRestock({ ...item, announce: 0 }, { status: STATUS.IN_STOCK, price: item.last_price, source: 'manual', manual: true, note })) pinged += 1;
+    // (Mugibot 2.0: every armed member's Auto-checkout run made first, the DMs after — never the Nth run behind N−1 DMs.)
+    const later = [];
+    const order = [...items].sort((a, b) => (b.aco ? 1 : 0) - (a.aco ? 1 : 0));
+    for (const item of order) {
+      if (await this.alertRestock({ ...item, announce: 0 }, { status: STATUS.IN_STOCK, price: item.last_price, source: 'manual', manual: true, note, later })) pinged += 1;
     }
+    await this.deliver(later, store);
     const sample = items[0] || { store, sku, name: name || sku, url };
     const product = this.catalog.upsertProduct({ store, sku, url: sample.url || url, name: name || sample.name });
     const fresh = this.catalog.updateProduct(product.id, { status: STATUS.IN_STOCK, status_source: 'manual', status_at: now });

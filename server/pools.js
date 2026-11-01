@@ -600,11 +600,16 @@ export class Pools {
         continue;
       }
       const s = this.ctx.aco.settings(m.user_id);
-      const run = await this.ctx.aco.trigger(row, {
-        price, test: explicit, later: tell, variantId, queue: queue && s.mode === 'place',
-        pool: { leader: leader ? leader.username : '', explicit },
-      });
-      if (run) runs.push(run);
+      // (Mugibot 2.0: one member's run failing to start never stops the members after them.)
+      try {
+        const run = await this.ctx.aco.trigger(row, {
+          price, test: explicit, later: tell, variantId, queue: queue && s.mode === 'place',
+          pool: { leader: leader ? leader.username : '', explicit },
+        });
+        if (run) runs.push(run);
+      } catch (e) {
+        this.cfg.log('[pools]', `fan-out to a member failed: ${e.message}`);
+      }
     }
     // (Started first, every one of them — then told.)
     if (!later) await Promise.allSettled(tell.map((f) => f()));

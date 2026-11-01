@@ -396,6 +396,12 @@
       <section data-panel="monitor-log" hidden>
         <div class="mon-head"><div class="mon-titles"><div class="mon-title"><h2>Check log</h2></div><p class="mon-sub">Every page check of a monitored product, and how each store answered. Admins only.</p></div></div>
         <nav class="mon-tabs" aria-label="Monitor pages" hidden><a href="#monitor" data-mtab="monitor">Live</a><a href="#monitor-settings" data-mtab="monitor-settings">Settings</a><a href="#monitor-log" data-mtab="monitor-log">Check log</a></nav>
+        <section class="mon-card" id="rel-card">
+          <header class="mon-card-hd"><h3>📈 Reliability &amp; delivery (Mugibot 2.0)</h3><span class="mon-meta" id="rel-ready"></span></header>
+          <p class="mon-help">Each store's score over the last hour (reads that worked 60%, page speed 20%, its circuit breaker 10%, alerts reaching Discord 10%), and how fast alerts and DMs went out (P50 / P95 / P99 since the last restart). Drop windows are estimates from the last 90 days of drops — never a promise.</p>
+          <div class="table-wrap"><table class="table" id="rel-table"><thead><tr><th>Store</th><th>Score</th><th>OK</th><th>Read P95</th><th>Breaker</th><th>To Discord P95</th><th>Drop windows (estimate)</th></tr></thead><tbody></tbody></table></div>
+          <p class="mon-help" id="rel-delivery"></p>
+        </section>
         <section class="mon-card">
           <header class="mon-card-hd"><h3>Page checks</h3><button class="btn small" id="mh-refresh" type="button">Refresh</button></header>
           <p class="mon-help" id="mh-loop"></p>

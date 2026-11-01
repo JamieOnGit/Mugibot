@@ -5,6 +5,8 @@ import http from 'node:http';
 import { Aco } from './aco.js';
 import { Bags } from './bags.js';
 import { SignIns } from './signins.js';
+import { Metrics } from './metrics.js';
+import { lagMeter } from './health.js';
 import { Pools } from './pools.js';
 import { Drops } from './monitor/drops.js';
 import { PageWatches } from './monitor/pages.js';
@@ -60,6 +62,11 @@ export async function createApp(options = {}) {
   const hub = new Hub();
   const mailer = new Mailer(cfg, fetchImpl);
   const discord = new Discord({ cfg, repo, fetchImpl, now });
+  // Delivery and detection metrics (Mugibot 2.0: P50/P95/P99 for the health panel and /readyz).
+  const metrics = new Metrics({ now });
+  discord.metrics = metrics;
+  // (The event loop's delay, for /readyz: a stalled process says so.)
+  const lag = lagMeter();
   const notifier = new Notifier({ cfg, repo, retailers, hub, mailer, discord, fetchImpl, now });
   const whop = new Whop({ cfg, repo, notifier, discord, fetchImpl, now });
   const catalog = new Catalog({ db, repo, now });
@@ -67,6 +74,10 @@ export async function createApp(options = {}) {
   const monitor = new Monitor({ cfg, repo, retailers, notifier, hub, catalog, feed, fetchImpl: storeFetchImpl, now });
   const sweeper = new Sweeper({ cfg, repo, catalog, feed, monitor, retailers, hub, fetchImpl: storeFetchImpl, now });
   monitor.sweeper = sweeper; // (a product the searches found, read off its own page: sweeper.pageRead)
+  Object.assign(monitor, { metrics });
+  Object.assign(feed, { metrics });
+  Object.assign(sweeper, { metrics });
+  Object.assign(notifier, { metrics });
   const limiter = new RateLimiter(now);
   // VIP drops: admins' watches, alerted in #vip-drop and checked fast around their drop time.
   const vip = new Vip({ cfg, db, repo, catalog, retailers, hub, now });
@@ -102,7 +113,7 @@ export async function createApp(options = {}) {
   Object.assign(monitor, { access });
   // Release news: admins' and the news feeds', posted in #news (and a digest each morning).
   const news = new News({ cfg, db, repo, retailers, discord, notifier, fetchImpl: storeFetchImpl, now });
-  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, pages, news, access, limiter, pageCache: new Map() };
+  const ctx = { cfg, db, repo, retailers, hub, mailer, discord, notifier, whop, monitor, sweeper, catalog, feed, vip, gates, drops, pages, news, access, metrics, lag, limiter, pageCache: new Map() };
   drops.ctx = ctx;
   // Auto-checkout: started by the monitor when an armed item drops.
   const aco = new Aco({ ...ctx, now });
@@ -291,6 +302,7 @@ export async function createApp(options = {}) {
     news,
     aco,
     signins,
+    metrics,
     bags,
     pools,
     catalog,
@@ -331,6 +343,7 @@ export async function createApp(options = {}) {
       aco.stop();
       bags.stop();
       pools.stop();
+      lag.stop();
       timers.forEach(clearInterval);
       // (Members' alerts still going out: given a few seconds to finish.)
       await Promise.race([monitor.delivered(), new Promise((r) => setTimeout(r, 5000).unref?.())]);

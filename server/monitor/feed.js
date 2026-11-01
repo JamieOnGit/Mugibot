@@ -51,7 +51,7 @@ export class Feed {
    * One check of a product page (or its search page).
    * r: { status, title, price, image, variantId, error }   info: { source: 'server'|'browser', url, ms }
    */
-  async applyCheck(product, r, { source, url, ms = null }) {
+  async applyCheck(product, r, { source, url, ms = null, posting = null }) {
     const now = this.now();
     const failed = FAILED.has(r.status);
     this.catalog.logCheck({ productId: product.id, store: product.store, url, source, status: r.status, price: r.price ?? null, ms, error: r.error || '' });
@@ -90,7 +90,7 @@ export class Feed {
     }
     const fresh = this.catalog.updateProduct(product.id, set);
     if (r.status !== prev || priceMoved) this.broadcast('product', toProduct(fresh));
-    await this.transitions(product, fresh);
+    await this.transitions(product, fresh, { posting });
     return fresh;
   }
 
@@ -98,7 +98,16 @@ export class Feed {
    * A monitored product's confirmed change → the alerts its monitor asks for.
    * The first successful check only sets the scene; changes after it are news.
    */
-  async transitions(before, fresh) {
+  /**
+   * posting: a read's list of channel posts on their way (Mugibot 2.0) — this one's alerts added to it, not waited for
+   * here, so the read carries on while Discord posts them.
+   */
+  async transitions(before, fresh, { posting = null } = {}) {
+    const alertOf = async (product, kind, opts = {}) => {
+      const a = await this.alert(product, kind, { ...opts, wait: !posting });
+      if (posting && a && a.posting) posting.push(a.posting);
+      return a;
+    };
     let prev = before.status;
     const wasKnown = prev !== 'pending' && !!before.last_ok_at;
     if (!wasKnown) return;
@@ -112,17 +121,17 @@ export class Feed {
     // to compare with, so no stock alert — it's how it was, not a change.
     if (prev === STATUS.UNKNOWN) prev = fresh.status;
     if (isOrderable(fresh.status) && !isOrderable(prev)) {
-      await this.alert(fresh, 'restock', { note: prev === STATUS.NOT_LISTED ? 'Just listed.' : '' });
+      await alertOf(fresh, 'restock', { note: prev === STATUS.NOT_LISTED ? 'Just listed.' : '' });
     } else if (prev === STATUS.NOT_LISTED && ![STATUS.NOT_LISTED, STATUS.NOT_FOUND, STATUS.UNKNOWN].includes(fresh.status)) {
-      await this.alert(fresh, 'listed');
+      await alertOf(fresh, 'listed');
     } else if (isOrderable(prev) && fresh.status === STATUS.OUT_OF_STOCK) {
-      await this.alert(fresh, 'sold_out');
+      await alertOf(fresh, 'sold_out');
     }
     const price = fresh.price;
     const prevPrice = before.price;
     if (typeof price === 'number' && typeof prevPrice === 'number' && prevPrice > 0 && Math.abs(price - prevPrice) >= 0.005) {
       const pct = ((price - prevPrice) / prevPrice) * 100;
-      if (Math.abs(pct) >= this.cfg.monitor.priceChangePercent) await this.alert(fresh, pct < 0 ? 'price_drop' : 'price_rise', { pct });
+      if (Math.abs(pct) >= this.cfg.monitor.priceChangePercent) await alertOf(fresh, pct < 0 ? 'price_drop' : 'price_rise', { pct });
     }
   }
 
@@ -168,6 +177,8 @@ export class Feed {
         if (detectedAt) {
           this.toDiscord.push(Math.max(0, this.now() - detectedAt));
           if (this.toDiscord.length > 50) this.toDiscord.shift();
+          // (Mugibot 2.0: P50/P95/P99, per store too — the health panel's.)
+          if (this.metrics) this.metrics.observe('detect_to_discord_ms', Math.max(0, this.now() - detectedAt), { store: product.store });
         }
       }
       return posted;

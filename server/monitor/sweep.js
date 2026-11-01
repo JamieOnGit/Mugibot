@@ -741,7 +741,8 @@ export class Sweeper {
   }
 
   /** One search from the server: fetch, read, compare, alert. */
-  async sweepTerm(r, term) {
+  /** wait: answered once the search's channel posts are in (the live loop doesn't wait: its next search goes meanwhile). */
+  async sweepTerm(r, term, { wait = true } = {}) {
     await this.refreshCollections(r);
     const url = this.urlFor(r, term.keyword, term.page, { vip: !!(term.vip || term.drop) });
     const started = Date.now();
@@ -777,7 +778,7 @@ export class Sweeper {
       return this.allFailed(r, parsed.problem === 'layout' ? "it wasn't the product list Mugibot reads" : 'no products in it');
     }
     const title = /<title[^>]*>([^<]{0,300})/i.exec(text);
-    return this.ingest(r, term, parsed, { source: 'server', url, ms, seen: { title: title ? title[1] : '', bytes: text.length } });
+    return this.ingest(r, term, parsed, { source: 'server', url, ms, seen: { title: title ? title[1] : '', bytes: text.length }, wait });
   }
 
   /**
@@ -875,7 +876,7 @@ export class Sweeper {
   }
 
   /** What one search found. parsed: { products, total, problem } */
-  async ingest(r, term, parsed, { source, url, ms = null, seen = null, way = source }) {
+  async ingest(r, term, parsed, { source, url, ms = null, seen = null, way = source, wait = false }) {
     // A person's check in an admin's browser: only that person passes it (Mugibot never answers one).
     if (parsed.problem === 'blocked') {
       return this.record(r, term, {
@@ -1037,7 +1038,6 @@ export class Sweeper {
       if (this.sightings) for (const w of mine) this.sightings.ownRead(w, r.id, { whole, codes: codesIn, how: way });
       // A new card listing in a read that isn't setting its scene (not a VIP or drop watch's own search): drop mode.
       if (cardsNew && !baseline && !term.vip && !term.drop) this.heat(r, all ? null : term.keyword, now);
-      await Promise.allSettled(posting);
       const out = this.record(r, term, { ok: true, url, source, ms, baseline, total: parsed.total ?? null, ...counts, error: parsed.problem === 'empty' ? emptyText(r, term, parsed) : '' });
       // (Its newest products read under their own name for the first time, at a store with no later pages: the second
       //  pages they were read as before — the card shops' — are no longer searched, so they leave its list of searches.)
@@ -1045,10 +1045,13 @@ export class Sweeper {
       out.gone = all ? 0 : await this.markGone(r, term.keyword, now);
       return out;
     } finally {
-      // (Members' own alerts once the channel's are out — even when reading the rest of the list failed — going out
-      //  while the store's next search is on its way: monitor.deliver.)
-      await Promise.allSettled(posting);
+      // (Members' own alerts — even when reading the rest of the list failed — going out with the channel's (Mugibot 2.0:
+      //  never waiting for them; the channel's go first in Discord's line, urgent) while the store's next search is on its
+      //  way: monitor.deliver.)
+      const posted = this.monitor.follow(Promise.allSettled(posting));
       await this.monitor.deliver(later, r.id);
+      // (wait: a browser's results — answered once the channel's posts are in, as before; members' DMs already going.)
+      if (wait) await posted;
     }
   }
 
@@ -1062,7 +1065,7 @@ export class Sweeper {
    * not on sale and is on sale now. What's bought is what the watch saw (monitor/sightings.js): this read is
    * the page's watches' own — whole: it holds every result the store has for the page.
    */
-  async ingestPage(r, watches, products, { fresh = null, whole = false, how = '', look = true, now = this.now() } = {}) {
+  async ingestPage(r, watches, products, { fresh = null, whole = false, how = '', look = true, now = this.now(), wait = false } = {}) {
     const s = this.settings;
     const counted = { found: products.length, kept: 0, new: 0, restock: 0, price: 0 };
     const counts = this.filters(s);
@@ -1115,12 +1118,13 @@ export class Sweeper {
       }
       // (One more read of each watch's first look, while that's going.)
       if (this.sightings && look) for (const w of watches) this.sightings.ownRead(w, r.id, { whole, codes: codesIn, how });
-      await Promise.allSettled(posting);
       return counted;
     } finally {
-      // (Members' own alerts once the channel's are out.)
-      await Promise.allSettled(posting);
+      // (Members' own alerts with the channel's, never waiting for them.)
+      const posted = this.monitor.follow(Promise.allSettled(posting));
       await this.monitor.deliver(later, r.id);
+      // (wait: a browser's results — answered once the channel's posts are in, as before; members' DMs already going.)
+      if (wait) await posted;
     }
   }
 
@@ -1302,7 +1306,7 @@ export class Sweeper {
       }
     }
     // A monitor on this product also gets the alerts it asks for (sold out, price up…).
-    if (monitor && !monitor.paused && before) await this.feed.transitions(before, fresh2());
+    if (monitor && !monitor.paused && before) await this.feed.transitions(before, fresh2(), { posting });
     return sent;
   }
 
@@ -1701,7 +1705,8 @@ export class Sweeper {
         }
         const term = backup ? this.tryTerm(r) : this.nextTerm(r);
         const began = Date.now();
-        await this.sweepTerm(r, term).catch((e) => this.record(r, term, { ok: false, source: 'server', error: e.message }));
+        // (Mugibot 2.0: its channel posts and members' DMs go out while the store's next search is on its way.)
+        await this.sweepTerm(r, term, { wait: false }).catch((e) => this.record(r, term, { ok: false, source: 'server', error: e.message }));
         const spent = Date.now() - began;
         // Handed over to an admin's browser (or still standing in): the next try waits at the top.
         if (st.backup && this.modeFor(r) === 'auto') continue;
@@ -1952,7 +1957,7 @@ export class Sweeper {
       // (Asked for at the same address as the server would — not a page drawn or asked from inside the store's own: its
       //  answer is the server's, as far as what a watch saw goes.)
       const way = r.sweep.render || r.sweep.inPage ? 'browser' : 'server';
-      out.push(await this.ingest(r, term, { products, total, ...(perPage !== null ? { perPage } : {}), ...(count !== null ? { count } : {}), problem, stated, none: res.none === true }, { source: 'browser', url, ms, seen, way }));
+      out.push(await this.ingest(r, term, { products, total, ...(perPage !== null ? { perPage } : {}), ...(count !== null ? { count } : {}), problem, stated, none: res.none === true }, { source: 'browser', url, ms, seen, way, wait: true }));
     }
     return out;
   }

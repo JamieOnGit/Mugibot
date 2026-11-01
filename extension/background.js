@@ -1660,14 +1660,18 @@ async function acoLoop() {
   }
   acoLooping = true;
   try {
-    for (let quiet = 0; quiet < 3;) {
+    for (let quiet = 0; ;) {
       // (An extension call between asks keeps this worker running while it waits.)
       await chrome.storage.session.set({ acoBeat: Date.now() });
       const started = Date.now();
       const res = await api('GET', `/api/ext/aco/next?wait=20&card=${await cardStateNow()}`, undefined, { timeoutMs: 40000 });
       if (res.status !== 200 || !res.body) {
-        quiet += 1; // offline, or the account's membership ended: try again in a moment, then leave it to the alarm
-        await new Promise((r) => setTimeout(r, 3000));
+        // Signed out of Mugibot, or the membership ended: left to the alarm. Offline, or the server restarting (a
+        // release): asked again with a growing wait — 1.5 s, 3 s, 6 s… never more than 15 s apart (1.40.0: it stopped
+        // after three tries before, and a drop just after a release waited up to half a minute for Chrome's alarm).
+        quiet += 1;
+        if ([401, 402, 403].includes(res.status) || quiet >= 40) break;
+        await new Promise((r) => setTimeout(r, Math.min(15000, 1500 * 2 ** Math.min(quiet - 1, 4))));
         continue;
       }
       quiet = 0;

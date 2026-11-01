@@ -1,5 +1,6 @@
 // Web pages: the public site, sign-in pages, the dashboard and admin.
 
+import { readiness } from '../health.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT } from '../config.js';
@@ -89,6 +90,13 @@ export function servePage(ctx, req, res, url) {
   if (url.pathname === '/healthz') {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ok');
+    return true;
+  }
+  // Mugibot 2.0: really working, not just answering (server/health.js) — what a deploy waits for.
+  if (url.pathname === '/readyz') {
+    const out = readiness(ctx, { lagMs: ctx.lag ? ctx.lag.lagMs : 0 });
+    res.writeHead(out.ok ? 200 : 503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify(out));
     return true;
   }
   if (url.pathname === '/robots.txt') {

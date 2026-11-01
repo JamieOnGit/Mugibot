@@ -631,7 +631,32 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     $('#mr-name').focus();
   }
 
+  // Mugibot 2.0's reliability & delivery card: scores, breakers, P95s, drop windows (estimates), /readyz's checks.
+  async function loadReliability() {
+    const d = await api('GET', '/api/admin/health');
+    const ms = (v) => (v === null || v === undefined ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);
+    $('#rel-ready').textContent = d.ready.ok ? '✓ Ready' : `✕ Not ready: ${Object.entries(d.ready.checks).filter(([, c]) => !c.ok).map(([k]) => k).join(', ')}`;
+    const drops = new Map((d.drops || []).map((x) => [x.store, x]));
+    const body = $('#rel-table tbody');
+    body.textContent = '';
+    if (!d.stores.length) body.append(h('tr', {}, h('td', { colspan: '7', class: 'muted' }, 'No reads in the last hour.')));
+    for (const s of d.stores) {
+      const cls = s.score === null ? '' : s.score >= 85 ? 'ok' : s.score >= 60 ? 'warn' : 'err';
+      const w = drops.get(s.store);
+      body.append(h('tr', { dataset: { store: s.store } },
+        h('td', {}, s.name), h('td', {}, s.score === null ? '—' : h('span', { class: `pill ${cls}` }, String(s.score))), h('td', {}, s.successRate === null ? '—' : `${s.successRate}%`),
+        h('td', {}, ms(s.readP95Ms)), h('td', {}, s.breaker), h('td', {}, ms(s.alertP95Ms)), h('td', { class: 'small' }, w && w.estimate ? w.estimate : '—')));
+    }
+    const ser = (d.metrics && d.metrics.series) || {};
+    const line = (label, k) => (ser[k] ? `${label}: P50 ${ms(ser[k].p50)} · P95 ${ms(ser[k].p95)} · P99 ${ms(ser[k].p99)} (${ser[k].n})` : null);
+    const c = (d.metrics && d.metrics.counters) || {};
+    const retried = Object.entries(c).filter(([k]) => k.startsWith('discord_retried')).reduce((a, [, n]) => a + n, 0);
+    const failed = Object.entries(c).filter(([k]) => k.startsWith('discord_failed')).reduce((a, [, n]) => a + n, 0);
+    $('#rel-delivery').textContent = [line('Drop → Discord', 'detect_to_discord_ms'), line('Member DMs', 'dm_ms'), line('Discord requests', 'discord_request_ms'), `Discord: ${retried} tried again, ${failed} failed`].filter(Boolean).join(' · ');
+  }
+
   async function loadHealth() {
+    loadReliability().catch(() => null);
     const { loop, stores } = await api('GET', '/api/monitor/health');
     $('#mh-loop').textContent = !loop.enabled ? 'The monitor is switched off (MONITOR_ENABLED=0).'
       : `Monitor loop: ${loop.lastTickAt ? `last ran ${ago(loop.lastTickAt)}` : 'not started yet'} · ${loop.inFlight} checking now · ${loop.due} page${loop.due === 1 ? '' : 's'} due · default every ${loop.intervalSeconds}s, ${loop.hostGapSeconds}s between requests to one store`;

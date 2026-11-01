@@ -49,7 +49,26 @@ jobs:
           exit 1
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
+      # The rollback point (Mugibot 2.0): a snapshot of the database volume made just before every release — no snapshot,
+      # no release. To go back: docs/OPERATIONS.md ("Roll back").
+      - name: Snapshot the database volume before deploying
+        run: |
+          set -euo pipefail
+          APP=$(sed -n 's/^app = "\([^"]*\)".*/\1/p' fly.toml)
+          VOL=$(flyctl volumes list -a "$APP" --json | jq -r '.[] | select(.name == "mugibot_data") | .id' | head -n1)
+          if [ -z "$VOL" ]; then echo "::error::No mugibot_data volume found for $APP"; exit 1; fi
+          flyctl volumes snapshots create "$VOL" -a "$APP"
+          echo "Snapshot requested for volume $VOL (list: flyctl volumes snapshots list $VOL -a $APP)"
       - run: flyctl deploy --remote-only --ha=false
+      # Really working after the release, not just answering: the database, the monitor, the process (/readyz). Red if
+      # not — with the commands to roll back.
+      - name: Check the release is ready
+        run: |
+          APP=$(sed -n 's/^app = "\([^"]*\)".*/\1/p' fly.toml)
+          if curl -fsS --retry 12 --retry-delay 10 --retry-all-errors --max-time 10 "https://$APP.fly.dev/readyz"; then echo; echo "Ready."; else
+            echo "::error::/readyz didn't pass after the release. Roll back: flyctl releases -a $APP (find the previous image), then flyctl deploy -a $APP --image <previous image> (docs/OPERATIONS.md)."
+            exit 1
+          fi
 
   publish-extension:
     needs: deploy

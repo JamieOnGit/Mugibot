@@ -25,8 +25,18 @@ const URGENT_PER_SECOND = 48;
 // A request counts for its second and this much more: it's sent a moment after its place is taken, and a millisecond
 // turning in between mustn't let a 46th into the same second.
 const PACE_SLACK_MS = 5;
-// First-time DMs each open a DM channel first, all on one route: two at a time, so a drop's first DMs don't run it dry.
-const OPENING_AT_ONCE = 2;
+// First-time DMs each open a DM channel first, all on one route: four at a time (Mugibot 2.0: two before — a drop with
+// many new members took 16 s for 200 DMs), so a drop's first DMs don't run it dry; a 429 there is waited out as anywhere.
+const OPENING_AT_ONCE = 4;
+// Mugibot 2.0 — what Discord didn't take is tried again, never lost on the first hiccup: a request that couldn't reach it
+// or timed out, or a 5xx, up to RETRIES more times (300 ms, 600 ms, 1.2 s, ±25%); a 429 waited out up to RATE_LIMIT_TRIES
+// times. Only requests that are safe to repeat: reads, PUT / PATCH / DELETE, opening a DM channel (the same one comes
+// back), and messages — each sent with a nonce Discord enforces, so a message that did arrive is never posted twice.
+const RETRIES = 3;
+const RATE_LIMIT_TRIES = 8;
+let nonces = 0;
+/** A message's nonce (Discord: up to 25 characters), the same for each try of it. */
+export const messageNonce = () => `${Date.now().toString(36)}${(nonces++ % 1679616).toString(36).padStart(4, '0')}${Math.floor(Math.random() * 1296).toString(36)}`.slice(0, 25);
 
 /** Plain words for the Discord errors people hit while setting up. */
 function explain(status, body, what) {
@@ -102,11 +112,20 @@ export class Discord {
     if (this.freeAt.size > 500) for (const [k, t] of this.freeAt) if (t <= now) this.freeAt.delete(k);
   }
 
-  /** urgent: a drop's channel post — first in line. */
-  async api(method, path, body, { bearer = null, form = null, urgent = false } = {}) {
+  /** urgent: a drop's channel post — first in line. retry: a POST that's safe to repeat (see RETRIES). */
+  async api(method, path, body, { bearer = null, form = null, urgent = false, retry = method !== 'POST' } = {}) {
     // (Discord's limits are per route: this message channel, that DM…)
     const route = `${method} ${path.split('?')[0]}`;
-    for (let attempt = 0; attempt < 4; attempt++) {
+    const t0 = Date.now();
+    let failures = 0;
+    const done = (out) => {
+      if (this.metrics) {
+        this.metrics.observe('discord_request_ms', Date.now() - t0, { ok: out.status >= 200 && out.status < 300 });
+        if (!(out.status >= 200 && out.status < 300)) this.metrics.count('discord_failed', { status: String(out.status) });
+      }
+      return out;
+    };
+    for (let attempt = 0; attempt < RATE_LIMIT_TRIES; attempt++) {
       const free = this.freeAt.get(route);
       if (free && free > Date.now()) await wait(free - Date.now());
       const headers = { 'user-agent': `DiscordBot (${this.cfg.baseUrl}, 1.0) ${this.cfg.appName}` };
@@ -129,14 +148,27 @@ export class Discord {
         try {
           res = await this.fetch(`${this.d.apiBase}${path}`, { method, headers, body: payload, signal: AbortSignal.timeout(10000) });
         } catch (e) {
-          return { status: 0, body: { message: e.message } };
+          res = null;
+          data = { message: e.message };
         }
-        data = res.status === 204 ? null : await res.json().catch(() => null);
+        if (res) data = res.status === 204 ? null : await res.json().catch(() => null);
       } finally {
         this.release();
       }
+      // (Couldn't reach Discord, or a 5xx: tried again in a moment, if it's safe to.)
+      if (!res || res.status >= 500) {
+        if (retry && failures < RETRIES) {
+          failures += 1;
+          if (this.metrics) this.metrics.count('discord_retried', { why: res ? String(res.status) : 'network' });
+          await wait(Math.round(300 * 2 ** (failures - 1) * (0.75 + Math.random() * 0.5)));
+          attempt -= 1; // (a hiccup isn't a rate limit: its own count)
+          continue;
+        }
+        return done(res ? { status: res.status, body: data } : { status: 0, body: data });
+      }
       this.noteLimit(route, res);
-      if (res.status === 429 && attempt < 3) {
+      if (res.status === 429 && attempt < (retry ? RATE_LIMIT_TRIES : 4) - 1) {
+        if (this.metrics) this.metrics.count('discord_retried', { why: '429' });
         const after = Math.min(10, Number(data && data.retry_after) || 1) * 1000;
         // (The whole bot over Discord's limit, not one route: every request waits, not just this one.)
         const global = (data && data.global === true) || (res.headers && typeof res.headers.get === 'function' && res.headers.get('x-ratelimit-global') === 'true');
@@ -144,9 +176,9 @@ export class Discord {
         await wait(after);
         continue;
       }
-      return { status: res.status, body: data };
+      return done({ status: res.status, body: data });
     }
-    return { status: 429, body: { message: 'rate limited' } };
+    return done({ status: 429, body: { message: 'rate limited' } });
   }
 
   // -------------------------------------------------------------------------
@@ -289,7 +321,7 @@ export class Discord {
       else this.opening += 1;
       let c;
       try {
-        c = await this.api('POST', '/users/@me/channels', { recipient_id: user.discord_id }, { urgent });
+        c = await this.api('POST', '/users/@me/channels', { recipient_id: user.discord_id }, { urgent, retry: true });
       } finally {
         const next = this.toOpen.shift();
         if (next) next(); else this.opening -= 1;
@@ -301,7 +333,7 @@ export class Discord {
       channel = c.body.id;
       this.repo.updateUser(user.id, { discord_dm_channel: channel });
     }
-    const r = await this.api('POST', `/channels/${channel}/messages`, message, { urgent });
+    const r = await this.api('POST', `/channels/${channel}/messages`, { ...message, nonce: messageNonce(), enforce_nonce: true }, { urgent, retry: true });
     if (r.status === 200) {
       if (user.discord_error) this.repo.updateUser(user.id, { discord_error: '' });
       return true;
@@ -336,7 +368,7 @@ export class Discord {
   /** urgent: a drop's alert — first in line. */
   async post(channelId, message, { urgent = false } = {}) {
     if (!this.botReady || !channelId) return false;
-    const r = await this.api('POST', `/channels/${channelId}/messages`, message, { urgent });
+    const r = await this.api('POST', `/channels/${channelId}/messages`, { ...message, nonce: messageNonce(), enforce_nonce: true }, { urgent, retry: true });
     if (r.status !== 200) this.cfg.log('[discord] channel post failed:', explain(r.status, r.body, 'post in that channel'));
     return r.status === 200;
   }
