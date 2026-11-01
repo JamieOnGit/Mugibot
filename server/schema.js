@@ -65,6 +65,8 @@ export function password(v) {
 }
 
 // --- Watchlist items -------------------------------------------------------------
+// "As many as the store allows": what's reserved against Auto-checkout's limits (and the most an older extension asks for).
+export const MOST_QTY = 10;
 /**
  * A SKU to watch and buy. Give a product link (the store and SKU are read
  * from it), or a store and SKU (the product page is found from the SKU).
@@ -98,7 +100,11 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
   const r = retailers.get(store);
   // How many to buy: 1 unless you say. (A Shop checkout link with one product in it: the link's own number,
   // unless you say otherwise — then the link is changed to it. With several, each as the link has it.)
-  let quantity = num(src.quantity, { min: 1, max: 10, def: 1, int: true });
+  // ('max', or qtyRule 'max': as many as the store allows — its drop-down's most, its box's max, its per-customer limit;
+  //  ten are reserved against your Auto-checkout limits meanwhile. A Shop checkout link's quantity is the link's own.)
+  const asked = input && input.quantity !== undefined && input.quantity !== null && input.quantity !== '' ? String(input.quantity).toLowerCase() : null;
+  const most = asked === 'max' || (asked === null && (src.qtyRule ?? src.qty_rule) === 'max');
+  let quantity = most ? MOST_QTY : num(src.quantity, { min: 1, max: 10, def: 1, int: true });
   // A Shop checkout link (retailers/shoplink.js): the store's whole cart link is the item — nothing else to go by.
   if (r && r.cartLinks) {
     if (!url) throw bad("Paste the store's checkout link (…/cart/<number>:<quantity>) — it's the order itself");
@@ -106,7 +112,7 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
     const lines = cartLines(u.pathname);
     if (!lines) throw bad("That's a Shop page, not a store's checkout link: paste the store's own link (…/cart/<number>:<quantity>)");
     if (lines.length === 1) {
-      quantity = input && input.quantity !== undefined && input.quantity !== '' && input.quantity !== null ? quantity : lines[0].qty;
+      quantity = asked !== null && asked !== 'max' ? quantity : lines[0].qty;
       u.pathname = u.pathname.replace(CART_LINK, (all, before) => `${before}/cart/${lines[0].id}:${quantity}`);
       url = u.href;
     } else quantity = 1;
@@ -122,6 +128,7 @@ export function item(input, { retailers, existing = null, isAdmin = false }) {
     price: num(src.price, { min: 0, max: 100000, def: null }),
     maxPrice: num(src.maxPrice ?? src.max_price, { min: 0, max: 100000, def: null }),
     quantity,
+    qtyRule: most && !(r && r.cartLinks) ? 'max' : '',
     profileId: str(src.profileId ?? src.profile_id, 40) || null,
     // Which of your cards pays for it (its id in your extension — never the card): '' for your default.
     cardId: CARD_ID.test(String(src.cardId ?? src.card_id ?? '')) ? String(src.cardId ?? src.card_id) : '',

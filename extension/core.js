@@ -813,6 +813,29 @@ var MGBQuick = (function () {
     return q >= 1 && Math.floor(q) === q ? Math.min(10, q) : 1;
   }
 
+  // "As many as the store allows" (an item or watch set to it — a hangsell or booster pack, say: 1.40.0): never more than
+  // the run says (what the server reserves against your Auto-checkout limits, at most this), nor than the store's own limit.
+  var MOST_QTY = 10;
+  // The store's own per-customer limit, as its page says it ("Limit 2 per customer", "Max 4 per order", "Maximum purchase
+  // quantity: 3") — never a stock count ("Only 3 left").
+  var LIMIT_RES = [
+    /\blimit(?:ed)?(?:\s+(?:of|to))?\s+(\d{1,2})\s*(?:units?|items?|copies|packs?|boxes)?\s*(?:per|each|\/)\s*(?:customer|order|person|household|transaction|account|member)\b/i,
+    /\bmax(?:imum)?(?:\s+of)?\s+(\d{1,2})\s*(?:units?|items?|copies|packs?|boxes)?\s*(?:per|each|\/)\s*(?:customer|order|person|household|transaction|account|member)\b/i,
+    /\b(\d{1,2})\s*(?:units?|items?|copies|packs?|boxes)?\s*per\s+(?:customer|household|person|transaction|account|member)\b/i,
+    /\bmax(?:imum)?\s+(?:purchase\s+|order\s+)?(?:quantity|qty)(?:\s+(?:is|of|allowed))?\s*:?\s*(\d{1,2})\b/i,
+    /\bpurchase\s+limit(?:\s+(?:is|of))?\s*:?\s*(\d{1,2})\b/i,
+  ];
+  function pageLimit(doc) {
+    var d = doc || document;
+    var text = String((d.body && (d.body.innerText || d.body.textContent)) || '').replace(/\s+/g, ' ').slice(0, 40000);
+    for (var i = 0; i < LIMIT_RES.length; i++) {
+      var m = text.match(LIMIT_RES[i]);
+      var n = m ? Number(m[1]) : 0;
+      if (n >= 1 && n <= 99) return n;
+    }
+    return 0;
+  }
+
   /** What an element says it's for: its name, id, class, label and the like. */
   function qtyWords(el) {
     var lab = el.labels && el.labels.length ? toArray(el.labels).map(function (l) { return l.textContent; }).join(' ') : '';
@@ -925,12 +948,17 @@ var MGBQuick = (function () {
    * How many to put in the bag, on the product page (before Add is pressed): its quantity set to n. Returns
    * { want, set, how } — set: what it says now (null: no quantity control on the page — the bag's is set instead).
    */
-  async function setQuantity(add, n) {
-    var want = wantedQty(n);
+  async function setQuantity(add, n, opts) {
+    // most: as many as the store allows — its per-customer limit where the page says one, else its drop-down's most, its
+    // box's max, its + button's last press — never more than MOST_QTY.
+    var most = !!(opts && opts.most);
+    var limit = most ? pageLimit() : 0;
+    var cap = most ? wantedQty(n || MOST_QTY) : 0;
+    var want = most ? Math.min(cap, limit || cap) : wantedQty(n);
     var c = qtyControl(add);
-    if (!c) return { want: want, set: null, how: 'none' };
-    if (c.field) return { want: want, set: setField(c.field, want), how: c.field.tagName === 'SELECT' ? 'select' : 'box' };
-    return { want: want, set: await setStepper(c.stepper, want), how: 'stepper' };
+    if (!c) return { want: want, set: null, how: 'none', limit: limit };
+    if (c.field) return { want: want, set: setField(c.field, want), how: c.field.tagName === 'SELECT' ? 'select' : 'box', limit: limit };
+    return { want: want, set: await setStepper(c.stepper, want), how: 'stepper', limit: limit };
   }
 
   /**
@@ -1011,7 +1039,10 @@ var MGBQuick = (function () {
     var closed = 0;
     // How many: this run's (its ⚡ Buy code), else the item's — 1 unless set — kept with the flow for its later pages.
     var prior = store.read();
-    var qtyWant = wantedQty((!opts.fresh && prior && prior.qty) || opts.quantity || (product && product.quantity) || 1);
+    // (As many as the store allows: the item's or watch's choice — a hangsell or booster pack, say — kept with the flow too.)
+    var qtyMost = !!(opts.qtyMax || (product && product.qtyMax) || (!opts.fresh && prior && prior.qtyMost));
+    // (Most: up to what the run says — your limits fit — the store's own limit deciding below that.)
+    var qtyWant = wantedQty((!opts.fresh && prior && prior.qty) || opts.quantity || (product && product.quantity) || (qtyMost ? MOST_QTY : 1));
     // On its way to another page already (a link the store's code followed): nothing sent anywhere else meanwhile.
     var leaving = false;
     addEventListener('beforeunload', function () { leaving = true; }, { once: true });
@@ -1030,11 +1061,17 @@ var MGBQuick = (function () {
      * What it says now — null: the page has no quantity control (the bag's is set instead, once it's open).
      */
     async function quantityFirst(add) {
-      if (qtyWant <= 1) return null;
-      var q = await setQuantity(add, qtyWant);
+      if (qtyWant <= 1 && !qtyMost) return null;
+      var q = await setQuantity(add, qtyWant, { most: qtyMost });
       if (q.set === null) {
-        report('step', 'No quantity on the product page — ' + qtyWant + ' set in the bag instead', product);
+        report('step', 'No quantity on the product page — ' + (qtyMost ? 'the most allowed' : qtyWant) + ' set in the bag instead', product);
         return null;
+      }
+      if (qtyMost) {
+        // (The store's most: whatever its page took, up to its own limit — never an error.)
+        setStatus('Adding ' + q.set + ' — the most ' + (q.limit ? 'per customer' : 'the page takes') + '…');
+        report('step', 'Quantity set to ' + q.set + ' — the most the store allows' + (q.limit ? ' (its limit: ' + q.limit + ' per customer)' : ''), product);
+        return q.set;
       }
       if (q.set !== qtyWant) {
         setStatus('The page only takes ' + q.set + ' — adding ' + q.set + '…');
@@ -1142,11 +1179,12 @@ var MGBQuick = (function () {
       if (!product) product = pageProduct(R);
       if (!product) { setStatus('This isn\'t a product page — open the product, then press this again.'); return 'error'; }
       // Shopify and WooCommerce: the store's own cart link puts it in the cart and opens checkout — no clicks.
-      if (R && R.cartPath && R.cartPath.indexOf('{variant}') !== -1) {
+      // (Not for "as many as the store allows": its product page's quantity control and limits decide that.)
+      if (!qtyMost && R && R.cartPath && R.cartPath.indexOf('{variant}') !== -1) {
         setStatus('Opening checkout with it in your cart…');
         var variant = R.platform === 'woocommerce' ? wooVariant() : await shopifyVariant(R);
         if (variant) {
-          store.save({ stage: 'cart-link', startedAt: Date.now(), sku: product.sku, name: product.name, qty: qtyWant, qtySet: qtyWant });
+          store.save({ stage: 'cart-link', startedAt: Date.now(), sku: product.sku, name: product.name, qty: qtyWant, qtyMost: qtyMost, qtySet: qtyWant });
           report('add', 'Opened the store\'s cart link' + (qtyWant > 1 ? ' with ' + qtyWant : '') + ' — straight to checkout', product);
           location.assign(storePath(R, R.cartPath.replace('{variant}', variant).replace('{qty}', String(qtyWant))));
           return 'navigating';
@@ -1161,7 +1199,7 @@ var MGBQuick = (function () {
           buy = await whenReady(R, buy, opts.probe, setStatus);
           var qtyBuy = await quantityFirst(buy);
           buy = findBuyNow(R) || buy;
-          store.save({ stage: 'buy-now', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, productUrl: location.href.split('#')[0], qty: qtyWant, qtySet: qtyBuy });
+          store.save({ stage: 'buy-now', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, productUrl: location.href.split('#')[0], qty: qtyWant, qtyMost: qtyMost, qtySet: qtyBuy });
           var said = (labelParts(buy).find(function (t) { return any(part(R, 'product').buyNow, t); }) || 'Buy Now').slice(0, 40);
           setStatus('Pressing "' + said + '" — straight to checkout…');
           report('add', 'Clicked "' + said + '"', product);
@@ -1184,7 +1222,7 @@ var MGBQuick = (function () {
       var qtySet = await quantityFirst(add);
       if (qtySet !== null) add = findAddToBag(R) || add; // (a page that drew its button again for the new number)
       // Save before clicking in case the site changes page straight away.
-      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, countBefore: bagCount(), productUrl: location.href.split('#')[0], qty: qtyWant, qtySet: qtySet });
+      store.save({ stage: 'add-clicked', startedAt: Date.now(), clickedAt: Date.now(), sku: product.sku, name: product.name, countBefore: bagCount(), productUrl: location.href.split('#')[0], qty: qtyWant, qtyMost: qtyMost, qtySet: qtySet });
       setStatus(qtySet > 1 ? 'Adding ' + qtySet + ' to your bag…' : 'Adding to your bag…');
       pressAdd(page, add);
       report('add', 'Clicked "' + textOf(add).slice(0, 40) + '"', product);
@@ -1263,7 +1301,7 @@ var MGBQuick = (function () {
         again2 = await whenReady(R, again2, opts.probe, setStatus);
         var qtyAgain = await quantityFirst(again2);
         if (qtyAgain !== null) again2 = findAddToBag(R) || again2;
-        store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), added: false, said: '', qty: qtyWant, qtySet: qtyAgain }));
+        store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), added: false, said: '', qty: qtyWant, qtyMost: qtyMost, qtySet: qtyAgain }));
         setStatus('Adding to your bag again…');
         pressAdd(page, again2);
         report('add', 'Pressed "' + textOf(again2).slice(0, 40) + '" again', product);
@@ -1283,7 +1321,7 @@ var MGBQuick = (function () {
           add2 = await whenReady(R, add2, opts.probe, setStatus);
           var qty2 = await quantityFirst(add2);
           if (qty2 !== null) add2 = findAddToBag(R) || add2;
-          store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), productUrl: location.href.split('#')[0], qty: qtyWant, qtySet: qty2 }));
+          store.save(Object.assign({}, flow, { stage: 'add-clicked', clickedAt: Date.now(), countBefore: bagCount(), productUrl: location.href.split('#')[0], qty: qtyWant, qtyMost: qtyMost, qtySet: qty2 }));
           setStatus('Adding to your bag…');
           pressAdd(page, add2);
           report('add', 'The cart link didn\'t open checkout — pressed "' + textOf(add2).slice(0, 40) + '"', product);

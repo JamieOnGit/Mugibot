@@ -20,6 +20,7 @@
 // members' SKUs they come across straight away; while a sweep has seen a SKU
 // lately, these slower checks leave it alone.
 
+import { Breakers, retryAfterMs } from './breaker.js';
 import { PRODUCTS_FOR_PAGE } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { DEFAULT_ALERTS } from '../schema.js';
@@ -33,11 +34,19 @@ import { STATUS, isOrderable } from './status.js';
 import { gateOnPage } from './gate.js';
 import { readingOf } from './sightings.js';
 import { olderVersion } from './sweep.js';
+import { BOOK_MS, outcomeOf } from './access.js';
 
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 // The oldest extension that reads a store's page by opening it in its window (monitor.render: BIG W's).
 export const RENDER_EXTENSION_VERSION = '1.27.0';
+// The oldest extension that waits the gap a check says (gapMs) before its next page at that store — a round of several
+// of a budgeted store's product pages (monitor/access.js: BIG W's) goes only to one that does; an older one gets one.
+export const GAP_EXTENSION_VERSION = '1.39.0';
+const ROUND_WAIT_MS = 15 * 1000;
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
+// Each store's lane (Mugibot 2.0): its due pages looked at a tick (more than it may read at once: a page still sending its alerts never keeps the next from being read), and its reads at once (unless its monitor.hostConcurrency says).
+const LANE_CANDIDATES = 12;
+const LANE_MAX = 4;
 // Not at its store (yet): a page that's not found, a code its store's search provider doesn't have — said by reads this
 // far apart at least before it counts as not on sale (one empty answer may be the store's hiccup).
 const UNLISTED = new Set([STATUS.NOT_LISTED, STATUS.NOT_FOUND]);
@@ -86,6 +95,11 @@ export class Monitor {
     this.going = new Set(); // members' alerts still going out (deliver)
     this.lines = new Map(); // store → its lots of alerts going out (two at most)
     this.inFlight = new Set();
+    // Each store's lane (Mugibot 2.0): its reads in flight (a store never holds more than its share of the pool), its
+    // circuit breaker, and the pages whose alerts are still going out (their read done, their slot free).
+    this.laneBusy = new Map();
+    this.applying = new Set();
+    this.breakers = new Breakers({ now, log: (line) => this.cfg.log(line) });
     this.pageSaid = new Map(); // product → what its page last said, when (a read that worked): { on, at }
     this.timer = null;
     this.ticks = 0;
@@ -159,16 +173,23 @@ export class Monitor {
       this.db.run(`DELETE FROM page_checks WHERE kind = 'search' AND NOT EXISTS (SELECT 1 FROM items i WHERE i.url = '' AND i.store = page_checks.store AND i.sku = page_checks.sku COLLATE NOCASE) AND NOT ${monitored}`);
       this.catalog.prune(this.cfg.monitor.logDays);
     }
-    // Oldest first — an armed item's page 15 seconds ahead of its place (its restock starts members' checkouts).
-    const due = this.db.all(`SELECT c.* FROM page_checks c
-      WHERE c.next_check_at <= :now AND (EXISTS (
-        SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
-        WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
-        OR EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id WHERE m.paused = 0 AND ${PRODUCTS_FOR_PAGE}))
-      ORDER BY c.next_check_at - CASE WHEN EXISTS (SELECT 1 FROM items i WHERE (${ITEMS_FOR_PAGE}) AND i.aco = 1 AND i.monitor = 1) THEN ${ARMED_AHEAD_MS} ELSE 0 END
-      LIMIT 50`, { now });
+    // Oldest first — an armed item's page 15 seconds ahead of its place (its restock starts members' checkouts) — and
+    // each store's lane apart (Mugibot 2.0): at most LANE_CANDIDATES of a store's due pages looked at a tick, so a store
+    // with hundreds due (or waiting out its gap, or its breaker open) never keeps another store's pages from being read.
+    const due = this.db.all(`SELECT * FROM (
+        SELECT d.*, ROW_NUMBER() OVER (PARTITION BY d.store, d.host ORDER BY d.prio) AS lane_rank FROM (
+          SELECT c.*, c.next_check_at - CASE WHEN EXISTS (SELECT 1 FROM items i WHERE (${ITEMS_FOR_PAGE}) AND i.aco = 1 AND i.monitor = 1) THEN ${ARMED_AHEAD_MS} ELSE 0 END AS prio
+          FROM page_checks c
+          WHERE c.next_check_at <= :now AND (EXISTS (
+            SELECT 1 FROM items i JOIN users u ON u.id = i.user_id
+            WHERE (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL})
+            OR EXISTS (SELECT 1 FROM products p JOIN monitors m ON m.product_id = p.id WHERE m.paused = 0 AND ${PRODUCTS_FOR_PAGE}))
+        ) d
+      ) WHERE lane_rank <= ${LANE_CANDIDATES} ORDER BY prio LIMIT 400`, { now });
     const jobs = [];
+    const pool = this.cfg.monitor.maxInFlight;
     for (const page of due) {
+      if (this.inFlight.size >= pool) break;
       if (this.sweptLately(page.url, now)) {
         // A live sweep has just seen this product: no need to fetch its page as well.
         this.db.run('UPDATE page_checks SET next_check_at = :next WHERE url = :url', { url: page.url, next: now + this.pageInterval(page.url) });
@@ -180,15 +201,48 @@ export class Monitor {
         this.db.run("UPDATE page_checks SET next_check_at = :next, error = 'Server checks are off for this store' WHERE url = :url", { url: page.url, next: now + 10 * 60 * 1000 });
         continue;
       }
-      if (this.inFlight.has(page.url) || this.inFlight.size >= 4) continue;
-      if ((this.hostNext.get(page.host) || 0) > now) continue;
-      const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
-      this.hostNext.set(page.host, now + gap * 1000);
-      this.inFlight.add(page.url);
-      jobs.push(this.checkPage(page.url).finally(() => this.inFlight.delete(page.url)));
+      if (this.inFlight.has(page.url) || this.applying.has(page.url)) continue;
+      const free = this.take(page, retailer, now);
+      if (!free) continue;
+      jobs.push(this.checkPage(page.url, { onRead: free }).finally(free));
     }
     await Promise.all(jobs);
     return jobs.length;
+  }
+
+  /** A store's lane key: the store (any other website: its host). */
+  laneOf(page, retailer) {
+    return retailer && retailer.id !== 'other' ? retailer.id : page.host;
+  }
+
+  /**
+   * A slot for a server read of this page, if one's free now — the pool's (cfg.monitor.maxInFlight), the store's lane's
+   * (its monitor.hostConcurrency, else LANE_MAX), the gap between two requests to the host, the store's breaker closed
+   * (or half-open, letting one read try). Returns the function that frees it (once), or null.
+   */
+  take(page, retailer, now = this.now()) {
+    if (this.inFlight.has(page.url) || this.inFlight.size >= this.cfg.monitor.maxInFlight) return null;
+    const lane = this.laneOf(page, retailer);
+    const max = (retailer && retailer.monitor && retailer.monitor.hostConcurrency) || LANE_MAX;
+    if ((this.laneBusy.get(lane) || 0) >= max) return null;
+    if ((this.hostNext.get(page.host) || 0) > now) return null;
+    if (!this.breakers.allow(lane)) return null;
+    const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
+    this.hostNext.set(page.host, now + gap * 1000);
+    this.inFlight.add(page.url);
+    this.laneBusy.set(lane, (this.laneBusy.get(lane) || 0) + 1);
+    let freed = false;
+    return () => {
+      if (freed) return;
+      freed = true;
+      this.inFlight.delete(page.url);
+      const n = (this.laneBusy.get(lane) || 1) - 1;
+      if (n > 0) this.laneBusy.set(lane, n);
+      else this.laneBusy.delete(lane);
+      // (A half-open breaker's read that never said how it went — the page gone meanwhile: the next may try.)
+      const b = this.breakers.map.get(lane);
+      if (b) b.probing = false;
+    };
   }
 
   /** Has a live sweep seen what's on this product page in the last few minutes (the shared product, or members' SKUs)? */
@@ -245,7 +299,7 @@ export class Monitor {
     }
     const res = await this.get(url);
     if (res.status === 404 || res.status === 410) return { status: STATUS.NOT_FOUND };
-    if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store refused the server check (HTTP ${res.status})` };
+    if (res.status === 403 || res.status === 429 || res.status === 503) return { status: STATUS.BLOCKED, error: `The store refused the server check (HTTP ${res.status})`, retryAfterMs: retryAfterMs(res.headers.get('retry-after'), this.now()) };
     if (!res.ok) return { status: STATUS.ERROR, error: `HTTP ${res.status}` };
     const html = (await res.text()).slice(0, 3_000_000);
     const queued = this.gateSeen(retailer, res.url || url, html);
@@ -338,7 +392,7 @@ export class Monitor {
     return { status: STATUS.NOT_LISTED };
   }
 
-  async checkPage(url) {
+  async checkPage(url, { onRead = null } = {}) {
     const prev = this.db.get('SELECT * FROM page_checks WHERE url = :url', { url });
     if (!prev) return null;
     const retailer = this.retailers.get(prev.store) || this.retailers.forUrl(url);
@@ -361,11 +415,31 @@ export class Monitor {
     this.db.run(`UPDATE page_checks SET status = :status, title = COALESCE(:title, title), price = COALESCE(:price, price), signals = :sig,
       checked_at = :now, next_check_at = :next, fail_count = :fails, error = :err, found_url = COALESCE(:found, found_url) WHERE url = :url`,
     { url, status, title: r.title || null, price: r.price ?? null, sig: r.decidedBy || null, now, next, fails: failCount, err: r.error || '', found: r.foundUrl || null });
+    // The store's breaker: a read that failed counts toward opening it (a Retry-After at once), one that worked closes it.
+    const lane = this.laneOf(prev, retailer);
+    if (failed) this.breakers.failure(lane, { retryAfterMs: r.retryAfterMs || 0, error: r.error || r.status });
+    else this.breakers.success(lane);
+    if (this.metrics) this.metrics.observe('page_read_ms', ms, { store: lane, ok: !failed });
+    // The read's done: its slot's free for the next page while this one's news goes out (Mugibot 2.0 — a Discord 429
+    // never holds up the monitor). (This page isn't read again till its news is out: applying.)
+    this.applying.add(url);
+    if (onRead) onRead();
+    try {
+      return await this.applyRead(url, prev, r, { failed, status, ms });
+    } finally {
+      this.applying.delete(url);
+    }
+  }
 
+  /** A page read's news: members' Auto-checkout runs, their alerts, the shared feed, VIP and drop watches (checkPage). */
+  async applyRead(url, prev, r, { failed, status, ms }) {
+    const now = this.now();
     // (On sale on its page, a moment after a search said it wasn't: never a restock for a watch that armed it on that.)
     if (!failed && prev.kind === 'product' && isOrderable(r.status)) for (const p of this.catalog.productsForPage(url)) await this.disagreed(p.store, p.sku);
-    // Members watching this page: each armed one's Auto-checkout run first; their alerts once the feed's are out.
+    // Members watching this page: each armed one's Auto-checkout run first; their alerts with the feed's (Mugibot 2.0:
+    // the channel posts first in Discord's line, never waited for).
     const later = [];
+    const posting = [];
     const items = prev.kind === 'search' && r.foundUrl ? [] : this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id, page_checks c
       WHERE c.url = :url AND (${ITEMS_FOR_PAGE}) AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { url, now });
     await this.applyAll(items, { status, title: r.title || null, price: r.price ?? null, error: r.error || '' }, 'server', { later });
@@ -376,14 +450,17 @@ export class Monitor {
         // (Not at its store till this read, as its page's reads said: when it was last said — Monitor.unlisted.)
         const unlistedAt = !failed && this.unlisted(product) ? product.last_ok_at : null;
         // What this check really saw: the feed keeps the last confirmed status itself.
-        await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms });
+        await this.feed.applyCheck(product, { status: r.status, title: r.title || null, price: r.price ?? null, image: r.image || null, variantId: r.variantId || null, error: r.error || '' }, { source: 'server', url, ms, posting });
         // What every VIP and drop watch that's seen it saw (monitor/sightings.js) — a read that worked only. (A product not
         // at its store yet — a page not found, Kmart's "not listed" — isn't on sale yet.)
         if (!failed && prev.kind === 'product') await this.watchReading(product.id, r.status, 'page', { later, notListed: true, unlistedAt });
       }
     } finally {
       // (Even when the shared feed's failed. Going out while the next pages are checked: deliver.)
+      const posted = this.follow(Promise.allSettled(posting));
       await this.deliver(later, prev.store);
+      // (Answered once its channel posts are in — its slot was freed the moment the store answered: onRead.)
+      await posted;
     }
     if (prev.kind === 'search' && r.foundUrl) {
       this.resolveSku(prev.store, prev.sku, r.foundUrl);
@@ -502,6 +579,13 @@ export class Monitor {
     while (this.going.size) await Promise.allSettled([...this.going]);
   }
 
+  /** Something going out (a read's channel posts) that delivered() waits for too — nothing else does. */
+  follow(p) {
+    const q = Promise.resolve(p).catch(() => null).finally(() => this.going.delete(q));
+    this.going.add(q);
+    return q;
+  }
+
   /**
    * A page to read as soon as the monitor may (a drop watch's find whose stock its search didn't say, another website's
    * new listing): next in the monitor's round — and now, without waiting for it, when its store can be asked this
@@ -518,13 +602,12 @@ export class Monitor {
     this.db.run('UPDATE page_checks SET next_check_at = 0 WHERE url = :url', { url });
     const retailer = this.retailers.get(page.store) || this.retailers.forUrl(url);
     if (retailer && !this.retailers.settings(retailer).serverChecks) return null;
-    if (this.inFlight.has(url) || this.inFlight.size >= 4 || (this.hostNext.get(page.host) || 0) > now) return null;
-    const gap = (retailer && retailer.monitor && retailer.monitor.hostGapSeconds) || this.cfg.monitor.hostGapSeconds;
-    this.hostNext.set(page.host, now + gap * 1000);
-    this.inFlight.add(url);
+    if (this.applying.has(url)) return null;
+    const free = this.take(page, retailer, now);
+    if (!free) return null;
     // (Waited for by delivered(), as the alerts it sends are.)
-    const p = this.checkPage(url).catch((e) => this.cfg.log('[monitor]', e.message)).finally(() => {
-      this.inFlight.delete(url);
+    const p = this.checkPage(url, { onRead: free }).catch((e) => this.cfg.log('[monitor]', e.message)).finally(() => {
+      free();
       this.going.delete(p);
     });
     this.going.add(p);
@@ -636,9 +719,13 @@ export class Monitor {
     const items = this.db.all(`SELECT i.* FROM items i JOIN users u ON u.id = i.user_id
       WHERE i.store = :s AND i.sku = :k COLLATE NOCASE AND i.monitor = 1 AND u.disabled = 0 AND ${ENTITLED_SQL}`, { s: store, k: sku, now });
     let pinged = 0;
-    for (const item of items) {
-      if (await this.alertRestock({ ...item, announce: 0 }, { status: STATUS.IN_STOCK, price: item.last_price, source: 'manual', manual: true, note })) pinged += 1;
+    // (Mugibot 2.0: every armed member's Auto-checkout run made first, the DMs after — never the Nth run behind N−1 DMs.)
+    const later = [];
+    const order = [...items].sort((a, b) => (b.aco ? 1 : 0) - (a.aco ? 1 : 0));
+    for (const item of order) {
+      if (await this.alertRestock({ ...item, announce: 0 }, { status: STATUS.IN_STOCK, price: item.last_price, source: 'manual', manual: true, note, later })) pinged += 1;
     }
+    await this.deliver(later, store);
     const sample = items[0] || { store, sku, name: name || sku, url };
     const product = this.catalog.upsertProduct({ store, sku, url: sample.url || url, name: name || sample.name });
     const fresh = this.catalog.updateProduct(product.id, { status: STATUS.IN_STOCK, status_source: 'manual', status_at: now });
@@ -656,7 +743,7 @@ export class Monitor {
    * version: the extension's (a store read by opening its page — BIG W's — only by one that does: 1.27.0).
    * priv: it opens such a store's pages in a private window of its own (extension 1.36.0, allowed in Incognito).
    */
-  browserDue(user, { through = new Set(), sites = new Set(), want = new Set(), version = null, priv = false } = {}) {
+  browserDue(user, { through = new Set(), sites = new Set(), want = new Set(), version = null, priv = false, device = null } = {}) {
     const held = (store) => !!this.gates && this.gates.queueUp(store) && !through.has(store);
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(user.id, 'alerts', {}) || {}) };
     if (!settings.browserChecks) return [];
@@ -681,10 +768,15 @@ export class Monitor {
       return { inPage: true, storeBase: r.base, ...(data ? { data, parser: r.sweep.parser } : {}) };
     };
     const cantRender = !version || olderVersion(version, RENDER_EXTENSION_VERSION);
-    const unopened = cantRender ? this.retailers.list.filter(render).map((r) => r.id) : [];
+    // (A store with a budget for what each browser reads of it — BIG W's, monitor/access.js: its product pages picked
+    //  apart, below, never among the rest — so its pages, all asking to be read every few seconds, never crowd the other
+    //  stores' out of a round.)
+    const budgeted = this.access ? this.retailers.list.filter((r) => this.access.limited(r)) : [];
+    const unopened = [...new Set([...(cantRender ? this.retailers.list.filter(render).map((r) => r.id) : []), ...budgeted.map((r) => r.id)])];
     const notThese = unopened.length ? `AND i.store NOT IN (${unopened.map((_, n) => `:r${n}`).join(', ')})` : '';
-    const rows = this.db.all(`SELECT i.*, c.status AS page_status, c.fail_count AS page_fails, c.checked_at AS page_checked, c.error AS page_error
-      FROM items i LEFT JOIN page_checks c ON c.url = i.url AND i.url != ''
+    const ITEMS = `SELECT i.*, c.status AS page_status, c.fail_count AS page_fails, c.checked_at AS page_checked, c.error AS page_error
+      FROM items i LEFT JOIN page_checks c ON c.url = i.url AND i.url != ''`;
+    const rows = this.db.all(`${ITEMS}
       WHERE i.user_id = :u AND i.monitor = 1 AND i.browser_next_at <= :now ${notThese} ORDER BY i.browser_next_at, i.position LIMIT 40`,
     { u: user.id, now, ...Object.fromEntries(unopened.map((id, n) => [`r${n}`, id])) });
     const out = [];
@@ -692,32 +784,48 @@ export class Monitor {
     // (Left for later this round — BIG W's one page a round: its turn pushed back a little, so a long BIG W
     //  list never keeps the other stores' checks out of the round.)
     const later = (table, id) => this.db.run(`UPDATE ${table} SET browser_next_at = :n WHERE id = :id`, { n: now + this.browserInterval, id });
-    for (const it of rows) {
+    // (One of the member's items this browser should read — its store, or null: not by this browser, not now.)
+    const itemStore = (it) => {
       const r = this.retailers.get(it.store);
       const other = it.store === 'other';
       // (Not a Shop checkout link: opening it starts a checkout — the server asks the store about its options instead.)
-      if (!r || r.cartLinks || !this.retailers.enabled(r) || held(it.store)) continue;
+      if (!r || r.cartLinks || !this.retailers.enabled(r) || held(it.store)) return null;
       // (Another website's page: only once it refuses the server, and where you've let the extension read that website.)
-      if (other ? !it.url : !this.retailers.settings(r).browserChecks) continue;
+      if (other ? !it.url : !this.retailers.settings(r).browserChecks) return null;
       const serverOff = !this.retailers.settings(r).serverChecks;
       const serverStruggling = FAILED.has(it.page_status) || it.page_fails > 0 || /Server checks are off/.test(it.page_error || '');
       const serverSilent = !it.page_checked && now - it.created_at > 90 * 1000;
       const searchBlocked = !it.url && this.searchStruggling(it);
-      if (!(serverOff || serverStruggling || serverSilent || searchBlocked || it.status_source === 'browser')) continue;
-      if (other && !this.siteAllowed(it.url, sites, want)) continue;
+      if (!(serverOff || serverStruggling || serverSilent || searchBlocked || it.status_source === 'browser')) return null;
+      if (other && !this.siteAllowed(it.url, sites, want)) return null;
+      return r;
+    };
+    const itemCheck = (it, r) => {
+      const url = it.url || this.retailers.searchUrl(r, it.sku);
+      return url ? serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, it.sku, it.url) }) : null;
+    };
+    const productCheck = (p, r) => {
+      const url = p.url || this.retailers.searchUrl(r, p.sku);
+      return url ? serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, p.sku, p.url) }) : null;
+    };
+    // (Seen by a live search just now: nothing more to open.)
+    const itemSwept = (it) => it.status_source === 'sweep' && it.checked_at && now - it.checked_at < SWEEP_FRESH_MS;
+    const productSwept = (p) => p.status_source === 'sweep' && p.sweep_seen_at && now - p.sweep_seen_at < SWEEP_FRESH_MS;
+    for (const it of rows) {
+      const r = itemStore(it);
+      if (!r) continue;
       if (render(r)) {
         if (cantRender) continue;
         if (rendering.has(r.id) && !fast(r)) { later('items', it.id); continue; }
-        // (Seen by a live search just now: nothing more to open.)
-        if (it.status_source === 'sweep' && it.checked_at && now - it.checked_at < SWEEP_FRESH_MS) {
+        if (itemSwept(it)) {
           this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
           continue;
         }
         rendering.add(r.id);
       }
-      const url = it.url || this.retailers.searchUrl(r, it.sku);
-      if (!url) continue;
-      out.push(serialize({ id: it.id, store: it.store, sku: it.sku, kind: it.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, it.sku, it.url) }));
+      const check = itemCheck(it, r);
+      if (!check) continue;
+      out.push(check);
       this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: it.id });
       if (out.length >= 5) break;
     }
@@ -725,34 +833,99 @@ export class Monitor {
     // refuses the server (Kmart), and any one whose own page refuses it (a drop watch's find at BIG W,
     // or at another website the admin has let the extension read). Members' browsers never do: only
     // the server and admins can change what everyone sees.
-    if (user.role === 'admin' && out.length < 5) {
-      const stores = this.retailers.list.filter((r) => r.id !== 'other' && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
-        && (!this.retailers.settings(r).serverChecks || this.serverStruggles(r.id)) && !held(r.id)).map((r) => r.id);
+    const admin = user.role === 'admin';
+    // (…the server refused there: every monitor at the store; a store read by opening its pages: what its searches found.)
+    const wholeStore = (r) => r.id !== 'other' && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
+      && (!this.retailers.settings(r).serverChecks || this.serverStruggles(r.id)) && !held(r.id);
+    const opensStore = (r) => render(r) && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks && !this.retailers.settings(r).serverChecks && !held(r.id);
+    if (admin && out.length < 5) {
+      const free = (r) => !budgeted.includes(r);
+      const stores = this.retailers.list.filter((r) => free(r) && wholeStore(r)).map((r) => r.id);
       const whole = this.catalog.browserTargets(stores, now, 5 - out.length);
       // (Picked in the database by where this browser may check — so ones it may not never crowd out the rest.)
-      const checks = this.retailers.list.filter((r) => r.id !== 'other' && !r.cartLinks && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks && !held(r.id)).map((r) => r.id);
+      const checks = this.retailers.list.filter((r) => free(r) && r.id !== 'other' && !r.cartLinks && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks && !held(r.id)).map((r) => r.id);
       const failing = this.catalog.browserFailing({ stores: checks, sites: this.sitePatterns(sites) }, now, 5).filter((p) => !whole.some((x) => x.id === p.id));
       for (const url of this.catalog.failingSitePages()) this.siteAllowed(url, sites, want);
       // …and at a store read by opening its pages (BIG W's), what its live searches found that nobody monitors:
       // its search tiles don't say when one goes on sale (a drop listed ahead of time shows no buy button), its
       // own page does. (Its one page a round, if the round has room for it.)
-      const opened = this.retailers.list.filter((r) => render(r) && this.retailers.enabled(r) && this.retailers.settings(r).browserChecks
-        && !this.retailers.settings(r).serverChecks && !held(r.id)).map((r) => r.id);
+      const opened = this.retailers.list.filter((r) => free(r) && opensStore(r)).map((r) => r.id);
       const swept = cantRender ? [] : this.catalog.sweptTargets(opened, now, 5).filter((p) => !whole.some((x) => x.id === p.id) && !failing.some((x) => x.id === p.id));
       for (const p of [...whole, ...failing, ...swept].slice(0, 15)) {
         if (out.length >= 5) break;
         const r = this.retailers.get(p.store);
         if (render(r) && cantRender) continue;
         if (render(r) && rendering.has(r.id) && !fast(r)) { later('products', p.id); continue; }
-        if (render(r) && p.status_source === 'sweep' && p.sweep_seen_at && now - p.sweep_seen_at < SWEEP_FRESH_MS) {
+        if (render(r) && productSwept(p)) {
           this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + pace(r), id: p.id });
           continue;
         }
         if (render(r)) rendering.add(r.id);
-        const url = p.url || this.retailers.searchUrl(r, p.sku);
         this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + this.productPace(p, { priv }), id: p.id });
-        if (url) out.push(serialize({ id: `p:${p.id}`, store: p.store, sku: p.sku, kind: p.url ? 'product' : 'search', url, productPath: r.productPath || null, ...(render(r) ? { render: true, ...privateOf(r) } : {}), ...askedIn(r, p.sku, p.url) }));
+        const check = productCheck(p, r);
+        if (check) out.push(check);
       }
+    }
+    // A store with a budget for what each browser reads of it (BIG W's, monitor/access.js): its product pages a round —
+    // checksPerRound from an extension that waits the gap between them (1.39.0; one from an older one) — when its budget
+    // in this browser allows, shared with its searches and pages watched. The member's own items and (an admin's) the
+    // monitors at it and what its searches found that nobody monitors, all together: the longest waiting first, so each
+    // has its turn (each asks again at its target pace once read). Its first page first in the round (unless the slot it
+    // booked is a while off), the rest last: the other stores' read while it waits.
+    const who = device || user.id;
+    for (const r of budgeted) {
+      if (!this.retailers.enabled(r) || !this.retailers.settings(r).browserChecks || held(r.id) || (render(r) && cantRender)) continue;
+      // (Asking for this round means its last is over — the extension reads one round at a time.)
+      this.access.settled(r, who, 'check');
+      // (An extension that waits as it's told (1.39.0): the next free slot booked, several a round while the gap between
+      //  them is short — a round's waits stay well within the round. An older one: one a round, when the slot's free.)
+      const waits = !!version && !olderVersion(version, GAP_EXTENSION_VERSION);
+      const gapMs = this.access.gapMs(r, who, { priv: fast(r) });
+      const many = Math.max(1, this.access.configFor(r).checksPerRound);
+      const n = !waits || gapMs * (many - 1) > ROUND_WAIT_MS ? 1 : many;
+      const target = this.access.targetMs(r);
+      const want = [];
+      for (const it of this.db.all(`${ITEMS} WHERE i.user_id = :u AND i.monitor = 1 AND i.store = :s AND i.browser_next_at <= :now
+        ORDER BY i.browser_next_at, i.position LIMIT 20`, { u: user.id, s: r.id, now })) {
+        if (!itemStore(it)) continue;
+        if (itemSwept(it)) {
+          this.db.run('UPDATE items SET browser_next_at = :n WHERE id = :id', { n: now + target, id: it.id });
+          continue;
+        }
+        const check = itemCheck(it, r);
+        if (check) want.push({ check, key: `item:${it.id}`, table: 'items', id: it.id, due: it.browser_next_at, next: now + target });
+        if (want.length >= n) break;
+      }
+      if (admin) {
+        const seen = new Set();
+        const whole = wholeStore(r) ? this.catalog.browserTargets([r.id], now, n * 2) : [];
+        const failing = this.catalog.browserFailing({ stores: [r.id] }, now, n * 2);
+        const swept = opensStore(r) ? this.catalog.sweptTargets([r.id], now, n) : [];
+        for (const p of [...whole, ...failing, ...swept]) {
+          if (seen.has(p.id)) continue;
+          seen.add(p.id);
+          if (productSwept(p)) {
+            this.db.run('UPDATE products SET browser_next_at = :n WHERE id = :id', { n: now + target, id: p.id });
+            continue;
+          }
+          const check = productCheck(p, r);
+          if (check) want.push({ check, key: `product:${p.id}`, table: 'products', id: p.id, due: p.browser_next_at, next: now + this.productPace(p, { priv }) });
+        }
+      }
+      // (Never the same page twice in a round — an admin's own item and the monitor it's part of share one.)
+      const picks = [];
+      for (const w of want.sort((x, y) => x.due - y.due)) if (picks.length < n && !picks.some((p) => p.check.url === w.check.url)) picks.push(w);
+      if (!picks.length) continue;
+      const may = this.access.ask(r, who, 'check', { priv: fast(r), bookMs: waits ? BOOK_MS : 0 });
+      if (!may.ok) continue; // (its turn comes: they're still due next round)
+      const startAt = may.startAt || now;
+      this.access.take(r, who, 'check', { n: picks.length, keys: picks.map((p) => p.key), startAt });
+      picks.forEach((p, i) => {
+        this.db.run(`UPDATE ${p.table} SET browser_next_at = :n WHERE id = :id`, { n: p.next, id: p.id });
+        // (startInMs: when the first may start — the slot it booked; and not before the store's own tabs there are done.)
+        const check = { ...p.check, gapMs, ...(i === 0 && waits ? { startInMs: startAt - now } : {}) };
+        if (i === 0 && startAt - now < 2000) out.unshift(check); else out.push(check);
+      });
     }
     return out;
   }
@@ -761,11 +934,13 @@ export class Monitor {
    * How soon a product's page is read again in an admin's browser: a store read by opening its pages (BIG W's) at
    * its pace (retailer monitor.browserSeconds) — one its searches found that nobody monitors at that pace while it
    * can't be bought (it's what drops), every half hour once it can (to see it sell out, so its next restock alerts).
-   * priv: read in the browser's private window — at the usual pace then.
+   * priv: read in the browser's private window — at the usual pace then. A store with a budget for what each browser
+   * reads of it (monitor/access.js): its target pace — the budget decides how often each really is.
    */
   productPace(product, { priv = false } = {}) {
     const r = this.retailers.get(product.store);
-    const pace = r && r.monitor && r.monitor.browserSeconds && !(priv && r.monitor.privateWindow) ? r.monitor.browserSeconds * 1000 : this.browserInterval;
+    const budget = this.access && this.access.limited(r) ? this.access.targetMs(r) : null;
+    const pace = budget ?? (r && r.monitor && r.monitor.browserSeconds && !(priv && r.monitor.privateWindow) ? r.monitor.browserSeconds * 1000 : this.browserInterval);
     if (r && r.monitor && r.monitor.render && isOrderable(product.status) && !this.catalog.monitorForProduct(product.id)) return Math.max(pace, 30 * 60 * 1000);
     return pace;
   }
@@ -835,13 +1010,16 @@ export class Monitor {
   }
 
   /** What an admin's browser saw on a monitored product. */
-  async browserProductResult(user, res) {
+  async browserProductResult(user, res, { device = null } = {}) {
     if (user.role !== 'admin') return false;
     const product = this.catalog.productById(String(res.id).slice(2));
     if (!product) return false;
     const now = this.now();
     const status = KNOWN.has(res.status) ? res.status : STATUS.ERROR;
     const failed = FAILED.has(status);
+    // (A store with a budget for what each browser reads of it — BIG W's: this read's done, and what came of it.)
+    const storeOf = this.retailers.get(product.store);
+    if (this.access && this.access.limited(storeOf)) this.access.done(storeOf, device || user.id, 'check', outcomeOf({ ok: !failed, status, error: res.error }));
     if (!failed && isOrderable(status)) await this.disagreed(product.store, product.sku);
     // (Refused in the admin's browser too: asked again later each time, as members' own are.)
     this.browserFails ||= new Map();
@@ -893,13 +1071,13 @@ export class Monitor {
   }
 
   /** What this member's browser saw. Only ever changes this member's own items. */
-  async browserResults(user, results) {
+  async browserResults(user, results, { device = null } = {}) {
     const now = this.now();
     let applied = 0;
     for (const res of results) {
       if (!res || typeof res !== 'object') continue;
       if (typeof res.id === 'string' && res.id.startsWith('p:')) {
-        if (await this.browserProductResult(user, res)) applied += 1;
+        if (await this.browserProductResult(user, res, { device })) applied += 1;
         continue;
       }
       const row = this.db.get('SELECT * FROM items WHERE id = :id AND user_id = :u', { id: String(res.id || ''), u: user.id });
@@ -908,10 +1086,13 @@ export class Monitor {
       const failed = FAILED.has(status);
       const fails = failed ? row.browser_fails + 1 : 0;
       // (Read fine: again at its store's pace — BIG W's every few minutes, not every round; read in the browser's private
-      //  window, the usual pace.)
+      //  window, the usual pace. A store with a budget for what each browser reads of it: its target pace, the budget
+      //  deciding — and told what came of this read.)
       const storeOf = this.retailers.get(row.store);
       const priv = res.privateWindow === true && !!(storeOf && storeOf.monitor && storeOf.monitor.privateWindow);
-      const pace = storeOf && storeOf.monitor && storeOf.monitor.browserSeconds && !priv ? storeOf.monitor.browserSeconds * 1000 : this.browserInterval;
+      const budgeted = !!this.access && this.access.limited(storeOf);
+      if (budgeted) this.access.done(storeOf, device || user.id, 'check', outcomeOf({ ok: !failed, status, error: res.error }));
+      const pace = budgeted ? this.access.targetMs(storeOf) : storeOf && storeOf.monitor && storeOf.monitor.browserSeconds && !priv ? storeOf.monitor.browserSeconds * 1000 : this.browserInterval;
       const next = now + (failed ? Math.min(MAX_BACKOFF_MS, this.browserInterval * 2 ** Math.min(fails, 5)) : pace);
       this.db.run('UPDATE items SET browser_checked_at = :now, browser_fails = :f, browser_next_at = :n WHERE id = :id', { now, f: fails, n: next, id: row.id });
       const found = typeof res.foundUrl === 'string' ? res.foundUrl.slice(0, 2000) : '';

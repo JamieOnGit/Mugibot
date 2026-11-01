@@ -1426,9 +1426,10 @@ test('📃 a store\'s search page in Drop watches: told apart from a product\'s 
   await page.waitForFunction(() => /Watching — its page is read in a moment, then every 5 seconds/.test(document.querySelector('#dw-msg').textContent));
   const row = page.locator('#dw-mine .dw-row', { hasText: 'EB pre-orders' });
   await row.waitFor();
-  assert.match(await row.textContent(), /EB pre-orders.*Page · EB Games · every 5 s · 📣 for everyone in #general · pings @Drop pings · 🤖 auto-checkout up to \$250\.00 · for "magic the gathering", "one piece op 15"/s);
+  assert.match(await row.textContent(), /EB pre-orders.*Page · EB Games · every 5 s · 📣 for everyone in #general · pings @Drop pings · 🤖 auto-checkout up to \$250\.00 \(a box 1, packs the most allowed\) · for "magic the gathering", "one piece op 15"/s);
   assert.match(await row.textContent(), /EB Games' page is read from an admin's browser — waiting for one/);
   const w = env.app.drops.watches().find((x) => x.page === EB);
+  assert.equal(w.qty, 'auto', 'a new watch\'s quantity: by the kind of product (Mugibot 2.0)');
   assert.deepEqual([w.phrases, w.every, w.channelId, w.roleId, w.aco, w.maxPrice, w.shared], [['magic the gathering', 'one piece op 15'], 5, general, PINGS, true, 250, true]);
   assert.equal(await page.inputValue('#dw-phrases'), '', 'ready for the next one');
   // ✎: its key phrases and pace (and, an admin's for everyone, where it posts).

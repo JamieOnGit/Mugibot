@@ -8,7 +8,6 @@ import { BAGS_EXTENSION_VERSION } from '../bags.js';
 import { ACO_EXTENSION_VERSION, EXTENSION_VERSION, REMOTE_EXTENSION_VERSION, RESTORE_EXTENSION_VERSION, storeUrl } from '../extension.js';
 import { DUMMY_PRODUCTS, STARTER_ITEMS, dummyProductPath } from '../presets.js';
 import { DEFAULT_ALERTS, HttpError, acoSettings, alerts as checkAlerts, bad, bool, cardBackupInfo, cardRestoreInfo, item as checkItem, num, profiles as checkProfiles, str } from '../schema.js';
-import { latestLogin } from '../retailers/index.js';
 import { cartLines } from '../retailers/shoplink.js';
 import { publicUser } from './auth.js';
 
@@ -354,17 +353,35 @@ export function register(router, ctx) {
 
   // The store login monitor: each store, and whether you're signed in there (the latest any of your
   // browsers saw), with where to sign in. Signed in, ⚡ Buy's checkout is faster.
+  // (Mugibot 2.0: keep — a store you keep signed in to, told at once when you're signed out there (server/signins.js);
+  //  the reading that counts is the checkout browser's, else the latest of any; since: in that state since; stale: not
+  //  checked lately.)
   router.get('/api/logins', async (req) => {
     const devices = repo.listDevices(req.user.id);
-    const stores = retailers.list.filter((r) => r.account && retailers.enabled(r) && (!r.demo || cfg.demoStoreUrl)).map((r) => {
-      const best = latestLogin(r, devices);
+    const view = ctx.signins.view(req.user.id);
+    const extra = new Map(view.stores.map((x) => [x.id, x]));
+    const checkout = ctx.aco.checkoutDevice(req.user.id);
+    const stores = ctx.signins.candidates().map((r) => {
+      const best = ctx.signins.reading(r, devices, checkout);
+      const x = extra.get(r.id) || {};
       return {
         id: r.id, name: r.name, demo: !!r.demo, signInUrl: `${r.base}${r.account.signIn || ''}`, cartLinks: !!r.cartLinks,
         // required: the store only sells to signed-in customers (Amazon: no guest checkout).
         required: !!r.account.required, checked: !!r.account.check, status: best ? best.status : null, at: best ? best.at : null, how: best ? best.how : null, device: best ? best.device : null,
+        keep: !!x.keep, since: x.since ?? null, alertedAt: x.alertedAt ?? null, stale: !!x.stale,
       };
     });
-    return { stores, browsers: devices.length };
+    return { stores, browsers: devices.length, prefs: view.prefs, checkoutBrowser: view.checkoutBrowser };
+  });
+
+  // Which stores you keep signed in to, and whether you're DM'd when signed out at one (Profile → Store sign-ins).
+  router.put('/api/logins/prefs', async (req) => {
+    const b = req.body || {};
+    if (b.stores !== undefined && !Array.isArray(b.stores)) throw bad('stores must be a list of store ids');
+    if (b.dm !== undefined && typeof b.dm !== 'boolean') throw bad('dm must be true or false');
+    const prefs = ctx.signins.setPrefs(req.user.id, b);
+    await ctx.signins.review(req.user.id);
+    return { prefs };
   });
 
   router.post('/api/devices/pair-code', async (req) => {
@@ -406,6 +423,9 @@ export function quantityOf(v) {
  * finishes a checkout itself (server/aco.js toPhone()). (A Shop checkout link is its own: its quantities are in it.)
  */
 export function productLink(ctx, it, variantId = null, qty = it.quantity) {
+  // (As many as the store allows: its own product page, whose quantity control and limits decide — never a cart link
+  //  that would put a number in the bag the page wouldn't take.)
+  if (it.qtyRule === 'max') return it.url;
   const r = ctx.retailers.get(it.store);
   const carts = !!(r && r.cartPath && r.cartPath.includes('{variant}'));
   const known = carts && ctx.catalog ? ctx.catalog.productFor(it.store, it.sku) : null;

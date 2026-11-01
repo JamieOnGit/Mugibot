@@ -227,7 +227,7 @@ function refreshState(auth) {
     refreshing = (async () => {
       const res = await api('GET', `/api/ext/items?src=${SOURCE}&card=${await cardStateNow()}`);
       if (res.status !== 200 || !res.body) return null;
-      const st = { items: res.body.items, flows: res.body.flows, active: res.body.active, browserChecks: res.body.browserChecks, aco: res.body.aco || null };
+      const st = { items: res.body.items, flows: res.body.flows, active: res.body.active, browserChecks: res.body.browserChecks, aco: res.body.aco || null, signins: Array.isArray(res.body.signins) ? res.body.signins : [] };
       await chrome.storage.local.set({ [`state:${auth.user.id}`]: { ...st, at: Date.now() } });
       if (Array.isArray(res.body.gates)) await noteGatesUp(res.body.gates);
       return st;
@@ -241,7 +241,7 @@ async function getState() {
   if (!auth) return { items: [], flows: [], online: false, paired: false };
   const cacheKey = `state:${auth.user.id}`;
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
-  const pick = (st) => ({ items: st.items, flows: st.flows, active: st.active, browserChecks: st.browserChecks, aco: st.aco || null });
+  const pick = (st) => ({ items: st.items, flows: st.flows, active: st.active, browserChecks: st.browserChecks, aco: st.aco || null, signins: st.signins || [] });
   if (cached && Date.now() - cached.at < STATE_FRESH_MS) {
     refreshState(auth).catch(() => null);
     return { ...pick(cached), online: true, paired: true, user: auth.user };
@@ -617,10 +617,12 @@ async function updateInfo(force = false) {
     // The store copy updates itself; a downloaded copy is asked to move to the store copy once there is one.
     info.available = moved || (!FROM_STORE && (newer(info.latest, VERSION) || !!info.store));
   }
-  const badge = info.retired ? 'OLD' : info.available ? 'NEW' : '';
+  // (Signed out at a store you keep signed in to: that first — the popup has its "Sign in" button.)
+  const out = info.retired ? [] : await signedOutKept().catch(() => []);
+  const badge = info.retired ? 'OLD' : out.length ? 'IN?' : info.available ? 'NEW' : '';
   chrome.action.setBadgeText({ text: badge });
-  if (badge) chrome.action.setBadgeBackgroundColor({ color: info.retired ? '#6b7280' : '#d97706' });
-  chrome.action.setTitle({ title: info.retired ? `${CONFIG.appName} — old copy, remove it` : info.available ? `${CONFIG.appName} — update available` : CONFIG.appName });
+  if (badge) chrome.action.setBadgeBackgroundColor({ color: info.retired ? '#6b7280' : out.length ? '#dc2626' : '#d97706' });
+  chrome.action.setTitle({ title: info.retired ? `${CONFIG.appName} — old copy, remove it` : out.length ? `${CONFIG.appName} — not signed in at ${out.map((r) => r.name).join(', ')}: open to sign in` : info.available ? `${CONFIG.appName} — update available` : CONFIG.appName });
   return info;
 }
 
@@ -912,6 +914,7 @@ async function runChecks() {
     await chrome.storage.local.set({ needSites: Array.isArray(due.body.sites) ? due.body.sites.slice(0, 20) : [] });
     const results = [];
     const lastByHost = new Map();
+    const began = Date.now();
     const flows = (await getState()).flows || [];
     const held = await heldStores();
     const denied = await deniedStores();
@@ -919,8 +922,21 @@ async function runChecks() {
       if (held.has(c.store)) continue; // its queue is up here (the server may not know yet)
       if (denied.has(c.store)) continue; // it's turning this browser away just now: left alone
       const host = new URL(c.url).host;
+      // (Gentle on each store: 4 s between two of its pages — or the gap the server says for a store whose bot protection
+      //  turns a browser away that reads it too often, BIG W's: 1.39.0.)
+      const wait = Math.max(4000, Math.min(Number(c.gapMs) || 0, 60 * 1000));
       const gap = Date.now() - (lastByHost.get(host) || 0);
-      if (gap < 4000) await new Promise((r) => setTimeout(r, 4000 - gap)); // gentle on each store
+      if (gap < wait) await new Promise((r) => setTimeout(r, wait - gap));
+      // (…the slot it booked there: not before startInMs — and none of the store's own searches or pages watched still
+      //  loading in this browser: one of its pages at a time. 1.39.0.)
+      const at = began + Math.min(Number(c.startInMs) || 0, 30 * 1000);
+      if (at > Date.now()) await new Promise((r) => setTimeout(r, at - Date.now()));
+      if (c.gapMs) {
+        const going = [sweepsGoing.get(c.store), sweepsGoing.get(`page:${c.store}`)].filter(Boolean);
+        if (going.length) await withinLimit(Promise.allSettled(going), 30 * 1000).catch(() => null);
+      }
+      // (Turned away by its last page just now: the rest of the round's pages there left alone too.)
+      if ((await deniedStores()).has(c.store)) { denied.add(c.store); continue; }
       lastByHost.set(host, Date.now());
       if (c.kind === 'site') {
         results.push(await readSite(c));
@@ -1644,14 +1660,18 @@ async function acoLoop() {
   }
   acoLooping = true;
   try {
-    for (let quiet = 0; quiet < 3;) {
+    for (let quiet = 0; ;) {
       // (An extension call between asks keeps this worker running while it waits.)
       await chrome.storage.session.set({ acoBeat: Date.now() });
       const started = Date.now();
       const res = await api('GET', `/api/ext/aco/next?wait=20&card=${await cardStateNow()}`, undefined, { timeoutMs: 40000 });
       if (res.status !== 200 || !res.body) {
-        quiet += 1; // offline, or the account's membership ended: try again in a moment, then leave it to the alarm
-        await new Promise((r) => setTimeout(r, 3000));
+        // Signed out of Mugibot, or the membership ended: left to the alarm. Offline, or the server restarting (a
+        // release): asked again with a growing wait — 1.5 s, 3 s, 6 s… never more than 15 s apart (1.40.0: it stopped
+        // after three tries before, and a drop just after a release waited up to half a minute for Chrome's alarm).
+        quiet += 1;
+        if ([401, 402, 403].includes(res.status) || quiet >= 40) break;
+        await new Promise((r) => setTimeout(r, Math.min(15000, 1500 * 2 ** Math.min(quiet - 1, 4))));
         continue;
       }
       quiet = 0;
@@ -2212,6 +2232,17 @@ async function noteLogin(store, status, how) {
   // Your account hears about it in a moment (a change: straight away), all stores at once.
   clearTimeout(loginReport);
   loginReport = setTimeout(() => reportLogins().catch(() => null), before && before.status === status ? 4000 : 200);
+  // (The toolbar button says so too: "IN?" while a store you keep signed in to says you're not.)
+  if (!before || before.status !== status) updateInfo().catch(() => null);
+}
+
+/** The stores you keep signed in to (Profile → Store sign-ins) that this browser last saw you signed out of. */
+async function signedOutKept() {
+  if (!(await getAuth())) return [];
+  const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
+  const st = await getState();
+  const keep = new Set(st.signins || []);
+  return (st.flows || []).filter((r) => keep.has(r.id) && all[r.id] && all[r.id].status === 'out');
 }
 
 async function reportLogins() {
@@ -2239,7 +2270,72 @@ async function checkLogins({ force = false } = {}) {
       if (status) { await noteLogin(r.id, status, 'check'); n += 1; }
     } catch { /* the store didn't answer: try again next time */ }
   }
+  n += await probeLogins(st, held, { force });
   return n;
+}
+
+// Mugibot 2.0 (1.40.0): a store you keep signed in to (Profile → Store sign-ins) whose pages don't say so in their
+// source — EB Games', BIG W's, Kmart's and Target's headers are drawn by their own code — is looked at in its own page:
+// its home page opened in a tab of the extension's own window (never its private one: your cookies are in this one),
+// its header read as on any page you open (logins.js), the tab closed. Only when nothing has said whether you're signed
+// in there for PROBE_MS (a store's own account.probeMinutes: BIG W's is longer), and never at a store whose queue is up
+// here, that turned this browser away ("Access Denied"), or with no probe (account.probe: false). One store at a time.
+const PROBE_MS = 20 * 60 * 1000;
+let probing = null;
+
+async function probeLogins(st, held, { force = false } = {}) {
+  if (probing) return 0;
+  probing = (async () => {
+    const keep = new Set(st.signins || []);
+    // (Not for an account whose membership has lapsed: nothing is bought for it anyway.)
+    if (!keep.size || st.active === false) return 0;
+    const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
+    const denied = await deniedStores().catch(() => new Set());
+    let n = 0;
+    for (const r of st.flows || []) {
+      const a = r.account;
+      if (!keep.has(r.id) || !a || a.check || a.probe === false || !r.base || held.has(r.id) || denied.has(r.id)) continue;
+      const every = Math.max(PROBE_MS, (Number(a.probeMinutes) || 0) * 60 * 1000);
+      const last = all[r.id];
+      if (!force && last && Date.now() - last.at < every) continue;
+      // (force — the dashboard's "Check now": still not one looked at in the last minute.)
+      if (force && last && Date.now() - last.at < 60 * 1000) continue;
+      const status = await probeOne(r).catch(() => null);
+      if (status) { await noteLogin(r.id, status, 'probe'); n += 1; }
+    }
+    return n;
+  })().finally(() => { probing = null; });
+  return probing;
+}
+
+/** Runs in the store's page (the extension's own world): signed in, signed out, or null (can't tell yet). */
+function readLoginHere(check) {
+  return globalThis.MGBLogins ? globalThis.MGBLogins.fromPage(document, check) : null;
+}
+
+async function probeOne(r) {
+  const key = `login:${r.id}`;
+  const { id: tabId, incognito } = await sweepTab(key);
+  try {
+    if (incognito) return null;
+    await openIn(tabId, `${r.base}${typeof r.account.probe === 'string' ? r.account.probe : '/'}`, r.gate || null);
+    // (Its header is drawn by its own code a moment after the page loads: a few looks, up to 8 s. A page that didn't
+    //  load — the store down, no connection: Chrome's error page, which can't be read — given up at once.)
+    const until = Date.now() + 8000;
+    for (;;) {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['logins.js'] });
+      const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: readLoginHere, args: [r.account.check || null] });
+      const got = res && res.result;
+      if (got === 'in' || got === 'out') return got;
+      if (Date.now() > until) return null;
+      await new Promise((ok) => setTimeout(ok, 1000));
+    }
+  } catch {
+    // (Its queue came up instead — left alone — or the page couldn't be read: nothing said either way.)
+    return null;
+  } finally {
+    await dropSweepTab(key, r.id).catch(() => null);
+  }
 }
 globalThis.mugibotCheckLogins = (opts) => checkLogins(opts);
 
@@ -2351,7 +2447,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!fromExtensionPage(sender)) return null;
         const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
         const st = await getState();
-        return { logins: all, stores: (st.flows || []).filter((r) => r.account).map((r) => ({ id: r.id, name: r.name, signIn: `${r.base}${r.account.signIn || ''}` })) };
+        const keep = new Set(st.signins || []);
+        return { logins: all, stores: (st.flows || []).filter((r) => r.account).map((r) => ({ id: r.id, name: r.name, signIn: `${r.base}${r.account.signIn || ''}`, keep: keep.has(r.id) })) };
       }
       case 'claim': {
         // A ⚡ Buy code: confirm it once, then allow checkout autofill in this tab.

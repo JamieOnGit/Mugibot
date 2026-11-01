@@ -478,7 +478,8 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     if (p.qtyStyle === 'none') return '';
     const max = Number(p.maxQty) || 10;
     if (p.qtyStyle === 'select') return `<label>Quantity <select name="quantity" aria-label="Quantity" style="width:80px">${Array.from({ length: max }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('')}</select></label>`;
-    return `<label>Qty <input name="quantity" type="number" value="1" min="1" ${p.maxQty ? `max="${p.maxQty}"` : ''} style="width:60px"></label>`;
+    // (hideMax: no max on the box — the store says its limit in words instead, limitNote: "Limit 4 per customer".)
+    return `<label>Qty <input name="quantity" type="number" value="1" min="1" ${p.maxQty && !p.hideMax ? `max="${p.maxQty}"` : ''} style="width:60px"></label>${p.limitNote ? `<p class="limit-note">${p.limitNote}</p>` : ''}`;
   }
 
   const readQtyJs = `const inp = document.querySelector('[name=quantity]'); const qv = document.getElementById('qval'); const qty = inp ? Number(inp.value || 1) : Number(qv ? qv.textContent : 1);`;

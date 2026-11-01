@@ -62,6 +62,11 @@ export async function startFakeDiscord() {
     roles: [{ id: 'guild-1', name: '@everyone', position: 0, permissions: '0' }, { id: 'role-member', name: 'Member', position: 1, permissions: '0' }, { id: 'role-bot', name: 'Mugibot', position: 5, managed: true, permissions: String(1n | (1n << 10n) | (1n << 11n) | (1n << 14n) | (1n << 28n)) }],
     botRoles: ['role-bot'],
     rateLimitNext: 0,
+    // Mugibot 2.0's retries: the next messages answered 500 (failNext), or taken but their answer lost (lostNext: a 500
+    // after it's posted); a message with a nonce Discord enforces is posted once however many times it's sent.
+    failNext: 0,
+    lostNext: 0,
+    nonces: new Map(),
     // How long each answer takes (ms) — Discord's few hundred from Sydney, for tests of what goes first.
     delayMs: 0,
     // The server's channels (text 0, category 4); the bot may make more when it can Manage Channels.
@@ -140,8 +145,14 @@ export async function startFakeDiscord() {
     if ((m = p.match(/^\/channels\/([^/]+)\/messages$/)) && c.method === 'POST') {
       const recipient = m[1].startsWith('dm-') ? m[1].slice(3) : null;
       if (recipient && state.dmsClosed.has(recipient)) return reply(403, { message: 'Cannot send messages to this user', code: 50007 });
+      if (state.failNext > 0) { state.failNext -= 1; return reply(500, { message: 'Internal Server Error' }); }
+      const key = c.body && c.body.enforce_nonce && c.body.nonce ? `${m[1]}:${c.body.nonce}` : null;
+      if (key && state.nonces.has(key)) return reply(200, state.nonces.get(key));
       state.messages.push({ channel: m[1], to: recipient, body: c.body, at: Date.now() });
-      return reply(200, { id: `msg-${state.messages.length}`, channel_id: m[1] });
+      const out = { id: `msg-${state.messages.length}`, channel_id: m[1] };
+      if (key) state.nonces.set(key, out);
+      if (state.lostNext > 0) { state.lostNext -= 1; return reply(502, { message: 'Bad Gateway' }); }
+      return reply(200, out);
     }
     if ((m = p.match(/^\/channels\/([^/]+)$/))) return reply(200, { id: m[1], name: 'restocks' });
     if ((m = p.match(/^\/applications\/([^/]+)\/guilds\/([^/]+)\/commands$/)) && c.method === 'PUT') return reply(200, c.body.map((x, i) => ({ ...x, id: `cmd-${i}` })));

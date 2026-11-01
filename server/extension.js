@@ -109,12 +109,23 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // Auto-checkout watch's new listing from one that only moved up into view (monitor/sightings.js). An older copy's
 // reads never say so: what they find is decided as before by the watch's own readings, never bought on newness alone.
 // Nothing else changed in how searches or checkouts go.
+// 1.39.0: everything a browser reads of BIG W within one budget (monitor/access.js; GAP_EXTENSION_VERSION): its watchlist
+// and product pages two a round, the gap the server says between them (gapMs), the first not before the slot it booked
+// (startInMs) nor while BIG W's own search or page watched is still loading in that browser — one BIG W page at a time —
+// and the rest of a round's pages at a store left alone the moment it says "Access Denied". An older copy gets one a
+// round. Nothing else changed in how searches or checkouts go.
 // 1.29.0: quantities — ⚡ Buy and Auto-checkout put as many in the bag as the item says (its product page's
 // drop-down, box or − / + set before Add; none on the page, the bag's), cart links with that many. From The
 // Deep Games (fromthedeepgames.com.au) is new to it too. And searching all day from an admin's browser (BIG W):
 // its sweep tabs never discarded by Chrome, a search that never ends given up (its tab opened afresh), a sweep
 // loop gone quiet started again by the alarm.
+// 1.40.0: "as many as the store allows" (an item or watch set to it — a hangsell or booster pack: MOST_EXTENSION_VERSION):
+// the product page's own per-customer limit, drop-down, box or + button decide how many go in the bag, never more than
+// the run says. And your store sign-ins checked at every store, each one that's signed out shown on the toolbar button
+// with a "Sign in" button in the popup. Nothing else changed in how searches or checkouts go.
 export const ACO_EXTENSION_VERSION = '1.19.0';
+// The oldest that buys "as many as the store allows" (an older copy is asked for one).
+export const MOST_EXTENSION_VERSION = '1.40.0';
 // The oldest that puts more than one in the bag (an older copy adds one, whatever the item says).
 export const QTY_EXTENSION_VERSION = '1.29.0';
 // The oldest that keeps a copy of your card for updates (locked with a key your dashboard keeps in this

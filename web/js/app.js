@@ -504,7 +504,7 @@ function itemRow(it, i, list = state.items, { movable = true } = {}) {
   const st = statusOf(it);
   // (Another website: no ⚡ Buy — Mugibot checks out at the stores it knows. Its page is the way in.)
   // (×2: ⚡ Buy puts that many in the bag.)
-  const many = it.quantity > 1 && !(it.shopLink && it.sku.includes(',')) ? ` ×${it.quantity}` : '';
+  const many = it.qtyRule === 'max' ? ' ×most' : it.quantity > 1 && !(it.shopLink && it.sku.includes(',')) ? ` ×${it.quantity}` : '';
   const buy = it.acoCan ? h('button', { class: 'btn primary small', type: 'button', disabled: !it.url, title: it.url ? (many ? `Puts ${it.quantity} in your bag` : '') : 'The product page hasn\'t been found yet' }, `⚡ Buy${many}`) : null;
   // The one-time ⚡ Buy code is asked for as the button goes down, so the store opens the moment it's clicked.
   buy?.addEventListener('pointerdown', () => primeBuy(it));
@@ -537,7 +537,7 @@ function itemRow(it, i, list = state.items, { movable = true } = {}) {
   // (Another website's product goes by its address: its made-up code isn't one anyone uses.)
   // (A Shop checkout link: what's in it, as the store names its options — its code is the link.)
   const what = it.shopLink ? (it.title || `${it.sku.split(',').length} option${it.sku.includes(',') ? 's' : ''} in the link`) : it.acoCan ? `SKU ${it.sku}` : '';
-  const meta = [it.storeName, what, money(price), it.quantity > 1 && !(it.shopLink && it.sku.includes(',')) ? `× ${it.quantity}` : '', it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}${it.quantity > 1 && !it.shopLink ? ' each' : ''}` : '', it.discount ? `🏷️ code ${it.discount}` : '', it.queueAt ? `⏰ 🚦 starts ${whenAt(it.queueAt)}` : '', checked].filter(Boolean).join(' · ');
+  const meta = [it.storeName, what, money(price), it.qtyRule === 'max' ? '× the most allowed' : it.quantity > 1 && !(it.shopLink && it.sku.includes(',')) ? `× ${it.quantity}` : '', it.maxPrice != null ? `ping at ≤ ${money(it.maxPrice)}${it.quantity > 1 && !it.shopLink ? ' each' : ''}` : '', it.discount ? `🏷️ code ${it.discount}` : '', it.queueAt ? `⏰ 🚦 starts ${whenAt(it.queueAt)}` : '', checked].filter(Boolean).join(' · ');
   const isAdmin = state.me.user.role === 'admin';
   // (One of your pool's leader's: theirs, kept in step — changed, paused or removed by them. Yours to skip.)
   const pooled = !!it.pool;
@@ -868,7 +868,9 @@ async function editItem(it, { shop = false } = {}) {
   $('#w-max').value = it && typeof it.maxPrice === 'number' ? it.maxPrice : '';
   // (How many: 1 unless set. A Shop checkout link goes by the link's own numbers: …/cart/<number>:<quantity>.)
   $('#w-qty').value = it && it.quantity ? it.quantity : 1;
-  $('#w-qty').disabled = !!link;
+  // (As many as the store allows — a hangsell or booster pack: the page's own most, up to 10.)
+  $('#w-qty-max').checked = !!(it && it.qtyRule === 'max');
+  $('#w-qty').disabled = !!link || $('#w-qty-max').checked;
   $('#w-qty').parentElement.hidden = !!link;
   $('#w-announce').checked = !!(it && it.announce);
   $('#w-aco').checked = !!(it && it.aco);
@@ -890,6 +892,8 @@ const wPageHint = () => {
   return page;
 };
 $('#w-url').addEventListener('input', wPageHint);
+// (As many as the store allows: no number to give then.)
+$('#w-qty-max').addEventListener('change', () => { $('#w-qty').disabled = $('#w-qty-max').checked || $('#w-form').dataset.mode === 'shop'; });
 $('#w-page-go').addEventListener('click', () => {
   const url = $('#w-url').value.trim();
   $('#w-form').hidden = true;
@@ -911,7 +915,8 @@ $('#w-form').addEventListener('submit', (e) => {
       cardId: $('#w-card').value,
     };
     // (A store's checkout link pasted in, …/cart/<number>:<quantity>: its own quantities, never the box's.)
-    if (!$('#w-qty').disabled && !/\/cart\/\d+:\d+/.test(body.url)) body.quantity = $('#w-qty').value || 1;
+    if ($('#w-qty-max').checked && !/\/cart\/\d+:\d+/.test(body.url)) body.quantity = 'max';
+    else if (!$('#w-qty').disabled && !/\/cart\/\d+:\d+/.test(body.url)) body.quantity = $('#w-qty').value || 1;
     if (shop) body.discount = $('#w-discount').value.trim();
     if (state.me.user.role === 'admin') body.announce = $('#w-announce').checked;
     try {
@@ -2262,6 +2267,68 @@ function renderFeedPager() {
 // ---------------------------------------------------------------------------
 // 👤 Account
 // ---------------------------------------------------------------------------
+// 🔑 Store sign-ins, 24/7 (server/signins.js): the stores you keep signed in to — ticked — each one's state as the
+// browser Mugibot checks out in last saw it, since when, and its "Sign in" button; whether you're DM'd when signed out.
+loaders.account = async () => {
+  await loadLogins().catch(() => null);
+  renderSignins();
+};
+
+function renderSignins() {
+  const d = state.logins;
+  const list = $('#signins');
+  if (!d || !list) return;
+  list.textContent = '';
+  $('#signins-dm').checked = !!(d.prefs && d.prefs.dm);
+  const rank = (s) => (s.keep ? 0 : 4) + ({ out: 0, unknown: 1, in: 3 }[s.status] ?? 2);
+  const stores = [...d.stores].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  const kept = stores.filter((s) => s.keep);
+  const outs = kept.filter((s) => s.status === 'out');
+  $('#signins-sum').textContent = !d.browsers ? 'Connect the extension (Setup → Extension) and this shows where you\'re signed in.'
+    : `${outs.length ? `⚠️ Signed out at ${outs.map((s) => s.name).join(', ')}. ` : ''}Signed in at ${kept.filter((s) => s.status === 'in').length} of the ${kept.length} store${kept.length === 1 ? '' : 's'} you keep${d.checkoutBrowser ? ` (in ${d.checkoutBrowser}, the browser Mugibot checks out in)` : ''}.`;
+  for (const s of stores) {
+    const seen = s.at ? `${LOGIN_TEXT[s.status] || 'Seen'}${s.since && s.status === 'out' ? ` since ${when(s.since)}` : ''} · ${s.how === 'check' || s.how === 'probe' ? 'checked' : 'seen'} ${ago(s.at)}${d.browsers > 1 && s.device ? ` in ${s.device}` : ''}${s.stale ? ' — not checked lately (is that browser open?)' : ''}`
+      : 'Not seen yet: the extension checks it soon (or open the store once)';
+    const box = h('input', { type: 'checkbox', name: 'keep', value: s.id, 'aria-label': `Keep signed in at ${s.name}` });
+    box.checked = !!s.keep;
+    list.append(h('li', { class: `login ${s.status || 'none'}${s.keep ? '' : ' muted'}`, dataset: { store: s.id } },
+      box,
+      h('span', { class: 'dot', 'aria-hidden': 'true' }),
+      h('div', { class: 'info' },
+        h('div', { class: 'name' }, s.name, s.required ? h('span', { class: 'pill warn', title: 'Only sells to signed-in customers' }, 'sign-in only') : null),
+        h('div', { class: 'meta', title: seen }, seen)),
+      s.status === 'in' ? null : h('a', { class: `btn small${s.status === 'out' && s.keep ? ' primary' : ''}`, href: s.signInUrl, target: '_blank', rel: 'noopener' }, 'Sign in ↗')));
+  }
+}
+
+$('#signins-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  busy(e.target, async () => {
+    try {
+      const stores = $$('#signins input[name=keep]').filter((b) => b.checked).map((b) => b.value);
+      await api('PUT', '/api/logins/prefs', { stores, dm: $('#signins-dm').checked });
+      await loadLogins();
+      renderSignins();
+      setMsg($('#signins-msg'), 'Saved.', true);
+    } catch (err) {
+      setMsg($('#signins-msg'), err.message);
+    }
+  });
+});
+
+$('#signins-check').addEventListener('click', async () => {
+  const msg = $('#signins-msg');
+  if (!state.ext || !state.ext.paired) { setMsg(msg, 'Install the extension and connect it (Setup → Extension) first.'); return; }
+  await busy($('#signins-form'), async () => {
+    setMsg(msg, 'Checking…', true);
+    const reply = await askExtension('checkLogins', {}, 60000);
+    if (!reply || !reply.ok) { setMsg(msg, 'The extension didn\'t answer: reload this page and try again.'); return; }
+    await loadLogins();
+    renderSignins();
+    setMsg(msg, reply.checked ? `Checked ${reply.checked} store${reply.checked === 1 ? '' : 's'}.` : 'Up to date (checked in the last minute).', true);
+  });
+});
+
 $('#acct-form').addEventListener('submit', (e) => {
   e.preventDefault();
   busy(e.target, async () => {
@@ -2370,6 +2437,7 @@ function connectStream() {
       loadDevices().catch(() => null);
       loadLogins().then(renderLogins).catch(() => null);
     }
+    if (!$('[data-panel="account"]').hidden) loadLogins().then(renderSignins).catch(() => null);
     if (listOpen('watch')) loadLogins().then(renderItems).catch(() => null);
     if (listOpen('armed')) Promise.all([loadLogins(), loadAco()]).then(renderArmed).catch(() => null);
     renderExtStatus().catch(() => null);

@@ -287,6 +287,16 @@ then, so a drop that isn't busy goes exactly as fast as before:
   your browser never opens a second tab for a run whose first one is still
   loading. (One that loaded and couldn't take it up gets a new tab, as before.)
 
+### As many as the store allows (Mugibot 2.0)
+
+An item can be set to **Most allowed** (its quantity on the watchlist; a drop or VIP watch's quantity **auto** sets it
+for booster packs, hangsells and blisters, and one for booster boxes, displays and cases). Its checkout then puts in the
+bag the least of: the store's own per-customer limit as its product page says it ("Limit 4 per customer"), the page's
+drop-down's highest choice, its box's max or its + button's last press, 10, and what your own limits fit at the price
+seen (your limit an order and what's left of today's spend — fewer, never skipped). The run says how many it took and
+why ("Quantity set to 4 — the most the store allows (its limit: 4 per customer)"). It needs extension 1.40.0; an older
+copy is asked for one. A store's purchase limits are always respected: Mugibot never adds more than the page takes.
+
 ### Several at once
 
 Several drops at once — armed items, Trigger ACO, ⚡ Buy pressed in Discord

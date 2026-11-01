@@ -51,6 +51,7 @@ import { categoryFor, toProduct } from '../catalog.js';
 import { ENTITLED_SQL } from '../repo.js';
 import { serialize } from '../retailers/index.js';
 import { bad, bool, num, str } from '../schema.js';
+import { outcomeOf } from './access.js';
 import { decodeEntities } from './html.js';
 import { dropConnections, storeFetch } from './http.js';
 import { AU_STATES, mentions, norm, parseListing, termsRegex } from './listing.js';
@@ -238,6 +239,9 @@ const UNKNOWN_SETTLE_READS_MS = 2 * 60 * 1000;
 // searching it — Chrome closed, the computer asleep — or it turned them away: BIG W's "Access Denied"): its
 // drops can't be seen, so its admins are told, once, and again when it's back.
 const BLIND_MS = 20 * 60 * 1000;
+// A store only admins' browsers search (EB Games, Premium Bandai, BIG W) that none has searched for this long: its admins
+// are told at once — a drop there can't be seen meanwhile (Mugibot 2.0: not 20 minutes later).
+const UNSEARCHED_MS = 3 * 60 * 1000;
 // "Restock once a day": its first restock of the (Sydney) day — and another the same day only once it's been sold out this
 // long first (a hot product's second wave: back at 13:30 after selling out at 9:04 — not a flicker), at most this many a day.
 const RESTOCK_GAP_MS = 30 * 60 * 1000;
@@ -577,6 +581,10 @@ export class Sweeper {
    */
   paceFor(r, browser = false) {
     const s = this.settings;
+    // (A store with a budget for what a browser reads of it — BIG W's, monitor/access.js: searched at its target pace, and
+    //  the budget, shared with its product pages and pages watched, decides how often a browser really does. While its
+    //  searches fail, backed off from its own pace, as ever — never sooner than before.)
+    if (browser && this.access && this.access.limited(r) && !this.stat(r.id).fails) return this.access.targetMs(r);
     const shared = browser && r.sweep.sharedWindowSeconds && !this.inPrivate(r) ? r.sweep.sharedWindowSeconds : 0;
     const every = Math.max(browser ? s.browserEverySeconds : s.everySeconds, r.sweep.minSeconds || 0, shared) * 1000;
     // A VIP drop in its window (monitor/vip.js): its words, every few seconds — at a store whose search is one big
@@ -733,7 +741,8 @@ export class Sweeper {
   }
 
   /** One search from the server: fetch, read, compare, alert. */
-  async sweepTerm(r, term) {
+  /** wait: answered once the search's channel posts are in (the live loop doesn't wait: its next search goes meanwhile). */
+  async sweepTerm(r, term, { wait = true } = {}) {
     await this.refreshCollections(r);
     const url = this.urlFor(r, term.keyword, term.page, { vip: !!(term.vip || term.drop) });
     const started = Date.now();
@@ -769,7 +778,7 @@ export class Sweeper {
       return this.allFailed(r, parsed.problem === 'layout' ? "it wasn't the product list Mugibot reads" : 'no products in it');
     }
     const title = /<title[^>]*>([^<]{0,300})/i.exec(text);
-    return this.ingest(r, term, parsed, { source: 'server', url, ms, seen: { title: title ? title[1] : '', bytes: text.length } });
+    return this.ingest(r, term, parsed, { source: 'server', url, ms, seen: { title: title ? title[1] : '', bytes: text.length }, wait });
   }
 
   /**
@@ -867,7 +876,7 @@ export class Sweeper {
   }
 
   /** What one search found. parsed: { products, total, problem } */
-  async ingest(r, term, parsed, { source, url, ms = null, seen = null, way = source }) {
+  async ingest(r, term, parsed, { source, url, ms = null, seen = null, way = source, wait = false }) {
     // A person's check in an admin's browser: only that person passes it (Mugibot never answers one).
     if (parsed.problem === 'blocked') {
       return this.record(r, term, {
@@ -1029,7 +1038,6 @@ export class Sweeper {
       if (this.sightings) for (const w of mine) this.sightings.ownRead(w, r.id, { whole, codes: codesIn, how: way });
       // A new card listing in a read that isn't setting its scene (not a VIP or drop watch's own search): drop mode.
       if (cardsNew && !baseline && !term.vip && !term.drop) this.heat(r, all ? null : term.keyword, now);
-      await Promise.allSettled(posting);
       const out = this.record(r, term, { ok: true, url, source, ms, baseline, total: parsed.total ?? null, ...counts, error: parsed.problem === 'empty' ? emptyText(r, term, parsed) : '' });
       // (Its newest products read under their own name for the first time, at a store with no later pages: the second
       //  pages they were read as before — the card shops' — are no longer searched, so they leave its list of searches.)
@@ -1037,10 +1045,13 @@ export class Sweeper {
       out.gone = all ? 0 : await this.markGone(r, term.keyword, now);
       return out;
     } finally {
-      // (Members' own alerts once the channel's are out — even when reading the rest of the list failed — going out
-      //  while the store's next search is on its way: monitor.deliver.)
-      await Promise.allSettled(posting);
+      // (Members' own alerts — even when reading the rest of the list failed — going out with the channel's (Mugibot 2.0:
+      //  never waiting for them; the channel's go first in Discord's line, urgent) while the store's next search is on its
+      //  way: monitor.deliver.)
+      const posted = this.monitor.follow(Promise.allSettled(posting));
       await this.monitor.deliver(later, r.id);
+      // (wait: a browser's results — answered once the channel's posts are in, as before; members' DMs already going.)
+      if (wait) await posted;
     }
   }
 
@@ -1054,7 +1065,7 @@ export class Sweeper {
    * not on sale and is on sale now. What's bought is what the watch saw (monitor/sightings.js): this read is
    * the page's watches' own — whole: it holds every result the store has for the page.
    */
-  async ingestPage(r, watches, products, { fresh = null, whole = false, how = '', look = true, now = this.now() } = {}) {
+  async ingestPage(r, watches, products, { fresh = null, whole = false, how = '', look = true, now = this.now(), wait = false } = {}) {
     const s = this.settings;
     const counted = { found: products.length, kept: 0, new: 0, restock: 0, price: 0 };
     const counts = this.filters(s);
@@ -1107,12 +1118,13 @@ export class Sweeper {
       }
       // (One more read of each watch's first look, while that's going.)
       if (this.sightings && look) for (const w of watches) this.sightings.ownRead(w, r.id, { whole, codes: codesIn, how });
-      await Promise.allSettled(posting);
       return counted;
     } finally {
-      // (Members' own alerts once the channel's are out.)
-      await Promise.allSettled(posting);
+      // (Members' own alerts with the channel's, never waiting for them.)
+      const posted = this.monitor.follow(Promise.allSettled(posting));
       await this.monitor.deliver(later, r.id);
+      // (wait: a browser's results — answered once the channel's posts are in, as before; members' DMs already going.)
+      if (wait) await posted;
     }
   }
 
@@ -1294,7 +1306,7 @@ export class Sweeper {
       }
     }
     // A monitor on this product also gets the alerts it asks for (sold out, price up…).
-    if (monitor && !monitor.paused && before) await this.feed.transitions(before, fresh2());
+    if (monitor && !monitor.paused && before) await this.feed.transitions(before, fresh2(), { posting });
     return sent;
   }
 
@@ -1372,13 +1384,31 @@ export class Sweeper {
   async watchBlind() {
     const s = this.settings;
     const now = this.now();
-    if (!this.running || !s.enabled || now - (this.startedAt || now) < BLIND_MS) return [];
+    if (!this.running || !s.enabled) return [];
+    // (Blind: only once it's had 20 minutes to find something. Unsearched: once it's had 3 to be searched.)
+    const settled = now - (this.startedAt || now) >= BLIND_MS;
     const told = [];
     const went = [];
     const back = [];
+    const lost = [];
+    const found = [];
     for (const { retailer: r, mode } of this.stores()) {
       if (mode === 'off' || !(mode === 'browser' || r.sweep.from === 'browser')) continue;
       const st = this.stat(r.id);
+      // (Searched from an admin's browser at all lately? Not: told within minutes — its queue up aside.)
+      if (mode === 'browser') {
+        const seen = st.lastAt || 0;
+        const held = !!(st.heldAt && now - st.heldAt < 2 * 60 * 1000);
+        const unsearched = !held && now - Math.max(seen, this.startedAt || 0) > UNSEARCHED_MS;
+        if (unsearched !== !!st.unsearchedSince) {
+          st.unsearchedSince = unsearched ? now : 0;
+          (unsearched ? lost : found).push({ r, line: unsearched ? `${r.name}: no admin's browser has searched it since ${seen ? sydneyTime.format(seen) : 'Mugibot started'} — Chrome closed, the computer asleep, the extension signed out, or "Access Denied" there.` : '' });
+          told.push({ store: r.id, unsearched });
+        }
+      }
+      // (Not searched at all: said already, just above — "not watched" on top would say it twice. Said once it's
+      //  searched again and those searches still find nothing.)
+      if (!settled || st.unsearchedSince) continue;
       if (!st.lastFoundAt) {
         const row = this.db.get('SELECT MAX(last_ok_at) AS at FROM sweep_terms WHERE store = :s AND found > 0', { s: r.id });
         st.lastFoundAt = (row && row.at) || this.startedAt;
@@ -1396,6 +1426,11 @@ export class Sweeper {
     }
     const names = (list) => andList(list.map((x) => x.r.name));
     const evs = [];
+    if (lost.length) {
+      evs.push({ level: 'urgent', stores: lost, title: `${names(lost)} ${lost.length === 1 ? "isn't" : "aren't"} being searched`,
+        message: `No drop there can be seen until an admin's browser searches ${lost.length === 1 ? 'it' : 'them'} again.\n${lost.map((x) => x.line).join('\n')}\nOpen Chrome with the Mugibot extension connected to an admin account (Setup → Extension), and keep the computer awake.` });
+    }
+    if (found.length) evs.push({ level: 'success', stores: found, title: `${names(found)} ${found.length === 1 ? 'is' : 'are'} being searched again`, message: `An admin's browser searched ${found.length === 1 ? 'it' : 'them'} at ${sydneyTime.format(now)}.` });
     if (went.length) {
       evs.push({ level: 'urgent', stores: went, title: `${names(went)} ${went.length === 1 ? "isn't" : "aren't"} being watched`,
         message: `Nothing ${went.length === 1 ? 'it drops' : 'they drop'} can be seen until ${went.length === 1 ? "it's" : "they're"} searched again.\n${went.map((x) => x.line).join('\n')}\nKeep Chrome open with the Mugibot extension connected to an admin account (Setup → Extension), and the computer awake. If a store says "Access Denied" there, clear that store's cookies in that browser, or use another one.` });
@@ -1670,7 +1705,8 @@ export class Sweeper {
         }
         const term = backup ? this.tryTerm(r) : this.nextTerm(r);
         const began = Date.now();
-        await this.sweepTerm(r, term).catch((e) => this.record(r, term, { ok: false, source: 'server', error: e.message }));
+        // (Mugibot 2.0: its channel posts and members' DMs go out while the store's next search is on its way.)
+        await this.sweepTerm(r, term, { wait: false }).catch((e) => this.record(r, term, { ok: false, source: 'server', error: e.message }));
         const spent = Date.now() - began;
         // Handed over to an admin's browser (or still standing in): the next try waits at the top.
         if (st.backup && this.modeFor(r) === 'auto') continue;
@@ -1731,6 +1767,9 @@ export class Sweeper {
         try { dropConnections(new URL(this.urlFor(r, this.settings.keywords[0] || '')).host); } catch { /* no address */ }
       }
       this.db.run("UPDATE sweep_terms SET fails = 0, error = '' WHERE store = :s", { s: r.id });
+      // (A store with a budget for what each browser reads of it — BIG W's: the browsers it turned away asked again,
+      //  at the wider gap they learned — monitor/access.js.)
+      if (this.access) this.access.reset(r);
       done.push(r);
       // Only the stores reset: the others keep their own pace (and any backoff).
       if (server && this.running && !this.loops.has(r.id)) this.loop(r.id).catch((e) => this.cfg.log('[sweep]', e.message));
@@ -1791,6 +1830,10 @@ export class Sweeper {
         st.heldAt = 0;
         this.sys(`${r.name}: searching it again (${this.gates && this.gates.queueUp(r.id) ? 'through its virtual queue' : 'its virtual queue is down'})`, { store: r.id });
       }
+      // (A store with a budget for what each browser reads of it — BIG W's: its tabs still reading there are done with.)
+      const budget = this.access && this.access.limited(r) ? this.access : null;
+      const device = browser.device || user.id;
+      if (budget) budget.idle(r, device, busy);
       // (Its search still going in that browser: nothing yet — the browser asks again the moment that's in.)
       if (busy.has(r.id)) continue;
       const needs = r.sweep.extension;
@@ -1800,8 +1843,14 @@ export class Sweeper {
         continue;
       }
       if (st.browserNext > now) { next = Math.min(next ?? Infinity, st.browserNext); continue; }
+      // (…and its budget: one of its pages at a time in this browser, the gap between them, a fair share — or later.)
+      if (budget) {
+        const may = budget.ask(r, device, 'search', { priv: typeof st.privateWindow === 'boolean' ? st.privateWindow : null });
+        if (!may.ok) { next = Math.min(next ?? Infinity, may.at); continue; }
+      }
       this.refreshCollections(r).catch(() => {});
       const term = this.nextTerm(r, { all: false }); // (an admin's browser: each keyword, as it always has — the whole-range list is the server's; the card shops' newest products too)
+      if (budget) budget.take(r, device, 'search', { keys: [`${term.keyword}\n${term.page}`] });
       // (A VIP or drop watch's words: searched as they are.)
       const raw = !!(term.vip || term.drop);
       st.browserNext = now + this.waitFor(st, this.paceFor(r, true));
@@ -1854,7 +1903,7 @@ export class Sweeper {
   }
 
   /** What an admin's browser found. Only admins' browsers can change the shared feed. */
-  async browserResults(user, results) {
+  async browserResults(user, results, { device = null } = {}) {
     if (!user || user.role !== 'admin' || !Array.isArray(results)) return [];
     const out = [];
     for (const res of results.slice(0, 10)) {
@@ -1862,6 +1911,8 @@ export class Sweeper {
       const r = this.retailers.get(str(res.store, 40));
       if (!r) continue;
       const st = this.stat(r.id);
+      // (A store with a budget for what each browser reads of it — BIG W's: this search is done, and what came of it.)
+      if (this.access && this.access.limited(r)) this.access.done(r, device || user.id, 'search', outcomeOf({ ok: !!res.ok && res.problem !== 'blocked', blocked: !!res.blocked, status: res.status, error: res.error, problem: res.problem }));
       // (Server first: also a search asked for just before the server took back over.)
       if (!this.fromBrowser(r) && !(this.modeFor(r) === 'auto' && st.askedAt && this.now() - st.askedAt < 2 * 60 * 1000)) continue;
       const term = this.termOf(r, res);
@@ -1906,7 +1957,7 @@ export class Sweeper {
       // (Asked for at the same address as the server would — not a page drawn or asked from inside the store's own: its
       //  answer is the server's, as far as what a watch saw goes.)
       const way = r.sweep.render || r.sweep.inPage ? 'browser' : 'server';
-      out.push(await this.ingest(r, term, { products, total, ...(perPage !== null ? { perPage } : {}), ...(count !== null ? { count } : {}), problem, stated, none: res.none === true }, { source: 'browser', url, ms, seen, way }));
+      out.push(await this.ingest(r, term, { products, total, ...(perPage !== null ? { perPage } : {}), ...(count !== null ? { count } : {}), problem, stated, none: res.none === true }, { source: 'browser', url, ms, seen, way, wait: true }));
     }
     return out;
   }
@@ -2071,6 +2122,9 @@ export class Sweeper {
         // (Drop mode: until when, and what it's searched for meanwhile.)
         dropMode: st.hot && st.hot.until > now ? { until: st.hot.until, keyword: st.hot.keyword ? st.hot.keyword : null, newest: !!st.hot.newest } : null,
         products24h: products ? products.n : 0,
+        // (A store with a budget for what each browser reads of it — BIG W's, monitor/access.js: its gap, pauses, blocks, and how
+        //  often each keyword, page and product is really read.)
+        access: this.access ? this.access.view(r) : null,
         terms: terms.map((t) => ({ keyword: termLabel(t.keyword, r), page: t.page, url: t.url, source: t.source, lastAt: t.last_at, lastOkAt: t.last_ok_at, found: t.found, kept: t.kept, total: t.total, fails: t.fails, error: t.error, ms: t.ms, baselineAt: t.baseline_at })),
       };
     });

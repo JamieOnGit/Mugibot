@@ -16,6 +16,10 @@ if (!app.ctx.mailer.configured) cfg.log('Email is not set up (RESEND_API_KEY / E
 if (!cfg.adminUsernames.length) cfg.log('No ADMIN_USERNAMES set — nobody can open /admin. Set ADMIN_USERNAMES=yourname, or run: npm run make-admin -- yourname');
 if (cfg.demoStoreUrl) cfg.log(`Dummy store mode: ${cfg.demoStoreUrl}`);
 
+// (Mugibot 2.0: a promise nobody caught is logged — its message only, never the request or member it came from —
+//  instead of passing unseen; the process carries on, as it would have.)
+process.on('unhandledRejection', (e) => cfg.log('[unhandled]', e && e.message ? e.message : String(e)));
+
 let stopping = false;
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {

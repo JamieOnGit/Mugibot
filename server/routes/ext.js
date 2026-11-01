@@ -138,6 +138,8 @@ export function register(router, ctx) {
         aco: it.aco, maxPrice: it.maxPrice, quantity: it.quantity || 1,
       })),
       flows: retailers.forExtension(),
+      // The stores you keep signed in to (Profile → Store sign-ins): the extension looks at them now and then (1.40.0).
+      signins: ctx.signins.prefs(req.user.id).stores,
       active: entitlement(req.user, repo.now()).active,
       browserChecks: settings.browserChecks,
       browserIntervalSeconds: cfg.monitor.browserIntervalSeconds,
@@ -173,7 +175,8 @@ export function register(router, ctx) {
     if (item) ctx.aco.noteShopSeen(req.user.id, item, 'in', aco ? 'run' : 'buy');
     // (quantity: how many to put in the bag — the item's, or its Auto-checkout run's.)
     // (cardId: which of your cards pays for it — its id in your extension; null: your default.)
-    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, cardId: (item && item.cardId) || null, quantity: row.quantity || 1, aco };
+    // (qtyMax: as many as the store allows, up to quantity — the extension reads the page's own most: 1.40.0; an older one's run asks for one, aco.js mostQty.)
+    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, cardId: (item && item.cardId) || null, quantity: row.quantity || 1, qtyMax: !!(item && item.qtyRule === 'max'), aco };
   }, { auth: 'device', entitled: true });
 
   // Delivery details for checkout autofill (the chosen set, else the default).
@@ -215,7 +218,8 @@ export function register(router, ctx) {
     const version = str(req.query.get('v'), 20) || req.device.version;
     if (version !== req.device.version) seen(req, version);
     // (priv: it opens BIG W's pages in a private window of its own — Mugibot allowed in Incognito there: 1.36.0.)
-    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want, version, priv: req.query.get('priv') === '1' });
+    // (device: this browser — a store's budget is each browser's own: monitor/access.js.)
+    const checks = ctx.monitor.browserDue(req.user, { through: throughFrom(req.query.get('through')), sites, want, version, priv: req.query.get('priv') === '1', device: req.device.id });
     if (ctx.drops && ctx.monitor.browserChecksOn(req.user)) checks.push(...ctx.drops.browserDue(req.user, { sites, want }));
     return { checks, intervalSeconds: cfg.monitor.browserIntervalSeconds, sites: [...want].slice(0, 20) };
   }, { auth: 'device', entitled: true });
@@ -225,7 +229,7 @@ export function register(router, ctx) {
     if (!limiter.hit(`checks-post:${req.device.id}`, 30, 60 * 1000)) throw new HttpError(429, 'Slow down a little');
     if (!Array.isArray(req.body.results)) throw bad('results must be a list');
     const results = req.body.results.slice(0, 20);
-    let applied = await ctx.monitor.browserResults(req.user, results.filter((r) => !(r && typeof r.id === 'string' && r.id.startsWith('d:'))));
+    let applied = await ctx.monitor.browserResults(req.user, results.filter((r) => !(r && typeof r.id === 'string' && r.id.startsWith('d:'))), { device: req.device.id });
     // (Another website's search read for a drop watch.)
     for (const r of results) if (r && typeof r.id === 'string' && r.id.startsWith('d:') && ctx.drops && (await ctx.drops.browserResult(req.user, r))) applied += 1;
     return { ok: true, applied };
@@ -246,10 +250,13 @@ export function register(router, ctx) {
       const at = Number(v.at);
       // how: 'check' (a page fetched), 'page' (the page you have open), 'screen' (read off the screen: Shop's
       // checkout), 'run' (a checkout link that went on to the store's guest checkout).
-      out[store] = { status: v.status, at: Number.isFinite(at) && at > 0 && at <= now + 60000 ? Math.round(at) : now, how: ['check', 'screen', 'run'].includes(v.how) ? v.how : 'page' };
+      // ('probe': the store's home page opened in the extension's own window to look — 1.40.0.)
+      out[store] = { status: v.status, at: Number.isFinite(at) && at > 0 && at <= now + 60000 ? Math.round(at) : now, how: ['check', 'screen', 'run', 'probe'].includes(v.how) ? v.how : 'page' };
     }
     const logins = repo.setDeviceLogins(req.user.id, req.device.id, out);
     if (logins && Object.keys(out).length) ctx.hub.publish(req.user.id, 'devices', {});
+    // Signed out at a store you keep signed in to: told at once (server/signins.js) — this browser not kept waiting for it.
+    if (logins && Object.keys(out).length) ctx.signins.review(req.user.id).catch((e) => cfg.log('[signins]', e.message));
     return { ok: true };
   }, { auth: 'device' });
 
@@ -342,10 +349,10 @@ export function register(router, ctx) {
     //  pages' tabs still reading; denied: the stores turning this browser away just now.)
     const through = throughFrom(req.query.get('through'));
     const busy = throughFrom(req.query.get('busy'));
-    const due = ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through, busy });
+    const due = ctx.sweeper.browserDue(req.user, { version, who: req.user.username, through, busy, device: req.device.id });
     if (req.user.role !== 'admin') return due;
     // Drop watches' search pages (monitor/pages.js): read in tabs of their own, beside the searches.
-    const pages = ctx.pages ? ctx.pages.browserDue(req.user, { version, busy, through, denied: throughFrom(req.query.get('denied')) }) : { pages: [], waitMs: null };
+    const pages = ctx.pages ? ctx.pages.browserDue(req.user, { version, busy, through, denied: throughFrom(req.query.get('denied')), device: req.device.id }) : { pages: [], waitMs: null };
     const waits = [due.waitMs, pages.waitMs].filter((x) => x !== null && x !== undefined);
     return { ...due, pages: pages.pages, waitMs: waits.length ? Math.min(...waits) : null };
   }, { auth: 'device' });
@@ -356,7 +363,7 @@ export function register(router, ctx) {
     const pages = Array.isArray(req.body.pages) ? req.body.pages : null;
     if (!Array.isArray(req.body.results) && !pages) throw bad('results must be a list');
     if (req.user.role !== 'admin') return { ok: true, results: [] };
-    const results = Array.isArray(req.body.results) ? await ctx.sweeper.browserResults(req.user, req.body.results) : [];
-    return { ok: true, results, ...(pages ? { pages: ctx.pages ? await ctx.pages.browserResults(req.user, pages) : [] } : {}) };
+    const results = Array.isArray(req.body.results) ? await ctx.sweeper.browserResults(req.user, req.body.results, { device: req.device.id }) : [];
+    return { ok: true, results, ...(pages ? { pages: ctx.pages ? await ctx.pages.browserResults(req.user, pages, { device: req.device.id }) : [] } : {}) };
   }, { auth: 'device', maxBody: 768 * 1024 });
 }

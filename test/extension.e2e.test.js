@@ -1655,7 +1655,7 @@ test('in-browser checks: a store that refuses the server is checked by your brow
   assert.match(discord.dmsTo('d-ash').at(-1).body.embeds[0].description, /Seen by your browser/);
 });
 
-test("🧭 BIG W, whose bot protection resets every server's connection: your watchlist's BIG W items are read by your browser opening each one's page in the extension's window — one at a time, never asked for in the background — and, told \"Access Denied\", BIG W is left alone from this browser for 30 minutes (no checks, no searches), the item and the store's panel saying why", async () => {
+test("🧭 BIG W, whose bot protection resets every server's connection: your watchlist's BIG W items are read by your browser opening each one's page in the extension's window — one at a time, the gap the server says between two (its budget: monitor/access.js — 20 s in an ordinary window, as here), never asked for in the background — and, told \"Access Denied\", BIG W is left alone from this browser for 30 minutes (no checks, no searches), the item and the store's panel saying why; asked again after, at a wider gap", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const prev = env.app.repo.getSetting('retailer:demo-bigw');
   // (The dummy BIG W as the real one is: never asked by the server — retailers/bigw.js, monitor.server 'never'.)
@@ -1663,25 +1663,25 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
   const S = store.shop('bigw');
   const bigwPages = () => store.state.requests.filter((x) => x.path.startsWith('/bigw/product/'));
   const due = () => env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
+  const R = env.app.retailers.get('demo-bigw');
   try {
     await useItems([{ url: store.productUrl('bigw', '6012345'), name: 'BIG W UPC' }, { url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle' }]);
     store.set('bigw', '6012345', { status: 'out_of_stock' });
     store.set('bigw', '6012346', { status: 'in_stock' });
     const before = bigwPages().length;
+    // (This browser reads BIG W in an ordinary window — not allowed in Incognito here: 20 s between two of its pages, so
+    //  one a round; the next round asked for straight away books the slot 20 s on, and waits for it.)
     let r = await sw.evaluate(() => globalThis.mugibotRunChecks());
-    assert.equal(r.checked, 1, 'one BIG W page at a time');
-    // (The other one's turn, pushed back a minute — the next round: here, now.)
-    env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u AND checked_at IS NULL', { u: userId });
+    assert.equal(r.checked, 1, 'one BIG W page a round');
+    const began = Date.now();
     r = await sw.evaluate(() => globalThis.mugibotRunChecks());
-    assert.equal(r.checked, 1, 'the next one in the next round');
+    assert.equal(r.checked, 1, 'the other one, the next round');
+    assert.ok(Date.now() - began >= 12000, `waited for its slot: ${Date.now() - began} ms`);
     const items = env.app.repo.listItems(userId);
     assert.deepEqual(items.map((i) => [i.name, i.status, i.statusSource]).sort(), [['BIG W Bundle', 'in_stock', 'browser'], ['BIG W UPC', 'out_of_stock', 'browser']]);
     const asked = bigwPages().slice(before);
     assert.equal(asked.length, 2);
     assert.ok(asked.every((x) => x.mode === 'navigate' && /Chrome|Mozilla/.test(x.ua)), `each page opened, as you'd open it: ${JSON.stringify(asked)}`);
-    // Each at most every 3 minutes: nothing due straight after.
-    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
-    assert.equal(r.checked, 0);
 
     // "Access Denied" (its Akamai, turning this browser away): said on the item, and BIG W left alone from here.
     S.denied = true;
@@ -1694,6 +1694,7 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
     assert.ok(denied, JSON.stringify(env.app.repo.listItems(userId)));
     assert.ok(['in_stock', 'out_of_stock'].includes(denied.status), denied.status);
     assert.match(denied.error, /asks it for nothing more from here for 30 minutes/);
+    assert.equal(env.app.access.view(R).pausedBrowsers, 1, 'the server leaves BIG W alone from this browser too');
     due();
     r = await sw.evaluate(() => globalThis.mugibotRunChecks());
     assert.equal(r.checked, 0, 'nothing more asked of BIG W from this browser');
@@ -1704,17 +1705,24 @@ test("🧭 BIG W, whose bot protection resets every server's connection: your wa
     await page.waitForFunction(() => /bot protection is turning this browser away \("Access Denied"\)/.test(document.querySelector('#mugibot-qc')?.textContent || ''), null, { timeout: 15000 });
     assert.match(await panel(page).textContent(), /30 minutes/);
     await page.close();
-    // Let in again (and the half hour over): checked as before.
+    // Let in again (and the half hour over — here, and on the server, as an admin's ↻ Reset of BIG W does): checked
+    // again, gently — the gap it was turned away at, doubled (40 s).
     S.denied = false;
     await sw.evaluate(() => chrome.storage.session.remove('deniedStores'));
+    env.app.access.reset(R);
+    assert.equal(env.app.access.view(R).gapSeconds, 40);
     due();
-    r = await sw.evaluate(() => globalThis.mugibotRunChecks());
-    assert.equal(r.checked, 1);
+    await waitFor(async () => (await sw.evaluate(() => globalThis.mugibotRunChecks())).checked === 1, { timeout: 90000, interval: 2000, message: 'checked again, at the wider gap' });
     assert.ok(env.app.repo.listItems(userId).some((i) => i.status === 'in_stock' || i.status === 'out_of_stock'));
   } finally {
     S.denied = false;
     await sw.evaluate(() => chrome.storage.session.remove('deniedStores')).catch(() => null);
     env.app.repo.setSetting('retailer:demo-bigw', prev || {});
+    // (What this browser learned at the dummy BIG W — turned away here: a doubled gap, its floor for the day — forgotten,
+    //  so the tests after see a browser it never turned away.)
+    env.app.access.stores.delete('demo-bigw');
+    delete env.app.access.saved['demo-bigw'];
+    env.app.repo.setSetting('access', env.app.access.saved);
     await useItems([]);
   }
 });
@@ -2204,7 +2212,10 @@ test("BIG W: products the page downloaded but hasn't drawn (a page in a hidden w
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;
   const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
-  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-bigw': 'browser' } }, null);
+  // (Its one keyword: the next search is that one's, wherever the keywords' turn was left by the tests before — BIG W's
+  //  searches come every 20 s in an ordinary window, so a turn of two keywords could take longer than the wait.)
+  const keywords = sweeper.settings.keywords;
+  sweeper.save({ browserEverySeconds: 5, keywords: ['pokemon'], stores: { ...off, 'demo-bigw': 'browser' } }, null);
   store.shop('bigw').clientSearch = 'data';
   store.shop('bigw').products.push({ sku: '6012399', name: 'Pokémon TCG: Hidden Window Booster Bundle', price: 49, status: 'in_stock', listed: true, maxQty: 0, qtyStyle: 'select', lateMs: 0, id: 4412399 });
   env.app.repo.updateUser(userId, { role: 'admin' });
@@ -2218,7 +2229,7 @@ test("BIG W: products the page downloaded but hasn't drawn (a page in a hidden w
   } finally {
     env.app.repo.updateUser(userId, { role: 'user' });
     store.shop('bigw').clientSearch = false;
-    sweeper.save({ stores: off }, null);
+    sweeper.save({ stores: off, keywords }, null);
   }
 });
 
@@ -2449,6 +2460,75 @@ test("store login monitor: the extension sees where you're signed in (its checks
   await popup.close();
   await page.close();
   store.state.signedIn = {};
+});
+
+test("🔑 store sign-ins, 24/7 (Mugibot 2.0): a store you keep signed in to whose pages don't say so (the dummy EB Games) — its home page looked at from the extension's own window: signed out → a Discord DM with a \"Sign in\" button at once, the toolbar button says IN?, the Account page shows it; signed in on the store's page → told so, the button clear", async () => {
+  if (!env.app.repo.userByUsername('ash').discord_id) {
+    const pg = await ctx.newPage();
+    discord.state.nextUser = 'd-ash';
+    await pg.goto(`${env.url}/auth/discord`);
+    await pg.waitForURL(/discord=linked/);
+    await pg.close();
+  }
+  // (What the tests before this one saw of where Ash is signed in — EB Games' pages opened signed out — forgotten, so the
+  //  extension's own look is what tells.)
+  const ashId = env.app.repo.userByUsername('ash').id;
+  env.app.db.run("UPDATE devices SET logins = '{}' WHERE user_id = :u", { u: ashId });
+  env.app.db.run('DELETE FROM login_state WHERE user_id = :u', { u: ashId });
+  const r = await browserApi('PUT', '/api/logins/prefs', { stores: ['demo-ebgames'], dm: true });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  store.state.signedIn = {};
+  try {
+    // (The extension's copy of your settings, asked for afresh — and nothing seen at EB Games yet.)
+    await sw.evaluate(async () => {
+      const all = await chrome.storage.local.get(null);
+      await chrome.storage.local.remove([...Object.keys(all).filter((k) => k.startsWith('state:')), 'logins', 'loginsCheckedAt']);
+    });
+    const before = discord.dmsTo('d-ash').length;
+    const asked = store.state.requests.length;
+    const checked = await sw.evaluate(() => globalThis.mugibotCheckLogins({ force: true }));
+    assert.ok(checked >= 1, `looked: ${checked}`);
+    await waitFor(() => discord.dmsTo('d-ash').slice(before).some((m) => /Signed out of EB Games \(dummy store\)/.test(JSON.stringify(m.body))), { message: 'the DM' });
+    const dm = discord.dmsTo('d-ash').slice(before).find((m) => /Signed out of EB Games/.test(JSON.stringify(m.body)));
+    assert.ok(JSON.stringify(dm.body).includes('Sign in at EB Games (dummy store)'), JSON.stringify(dm.body));
+    assert.ok(JSON.stringify(dm.body).includes(`${store.url}/ebgames`), 'the store\'s own sign-in page');
+    // Its home page, opened as you'd open it (your cookies, a page load) — once — and its tab closed again.
+    const homes = store.state.requests.slice(asked).filter((q) => q.path === '/ebgames/');
+    assert.equal(homes.length, 1, JSON.stringify(homes));
+    assert.equal(homes[0].mode, 'navigate');
+    await waitFor(() => !ctx.pages().some((pg) => pg.url() === `${store.url}/ebgames/`), { message: 'the tab closed' });
+    // The toolbar button says so.
+    await waitFor(async () => (await sw.evaluate(() => chrome.action.getBadgeText({}))) === 'IN?', { message: 'IN? on the button' });
+    assert.match(await sw.evaluate(() => chrome.action.getTitle({})), /not signed in at EB Games \(dummy store\)/);
+    // The Account page: kept, signed out, its Sign in button.
+    const page = await ctx.newPage();
+    await page.goto(`${env.url}/app#account`);
+    const row = page.locator('#signins li.login[data-store="demo-ebgames"]');
+    await row.waitFor();
+    assert.match(await row.getAttribute('class'), /\bout\b/);
+    assert.equal(await row.locator('input[name=keep]').isChecked(), true);
+    assert.equal(await row.locator('a', { hasText: 'Sign in' }).getAttribute('href'), `${store.url}/ebgames`);
+    assert.match(await page.textContent('#signins-sum'), /Signed out at EB Games \(dummy store\)/);
+    // The popup: first, with its Sign in link.
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForFunction(() => /EB Games/.test(document.querySelector('#logins-list')?.textContent || ''));
+    const first = popup.locator('#logins-list li').first();
+    assert.match(await first.textContent(), /🔑 EB Games \(dummy store\)Not signed in — Sign in ›/);
+    await popup.close();
+    // Signed in at the store (its Sign in button opened its page): the page says so → told, the button clear.
+    store.state.signedIn.ebgames = true;
+    const shop = await ctx.newPage();
+    await shop.goto(`${store.url}/ebgames/`);
+    await waitFor(() => discord.dmsTo('d-ash').slice(before).some((m) => /Signed in at EB Games \(dummy store\) again/.test(JSON.stringify(m.body))), { message: 'the signed-in DM' });
+    await waitFor(async () => (await sw.evaluate(() => chrome.action.getBadgeText({}))) !== 'IN?', { message: 'the button clear' });
+    await page.waitForSelector('#signins li.login.in[data-store="demo-ebgames"]', { timeout: 15000 });
+    await shop.close();
+    await page.close();
+  } finally {
+    store.state.signedIn = {};
+    await browserApi('PUT', '/api/logins/prefs', { stores: [], dm: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -2847,6 +2927,38 @@ test('🤖 Auto-checkout at EB Games: Home Delivery (not the Click & Collect EB 
   const userId = env.app.repo.userByUsername('ash').id;
   assert.ok(env.app.repo.listEvents(userId).some((e) => /Auto-checkout pressed "CONFIRM & PAY"/.test(e.message)));
   await closeStorePages('ebgames');
+});
+
+test("🏴‍☠️ One Piece drops, bought as they drop (Mugibot 2.0): EB Games' OP-20 hangsell — as many as the store allows, its limit said only in words (\"Limit 4 per customer\", no max on its box) — then its booster box, one; Premium Bandai's OP pack the most its drop-down offers. Each placed, and timed", async (t) => {
+  const hang = store.addProduct('ebgames', { sku: '390002', name: 'One Piece TCG OP-20 Hangsell Booster', price: 8, status: 'in_stock', maxQty: 4, hideMax: true, limitNote: 'Limit 4 per customer' });
+  const box = store.addProduct('ebgames', { sku: '390001', name: 'One Piece TCG OP-20 Booster Box', price: 189, status: 'in_stock' });
+  const pack = store.addProduct('pbandai', { sku: 'N2990000001', name: 'ONE PIECE CARD GAME OP-12 (PACK)', price: 9, status: 'preorder', qtyStyle: 'select', maxQty: 6 });
+  store.state.signedIn.pbandai = true;
+  await useItems([
+    { url: hang, name: 'OP-20 Hangsell', maxPrice: 20, quantity: 'max' },
+    { url: box, name: 'OP-20 Box', maxPrice: 300 },
+    { url: pack, name: 'OP-12 Pack', maxPrice: 20, quantity: 'max' },
+  ]);
+  const timed = async (name, label) => {
+    const t0 = Date.now();
+    await testRun(name);
+    const run = await runOver(`the ${name} run over`);
+    assert.equal(run.status, 'placed', `${name}: ${JSON.stringify(run)}`);
+    t.diagnostic(`${label}: run created → order placed in ${Date.now() - t0} ms`);
+    return run;
+  };
+  const S = store.shop('ebgames');
+  await timed('OP-20 Hangsell', 'EB Games OP-20 hangsell (×4)');
+  assert.deepEqual(S.orders.at(-1).cart.map((c) => [c.sku, c.qty]), [['390002', 4]], 'the hangsell: 4 — the store\'s own limit, read off its page');
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /Quantity set to 4 — the most the store allows \(its limit: 4 per customer\)/.test(e.message)), 'said so');
+  await closeStorePages('ebgames');
+  await timed('OP-20 Box', 'EB Games OP-20 booster box (×1)');
+  assert.deepEqual(S.orders.at(-1).cart.map((c) => [c.sku, c.qty]), [['390001', 1]], 'the box: one');
+  await closeStorePages('ebgames');
+  await timed('OP-12 Pack', 'Premium Bandai OP-12 pack (×6)');
+  assert.deepEqual(store.shop('pbandai').orders.at(-1).cart.map((c) => [c.sku, c.qty]), [['N2990000001', 6]], "Bandai's pack: 6 — its drop-down's most");
+  await closeStorePages('pbandai');
 });
 
 test('🤖 Auto-checkout at EB Games signed in: it\'s all in already (your saved card included, shown as EB shows it: "...2387 08/27") — straight to "CONFIRM & PAY", placed', async () => {

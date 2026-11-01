@@ -31,7 +31,7 @@
 
 import { entitlement } from './entitlement.js';
 import { newId, purposeKey, signParts, verifyParts } from './crypto.js';
-import { PHONE_EXTENSION_VERSION, QTY_EXTENSION_VERSION } from './extension.js';
+import { MOST_EXTENSION_VERSION, PHONE_EXTENSION_VERSION, QTY_EXTENSION_VERSION } from './extension.js';
 import { olderVersion } from './monitor/sweep.js';
 import { buyAction } from './notifier.js';
 import { DEFAULT_ACO } from './schema.js';
@@ -273,7 +273,8 @@ export class Aco {
       const out = await this.test(d.user_id, d.id, { queue: true }).catch((e) => ({ error: e.message }));
       if (out.error) {
         this.repo.addEvent(d.user_id, { type: 'aco', level: 'warn', message: `⏰ ${d.name}: 🚦 Wait for queue, then ACO didn't start at the time you picked — ${out.error}`, name: d.name, sku: d.sku, url: d.url || null });
-        await this.notifier.notify(d.user_id, {
+        // (Not waited for: the next member's start never waits behind this DM — Mugibot 2.0.)
+        this.notifier.notify(d.user_id, {
           type: 'aco', level: 'urgent', channel: 'aco', title: `⏰ Wait for queue, then ACO didn't start: ${d.name}`, message: out.error,
           name: d.name, sku: d.sku, url: d.url || null, buttons: [{ label: 'Auto-checkout', url: `${this.cfg.baseUrl}/app#aco` }],
         }).catch(() => null);
@@ -307,6 +308,25 @@ export class Aco {
     if (!chosen || s.fallback === false || this.isListening(chosen.id)) return chosen;
     const open = devices.filter((d) => d.id !== chosen.id && this.isListening(d.id)).sort((a, b) => this.listening.get(b.id) - this.listening.get(a.id));
     return open[0] || chosen;
+  }
+
+  /**
+   * "As many as the store allows" (an item set to it — a hangsell or booster pack: item.qtyRule 'max'): the most this
+   * run reserves against your own limits — never more than the item's (MOST_QTY), nor than your limit an order or (placing
+   * orders) what's left of today's spend allows at the price seen (else your max price), and at least 1. The extension
+   * then puts in the bag the least of that and the store's own limit. An older copy (before MOST_EXTENSION_VERSION)
+   * can't read a store's limit: it buys one. null: not an item set to the most.
+   */
+  mostQty(userId, item, s, price, device) {
+    if (!item || item.qtyRule !== 'max') return null;
+    if (device && olderVersion(device.version, MOST_EXTENSION_VERSION)) return 1;
+    let n = quantityOf(item.quantity);
+    const each = typeof price === 'number' && price > 0 ? price : (typeof item.maxPrice === 'number' && item.maxPrice > 0 ? item.maxPrice : null);
+    if (each) {
+      n = Math.min(n, Math.floor(s.maxOrder / each));
+      if (s.enabled && s.mode === 'place') n = Math.min(n, Math.floor((s.spendPerDay - this.todayWithRunning(userId).spent) / each));
+    }
+    return Math.max(1, n);
   }
 
   /**
@@ -409,7 +429,9 @@ export class Aco {
     // How many it buys: the item's (1 unless set). Its max price is for one; the run's limit is for them all.
     // (A Shop checkout link's price and max are the whole link's, its quantities in it already.)
     const linked = this.retailers.get(item.store);
-    const qty = linked && linked.cartLinks ? 1 : quantityOf(item.quantity);
+    // (As many as the store allows — a hangsell or booster pack: never more than your own limits fit, mostQty.)
+    const most = linked && linked.cartLinks ? null : this.mostQty(userId, item, s, price, this.checkoutDevice(userId));
+    const qty = linked && linked.cartLinks ? 1 : most ?? quantityOf(item.quantity);
     const cap = item.maxPrice === null || item.maxPrice === undefined ? null : Math.round(item.maxPrice * qty * 100) / 100;
     const base = { userId, item, price, quantity: qty, ...(cap !== null ? { maxPrice: cap } : {}), mode: s.mode, trigger: info.pool ? 'pool' : info.queue ? 'queue' : info.test ? 'test' : info.manual ? 'manual' : info.source || '' };
     // (info.later: the monitor's list of alerts to send once every member's run is made — monitor/index.js applyAll.)
@@ -529,11 +551,12 @@ export class Aco {
     if (!device) return solo(`No browser with the ${this.cfg.appName} extension is connected yet — connect the one on your computer at ${this.cfg.baseUrl}/app#extension, and ⚡ Buy runs there from anywhere.`);
     if (this.db.get(`SELECT id FROM aco_runs WHERE item_id = :i AND status IN (${ACTIVE.map((x) => `'${x}'`).join(',')})`, { i: item.id })) return solo(`It's already checking out in ${device.name}.`);
     if (r.acoVersion && olderVersion(device.version, r.acoVersion)) return solo(`${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}) — update it to ${r.acoVersion} to buy from ${r.name} (${this.cfg.baseUrl}/app#update).`);
-    if (!r.cartLinks && quantityOf(item.quantity) > 1 && olderVersion(device.version, QTY_EXTENSION_VERSION)) return solo(`${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}), which buys one at a time — update it to ${QTY_EXTENSION_VERSION} to buy ${quantityOf(item.quantity)} (${this.cfg.baseUrl}/app#update).`);
+    const most = r.cartLinks ? null : this.mostQty(userId, item, s, shown, device);
+    if (!r.cartLinks && most === null && quantityOf(item.quantity) > 1 && olderVersion(device.version, QTY_EXTENSION_VERSION)) return solo(`${device.name} has an older copy of the ${this.cfg.appName} extension (${device.version || 'version unknown'}), which buys one at a time — update it to ${QTY_EXTENSION_VERSION} to buy ${quantityOf(item.quantity)} (${this.cfg.baseUrl}/app#update).`);
 
     // Place the order, or fill checkout in and stop at the final button (and why).
     // (Its max is for one: the order's limit, that times how many. A Shop checkout link's: the whole link's.)
-    const qty = r.cartLinks ? 1 : quantityOf(item.quantity);
+    const qty = r.cartLinks ? 1 : most ?? quantityOf(item.quantity);
     const one = item.maxPrice ?? shown;
     const cap = one === null ? null : Math.round(one * qty * 100) / 100;
     const day = this.todayWithRunning(userId);
@@ -1031,7 +1054,7 @@ export class Aco {
   /** The store's page for the phone: its cart link with the product where it has one (Shopify's), else the product. */
   storeLink(row) {
     const item = row.item_id ? this.repo.getItem(row.user_id, row.item_id) : null;
-    return productLink(this.ctx, { store: row.store, sku: row.sku, url: (item && item.url) || row.url }, this.variants.get(row.id) || null, row.quantity || 1);
+    return productLink(this.ctx, { store: row.store, sku: row.sku, url: (item && item.url) || row.url, qtyRule: (item && item.qtyRule) || '' }, this.variants.get(row.id) || null, row.quantity || 1);
   }
 
   /** Under a checkpoint's message (the ⚡ Buy reply, the DM): finish on the phone, or solve it on the computer from there. */

@@ -19,7 +19,10 @@ export class Mailer {
       return true;
     }
     if (!this.cfg.email.resendApiKey || !this.cfg.email.from) {
-      this.cfg.log(`[email not sent — set RESEND_API_KEY and EMAIL_FROM] to=${to} subject="${subject}"\n${text}`);
+      // (On your own computer the message is shown — a password reset's link to use; in production never: a member's
+      //  address, their alerts and a reset link are not for logs.)
+      if (this.cfg.production) this.cfg.log('[email not sent — set RESEND_API_KEY and EMAIL_FROM] (address and message not logged)');
+      else this.cfg.log(`[email not sent — set RESEND_API_KEY and EMAIL_FROM] to=${to} subject="${subject}"\n${text}`);
       return false;
     }
     try {

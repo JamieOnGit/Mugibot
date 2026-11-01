@@ -668,6 +668,25 @@ const MIGRATIONS = [
     PRIMARY KEY (store, sku)
   );
   `,
+  // 25: Mugibot 2.0. How many Auto-checkout buys: an item's rule ('' its quantity; 'max' as many as the store allows) and a
+  //     drop or VIP watch's ('1'…'10', 'max', or 'auto': by the kind of product — a booster box one, a hangsell or
+  //     booster pack as many as allowed: monitor/classify.js). Existing watches keep buying one.
+  //     And each member's sign-in at each store (the store login monitor): what their browsers last saw, since when,
+  //     and when they were last told they're signed out.
+  `
+  ALTER TABLE items ADD COLUMN qty_rule TEXT NOT NULL DEFAULT '';
+  ALTER TABLE drop_watches ADD COLUMN qty TEXT NOT NULL DEFAULT '1';
+  ALTER TABLE vip_watches ADD COLUMN qty TEXT NOT NULL DEFAULT '1';
+  CREATE TABLE login_state (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    store TEXT NOT NULL,
+    status TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    since INTEGER NOT NULL,
+    alerted_at INTEGER,
+    PRIMARY KEY (user_id, store)
+  );
+  `,
 ];
 
 export class Db {

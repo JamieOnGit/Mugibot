@@ -244,6 +244,13 @@ export function register(router, ctx) {
     const watch = await ctx.drops.add(body, req.user);
     return { watch, ...ctx.drops.viewFor(req.user) };
   }, member);
+  // A ready-made set of watches (monitor/drops.js PRESETS: "onepiece" — every One Piece set at EB Games and Premium Bandai).
+  router.post('/api/drops/presets/:name', async (req) => {
+    if (!limiter.hit(`dropadd:${req.user.id}`, 30, 10 * 60 * 1000)) throw new HttpError(429, 'Slow down a little — try again in a few minutes');
+    const out = await ctx.drops.preset(String(req.params.name || ''), req.body || {}, req.user);
+    if (!out.added.length && out.skipped.length) throw bad(out.skipped.map((x) => x.why).join(' · '));
+    return { ...ctx.drops.viewFor(req.user), ...out };
+  }, member);
   router.post('/api/drops/channel', async (req) => {
     if (!limiter.hit(`nontcgsetup:${req.user.id}`, 5, 10 * 60 * 1000)) throw new HttpError(429, 'Try again in a few minutes');
     const out = await manage.setupNonTcg({ roleId: req.body.roleId }, req.user);

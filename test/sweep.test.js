@@ -963,17 +963,21 @@ test("where each store is searched: server first everywhere (saved modes from be
     assert.equal(eb.url.startsWith(`${store.url}/ebgames/search/query?q=${q}&sort=releasedate&order=desc`), true, eb.url);
     assert.equal(eb.pageUrl, `${store.url}/ebgames/search?q=${q}`);
     assert.equal(t.storeBase, `${store.url}/bigw`);
-    // BIG W in an ordinary window (or not known yet): its own floor — 20 s, gentle on its bot protection — over the set 15 s.
-    // Read in its private window: the set pace, as the other stores.
+    // BIG W: everything a browser reads of it within one budget (monitor/access.js) — each keyword asks to be read every
+    // 5 s, its target, and the budget decides how often one really is (8 s between two of its pages in its private window,
+    // 20 s in an ordinary one — shared with its product pages and pages watched). The other stores: their pace, as ever.
     const st = sw.stat('demo-bigw');
     const was = st.privateWindow;
     try {
-      st.privateWindow = undefined;
-      assert.equal(sw.paceFor(R('demo-bigw'), true), 20000, 'not known yet: as in an ordinary window');
-      st.privateWindow = false;
-      assert.equal(sw.paceFor(R('demo-bigw'), true), 20000, "an ordinary window: BIG W's own 20 s");
-      st.privateWindow = true;
-      assert.equal(sw.paceFor(R('demo-bigw'), true), 15000, 'its private window: the set pace');
+      for (const priv of [undefined, false, true]) {
+        st.privateWindow = priv;
+        assert.equal(sw.paceFor(R('demo-bigw'), true), 5000, `its target, the budget deciding (${priv})`);
+      }
+      // (Its searches failing: backed off from its own pace, as ever — 20 s in an ordinary window — never from the target.)
+      const fails = st.fails;
+      Object.assign(st, { privateWindow: false, fails: 1 });
+      assert.equal(sw.paceFor(R('demo-bigw'), true), 20000);
+      st.fails = fails;
       assert.equal(sw.paceFor(R('demo-ebgames'), true), 15000);
       assert.equal(sw.paceFor(R('pokemoncenter'), true), 30000, "Pokémon Center's own 30 s stays");
     } finally {
@@ -2178,12 +2182,17 @@ test("📵 BIG W not watched (no admin's browser searching it — Chrome closed,
     await bigwSearch(admin, [bigwTile('6099401', 'Pokemon TCG: Watched Tin', true, 25)]);
     // (As on Mugibot's server: the live sweeps running, started a while ago.)
     Object.assign(sw, { running: true, startedAt: sw.now() - 30 * 60 * 1000 });
+    // (The other stores admins' browsers search here: searched — they're not what this is about.)
+    const others = () => { for (const id of ['demo-ebgames', 'demo-pbandai']) Object.assign(sw.stat(id), { lastAt: sw.now(), lastFoundAt: sw.now() }); };
+    others();
     const told = async () => (await sw.watchBlind()).filter((t) => t.store === 'demo-bigw');
     assert.deepEqual(await told(), [], 'searched just now');
     const before = dms().length;
     clock.offset += 21 * 60 * 1000;
+    // (Searched all along — its searches finding nothing: not searched at all is the 3-minute alert, onepiece.test.js.)
+    await bigwSearch(admin, []);
+    others();
     assert.deepEqual(await told(), [{ store: 'demo-bigw', blind: true }]);
-    // (EB Games' dummy copy is searched from the admin's browser here too: both in one DM, as Chrome closed takes them all.)
     const fresh = dms().slice(before);
     assert.equal(fresh.length, 1, `one DM: ${fresh.join('\n')}`);
     const dm = fresh[0];
@@ -2261,7 +2270,7 @@ test('the keywords: Pokémon, One Piece, Riftbound and Gundam by default — add
   }
 });
 
-test("🔎 a product BIG W's searches found that nobody monitors is read off its own page in an admin's browser (its tile may not say it's on sale): on sale there after sold out or coming soon, or after being listed a while with no buy button, it alerts and updates everyone watching it — each page every 3 minutes at most, every half hour once it's buyable", async () => {
+test("🔎 a product BIG W's searches found that nobody monitors is read off its own page in an admin's browser (its tile may not say it's on sale): on sale there after sold out or coming soon, or after being listed a while with no buy button, it alerts and updates everyone watching it — each page in turn within BIG W's budget (monitor/access.js), every half hour once it's buyable", async () => {
   clearOfMidnight(2);
   env.app.repo.setSetting('retailer:demo-bigw', { serverChecks: false });
   const watcher = await ash.post('/api/items', { url: bigwTile('6099501', 'Pokemon TCG: 30th Celebration Ultra-Premium Collection - Day').url, name: 'Day UPC' });
@@ -2291,7 +2300,7 @@ test("🔎 a product BIG W's searches found that nobody monitors is read off its
         assert.equal(r.status, 200, JSON.stringify(r.body));
       };
       // Their pages: the Day one coming soon, the Night one with no buy button either way. Nothing to say yet;
-      // each read again in 3 minutes, not every round.
+      // each asks to be read again in 5 s — BIG W's budget for this browser deciding when it is.
       const dayId = `p:${P('6099501').id}`;
       const nightId = `p:${P('6099502').id}`;
       const pageSays = (id) => (id === dayId ? 'coming_soon' : 'unknown');
@@ -2299,8 +2308,8 @@ test("🔎 a product BIG W's searches found that nobody monitors is read off its
       await read(aId, pageSays(aId));
       const a0 = env.app.catalog.productById(aId.slice(2));
       assert.equal(a0.status, pageSays(aId));
-      assert.ok(a0.browser_next_at - env.app.repo.now() > 170 * 1000, 'its next read in about 3 minutes');
-      // (The other one's turn pushed back a little — so a long BIG W list never keeps other stores out: the next round.)
+      assert.ok(a0.browser_next_at - env.app.repo.now() <= 5 * 1000, 'asked for again in 5 s, its budget deciding');
+      // (The other one's turn: the next round, its budget allowing.)
       clock.offset += 61 * 1000;
       due = await ours('1.28.0');
       assert.deepEqual(due.map((c) => c.id), [bId], "the other one's turn, the next round");

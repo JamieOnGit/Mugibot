@@ -232,7 +232,7 @@ test('an admin switches a store\'s server checks off: no server requests, browse
   assert.ok(env.app.repo.listAudit().some((a) => a.action === 'retailer'));
 });
 
-test("BIG W (its bot protection resets every server's connection): the server never asks it, whatever an admin saved; the \"Error\" its old tries left is forgotten; members' browsers read each product by opening its page — one BIG W page a round, each at most every 3 minutes — and only an extension that does (1.27.0) is asked", async () => {
+test("BIG W (its bot protection resets every server's connection): the server never asks it, whatever an admin saved; the \"Error\" its old tries left is forgotten; members' browsers read each product by opening its page — one BIG W page a round from a copy older than 1.39.0, within the store's budget (monitor/access.js: in an ordinary window, 20 s between two of its pages), every item in turn — and only an extension that does (1.27.0) is asked", async () => {
   const real = env.app.retailers.get('bigw');
   assert.equal(real.monitor.server, 'never');
   assert.equal(real.monitor.render, true);
@@ -270,14 +270,16 @@ test("BIG W (its bot protection resets every server's connection): the server ne
     assert.equal(first.length, 1, 'one BIG W page a round');
     assert.equal(first[0].render, true, 'opened in the extension\'s window, as you would');
     assert.equal(first[0].privateWindow, true, '…its private one, where the browser allows it');
-    // (The other one's turn, pushed back a little so a long BIG W list never keeps other stores out: the next round.)
-    clock.offset += 61 * 1000;
+    // (Not in a private window here — the browser didn't say it can: 20 s between two of its pages.)
+    clock.offset += 19 * 1000;
+    assert.equal((await round()).length, 0, 'not before the gap');
+    clock.offset += 2 * 1000;
     const second = await round();
     assert.equal(second.length, 1);
-    assert.deepEqual([first[0].id, second[0].id].sort(), [a.id, b.id].sort());
-    assert.equal((await round()).length, 0, 'each at most every 3 minutes');
-    clock.offset += 181 * 1000;
-    assert.equal((await round()).length, 1, 'due again after 3 minutes');
+    assert.deepEqual([first[0].id, second[0].id].sort(), [a.id, b.id].sort(), 'the other one\'s turn');
+    assert.equal((await round()).length, 0, 'one of its pages at a time, the gap between');
+    clock.offset += 21 * 1000;
+    assert.equal((await round())[0].id, first[0].id, 'and round again: each asked for every 5 s, the budget deciding');
     // Seen by a live search just now: nothing more to open — its turn pushed back.
     env.app.db.run("UPDATE items SET status_source = 'sweep', checked_at = :t, browser_next_at = 0 WHERE user_id = :u", { t: env.app.repo.now(), u: c.user.id });
     assert.equal((await round()).length, 0, 'a fresh live-search reading: no page opened');
@@ -287,30 +289,43 @@ test("BIG W (its bot protection resets every server's connection): the server ne
   }
 });
 
-test("BIG W in a browser that opens its pages in a private window of its own (1.36.0, allowed in Incognito): its items are read at the usual pace — every minute, as many a round as there's room for — and a read there keeps that pace; one in an ordinary window, every 3 minutes as before", async () => {
+test("BIG W's product pages in a browser that opens them in a private window of its own (allowed in Incognito), within the store's budget (monitor/access.js): 8 s between two of its pages there (20 s in an ordinary window); a copy that waits the gap itself (1.39.0) gets two a round, the gap to wait and the slot it booked, an older one one; each read asks again in 5 s, every item in turn", async () => {
   const c = await member('bigwpriv');
   env.app.repo.setSetting('retailer:demo-bigw', { serverChecks: false });
   try {
     const a = (await c.post('/api/items', { url: store.productUrl('bigw', '6012345'), name: 'BIG W UPC' })).body;
     const b = (await c.post('/api/items', { url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle' })).body;
+    const d = (await c.post('/api/items', { url: `${store.url}/bigw/product/pokemon-tcg-tin/p/6012347`, name: 'BIG W Tin' })).body;
     await advance();
     const device = await Device.pair(env.url, c, 'Private copy');
-    await device.call('GET', '/api/ext/me?v=1.36.0');
-    const round = async (priv) => (await device.call('GET', `/api/ext/checks?priv=${priv}`)).body.checks.filter((x) => x.store === 'demo-bigw');
+    await device.call('GET', '/api/ext/me?v=1.39.0');
+    const round = async (priv, dev = device) => (await dev.call('GET', `/api/ext/checks?priv=${priv}`)).body.checks.filter((x) => x.store === 'demo-bigw');
     const first = await round(1);
-    assert.deepEqual(first.map((x) => x.id).sort(), [a.id, b.id].sort(), 'both in one round');
-    assert.ok(first.every((x) => x.render && x.privateWindow));
-    assert.equal((await round(1)).length, 0, 'not again straight away');
-    clock.offset += 61 * 1000;
-    assert.equal((await round(1)).length, 2, 'due again after a minute');
-    // Read in its private window: again in a minute. In an ordinary window: in 3.
+    assert.equal(first.length, 2, 'two a round');
+    assert.ok(first.every((x) => x.render && x.privateWindow && x.gapMs === 8000), 'the gap to wait between them said');
     const next = (id) => env.app.db.get('SELECT browser_next_at FROM items WHERE id = :id', { id }).browser_next_at - env.app.repo.now();
-    await device.call('POST', '/api/ext/checks', { results: [{ id: a.id, status: 'out_of_stock', privateWindow: true }, { id: b.id, status: 'out_of_stock', privateWindow: false }] });
-    assert.ok(next(a.id) <= 60 * 1000 && next(a.id) > 50 * 1000, String(next(a.id)));
-    assert.ok(next(b.id) > 170 * 1000, String(next(b.id)));
-    // A browser that can't open a private window: one BIG W page a round, as before.
-    env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: c.user.id });
-    assert.equal((await round(0)).length, 1, 'one BIG W page a round');
+    await device.call('POST', '/api/ext/checks', { results: first.map((x) => ({ id: x.id, status: 'out_of_stock', privateWindow: true })) });
+    for (const x of first) assert.ok(next(x.id) <= 5 * 1000 && next(x.id) > 0, `asked for again in 5 s: ${next(x.id)}`);
+    // (The second of the two started 8 s after the first: the next of its pages 8 s after that — a round asked for a
+    //  moment sooner books that slot, and starts then.)
+    clock.offset += 15 * 1000;
+    const second = await round(1);
+    assert.equal(second.length, 2);
+    assert.ok(second[0].startInMs > 900 && second[0].startInMs <= 1000, `booked: 8 s after the last round's second (${second[0].startInMs})`);
+    assert.equal(second[1].startInMs, undefined);
+    assert.ok(second.some((x) => x.id === d.id), 'the one left over first: every item in turn');
+    await device.call('POST', '/api/ext/checks', { results: second.map((x) => ({ id: x.id, status: 'out_of_stock', privateWindow: true })) });
+    // An older copy (1.36.0) — it waits only its own 4 s between two of a store's pages: one a round.
+    const older = await Device.pair(env.url, c, 'Older copy');
+    await older.call('GET', '/api/ext/me?v=1.36.0');
+    const one = await round(1, older);
+    assert.equal(one.length, 1, 'one a round');
+    // A browser that can't open a private window: 20 s between two of its pages.
+    await older.call('POST', '/api/ext/checks', { results: one.map((x) => ({ id: x.id, status: 'out_of_stock' })) });
+    clock.offset += 10 * 1000;
+    assert.equal((await round(0, older)).length, 0, 'not after 10 s in an ordinary window');
+    clock.offset += 11 * 1000;
+    assert.equal((await round(0, older)).length, 1, 'after 20 s');
   } finally {
     env.app.repo.setSetting('retailer:demo-bigw', {});
     for (const it of (await c.get('/api/items')).body.items) await c.del(`/api/items/${it.id}`);
