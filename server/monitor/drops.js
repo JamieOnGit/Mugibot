@@ -519,7 +519,11 @@ export class Drops {
       this.db.run(`UPDATE items SET drop_watch = :w, status = :st, status_source = 'server', status_at = :t, checked_at = :t,
         last_price = COALESCE(:price, last_price) WHERE id = :id`, { w: w.id, st, t, price: typeof p.price === 'number' ? p.price : null, id: item.id });
     }
-    this.saveFound(w, [...w.found, { itemId: item.id, sku: p.sku, store: p.store, at: this.now(), base: !fresh, ...(arm ? { arm } : {}) }]);
+    // (Put on the watchlist armed by this find: the find and its arming are one moment — the item's acoAt — so unarm()
+    //  tells the find's arming from one the member made themselves before it. Recorded a millisecond later, they were
+    //  taken for the member's, and a find whose page then said "on sale" stayed armed.)
+    const foundAt = added && item.acoAt ? Math.min(this.now(), item.acoAt) : this.now();
+    this.saveFound(w, [...w.found, { itemId: item.id, sku: p.sku, store: p.store, at: foundAt, base: !fresh, ...(arm ? { arm } : {}) }]);
     this.hub.publish(user.id, 'watch', { id: item.id, added: true });
     this.hub.publish(user.id, 'drop', { id: w.id });
     if (added && fresh) {
