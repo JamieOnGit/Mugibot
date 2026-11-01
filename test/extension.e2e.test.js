@@ -2462,6 +2462,70 @@ test("store login monitor: the extension sees where you're signed in (its checks
   store.state.signedIn = {};
 });
 
+test("🔑 store sign-ins, 24/7 (Mugibot 2.0): a store you keep signed in to whose pages don't say so (the dummy EB Games) — its home page looked at from the extension's own window: signed out → a Discord DM with a \"Sign in\" button at once, the toolbar button says IN?, the Account page shows it; signed in on the store's page → told so, the button clear", async () => {
+  if (!env.app.repo.userByUsername('ash').discord_id) {
+    const pg = await ctx.newPage();
+    discord.state.nextUser = 'd-ash';
+    await pg.goto(`${env.url}/auth/discord`);
+    await pg.waitForURL(/discord=linked/);
+    await pg.close();
+  }
+  const r = await browserApi('PUT', '/api/logins/prefs', { stores: ['demo-ebgames'], dm: true });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  store.state.signedIn = {};
+  try {
+    // (The extension's copy of your settings, asked for afresh — and nothing seen at EB Games yet.)
+    await sw.evaluate(async () => {
+      const all = await chrome.storage.local.get(null);
+      await chrome.storage.local.remove([...Object.keys(all).filter((k) => k.startsWith('state:')), 'logins', 'loginsCheckedAt']);
+    });
+    const before = discord.dmsTo('d-ash').length;
+    const asked = store.state.requests.length;
+    const checked = await sw.evaluate(() => globalThis.mugibotCheckLogins({ force: true }));
+    assert.ok(checked >= 1, `looked: ${checked}`);
+    await waitFor(() => discord.dmsTo('d-ash').slice(before).some((m) => /Signed out of EB Games \(dummy store\)/.test(JSON.stringify(m.body))), { message: 'the DM' });
+    const dm = discord.dmsTo('d-ash').slice(before).find((m) => /Signed out of EB Games/.test(JSON.stringify(m.body)));
+    assert.ok(JSON.stringify(dm.body).includes('Sign in at EB Games (dummy store)'), JSON.stringify(dm.body));
+    assert.ok(JSON.stringify(dm.body).includes(`${store.url}/ebgames`), 'the store\'s own sign-in page');
+    // Its home page, opened as you'd open it (your cookies, a page load) — once — and its tab closed again.
+    const homes = store.state.requests.slice(asked).filter((q) => q.path === '/ebgames/');
+    assert.equal(homes.length, 1, JSON.stringify(homes));
+    assert.equal(homes[0].mode, 'navigate');
+    await waitFor(() => !ctx.pages().some((pg) => pg.url() === `${store.url}/ebgames/`), { message: 'the tab closed' });
+    // The toolbar button says so.
+    await waitFor(async () => (await sw.evaluate(() => chrome.action.getBadgeText({}))) === 'IN?', { message: 'IN? on the button' });
+    assert.match(await sw.evaluate(() => chrome.action.getTitle({})), /not signed in at EB Games \(dummy store\)/);
+    // The Account page: kept, signed out, its Sign in button.
+    const page = await ctx.newPage();
+    await page.goto(`${env.url}/app#account`);
+    const row = page.locator('#signins li.login[data-store="demo-ebgames"]');
+    await row.waitFor();
+    assert.match(await row.getAttribute('class'), /\bout\b/);
+    assert.equal(await row.locator('input[name=keep]').isChecked(), true);
+    assert.equal(await row.locator('a', { hasText: 'Sign in' }).getAttribute('href'), `${store.url}/ebgames`);
+    assert.match(await page.textContent('#signins-sum'), /Signed out at EB Games \(dummy store\)/);
+    // The popup: first, with its Sign in link.
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.waitForFunction(() => /EB Games/.test(document.querySelector('#logins-list')?.textContent || ''));
+    const first = popup.locator('#logins-list li').first();
+    assert.match(await first.textContent(), /🔑 EB Games \(dummy store\)Not signed in — Sign in ›/);
+    await popup.close();
+    // Signed in at the store (its Sign in button opened its page): the page says so → told, the button clear.
+    store.state.signedIn.ebgames = true;
+    const shop = await ctx.newPage();
+    await shop.goto(`${store.url}/ebgames/`);
+    await waitFor(() => discord.dmsTo('d-ash').slice(before).some((m) => /Signed in at EB Games \(dummy store\) again/.test(JSON.stringify(m.body))), { message: 'the signed-in DM' });
+    await waitFor(async () => (await sw.evaluate(() => chrome.action.getBadgeText({}))) !== 'IN?', { message: 'the button clear' });
+    await page.waitForSelector('#signins li.login.in[data-store="demo-ebgames"]', { timeout: 15000 });
+    await shop.close();
+    await page.close();
+  } finally {
+    store.state.signedIn = {};
+    await browserApi('PUT', '/api/logins/prefs', { stores: [], dm: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md)
 // ---------------------------------------------------------------------------

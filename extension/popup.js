@@ -155,18 +155,22 @@ function renderLogins(d) {
   const stores = (d && d.stores) || [];
   $('logins').hidden = !stores.length;
   let signedIn = 0;
+  // (The stores you keep signed in to first — those you're signed out of at the very top, a "Sign in" button each.)
+  const rank = (r) => { const l = d.logins[r.id]; return (r.keep ? 0 : 2) + (l && l.status === 'out' ? 0 : 1); };
+  stores.sort((a, b) => rank(a) - rank(b));
   for (const r of stores) {
     const l = d.logins[r.id];
     if (l && l.status === 'in') signedIn += 1;
     const li = document.createElement('li');
     const name = document.createElement('span');
-    name.textContent = r.name;
+    name.textContent = r.keep ? `🔑 ${r.name}` : r.name;
     const state = document.createElement('a');
     state.href = r.signIn;
     state.target = '_blank';
     state.rel = 'noopener';
-    state.className = l && l.status === 'in' ? 'ok' : 'muted';
-    state.textContent = !l ? 'Not seen yet — open it' : l.status === 'in' ? '✓ Signed in' : 'Not signed in — sign in';
+    const out = l && l.status === 'out';
+    state.className = l && l.status === 'in' ? 'ok' : out && r.keep ? 'err' : 'muted';
+    state.textContent = !l ? 'Not seen yet — open it' : l.status === 'in' ? '✓ Signed in' : r.keep ? 'Not signed in — Sign in ›' : 'Not signed in — sign in';
     if (l && l.status === 'in') state.removeAttribute('href');
     li.append(name, state);
     list.appendChild(li);

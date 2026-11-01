@@ -72,7 +72,8 @@ export class Notifier {
   /**
    * ev: { type, level ('info'|'success'|'warn'|'urgent'), message, title?, name?, sku?, url?, buttons?: [{label, url}],
    *       channel?: 'restock' | 'listed' | 'checkout' | 'aco' — also DM / webhook / email per the member's settings;
-   *                 'account' — membership news, DM'd if Discord is connected }
+   *                 'account' — membership news, DM'd if Discord is connected;
+   *                 'signin' — signed out at a store you keep signed in to (server/signins.js): DM'd, never emailed }
    * Back once the Discord DM is out: the member's own webhook and email still going, never holding up the next member's
    * DM in a drop (a dead webhook took 8 s, an email up to 10) — wait: back once all three are (a test alert says which
    * went). urgent: an Auto-checkout DM the member has to act on now (approve the payment in their bank's app, press the
@@ -91,7 +92,7 @@ export class Notifier {
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(userId, 'alerts', {}) || {}) };
     const jobs = [];
     // 'aco': Auto-checkout (it spends their money): always DM'd.
-    const wantsDm = { restock: settings.discordDm, listed: settings.discordDmListed, checkout: settings.discordDmCheckout, aco: true, account: true }[ev.channel];
+    const wantsDm = { restock: settings.discordDm, listed: settings.discordDmListed, checkout: settings.discordDmCheckout, aco: true, account: true, signin: true }[ev.channel];
     if (wantsDm && user.discord_id && this.discord.botReady) {
       jobs.push(this.discord.dm(user, this.message(ev), { urgent }).then((ok) => ok && sent.push('discord-dm')));
     }
@@ -100,7 +101,7 @@ export class Notifier {
       if (wait) jobs.push(done);
       else done.catch((e) => this.cfg.log('[notify]', `${what}: ${e.message}`));
     };
-    if (settings.discordWebhook && ev.channel !== 'account') after(this.webhook(settings, ev), 'webhook');
+    if (settings.discordWebhook && ev.channel !== 'account' && ev.channel !== 'signin') after(this.webhook(settings, ev), 'webhook');
     const wantsEmail = { checkout: settings.emailOnCheckout, aco: settings.emailOnCheckout, restock: settings.emailOnRestock, listed: settings.emailOnRestock, account: true }[ev.channel];
     if (wantsEmail && user.email) {
       const links = (ev.buttons || []).map((b) => `${b.label}: ${b.url}`).join('\n');

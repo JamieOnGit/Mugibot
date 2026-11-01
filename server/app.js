@@ -4,6 +4,7 @@
 import http from 'node:http';
 import { Aco } from './aco.js';
 import { Bags } from './bags.js';
+import { SignIns } from './signins.js';
 import { Pools } from './pools.js';
 import { Drops } from './monitor/drops.js';
 import { PageWatches } from './monitor/pages.js';
@@ -108,6 +109,10 @@ export async function createApp(options = {}) {
   ctx.aco = aco;
   monitor.aco = aco;
   gates.aco = aco;
+  // Store sign-ins, 24/7 (server/signins.js): signed out at a store a member keeps signed in to → told at once.
+  const signins = new SignIns({ ...ctx, now });
+  signins.aco = aco;
+  ctx.signins = signins;
   // Clear cart: the member's bags, emptied in their checkout browser (from the dashboard, anywhere).
   const bags = new Bags({ ...ctx, now });
   ctx.bags = bags;
@@ -285,6 +290,7 @@ export async function createApp(options = {}) {
     access,
     news,
     aco,
+    signins,
     bags,
     pools,
     catalog,

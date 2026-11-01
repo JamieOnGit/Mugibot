@@ -2267,6 +2267,68 @@ function renderFeedPager() {
 // ---------------------------------------------------------------------------
 // 👤 Account
 // ---------------------------------------------------------------------------
+// 🔑 Store sign-ins, 24/7 (server/signins.js): the stores you keep signed in to — ticked — each one's state as the
+// browser Mugibot checks out in last saw it, since when, and its "Sign in" button; whether you're DM'd when signed out.
+loaders.account = async () => {
+  await loadLogins().catch(() => null);
+  renderSignins();
+};
+
+function renderSignins() {
+  const d = state.logins;
+  const list = $('#signins');
+  if (!d || !list) return;
+  list.textContent = '';
+  $('#signins-dm').checked = !!(d.prefs && d.prefs.dm);
+  const rank = (s) => (s.keep ? 0 : 4) + ({ out: 0, unknown: 1, in: 3 }[s.status] ?? 2);
+  const stores = [...d.stores].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  const kept = stores.filter((s) => s.keep);
+  const outs = kept.filter((s) => s.status === 'out');
+  $('#signins-sum').textContent = !d.browsers ? 'Connect the extension (Setup → Extension) and this shows where you\'re signed in.'
+    : `${outs.length ? `⚠️ Signed out at ${outs.map((s) => s.name).join(', ')}. ` : ''}Signed in at ${kept.filter((s) => s.status === 'in').length} of the ${kept.length} store${kept.length === 1 ? '' : 's'} you keep${d.checkoutBrowser ? ` (in ${d.checkoutBrowser}, the browser Mugibot checks out in)` : ''}.`;
+  for (const s of stores) {
+    const seen = s.at ? `${LOGIN_TEXT[s.status] || 'Seen'}${s.since && s.status === 'out' ? ` since ${when(s.since)}` : ''} · ${s.how === 'check' || s.how === 'probe' ? 'checked' : 'seen'} ${ago(s.at)}${d.browsers > 1 && s.device ? ` in ${s.device}` : ''}${s.stale ? ' — not checked lately (is that browser open?)' : ''}`
+      : 'Not seen yet: the extension checks it soon (or open the store once)';
+    const box = h('input', { type: 'checkbox', name: 'keep', value: s.id, 'aria-label': `Keep signed in at ${s.name}` });
+    box.checked = !!s.keep;
+    list.append(h('li', { class: `login ${s.status || 'none'}${s.keep ? '' : ' muted'}`, dataset: { store: s.id } },
+      box,
+      h('span', { class: 'dot', 'aria-hidden': 'true' }),
+      h('div', { class: 'info' },
+        h('div', { class: 'name' }, s.name, s.required ? h('span', { class: 'pill warn', title: 'Only sells to signed-in customers' }, 'sign-in only') : null),
+        h('div', { class: 'meta', title: seen }, seen)),
+      s.status === 'in' ? null : h('a', { class: `btn small${s.status === 'out' && s.keep ? ' primary' : ''}`, href: s.signInUrl, target: '_blank', rel: 'noopener' }, 'Sign in ↗')));
+  }
+}
+
+$('#signins-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  busy(e.target, async () => {
+    try {
+      const stores = $$('#signins input[name=keep]').filter((b) => b.checked).map((b) => b.value);
+      await api('PUT', '/api/logins/prefs', { stores, dm: $('#signins-dm').checked });
+      await loadLogins();
+      renderSignins();
+      setMsg($('#signins-msg'), 'Saved.', true);
+    } catch (err) {
+      setMsg($('#signins-msg'), err.message);
+    }
+  });
+});
+
+$('#signins-check').addEventListener('click', async () => {
+  const msg = $('#signins-msg');
+  if (!state.ext || !state.ext.paired) { setMsg(msg, 'Install the extension and connect it (Setup → Extension) first.'); return; }
+  await busy($('#signins-form'), async () => {
+    setMsg(msg, 'Checking…', true);
+    const reply = await askExtension('checkLogins', {}, 60000);
+    if (!reply || !reply.ok) { setMsg(msg, 'The extension didn\'t answer: reload this page and try again.'); return; }
+    await loadLogins();
+    renderSignins();
+    setMsg(msg, reply.checked ? `Checked ${reply.checked} store${reply.checked === 1 ? '' : 's'}.` : 'Up to date (checked in the last minute).', true);
+  });
+});
+
 $('#acct-form').addEventListener('submit', (e) => {
   e.preventDefault();
   busy(e.target, async () => {
@@ -2375,6 +2437,7 @@ function connectStream() {
       loadDevices().catch(() => null);
       loadLogins().then(renderLogins).catch(() => null);
     }
+    if (!$('[data-panel="account"]').hidden) loadLogins().then(renderSignins).catch(() => null);
     if (listOpen('watch')) loadLogins().then(renderItems).catch(() => null);
     if (listOpen('armed')) Promise.all([loadLogins(), loadAco()]).then(renderArmed).catch(() => null);
     renderExtStatus().catch(() => null);

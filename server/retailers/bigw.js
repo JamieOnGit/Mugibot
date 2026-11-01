@@ -42,7 +42,9 @@ export default {
   sweep: { from: 'browser', mode: 'browser', parser: 'generic', render: true, privateWindow: true, path: '/search?text={q}', addWord: 'tcg', sharedWindowSeconds: 20, pages: 3, followNext: true },
   // Store login monitor: whether you're signed in here is read from the store's own page when you
   // open it (its header: a "Sign in" link, or "Hi, <name>" / "Sign out"). signIn: where to sign in.
-  account: { signIn: '' },
+  // (Whether you're signed in: its home page looked at from your browser now and then — once an hour at most here, its
+  //  bot protection being what it is; the store pages you open say so too.)
+  account: { signIn: '', probeMinutes: 60 },
   // Its product pages: BIG W's bot protection (Akamai) resets every server's connection, so the server never
   // asks (server: 'never'). Browsers do, by opening its page in the extension's window the way you'd open it
   // (render): background requests are what got a member's browser turned away. How often: its budget's (access,

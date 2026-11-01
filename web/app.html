@@ -604,7 +604,7 @@
         </div>
         <div class="card" id="logins-card">
           <div class="card-head"><h3>4. Sign in at the stores</h3><button class="btn small" id="logins-check" type="button">Check now</button></div>
-          <p class="muted">Signed in at a store, ⚡ Buy's checkout is faster: the store fills in your saved address (and often your card) itself. The extension notices whether you're signed in whenever you open a store, and checks the stores that show it in their pages every 10 minutes. It only looks: nothing is clicked or typed.</p>
+          <p class="muted">Signed in at a store, ⚡ Buy's checkout is faster: the store fills in your saved address (and often your card) itself. The extension notices whether you're signed in whenever you open a store, and checks the stores you keep signed in to around the clock (<a href="#account">Account → Store sign-ins</a>: you're told the moment you're signed out). It only looks: nothing is clicked or typed.</p>
           <p class="logins-sum" id="logins-sum"></p>
           <ul class="logins" id="logins"></ul>
           <p class="msg" id="logins-msg"></p>
@@ -715,6 +715,14 @@
           <label for="acct-email">Email <span class="muted">(optional — password resets and email alerts)</span></label><input id="acct-email" name="email" type="email" autocomplete="email">
           <label for="acct-name">Name <span class="muted">(optional)</span></label><input id="acct-name" name="name" autocomplete="name">
           <div class="form-actions"><button class="btn primary" type="submit">Save</button><span class="msg" id="acct-msg"></span></div>
+        </form>
+        <form class="card" id="signins-form">
+          <div class="card-head"><h3>🔑 Store sign-ins (24/7)</h3><button class="btn small" id="signins-check" type="button">Check now</button></div>
+          <p class="muted">Stay signed in at the stores you buy from, in the browser Mugibot checks out in: ⚡ Buy and Auto-checkout go faster (the store fills in your saved details itself), and some stores only sell to customers who are signed in. The extension checks each store ticked here around the clock. The moment it finds you signed out, you're told here, on the extension's button, and in a Discord DM with a <b>Sign in</b> button. Mugibot never signs in for you and never sees your passwords: the button opens the store's own sign-in page.</p>
+          <p class="logins-sum" id="signins-sum"></p>
+          <ul class="logins" id="signins"></ul>
+          <label class="check"><input type="checkbox" id="signins-dm"> <span>DM me in Discord when I'm signed out at one of these</span></label>
+          <div class="form-actions"><button class="btn primary" type="submit">Save</button><span class="msg" id="signins-msg"></span></div>
         </form>
         <form class="card" id="pw-form">
           <h3>Change password</h3>
