@@ -575,7 +575,14 @@ test("💸 a VIP keyword watch at Kmart; the drop's link monitored ahead (not li
 // Found merging main (JamieOnGit/Mugibot#54's cases)
 // ---------------------------------------------------------------------------
 
-test("🛡️ JB Hi-Fi's full top 10: one that moves into it later, sold out in the search but on sale on its page a moment later (they disagree) — never armed, never bought (own watch and an admin's)", async () => {
+test("🛡️ JB Hi-Fi's full top 10: one that moves into it later, sold out in the search but on sale on its page a moment later (they disagree) — never armed, never bought (own watch and an admin's)", async (t) => {
+  // (Time passing between any two reads of the clock — a slower machine, CI's: a millisecond between a find's item put
+  //  on the watchlist armed and the find recorded took the find's own arming for one the member made before it, and
+  //  left it armed. Forced here: each read of the clock a millisecond on.)
+  let base = clock.offset;
+  let ticks = 0;
+  Object.defineProperty(clock, 'offset', { configurable: true, get: () => base + ticks++, set: (v) => { base = v - ticks; } });
+  t.after(() => { Object.defineProperty(clock, 'offset', { configurable: true, writable: true, enumerable: true, value: base + ticks }); });
   const jb = R('demo-jbhifi');
   for (const p of store.shop('jbhifi').products) p.listed = false;
   for (let i = 1; i <= 11; i++) store.addProduct('jbhifi', { sku: `zephyrine-foosball-${i}`, name: `Zephyrine Foosball ${i}`, price: 300 + i, status: i === 11 ? 'out_of_stock' : 'in_stock' });
