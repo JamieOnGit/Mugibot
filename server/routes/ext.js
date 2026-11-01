@@ -173,7 +173,8 @@ export function register(router, ctx) {
     if (item) ctx.aco.noteShopSeen(req.user.id, item, 'in', aco ? 'run' : 'buy');
     // (quantity: how many to put in the bag — the item's, or its Auto-checkout run's.)
     // (cardId: which of your cards pays for it — its id in your extension; null: your default.)
-    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, cardId: (item && item.cardId) || null, quantity: row.quantity || 1, aco };
+    // (qtyMax: as many as the store allows, up to quantity — the extension reads the page's own most: 1.40.0; an older one's run asks for one, aco.js mostQty.)
+    return { ok: true, itemId: row.item_id, sku: row.sku, name: row.name, url: (item && item.url) || null, host: row.host, profileId: row.profile_id, cardId: (item && item.cardId) || null, quantity: row.quantity || 1, qtyMax: !!(item && item.qtyRule === 'max'), aco };
   }, { auth: 'device', entitled: true });
 
   // Delivery details for checkout autofill (the chosen set, else the default).

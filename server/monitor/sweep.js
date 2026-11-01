@@ -239,6 +239,9 @@ const UNKNOWN_SETTLE_READS_MS = 2 * 60 * 1000;
 // searching it — Chrome closed, the computer asleep — or it turned them away: BIG W's "Access Denied"): its
 // drops can't be seen, so its admins are told, once, and again when it's back.
 const BLIND_MS = 20 * 60 * 1000;
+// A store only admins' browsers search (EB Games, Premium Bandai, BIG W) that none has searched for this long: its admins
+// are told at once — a drop there can't be seen meanwhile (Mugibot 2.0: not 20 minutes later).
+const UNSEARCHED_MS = 3 * 60 * 1000;
 // "Restock once a day": its first restock of the (Sydney) day — and another the same day only once it's been sold out this
 // long first (a hot product's second wave: back at 13:30 after selling out at 9:04 — not a flicker), at most this many a day.
 const RESTOCK_GAP_MS = 30 * 60 * 1000;
@@ -1377,13 +1380,31 @@ export class Sweeper {
   async watchBlind() {
     const s = this.settings;
     const now = this.now();
-    if (!this.running || !s.enabled || now - (this.startedAt || now) < BLIND_MS) return [];
+    if (!this.running || !s.enabled) return [];
+    // (Blind: only once it's had 20 minutes to find something. Unsearched: once it's had 3 to be searched.)
+    const settled = now - (this.startedAt || now) >= BLIND_MS;
     const told = [];
     const went = [];
     const back = [];
+    const lost = [];
+    const found = [];
     for (const { retailer: r, mode } of this.stores()) {
       if (mode === 'off' || !(mode === 'browser' || r.sweep.from === 'browser')) continue;
       const st = this.stat(r.id);
+      // (Searched from an admin's browser at all lately? Not: told within minutes — its queue up aside.)
+      if (mode === 'browser') {
+        const seen = st.lastAt || 0;
+        const held = !!(st.heldAt && now - st.heldAt < 2 * 60 * 1000);
+        const unsearched = !held && now - Math.max(seen, this.startedAt || 0) > UNSEARCHED_MS;
+        if (unsearched !== !!st.unsearchedSince) {
+          st.unsearchedSince = unsearched ? now : 0;
+          (unsearched ? lost : found).push({ r, line: unsearched ? `${r.name}: no admin's browser has searched it since ${seen ? sydneyTime.format(seen) : 'Mugibot started'} — Chrome closed, the computer asleep, the extension signed out, or "Access Denied" there.` : '' });
+          told.push({ store: r.id, unsearched });
+        }
+      }
+      // (Not searched at all: said already, just above — "not watched" on top would say it twice. Said once it's
+      //  searched again and those searches still find nothing.)
+      if (!settled || st.unsearchedSince) continue;
       if (!st.lastFoundAt) {
         const row = this.db.get('SELECT MAX(last_ok_at) AS at FROM sweep_terms WHERE store = :s AND found > 0', { s: r.id });
         st.lastFoundAt = (row && row.at) || this.startedAt;
@@ -1401,6 +1422,11 @@ export class Sweeper {
     }
     const names = (list) => andList(list.map((x) => x.r.name));
     const evs = [];
+    if (lost.length) {
+      evs.push({ level: 'urgent', stores: lost, title: `${names(lost)} ${lost.length === 1 ? "isn't" : "aren't"} being searched`,
+        message: `No drop there can be seen until an admin's browser searches ${lost.length === 1 ? 'it' : 'them'} again.\n${lost.map((x) => x.line).join('\n')}\nOpen Chrome with the Mugibot extension connected to an admin account (Setup → Extension), and keep the computer awake.` });
+    }
+    if (found.length) evs.push({ level: 'success', stores: found, title: `${names(found)} ${found.length === 1 ? 'is' : 'are'} being searched again`, message: `An admin's browser searched ${found.length === 1 ? 'it' : 'them'} at ${sydneyTime.format(now)}.` });
     if (went.length) {
       evs.push({ level: 'urgent', stores: went, title: `${names(went)} ${went.length === 1 ? "isn't" : "aren't"} being watched`,
         message: `Nothing ${went.length === 1 ? 'it drops' : 'they drop'} can be seen until ${went.length === 1 ? "it's" : "they're"} searched again.\n${went.map((x) => x.line).join('\n')}\nKeep Chrome open with the Mugibot extension connected to an admin account (Setup → Extension), and the computer awake. If a store says "Access Denied" there, clear that store's cookies in that browser, or use another one.` });

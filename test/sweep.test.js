@@ -2182,12 +2182,17 @@ test("📵 BIG W not watched (no admin's browser searching it — Chrome closed,
     await bigwSearch(admin, [bigwTile('6099401', 'Pokemon TCG: Watched Tin', true, 25)]);
     // (As on Mugibot's server: the live sweeps running, started a while ago.)
     Object.assign(sw, { running: true, startedAt: sw.now() - 30 * 60 * 1000 });
+    // (The other stores admins' browsers search here: searched — they're not what this is about.)
+    const others = () => { for (const id of ['demo-ebgames', 'demo-pbandai']) Object.assign(sw.stat(id), { lastAt: sw.now(), lastFoundAt: sw.now() }); };
+    others();
     const told = async () => (await sw.watchBlind()).filter((t) => t.store === 'demo-bigw');
     assert.deepEqual(await told(), [], 'searched just now');
     const before = dms().length;
     clock.offset += 21 * 60 * 1000;
+    // (Searched all along — its searches finding nothing: not searched at all is the 3-minute alert, onepiece.test.js.)
+    await bigwSearch(admin, []);
+    others();
     assert.deepEqual(await told(), [{ store: 'demo-bigw', blind: true }]);
-    // (EB Games' dummy copy is searched from the admin's browser here too: both in one DM, as Chrome closed takes them all.)
     const fresh = dms().slice(before);
     assert.equal(fresh.length, 1, `one DM: ${fresh.join('\n')}`);
     const dm = fresh[0];

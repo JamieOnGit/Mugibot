@@ -2860,6 +2860,38 @@ test('🤖 Auto-checkout at EB Games: Home Delivery (not the Click & Collect EB 
   await closeStorePages('ebgames');
 });
 
+test("🏴‍☠️ One Piece drops, bought as they drop (Mugibot 2.0): EB Games' OP-20 hangsell — as many as the store allows, its limit said only in words (\"Limit 4 per customer\", no max on its box) — then its booster box, one; Premium Bandai's OP pack the most its drop-down offers. Each placed, and timed", async (t) => {
+  const hang = store.addProduct('ebgames', { sku: '390002', name: 'One Piece TCG OP-20 Hangsell Booster', price: 8, status: 'in_stock', maxQty: 4, hideMax: true, limitNote: 'Limit 4 per customer' });
+  const box = store.addProduct('ebgames', { sku: '390001', name: 'One Piece TCG OP-20 Booster Box', price: 189, status: 'in_stock' });
+  const pack = store.addProduct('pbandai', { sku: 'N2990000001', name: 'ONE PIECE CARD GAME OP-12 (PACK)', price: 9, status: 'preorder', qtyStyle: 'select', maxQty: 6 });
+  store.state.signedIn.pbandai = true;
+  await useItems([
+    { url: hang, name: 'OP-20 Hangsell', maxPrice: 20, quantity: 'max' },
+    { url: box, name: 'OP-20 Box', maxPrice: 300 },
+    { url: pack, name: 'OP-12 Pack', maxPrice: 20, quantity: 'max' },
+  ]);
+  const timed = async (name, label) => {
+    const t0 = Date.now();
+    await testRun(name);
+    const run = await runOver(`the ${name} run over`);
+    assert.equal(run.status, 'placed', `${name}: ${JSON.stringify(run)}`);
+    t.diagnostic(`${label}: run created → order placed in ${Date.now() - t0} ms`);
+    return run;
+  };
+  const S = store.shop('ebgames');
+  await timed('OP-20 Hangsell', 'EB Games OP-20 hangsell (×4)');
+  assert.deepEqual(S.orders.at(-1).cart.map((c) => [c.sku, c.qty]), [['390002', 4]], 'the hangsell: 4 — the store\'s own limit, read off its page');
+  const userId = env.app.repo.userByUsername('ash').id;
+  assert.ok(env.app.repo.listEvents(userId).some((e) => /Quantity set to 4 — the most the store allows \(its limit: 4 per customer\)/.test(e.message)), 'said so');
+  await closeStorePages('ebgames');
+  await timed('OP-20 Box', 'EB Games OP-20 booster box (×1)');
+  assert.deepEqual(S.orders.at(-1).cart.map((c) => [c.sku, c.qty]), [['390001', 1]], 'the box: one');
+  await closeStorePages('ebgames');
+  await timed('OP-12 Pack', 'Premium Bandai OP-12 pack (×6)');
+  assert.deepEqual(store.shop('pbandai').orders.at(-1).cart.map((c) => [c.sku, c.qty]), [['N2990000001', 6]], "Bandai's pack: 6 — its drop-down's most");
+  await closeStorePages('pbandai');
+});
+
 test('🤖 Auto-checkout at EB Games signed in: it\'s all in already (your saved card included, shown as EB shows it: "...2387 08/27") — straight to "CONFIRM & PAY", placed', async () => {
   store.state.signedIn.ebgames = true;
   store.shop('ebgames').savedCard = '...2387 08/27';

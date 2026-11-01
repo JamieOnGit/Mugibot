@@ -32,6 +32,7 @@ import { publicError } from './public.js';
 import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
 import { readingOf } from './sightings.js';
+import { qtySetting, quantityFor, typeOf } from './classify.js';
 
 const KINDS = ['restock', 'listed', 'price_drop'];
 export const DROP_NOTE = 'Drop watch';
@@ -94,11 +95,29 @@ export function otherSku(url) {
 /** A name from a product link ("…/products/xbox-series-x-console" → "Xbox Series X Console"). */
 export const nameFromLink = linkName;
 
+// Ready-made watches, one click on the Drops page. One Piece: every set at EB Games and Premium Bandai — OP and EB sets,
+// premium boosters, hangsells, booster packs and boxes ("one piece tcg" is how EB Games names them: "One Piece TCG OP-19
+// Hangsell Booster"; Premium Bandai: "ONE PIECE CARD GAME …") — Auto-checkout buying a box one, packs and hangsells as many
+// as the store allows (qty "auto": monitor/classify.js), and never an accessory.
+export const PRESETS = Object.freeze({
+  onepiece: {
+    label: 'One Piece drops',
+    watches: [
+      { store: 'ebgames', words: 'one piece tcg' },
+      { store: 'ebgames', words: 'one piece card game' },
+      { store: 'pbandai', words: 'one piece card game' },
+    ],
+  },
+});
+
 function toWatch(r) {
   return r && {
     id: r.id, userId: r.user_id, username: r.username || '', active: r.active !== 0, shared: !!r.shared,
     store: r.store, site: r.site, words: r.words, url: r.url, label: r.label, category: r.category,
     aco: !!r.aco, maxPrice: r.max_price ?? null, found: json(r.found, []), how: r.how, seen: r.seen ?? 0,
+    // How many its Auto-checkout buys: '1'…'10', 'max' (as many as the store allows) or 'auto' (by the kind of product:
+    // a booster box one, a hangsell or booster pack as many as allowed — monitor/classify.js).
+    qty: r.qty || '1',
     baselineAt: r.baseline_at ?? null, bases: json(r.bases, {}), nextAt: r.next_at || 0, lastAt: r.last_at ?? null, lastOkAt: r.last_ok_at ?? null,
     fails: r.fails || 0, error: r.error || '', createdAt: r.created_at,
     channelId: r.channel_id || '', roleId: r.role_id || '',
@@ -301,7 +320,7 @@ export class Drops {
       // (New to the watch — what it saw says so — has the room of what's dropped since its first look.)
       const base = baseline && verdict !== 'new';
       if (!this.room(w, base)) return;
-      const want = this.armFor(w, product.store, product.url, 'pending');
+      const want = this.armFor(w, product.store, product.url, 'pending', product.name);
       this.saveFound(w, [...w.found, { productId: product.id, sku: product.sku, store: product.store, at: this.now(), base, ...(want ? { arm: want } : {}) }]);
       this.repo.ensurePageFor({ store: product.store, sku: product.sku, url: product.url });
       // (Its page read now — unless it's backing off, the store having refused it: at its turn then.)
@@ -321,7 +340,7 @@ export class Drops {
     if (!f || !f.arm || f.arm === 'armed') return;
     // (A find from before the watch kept what it saw: never new to it, and skipped stays skipped.)
     if (this.sightings) verdict = this.sightings.findVerdict(w, product.store, [product.sku], verdict, { foundAt: f.at, arm: f.arm });
-    const arm = this.armFor(w, product.store, product.url, verdict);
+    const arm = this.armFor(w, product.store, product.url, verdict, product.name);
     if (!arm || arm === f.arm || arm === 'pending') return;
     this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm } : x)));
     if (arm === 'skipped') { this.onSale(w, product); return; }
@@ -362,8 +381,11 @@ export class Drops {
    * when the watch first read it), 'pending' (armed once its page says it isn't on sale yet), 'skipped' (on sale
    * when the watch first read it: there before it) or '' (not asked for, or no checkout there).
    */
-  armFor(w, store, url, verdict) {
+  armFor(w, store, url, verdict, name = null) {
     if (!w.aco || w.maxPrice === null || !url || !this.retailers.canBuy(store)) return '';
+    // ("auto" — by the kind of product: only a card product Mugibot recognises — a box, a case, a pack, a hangsell, a
+    //  deck, a collection — is bought; a One Piece playmat or deck case that has the words is found and told, not bought.)
+    if (w.qty === 'auto' && name && typeOf(name) === 'other') return '';
     return verdict === 'new' || verdict === 'armed' ? 'armed' : verdict === 'skipped' ? 'skipped' : 'pending';
   }
 
@@ -371,6 +393,7 @@ export class Drops {
   arm(w, p, status = null) {
     const user = this.repo.userById(w.userId);
     if (!user || user.disabled || !p || !p.url || !this.retailers.canBuy(p.store)) return null;
+    if (w.qty === 'auto' && typeOf(p.name || w.label) === 'other') return null; // (not a card product: told, not bought)
     const existing = this.repo.itemBySku(user.id, p.store, p.sku);
     if (existing && existing.aco) return existing;
     try {
@@ -380,7 +403,7 @@ export class Drops {
         saved = this.repo.updateItem(user.id, existing.id, checkItem({ aco: true, maxPrice: existing.maxPrice ?? w.maxPrice, monitor: true }, { retailers: this.retailers, existing, isAdmin }));
       } else {
         if (this.repo.countItems(user.id) >= this.cfg.limits.items) { this.full(w); return null; }
-        saved = this.repo.addItem(user.id, checkItem({ url: p.url, sku: p.sku, name: p.name || w.label || p.sku, maxPrice: w.maxPrice, aco: true, monitor: true }, { retailers: this.retailers, isAdmin }));
+        saved = this.repo.addItem(user.id, checkItem({ url: p.url, sku: p.sku, name: p.name || w.label || p.sku, maxPrice: w.maxPrice, aco: true, monitor: true, quantity: quantityFor(w.qty, p.name || w.label) }, { retailers: this.retailers, isAdmin }));
         this.db.run('UPDATE items SET drop_watch = :w WHERE id = :id', { w: w.id, id: saved.id });
       }
       if (READ.has(status) && !isOrderable(status)) {
@@ -481,9 +504,9 @@ export class Drops {
     const fresh = !baseline || verdict === 'new';
     if (added) {
       if (this.repo.countItems(user.id) >= this.cfg.limits.items) { this.full(w); return null; }
-      arm = this.armFor(w, p.store, p.url, verdict);
+      arm = this.armFor(w, p.store, p.url, verdict, productName(p));
       try {
-        item = this.repo.addItem(user.id, checkItem({ url: p.url, sku: p.sku, name: productName(p), maxPrice: arm ? w.maxPrice : null, aco: arm === 'armed', monitor: true }, { retailers: this.retailers }));
+        item = this.repo.addItem(user.id, checkItem({ url: p.url, sku: p.sku, name: productName(p), maxPrice: arm ? w.maxPrice : null, aco: arm === 'armed', monitor: true, quantity: quantityFor(w.qty, productName(p)) }, { retailers: this.retailers }));
       } catch (e) {
         this.cfg.log('[drops]', e.message);
         return null;
@@ -523,7 +546,7 @@ export class Drops {
     const item = this.db.get('SELECT * FROM items WHERE id = :id', { id: f.itemId });
     if (!item) return;
     if (this.sightings) verdict = this.sightings.findVerdict(w, item.store, [item.sku], verdict, { foundAt: f.at, arm: f.arm });
-    const arm = this.armFor(w, item.store, item.url, verdict);
+    const arm = this.armFor(w, item.store, item.url, verdict, item.name);
     if (!arm || arm === f.arm || arm === 'pending') return;
     this.saveFound(w, w.found.map((x) => (x === f ? { ...x, arm } : x)));
     if (arm === 'skipped') { this.onSale(w, { name: item.name, sku: item.sku, url: item.url }); return; }
@@ -874,6 +897,30 @@ export class Drops {
    * search page, read every few seconds for any of its key phrases: monitor/pages.js) — plus label,
    * aco + maxPrice, and for admins shared (for everyone: default on), category, channelId and roleId.
    */
+  /**
+   * A ready-made set of watches (PRESETS): each one this person hasn't got yet, at the stores Mugibot searches now —
+   * with Auto-checkout up to maxPrice (each, a box or a pack) and "auto" quantities when aco. { added, skipped }.
+   */
+  async preset(name, input, user) {
+    const p = PRESETS[name];
+    if (!p) throw bad('No such preset');
+    const aco = bool(input.aco, true);
+    const maxPrice = aco ? num(input.maxPrice, { min: 1, max: 100000, def: null }) : null;
+    if (aco && maxPrice === null) throw bad('Set a max price (for one box or pack) to auto-checkout what drops: Mugibot never pays more than that');
+    const added = [];
+    const skipped = [];
+    for (const x of p.watches) {
+      const r = this.retailers.get(x.store);
+      if (!r || !this.retailers.enabled(r) || (this.sweeper && this.sweeper.modeFor(r) === 'off')) { skipped.push({ store: x.store, words: x.words, why: `${r ? r.name : x.store} isn't searched at the moment` }); continue; }
+      try {
+        added.push(await this.add({ store: x.store, words: x.words, label: `${p.label} — ${r.name}`, shared: false, aco, maxPrice, qty: x.qty || 'auto' }, user));
+      } catch (e) {
+        skipped.push({ store: x.store, words: x.words, why: e.message });
+      }
+    }
+    return { added, skipped };
+  }
+
   async add(input, user) {
     const isAdmin = user.role === 'admin';
     const mine = this.watches().filter((w) => w.userId === user.id);
@@ -890,6 +937,7 @@ export class Drops {
     const aco = bool(input.aco, false);
     const maxPrice = aco ? num(input.maxPrice, { min: 1, max: 100000, def: null }) : null;
     if (aco && maxPrice === null) throw bad('Set a max price to auto-checkout it: Mugibot never pays more than that');
+    const qty = qtySetting(input.qty, '1');
     // (Where it posts: for everyone only — someone's own watch tells them alone.)
     const dest = shared ? await this.destination(input) : { channelId: '', roleId: '' };
     const url = input.page ? '' : httpUrl(input.url, 'Product link', { required: false });
@@ -947,9 +995,9 @@ export class Drops {
       if (mine.some((w) => w.words === words && w.store === store && w.site === site)) throw bad('You have that drop watch already');
     }
     const id = newId('drp');
-    this.db.run(`INSERT INTO drop_watches (id, user_id, shared, store, site, words, url, label, category, aco, max_price, channel_id, role_id, page, phrases, every_seconds, created_at)
-      VALUES (:id, :u, :shared, :store, :site, :words, :url, :label, :category, :aco, :max, :ch, :role, :page, :phrases, :every, :t)`, {
-      id, u: user.id, shared: shared ? 1 : 0, store, site, words, url, label, category, aco: aco ? 1 : 0, max: maxPrice, ch: dest.channelId, role: dest.roleId,
+    this.db.run(`INSERT INTO drop_watches (id, user_id, shared, store, site, words, url, label, category, aco, max_price, qty, channel_id, role_id, page, phrases, every_seconds, created_at)
+      VALUES (:id, :u, :shared, :store, :site, :words, :url, :label, :category, :aco, :max, :qty, :ch, :role, :page, :phrases, :every, :t)`, {
+      id, u: user.id, shared: shared ? 1 : 0, store, site, words, url, label, category, aco: aco ? 1 : 0, max: maxPrice, qty, ch: dest.channelId, role: dest.roleId,
       page, phrases: JSON.stringify(phrases), every, t: this.now(),
     });
     this.changed();
@@ -982,7 +1030,7 @@ export class Drops {
       if (w.aco) this.arm(w, this.catalog.productById(product.id));
       return;
     }
-    const parsed = checkItem({ url, sku, name: w.label || nameFromLink(url) || sku, maxPrice: w.maxPrice, aco: w.aco, monitor: true }, { retailers: this.retailers, isAdmin: user.role === 'admin' });
+    const parsed = checkItem({ url, sku, name: w.label || nameFromLink(url) || sku, maxPrice: w.maxPrice, aco: w.aco, monitor: true, quantity: quantityFor(w.qty, w.label || nameFromLink(url)) }, { retailers: this.retailers, isAdmin: user.role === 'admin' });
     let item = this.repo.itemBySku(user.id, parsed.store, parsed.sku);
     if (item) {
       if (w.aco && !item.aco) {
@@ -1076,6 +1124,10 @@ export class Drops {
       if (aco && w.store !== ALL_STORES && !this.retailers.canBuy(w.store)) throw bad(NO_ACO);
       if (aco && max === null) throw bad('Set a max price to auto-checkout it: Mugibot never pays more than that');
       Object.assign(set, { aco: aco ? 1 : 0, max_price: max });
+    }
+    if (input.qty !== undefined) {
+      if (w.userId !== user.id) throw bad('Only its owner sets how many its Auto-checkout buys');
+      set.qty = qtySetting(input.qty, w.qty);
     }
     if (input.channelId !== undefined || input.roleId !== undefined) {
       if (!w.shared || user.role !== 'admin') throw bad('Only an admin\'s drop watch for everyone posts in a channel — your own tell you by DM');
@@ -1189,7 +1241,7 @@ export class Drops {
       id: w.id, kind: w.url ? 'link' : w.page ? 'page' : 'words', shared: w.shared, mine, by: w.shared || admin || pooled ? w.username : '',
       ...(pooled ? { pool: w.username } : {}),
       store: w.store, storeName: this.where(w), site: w.site, words: w.words, url: w.url, label: w.label,
-      category: w.category, aco: mine && w.aco, maxPrice: mine ? w.maxPrice : null, canBuy: w.store === ALL_STORES || this.retailers.canBuy(w.store),
+      category: w.category, aco: mine && w.aco, maxPrice: mine ? w.maxPrice : null, qty: mine ? w.qty : null, canBuy: w.store === ALL_STORES || this.retailers.canBuy(w.store),
       // (A search page's note on a read that went fine, saying where it's read from: admins only.)
       lastAt: w.lastAt, lastOkAt: w.lastOkAt, fails: w.fails, error: admin ? w.error : pg && !w.fails && publicError(w.error) !== w.error ? '' : publicError(w.error), seen: w.seen,
       looked: !!w.baselineAt, nextAt: pg ? pg.nextAt : w.store === 'other' ? w.nextAt : null, createdAt: w.createdAt,

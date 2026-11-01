@@ -406,6 +406,9 @@ export function quantityOf(v) {
  * finishes a checkout itself (server/aco.js toPhone()). (A Shop checkout link is its own: its quantities are in it.)
  */
 export function productLink(ctx, it, variantId = null, qty = it.quantity) {
+  // (As many as the store allows: its own product page, whose quantity control and limits decide — never a cart link
+  //  that would put a number in the bag the page wouldn't take.)
+  if (it.qtyRule === 'max') return it.url;
   const r = ctx.retailers.get(it.store);
   const carts = !!(r && r.cartPath && r.cartPath.includes('{variant}'));
   const known = carts && ctx.catalog ? ctx.catalog.productFor(it.store, it.sku) : null;

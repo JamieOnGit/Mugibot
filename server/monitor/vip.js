@@ -19,6 +19,7 @@ import { newId } from '../crypto.js';
 import { bad, bool, httpUrl, item as checkItem, num, str } from '../schema.js';
 import { mentions, norm } from './listing.js';
 import { STATUS, isOrderable } from './status.js';
+import { qtySetting, quantityFor, typeOf } from './classify.js';
 
 // Fast from 15 minutes before the drop time to 3 hours after it.
 export const VIP_BEFORE_MS = 15 * 60 * 1000;
@@ -38,6 +39,8 @@ function toWatch(r) {
   return r && {
     id: r.id, store: r.store, words: r.words, url: r.url, label: r.label, dropAt: r.drop_at ?? null,
     acoUser: r.aco_user || null, maxPrice: r.max_price ?? null, found, createdBy: r.created_by, createdAt: r.created_at,
+    // How many its Auto-checkout buys: '1'…'10', 'max' or 'auto' (by the kind of product — monitor/classify.js).
+    qty: r.qty || '1',
   };
 }
 
@@ -132,6 +135,7 @@ export class Vip {
     const aco = bool(input.aco, false);
     const maxPrice = aco ? num(input.maxPrice, { min: 1, max: 100000, def: null }) : null;
     if (aco && maxPrice === null) throw bad('Set a max price to auto-checkout it: Mugibot never pays more than that');
+    const qty = qtySetting(input.qty, '1');
     let store = '';
     let words = '';
     if (!url) {
@@ -144,9 +148,9 @@ export class Vip {
       if (aco && !r.flow) throw bad(`Auto-checkout works at stores Mugibot has a checkout for — not ${r.name} yet`);
     }
     const id = newId('vip');
-    this.db.run(`INSERT INTO vip_watches (id, store, words, url, label, drop_at, aco_user, max_price, created_by, created_at)
-      VALUES (:id, :store, :words, :url, :label, :drop, :acoUser, :max, :by, :t)`, {
-      id, store, words, url: url || '', label, drop: dropAt, acoUser: aco && user ? user.id : null, max: maxPrice, by: user ? user.id : null, t: this.now(),
+    this.db.run(`INSERT INTO vip_watches (id, store, words, url, label, drop_at, aco_user, max_price, qty, created_by, created_at)
+      VALUES (:id, :store, :words, :url, :label, :drop, :acoUser, :max, :qty, :by, :t)`, {
+      id, store, words, url: url || '', label, drop: dropAt, acoUser: aco && user ? user.id : null, max: maxPrice, qty, by: user ? user.id : null, t: this.now(),
     });
     this.changed();
     try {
@@ -303,13 +307,15 @@ export class Vip {
     if (!user || user.disabled || !r || !r.flow) return null;
     const existing = this.repo.itemBySku(user.id, product.store, product.sku);
     if (existing && existing.aco) return existing;
+    // ("auto" quantities: only a card product Mugibot recognises is bought — never an accessory with the words.)
+    if (w.qty === 'auto' && typeOf(product.name) === 'other') return null;
     try {
       let saved;
       if (existing) {
         saved = this.repo.updateItem(user.id, existing.id, checkItem({ aco: true, maxPrice: existing.maxPrice ?? w.maxPrice, monitor: true }, { retailers: this.retailers, existing, isAdmin: true }));
       } else {
         if (this.repo.countItems(user.id) >= this.cfg.limits.items) return null;
-        saved = this.repo.addItem(user.id, checkItem({ url: product.url, sku: product.sku, name: product.name || product.sku, maxPrice: w.maxPrice, aco: true, monitor: true }, { retailers: this.retailers, isAdmin: true }));
+        saved = this.repo.addItem(user.id, checkItem({ url: product.url, sku: product.sku, name: product.name || product.sku, maxPrice: w.maxPrice, aco: true, monitor: true, quantity: quantityFor(w.qty, product.name) }, { retailers: this.retailers, isAdmin: true }));
       }
       if (status && !isOrderable(status)) {
         this.db.run("UPDATE items SET status = :st, status_source = 'server', status_at = :t, checked_at = :t WHERE id = :id", { st: status, t: this.now(), id: saved.id });

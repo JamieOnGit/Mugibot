@@ -153,7 +153,7 @@
                     <div><label for="w-name">Name</label><input id="w-name" name="name" placeholder="Shown on your list"></div>
                     <div><label for="w-price">Price ($)</label><input id="w-price" name="price" type="number" min="0" step="0.01"></div>
                     <div><label for="w-max">Max price ($)</label><input id="w-max" name="maxPrice" type="number" min="0" step="0.01" placeholder="Any price" title="Pinged (and, if armed, bought) only at or below this price — for one of it"></div>
-                    <div><label for="w-qty">Quantity</label><input id="w-qty" name="quantity" type="number" min="1" max="10" step="1" value="1" title="How many ⚡ Buy and Auto-checkout put in the bag (1 to 10). Your max price is for one; Auto-checkout's limit is for them all"></div>
+                    <div><label for="w-qty">Quantity</label><input id="w-qty" name="quantity" type="number" min="1" max="10" step="1" value="1" title="How many ⚡ Buy and Auto-checkout put in the bag (1 to 10). Your max price is for one; Auto-checkout's limit is for them all"><label class="check inline small" title="As many as the store allows: its drop-down's most, its box's max or its per-customer limit (up to 10) — for hangsells and booster packs"><input type="checkbox" id="w-qty-max"> Most allowed</label></div>
                   </div>
                   <div id="w-discount-row" hidden><label for="w-discount">Discount code <span class="muted">(optional — Auto-checkout types it in and presses Apply before "Pay now"; if the store won't take it, it's cleared and "Pay now" pressed anyway)</span></label><input id="w-discount" name="discount" maxlength="60" autocomplete="off" spellcheck="false" placeholder="Leave empty for none"></div>
                   <div class="grid2">
@@ -205,6 +205,12 @@
               <!-- 🎯 Drop watches: anything outside the card keywords, by link or words, at any store or website -->
               <div class="mon-ppanel" data-ppanel="drops" id="pp-drops" role="tabpanel" aria-labelledby="pt-drops" hidden>
                 <p class="muted small dw-lead">Watch for anything — a product the card keywords miss, a console, a collectible, a product at any shop (Garmin, a sneaker store…). Paste its link, or <b>key phrases</b> — the words in its name, one phrase a line ("Heavy Hitters Premium") — and choose where to look: <b>every store Mugibot searches</b>, one of them, or another website. You're told when it <b>drops</b>, comes <b>back in stock</b>, opens for <b>pre-order</b> or its <b>price drops</b>. <span id="dw-scope"></span></p>
+                <form class="card dw-preset" id="dw-preset-op" novalidate>
+                  <p class="small"><b>🏴‍☠️ One Piece drops</b> — every One Piece set at <b>EB Games</b> and <b>Premium Bandai</b>: OP and EB sets, premium boosters, hangsells, booster packs and booster boxes, found by their searches the moment they're listed and bought by Auto-checkout as they drop — a box one, packs and hangsells as many as the store allows. Accessories (sleeves, playmats, deck cases) are told, never bought.</p>
+                  <label class="inline small">Max price for one box or pack $ <input id="dw-preset-max" type="number" min="1" step="0.01" placeholder="e.g. 300" aria-label="Max price for one box or pack"></label>
+                  <button class="btn small primary" type="submit" id="dw-preset-go">Watch One Piece drops</button>
+                  <span class="small muted" id="dw-preset-msg"></span>
+                </form>
                 <form class="card dw-form" id="dw-form" novalidate>
                   <label for="dw-input">Product link, a store's search page, or key phrases (one a line)</label>
                   <textarea id="dw-input" rows="2" autocomplete="off" maxlength="2000" placeholder="A product: https://www.jbhifi.com.au/products/…  ·  a search page: https://www.ebgames.com.au/search?…&#10;or key phrases, one a line: Heavy Hitters Premium"></textarea>
@@ -228,7 +234,7 @@
                     <div><label for="dw-label">Name it <span class="muted">(optional)</span></label><input id="dw-label" maxlength="80" placeholder="e.g. Xbox 25th Anniversary"></div>
                     <div id="dw-cat-wrap" hidden><label for="dw-category">Category</label><select id="dw-category"><option value="nontcg">Non-TCG (#non-tcg-alerts)</option><option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="other">Other</option></select></div>
                   </div>
-                  <div class="dw-aco" id="dw-aco-wrap" hidden><label class="check inline"><input type="checkbox" id="dw-aco"> 🤖 Auto-checkout it when it drops, up to</label> <input id="dw-max" type="number" min="1" step="0.01" placeholder="Max price $" aria-label="Max price for Auto-checkout"> <a class="small" href="#aco">Auto-checkout settings</a></div>
+                  <div class="dw-aco" id="dw-aco-wrap" hidden><label class="check inline"><input type="checkbox" id="dw-aco"> 🤖 Auto-checkout it when it drops, up to</label> <input id="dw-max" type="number" min="1" step="0.01" placeholder="Max price $" aria-label="Max price for Auto-checkout"> <label class="inline small">buying <select id="dw-qty" aria-label="How many Auto-checkout buys"><option value="auto" selected>by product: a box 1, packs &amp; hangsells the most allowed</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="max">the most the store allows</option></select></label> <a class="small" href="#aco">Auto-checkout settings</a></div>
                   <p class="small muted" id="dw-aco-note" hidden></p>
                   <label class="check" id="dw-share-wrap" hidden><input type="checkbox" id="dw-share" checked> <span>📣 For everyone — posted in Discord and on every member's dashboard (off: just for you, by DM)</span></label>
                   <div class="grid2" id="dw-post-wrap" hidden>

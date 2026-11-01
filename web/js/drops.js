@@ -332,7 +332,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const meta = [
       whereText(w),
       w.pool ? `🤝 ${w.pool}'s — what it finds is on your watchlist as theirs is` : w.shared ? `📣 for everyone${admin && w.channelId !== undefined ? ` ${postsIn(w)}` : ''}` : '🔒 just for you',
-      w.aco && w.maxPrice !== null ? `🤖 auto-checkout up to ${money(w.maxPrice)}` : '',
+      w.aco && w.maxPrice !== null ? `🤖 auto-checkout up to ${money(w.maxPrice)}${w.qty === 'auto' ? ' (a box 1, packs the most allowed)' : w.qty === 'max' ? ' (the most allowed)' : w.qty && w.qty !== '1' ? ` (×${w.qty})` : ''}` : '',
       w.by && !w.mine && !w.pool ? `by ${w.by}` : '',
       w.kind === 'page' && w.label ? `for ${phrasesText(w)}` : '',
     ].filter(Boolean).join(' · ');
@@ -507,7 +507,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     // (Several key phrases, one a line: a watch each.)
     else if (list.length > 1) Object.assign(body, { phrases: list, store: $('#dw-store').value, site: $('#dw-store').value === OTHER ? $('#dw-site').value.trim() : '' });
     else Object.assign(body, { words: list[0] || raw, store: $('#dw-store').value, site: $('#dw-store').value === OTHER ? $('#dw-site').value.trim() : '' });
-    if ($('#dw-aco').checked) Object.assign(body, { aco: true, maxPrice: $('#dw-max').value ? Number($('#dw-max').value) : null });
+    if ($('#dw-aco').checked) Object.assign(body, { aco: true, maxPrice: $('#dw-max').value ? Number($('#dw-max').value) : null, qty: $('#dw-qty').value });
     if (isAdmin()) Object.assign(body, { shared: $('#dw-share').checked, category: $('#dw-category').value });
     if (isAdmin() && $('#dw-share').checked) Object.assign(body, { channelId: $('#dw-post').value, roleId: $('#dw-ping').value });
     const form = e.target;
@@ -532,6 +532,24 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
         setTimeout(refreshSoon, 4000);
       } catch (err) {
         setMsg($('#dw-msg'), err.message);
+      }
+    });
+  });
+
+  // 🏴‍☠️ One Piece drops: every One Piece set at EB Games and Premium Bandai, armed for Auto-checkout (a box one, packs the most).
+  $('#dw-preset-op').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const max = Number($('#dw-preset-max').value);
+    if (!(max > 0)) { setMsg($('#dw-preset-msg'), 'Set a max price for one box or pack first — Mugibot never pays more than that'); return; }
+    busy(e.target, async () => {
+      try {
+        const r = await api('POST', '/api/drops/presets/onepiece', { aco: true, maxPrice: max });
+        d.data = { ...d.data, ...r };
+        render();
+        const skipped = (r.skipped || []).map((x) => x.why).join('; ');
+        setMsg($('#dw-preset-msg'), `Watching ${r.added.length} One Piece search${r.added.length === 1 ? '' : 'es'} — armed up to ${money(max)} each.${skipped ? ` Not added: ${skipped}` : ''}`, true);
+      } catch (err) {
+        setMsg($('#dw-preset-msg'), err.message);
       }
     });
   });
