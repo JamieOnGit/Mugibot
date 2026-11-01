@@ -44,8 +44,8 @@ export const RENDER_EXTENSION_VERSION = '1.27.0';
 export const GAP_EXTENSION_VERSION = '1.39.0';
 const ROUND_WAIT_MS = 15 * 1000;
 const FAILED = new Set([STATUS.BLOCKED, STATUS.ERROR]);
-// Each store's lane (Mugibot 2.0): its due pages looked at a tick, and its reads at once (unless its monitor.hostConcurrency says).
-const LANE_CANDIDATES = 3;
+// Each store's lane (Mugibot 2.0): its due pages looked at a tick (more than it may read at once: a page still sending its alerts never keeps the next from being read), and its reads at once (unless its monitor.hostConcurrency says).
+const LANE_CANDIDATES = 12;
 const LANE_MAX = 4;
 // Not at its store (yet): a page that's not found, a code its store's search provider doesn't have — said by reads this
 // far apart at least before it counts as not on sale (one empty answer may be the store's hiccup).

@@ -1,0 +1,186 @@
+{
+  "version": "main",
+  "node": "v22.22.0",
+  "at": "2026-11-01T08:55:11.828Z",
+  "scenarios": {
+    "notify": [
+      {
+        "label": "warm DM channels, Discord 150 ms",
+        "members": 200,
+        "discordDelayMs": 150,
+        "warmDm": true,
+        "finishedInTime": true,
+        "pageCheckHeldMs": 226,
+        "channelPosts": 1,
+        "channelPostMs": 211,
+        "dmsDelivered": 200,
+        "dmsExpected": 200,
+        "dmsLost": 0,
+        "duplicateDms": 0,
+        "dmLatencyMs": {
+          "n": 200,
+          "p50": 2397,
+          "p95": 4408,
+          "p99": 4571,
+          "max": 4575
+        },
+        "lastDmMs": 4575,
+        "faults": null
+      },
+      {
+        "label": "first-time DM channels, Discord 150 ms",
+        "members": 200,
+        "discordDelayMs": 150,
+        "warmDm": false,
+        "finishedInTime": true,
+        "pageCheckHeldMs": 201,
+        "channelPosts": 1,
+        "channelPostMs": 197,
+        "dmsDelivered": 200,
+        "dmsExpected": 200,
+        "dmsLost": 0,
+        "duplicateDms": 0,
+        "dmLatencyMs": {
+          "n": 200,
+          "p50": 8082,
+          "p95": 14993,
+          "p99": 15606,
+          "max": 15758
+        },
+        "lastDmMs": 15758,
+        "faults": null
+      },
+      {
+        "label": "Discord failing 5% (HTTP 500) + 3% dropped connections",
+        "members": 200,
+        "discordDelayMs": 150,
+        "warmDm": true,
+        "finishedInTime": false,
+        "pageCheckHeldMs": 180,
+        "channelPosts": 1,
+        "channelPostMs": 176,
+        "dmsDelivered": 185,
+        "dmsExpected": 200,
+        "dmsLost": 15,
+        "duplicateDms": 0,
+        "dmLatencyMs": {
+          "n": 185,
+          "p50": 2351,
+          "p95": 4511,
+          "p99": 4519,
+          "max": 4522
+        },
+        "lastDmMs": 4522,
+        "faults": {
+          "posts": 201,
+          "fail500": 7,
+          "dropped": 8
+        }
+      },
+      {
+        "label": "Discord rate-limiting the first 30 posts (429)",
+        "members": 200,
+        "discordDelayMs": 150,
+        "warmDm": true,
+        "finishedInTime": false,
+        "pageCheckHeldMs": 800,
+        "channelPosts": 0,
+        "channelPostMs": null,
+        "dmsDelivered": 200,
+        "dmsExpected": 200,
+        "dmsLost": 0,
+        "duplicateDms": 0,
+        "dmLatencyMs": {
+          "n": 200,
+          "p50": 3575,
+          "p95": 5586,
+          "p99": 5703,
+          "max": 5978
+        },
+        "lastDmMs": 5978,
+        "faults": null
+      }
+    ],
+    "isolation": {
+      "seconds": 75,
+      "healthyPages": 12,
+      "slowPages": 40,
+      "intervalSeconds": 5,
+      "slowStoreHangs": true,
+      "healthyReadsPerPage": {
+        "expected": 15,
+        "min": 1,
+        "median": 1,
+        "max": 4
+      },
+      "slowStoreRequests": 51,
+      "restocksAtHealthyStore": 6,
+      "restocksSeen": 5,
+      "detectionMs": {
+        "n": 5,
+        "p50": 41022,
+        "p95": 51695,
+        "p99": 51695,
+        "max": 51695
+      },
+      "missed": 1
+    },
+    "dupes": {
+      "members": 20,
+      "cycles": 5,
+      "restockWindows": 100,
+      "dmsPerMemberPerRestock": {
+        "exactlyOne": 100,
+        "missed": 0,
+        "duplicates": 0
+      },
+      "dmsOutsideRestocks": 0,
+      "channelPosts": 5,
+      "channelPostKinds": [
+        "In stock Pokémon",
+        "In stock Pokémon",
+        "In stock Pokémon",
+        "In stock Pokémon",
+        "In stock Pokémon"
+      ]
+    },
+    "sweep": {
+      "trials": 12,
+      "searchEverySeconds": 3,
+      "listingToAlertMs": {
+        "n": 12,
+        "p50": 2069,
+        "p95": 4751,
+        "p99": 4751,
+        "max": 4751
+      },
+      "listingToDiscordMs": {
+        "n": 12,
+        "p50": 2073,
+        "p95": 4755,
+        "p99": 4755,
+        "max": 4755
+      }
+    },
+    "load": {
+      "seconds": 60,
+      "products": 300,
+      "users": 300,
+      "itemsWatched": 1500,
+      "uniquePagesWatched": 266,
+      "cpuMs": 2878,
+      "cpuPercentOfOneCore": 5,
+      "rssMaxMB": 134,
+      "eventLoopDelayMs": {
+        "p50": 10,
+        "p99": 13,
+        "max": 47
+      },
+      "storeRequests": 1002,
+      "productPageRequests": 940,
+      "productPagesRead": 242,
+      "requestsPerPagePerMinute": 3.9,
+      "note": "The dummy stores run in the same process: CPU and memory include them (the same on every version)."
+    }
+  }
+}

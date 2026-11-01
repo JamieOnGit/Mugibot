@@ -2470,6 +2470,11 @@ test("🔑 store sign-ins, 24/7 (Mugibot 2.0): a store you keep signed in to who
     await pg.waitForURL(/discord=linked/);
     await pg.close();
   }
+  // (What the tests before this one saw of where Ash is signed in — EB Games' pages opened signed out — forgotten, so the
+  //  extension's own look is what tells.)
+  const ashId = env.app.repo.userByUsername('ash').id;
+  env.app.db.run("UPDATE devices SET logins = '{}' WHERE user_id = :u", { u: ashId });
+  env.app.db.run('DELETE FROM login_state WHERE user_id = :u', { u: ashId });
   const r = await browserApi('PUT', '/api/logins/prefs', { stores: ['demo-ebgames'], dm: true });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   store.state.signedIn = {};

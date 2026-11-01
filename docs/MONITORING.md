@@ -1314,6 +1314,37 @@ bot check: it only stops Mugibot waiting and starts politely again.
 
 **Discord**: `/monitor list`, `/monitor status`, `/restocks` as before.
 
+### Mugibot 2.0: what changed in the engine
+
+- **Each store in its own lane.** Server page checks used to take the 50 oldest due pages across every store, four at a
+  time: a store with many pages due (or slow, or refusing) left the others' pages unread. Now each store's due pages are
+  looked at apart (at most 3 a tick), up to 12 reads at once across stores and 4 of one store's, still with the store's
+  gap between two requests (`MONITOR_HOST_GAP`). A page's slot is free the moment the store answers: its alerts go out
+  while the next pages are read.
+- **A circuit breaker per store** (`server/monitor/breaker.js`). Five failed reads in a row at a store (refused, timed out,
+  down) and the server leaves it alone for 30 s, doubling each time it opens again up to 10 minutes (±20%), never sooner
+  than a `Retry-After` the store gave; then one read tries, and closes it if it works. Logged as `monitor.breaker`.
+- **Alerts never wait on each other.** Members' DMs go out with the channel posts (which stay first in Discord's line)
+  instead of after them, and the live sweeps' next search never waits for Discord.
+- **Discord deliveries tried again, never twice.** A network error, a timeout or a 5xx is tried again (300 ms, 600 ms,
+  1.2 s); a 429 is waited out up to 8 times. Each message carries a nonce Discord enforces, so a message that did arrive
+  is never posted again.
+- **Store sign-ins, 24/7** (Account → 🔑 Store sign-ins): see `server/signins.js`. The stores a member keeps signed in to
+  (EB Games, Premium Bandai, JB Hi-Fi, BIG W, Target and Kmart by default) are checked around the clock by the extension
+  (1.40.0): pages that say so in their source every 10 minutes; the others' home pages, opened in the extension's window,
+  when nothing has said for 20 minutes (BIG W: an hour). Signed out → told at once on the dashboard, on the extension's
+  button (`IN?`) and by Discord DM with a **Sign in** button; reminded twice a day at most; told when back in. Mugibot
+  never signs in for anyone and never sees a password.
+- **One Piece at EB Games and Premium Bandai** (Drops → drop watches → 🏴‍☠️ One Piece preset): watches for "one piece tcg" /
+  "one piece card game" at both stores, armed up to your max price, quantity **auto**: a booster box (or display, or case)
+  one; a booster pack, hangsell or blister as many as the store allows (its own per-customer limit, drop-down, box or +
+  button, never more than 10, never past your own Auto-checkout limits); an accessory with the words (a playmat, a deck
+  case) told but never bought. Stores only admins' browsers search (EB Games, Premium Bandai, BIG W): admins are DM'd
+  when one hasn't been searched for **3 minutes** (it was 20 minutes without a product found).
+- **Health**: `/readyz` (the database, the monitor, the process) and, for admins, **Check log → 📈 Reliability &
+  delivery**: each store's score, breaker, P95s, Discord retries, and drop windows from the last 90 days (estimates).
+  See `docs/OPERATIONS.md`.
+
 ## 5. Settings (environment variables, all optional)
 
 The sweep settings are in the dashboard. These are for the whole monitor:
@@ -1325,6 +1356,7 @@ The sweep settings are in the dashboard. These are for the whole monitor:
 | `MONITOR_URL_INTERVAL` | 60 | Seconds between page checks of one product page (monitors and members' SKUs the sweeps don't cover) |
 | `MONITOR_MIN_INTERVAL` | 20 | The shortest interval a monitor may ask for |
 | `MONITOR_HOST_GAP` | 5 | Seconds between page checks at the same store |
+| `MONITOR_MAX_IN_FLIGHT` | 12 | Server page reads at once across every store (Mugibot 2.0: each store in its own lane — at most 4 at once of its own, at most 3 of its due pages looked at a tick — so one store never holds up another's) |
 | `MONITOR_PRICE_CHANGE_PERCENT` | 1 | The smallest price change a **monitor's** price alerts count (sweeps use the dashboard's price drop %) |
 | `MONITOR_LOG_DAYS` | 7 | How long the page-check log is kept |
 | `MONITOR_ACCESS` | (each store's own) | A store's budget for what each browser reads of it, by store, as JSON — e.g. `{"bigw":{"gapSeconds":12}}` (see **BIG W within one budget**). Any of `gapSeconds` (3–600), `sharedGapSeconds`, `maxGapSeconds`, `pauseMinutes`, `easeMinutes`, `targetSeconds`, `checksPerRound` (1–5), `shares`; the rest stays the store's own |

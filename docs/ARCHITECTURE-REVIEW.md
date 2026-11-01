@@ -56,7 +56,7 @@ So this is not a rewrite. The gains are in the places below.
 10. **First-time DMs are slow.** *Confirmed by benchmark.* Opening a DM channel runs two at a time (`discord.js:29`).
     The channel id is kept in the database (`users.discord_dm_channel`) once opened, so this only hits a member's very
     first DM — but in a drop where many members are new, 200 DMs took 15.8 s with no channel known vs 4.6 s with all
-    known (bench, 120 ms Discord latency).
+    known (bench, 150 ms Discord latency).
 11. **Duplicates.** *Confirmed.* Two alert rules with the same channel post twice (`feed.js:228-230`); a monitored
     product going from not listed to in stock through a sweep posts both "🆕 New drop" and "🟢 In stock… Just listed".
     *Suspected:* a sweep and a page/browser read can both see an item's old status across awaits and both DM the
