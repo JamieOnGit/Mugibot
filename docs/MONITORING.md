@@ -164,11 +164,12 @@ an alert. BIG W can only be read from browsers, so:
   **3** products nobody had seen still alert: what was listed while the browser
   was turned away.
 - **"BIG W isn't being watched".** When no BIG W search has found a product for
-  **20 minutes**, every admin gets a DM (and an email, where they have one). That
-  happens when no admin's browser is searching (Chrome closed, the computer
-  asleep, the extension signed out) or BIG W is turning it away. The DM says why
-  and what to do, and another follows when it's back. The same goes for any store
-  searched only from admins' browsers.
+  **20 minutes** (or no admin's browser has searched it for 3), the Monitor's live
+  log and BIG W's store card say so, with why — no admin's browser searching
+  (Chrome closed, the computer asleep, the extension signed out) or BIG W turning
+  it away — and again when it's back. It's shown, never announced: no DM, email or
+  activity entry (admins found those noise). The same goes for any store searched
+  only from admins' browsers.
 - **Riftbound and Gundam** (`riftbound`, `gundam card game`) are searched for by
   default with Pokémon and One Piece, and are added to a keyword list saved
   before them. Take them off in the settings, and they stay off.
@@ -204,7 +205,7 @@ browsers, so the extension keeps it going for as long as the browser is open:
   minutes, then searched again by itself. In the private window too: it's kept
   as it is, with its cookies — Mugibot never opens a fresh private window to get
   round a refusal. After 20 minutes with no BIG W finds,
-  every admin gets the "BIG W isn't being watched" DM, as above.
+  the live log says "BIG W isn't being watched", as above.
 
 **BIG W from an admin's browser by default, and what an empty page said**
 (October 2026, extension **1.32.0**). BIG W's line on the live monitor kept saying
@@ -1339,8 +1340,8 @@ bot check: it only stops Mugibot waiting and starts politely again.
   "one piece card game" at both stores, armed up to your max price, quantity **auto**: a booster box (or display, or case)
   one; a booster pack, hangsell or blister as many as the store allows (its own per-customer limit, drop-down, box or +
   button, never more than 10, never past your own Auto-checkout limits); an accessory with the words (a playmat, a deck
-  case) told but never bought. Stores only admins' browsers search (EB Games, Premium Bandai, BIG W): admins are DM'd
-  when one hasn't been searched for **3 minutes** (it was 20 minutes without a product found).
+  case) told but never bought. Stores only admins' browsers search (EB Games, Premium Bandai, BIG W): the live log
+  shows when one hasn't been searched for **3 minutes** (never announced — no DM).
 - **Health**: `/readyz` (the database, the monitor, the process) and, for admins, **Check log → 📈 Reliability &
   delivery**: each store's score, breaker, P95s, Discord retries, and drop windows from the last 90 days (estimates).
   See `docs/OPERATIONS.md`.

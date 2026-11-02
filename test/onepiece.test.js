@@ -161,7 +161,7 @@ test("🏴‍☠️ an \"auto\" drop watch at EB Games: a new OP-20 booster box 
   }
 });
 
-test('a store only admins\' browsers search (EB Games, Premium Bandai): unsearched for 3 minutes — every admin told at once (Discord too), and told again when it\'s searched', async () => {
+test('a store only admins\' browsers search (EB Games, Premium Bandai): unsearched for 3 minutes — shown in the live log (never announced: no DM, no activity entry), and shown again when it\'s searched', async () => {
   const sw = env.app.sweeper;
   const was = { running: sw.running, startedAt: sw.startedAt };
   const dms = () => discord.dmsTo('d-boss');
@@ -175,14 +175,15 @@ test('a store only admins\' browsers search (EB Games, Premium Bandai): unsearch
     assert.ok(told.some((x) => x.store === 'demo-ebgames' && x.unsearched === true), JSON.stringify(told));
     await env.app.monitor.delivered();
     await new Promise((r) => setTimeout(r, 200));
-    const dm = dms().slice(before).find((m) => /isn't being searched|aren't being searched/.test(JSON.stringify(m.body)));
-    assert.ok(dm, 'a DM to the admin');
-    assert.match(JSON.stringify(dm.body), /EB Games/);
+    assert.equal(dms().length, before, 'not announced: no DM');
+    assert.ok(!env.app.repo.listEvents(boss.user.id, { limit: 20 }).some((e) => /being searched/.test(e.message)), 'nor an activity entry');
+    assert.ok(sw.events.some((e) => e.type === 'sys' && /EB Games \(dummy store\)[^]*isn't being searched|aren't being searched/.test(e.message)), 'shown in the live log');
     assert.deepEqual((await sw.watchBlind()).filter((x) => x.store === 'demo-ebgames'), [], 'once, not every minute');
     // Searched again: told so.
     await ebSearch([ebTile('312345', 'One Piece TCG OP-18 Booster Box (24 Packs)', false, 179)]);
     const back = await sw.watchBlind();
     assert.ok(back.some((x) => x.store === 'demo-ebgames' && x.unsearched === false), JSON.stringify(back));
+    assert.equal(dms().length, before, 'still no DM');
   } finally {
     Object.assign(sw, was);
   }

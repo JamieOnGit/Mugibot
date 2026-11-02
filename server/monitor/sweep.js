@@ -237,10 +237,10 @@ const UNKNOWN_SETTLE_READS = 3;
 const UNKNOWN_SETTLE_READS_MS = 2 * 60 * 1000;
 // A store searched from admins' browsers none of whose searches has found any products this long (no browser
 // searching it — Chrome closed, the computer asleep — or it turned them away: BIG W's "Access Denied"): its
-// drops can't be seen, so its admins are told, once, and again when it's back.
+// drops can't be seen: shown in the live log and its store card, once, and again when it's back — never announced.
 const BLIND_MS = 20 * 60 * 1000;
-// A store only admins' browsers search (EB Games, Premium Bandai, BIG W) that none has searched for this long: its admins
-// are told at once — a drop there can't be seen meanwhile (Mugibot 2.0: not 20 minutes later).
+// A store only admins' browsers search (EB Games, Premium Bandai, BIG W) that none has searched for this long: shown in
+// the live log — a drop there can't be seen meanwhile (never announced).
 const UNSEARCHED_MS = 3 * 60 * 1000;
 // "Restock once a day": its first restock of the (Sydney) day — and another the same day only once it's been sold out this
 // long first (a hot product's second wave: back at 13:30 after selling out at 9:04 — not a flicker), at most this many a day.
@@ -1377,8 +1377,8 @@ export class Sweeper {
 
   /**
    * A store searched from admins' browsers whose searches haven't found a single product for BLIND_MS: nothing
-   * it drops can be seen meanwhile — so its admins are told, once (a DM, and an email where they have one), with
-   * why and what to do, and told again when it's back. The stores that go (or come back) at once are in one
+   * it drops can be seen meanwhile — shown in the live log (and its store card), once, with why, and again when it's
+   * back: never announced (no DM, email or activity entry — admins found those noise). The stores that go (or come back) at once are in one
    * message: Chrome closed takes them all. (Never in the first BLIND_MS after a start.)
    */
   async watchBlind() {
@@ -1436,11 +1436,10 @@ export class Sweeper {
         message: `Nothing ${went.length === 1 ? 'it drops' : 'they drop'} can be seen until ${went.length === 1 ? "it's" : "they're"} searched again.\n${went.map((x) => x.line).join('\n')}\nKeep Chrome open with the Mugibot extension connected to an admin account (Setup → Extension), and the computer awake. If a store says "Access Denied" there, clear that store's cookies in that browser, or use another one.` });
     }
     if (back.length) evs.push({ level: 'success', stores: back, title: `${names(back)} ${back.length === 1 ? 'is' : 'are'} being watched again`, message: `${back.length === 1 ? 'Its search' : 'Their searches'} found products again at ${sydneyTime.format(now)}.` });
-    if (!evs.length) return told;
-    const admins = this.db.all("SELECT id FROM users WHERE role = 'admin' AND disabled = 0");
+    // (Shown, never announced: the live log and each store's card on the Monitor page say so — no DM, no activity
+    //  entry. Admins found these DMs noise: a store's searches come and go with the browsers searching it.)
     for (const { stores, ...ev } of evs) {
-      for (const x of stores) this.sys(`${ev.title} — ${x.line || ev.message}`, { store: x.r.id, level: ev.level === 'urgent' ? 'warn' : 'info' });
-      for (const a of admins) await this.feed.notifier.notify(a.id, { type: 'monitor', channel: 'account', ...ev }).catch((e) => this.cfg.log('[sweep]', e.message));
+      for (const x of stores) this.sys(`${ev.title} — ${x.line || ev.message}`, { store: x.r.id, level: 'info' });
     }
     return told;
   }

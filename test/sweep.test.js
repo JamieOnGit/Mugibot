@@ -2175,7 +2175,7 @@ test("📄 BIG W's later pages (48 a page, by relevance: a new listing can be fu
   });
 });
 
-test("📵 BIG W not watched (no admin's browser searching it — Chrome closed, the computer asleep — or it turned them away): after 20 minutes without a product found there, admins are DM'd once, with why and what to do, and again when it's back", async () => {
+test("📵 BIG W not watched (no admin's browser searching it — Chrome closed, the computer asleep — or it turned them away): after 20 minutes without a product found there, it's shown in the live log once, with why — never announced (no DM, no activity entry) — and again when it's back", async () => {
   env.app.repo.updateUser(boss.user.id, { discord_id: 'd-boss' });
   await asBigwBrowser(async (admin) => {
     const dms = () => discord.dmsTo('d-boss').map((m) => JSON.stringify(m.body));
@@ -2193,15 +2193,11 @@ test("📵 BIG W not watched (no admin's browser searching it — Chrome closed,
     await bigwSearch(admin, []);
     others();
     assert.deepEqual(await told(), [{ store: 'demo-bigw', blind: true }]);
-    const fresh = dms().slice(before);
-    assert.equal(fresh.length, 1, `one DM: ${fresh.join('\n')}`);
-    const dm = fresh[0];
-    assert.match(dm, /BIG W \(dummy store\)( and |, )[^"]*aren't being watched|BIG W \(dummy store\) isn't being watched/);
-    assert.match(dm, /BIG W \(dummy store\): no search has found a product since/);
-    assert.match(dm, /can be seen until/);
-    assert.match(dm, /Keep Chrome open with the Mugibot extension connected to an admin account/);
-    assert.match(dm, /Access Denied/);
-    assert.ok(env.app.repo.listEvents(boss.user.id, { limit: 20 }).some((e) => /being watched/.test(e.message)), 'on the dashboard too');
+    // Shown, never announced (admins found the DMs noise): the live log says so — no DM, no activity entry.
+    assert.equal(dms().length, before, 'no DM');
+    assert.ok(!env.app.repo.listEvents(boss.user.id, { limit: 20 }).some((e) => /being watched/.test(e.message)), 'no activity entry');
+    const line = sw.events.filter((e) => e.type === 'sys' && e.store === 'demo-bigw').map((e) => e.message).find((m) => /isn't being watched/.test(m));
+    assert.match(line, /BIG W \(dummy store\): no search has found a product since/);
     assert.deepEqual(await told(), [], 'once');
     // A search that comes back with no products doesn't count as watching it.
     await bigwSearch(admin, []);
@@ -2209,7 +2205,8 @@ test("📵 BIG W not watched (no admin's browser searching it — Chrome closed,
     // Back: said so.
     await bigwSearch(admin, [bigwTile('6099401', 'Pokemon TCG: Watched Tin', true, 25)]);
     assert.deepEqual(await told(), [{ store: 'demo-bigw', blind: false }]);
-    assert.ok(dms().some((m) => /BIG W \(dummy store\) is being watched again/.test(m)));
+    assert.equal(dms().length, before, 'still no DM');
+    assert.ok(sw.events.some((e) => e.type === 'sys' && /BIG W \(dummy store\) is being watched again/.test(e.message)));
   }).finally(() => { sw.running = false; });
   env.app.repo.updateUser(boss.user.id, { discord_id: null });
 });
