@@ -5345,11 +5345,12 @@ test('Chrome Web Store copy: downloaded copies are asked to move to it, and with
 
     // The dashboard talks to the store copy; the downloaded copy stays quiet and is pointed out.
     await page.goto(`${env.url}/app#extension`);
-    await page.waitForFunction(() => /installed but not connected/.test(document.querySelector('#ext-status-2').textContent));
+    // (This browser had Misty connected (the downloaded copy): the store copy may reconnect by itself — else press it.)
+    await page.waitForFunction(() => /installed but not connected|Extension connected/.test(document.querySelector('#ext-status-2').textContent));
     assert.equal(await page.evaluate(() => !!document.documentElement.dataset.mugibotStore), true);
     assert.equal(await page.isVisible('#store-link'), true, '"Add to Chrome" from the Chrome Web Store');
     assert.equal(await page.getAttribute('#store-link', 'href'), listing);
-    await page.click('#pair-now');
+    if (await page.isVisible('#pair-now')) await page.click('#pair-now');
     await page.waitForFunction(() => /Extension connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 10000 });
     assert.match(await page.textContent('#ext-status-2'), /from the Chrome Web Store \(it updates itself\)/);
     assert.match(await page.textContent('#ext-status-2'), /The old downloaded copy is still installed/);

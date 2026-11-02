@@ -385,7 +385,9 @@ async function renderExtStatus() {
   const ext = state.ext;
   const me = state.me.user;
   if (ext.installed && ext.paired && ext.userId === me.id) { try { localStorage.setItem(connectedKey(), '1'); } catch { /* private window */ } }
-  if (ext.installed && !ext.paired && !autoReconnect && wasConnected()) {
+  // (A downloaded copy only — a Chrome Web Store copy updates itself in place and keeps its connection — and only
+  //  when it's the one copy here: never beside another, which says itself which copy acts.)
+  if (ext.installed && !ext.paired && !ext.fromStore && !ext.oldCopy && !autoReconnect && wasConnected()) {
     autoReconnect = true;
     setTimeout(() => pairNow({ auto: true }).catch(() => null), 0);
   }
@@ -433,9 +435,19 @@ async function renderExtStatus() {
   }
 }
 
-async function pairNow(opts = {}) {
+// (One connection at a time: a press while it's reconnecting by itself joins it — never two browsers made of one.)
+let pairing = null;
+function pairNow(opts = {}) {
+  if (!pairing) pairing = pairOnce(opts).finally(() => { pairing = null; });
+  return pairing;
+}
+
+async function pairOnce(opts = {}) {
   const auto = !!(opts && opts.auto === true);
   const msg = $('#pair-msg');
+  // (Connected to your account already — a reconnect a moment ago: nothing to do.)
+  const now = await detectExtension().catch(() => null);
+  if (now && now.paired && now.userId === state.me.user.id) { await renderExtStatus(); return; }
   if (!document.documentElement.dataset.mugibotExtension) {
     setMsg(msg, 'Install the extension first, then reload this page.');
     location.hash = '#extension';
