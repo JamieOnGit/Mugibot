@@ -1684,10 +1684,18 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     // (collectOnly: "Home delivery" greyed out; Click & Collect: "Choose a store" opens its store finder — a postcode,
     //  Search, a store's "Select" — then your name and phone, "Continue to payment".)
     const co = !!shopOf('bigw').collectOnly;
+    // Signed in (state.signedIn.bigw): your account's email shown with a plain "Continue", and your saved delivery
+    // address already in (its manual fields open) — Mugibot leaves what's there as it is.
+    const signed = !!state.signedIn.bigw;
+    const sv = signed ? { email: 'ash.bigw@example.com', firstName: 'Ash', lastName: 'Ketchum', phone: '0412345678', street: '12 Saved St', suburb: 'Sydney', state: 'NSW', postcode: '2000' } : {};
+    const v = (k) => (sv[k] ? ` value="${esc(sv[k])}"` : '');
+    const stateSel = signed ? STATES.replace('value="NSW"', 'value="NSW" selected') : STATES;
     return `<h1>Secure checkout</h1>
       <section id="b-contact"><h2>1. Contact details</h2>
-        <label>Email address <input name="email" type="email" required></label>
-        <p><button type="button" id="b-guest">Continue as guest</button> or <a href="#" id="b-signin">Sign in</a></p></section>
+        ${signed ? `<p class="signed-in">Signed in as <b>${sv.email}</b></p><input name="email" type="hidden"${v('email')}>
+        <p><button type="button" id="b-continue">Continue</button></p>`
+        : `<label>Email address <input name="email" type="email" required></label>
+        <p><button type="button" id="b-guest">Continue as guest</button> or <a href="#" id="b-signin">Sign in</a></p>`}</section>
       <section id="b-delivery" hidden><h2>2. Delivery</h2><p>How would you like to get your order?</p>
         <button type="button" class="choice" id="b-home" aria-pressed="false"${co ? ' disabled' : ''}>Home delivery${co ? ' — Not available for this order' : ''}</button>
         <button type="button" class="choice" id="b-cc" aria-pressed="false">Click &amp; Collect</button>
@@ -1697,17 +1705,17 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           <label>Phone number <input name="ccPhone" type="tel" autocomplete="tel"></label>
           <p><button type="button" id="b-cc-next">Continue to payment</button></p></div>
         <div id="b-address" hidden>
-          <label>First name <input name="firstName" required></label>
-          <label>Last name <input name="lastName" required></label>
-          <label>Phone number <input name="phone" type="tel" required></label>
-          <label for="b-lookup">Start typing your address</label><input id="b-lookup" name="addressSearch" placeholder="Start typing your address">
-          <p><a href="#" id="b-manual">Enter address manually</a></p>
-          <div id="b-manual-fields" hidden>
-            <label>Street address <input name="street"></label>
+          <label>First name <input name="firstName" required${v('firstName')}></label>
+          <label>Last name <input name="lastName" required${v('lastName')}></label>
+          <label>Phone number <input name="phone" type="tel" required${v('phone')}></label>
+          ${signed ? '' : `<label for="b-lookup">Start typing your address</label><input id="b-lookup" name="addressSearch" placeholder="Start typing your address">
+          <p><a href="#" id="b-manual">Enter address manually</a></p>`}
+          <div id="b-manual-fields"${signed ? '' : ' hidden'}>
+            <label>Street address <input name="street"${v('street')}></label>
             <label>Unit / apartment (optional) <input name="unit"></label>
-            <label>Suburb <input name="suburb"></label>
-            <label>State <select name="state">${STATES}</select></label>
-            <label>Postcode <input name="postcode" maxlength="4"></label>
+            <label>Suburb <input name="suburb"${v('suburb')}></label>
+            <label>State <select name="state">${stateSel}</select></label>
+            <label>Postcode <input name="postcode" maxlength="4"${v('postcode')}></label>
           </div>
           <p><button type="button" id="b-to-payment">Continue to payment</button></p>
         </div></section>
@@ -1718,14 +1726,16 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         const $ = (id) => document.getElementById(id);
         const post = (step, data) => fetch('/bigw/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step, data }) });
         const vals = (sec) => Object.fromEntries([...sec.querySelectorAll('input,select')].filter((i) => i.name).map((i) => [i.name, i.value]));
-        $('b-guest').addEventListener('click', () => {
+        const contact = () => {
           const email = document.querySelector('[name=email]').value;
           if (!email) { $('b-error').textContent = 'Enter your email address'; return; }
           $('b-error').textContent = '';
           post('contact', { email });
-          $('b-contact').querySelector('p').remove();
+          ($('b-guest') || $('b-continue')).closest('p').remove();
           setTimeout(() => { $('b-delivery').hidden = false; }, 300);
-        });
+        };
+        $('b-guest')?.addEventListener('click', contact);
+        $('b-continue')?.addEventListener('click', contact);
         $('b-home').addEventListener('click', () => { $('b-home').setAttribute('aria-pressed', 'true'); $('b-cc').setAttribute('aria-pressed', 'false'); post('method', { method: 'home' }); setTimeout(() => { $('b-address').hidden = false; }, 200); });
         $('b-cc').addEventListener('click', () => { $('b-cc').setAttribute('aria-pressed', 'true'); $('b-home').setAttribute('aria-pressed', 'false'); post('method', { method: 'collect' }); $('b-address').hidden = true; $('b-cc-sec').hidden = false; });
         $('b-cc-next').addEventListener('click', () => {
@@ -1737,7 +1747,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           $('b-cc-next').remove();
           setTimeout(() => { $('b-payment').hidden = false; }, 300);
         });
-        $('b-manual').addEventListener('click', (e) => { e.preventDefault(); $('b-manual-fields').hidden = false; $('b-lookup').closest('label')?.remove(); $('b-lookup').remove(); });
+        $('b-manual')?.addEventListener('click', (e) => { e.preventDefault(); $('b-manual-fields').hidden = false; $('b-lookup').closest('label')?.remove(); $('b-lookup').remove(); });
         $('b-to-payment').addEventListener('click', () => {
           const d = vals($('b-address'));
           const missing = ['firstName', 'lastName', 'phone', 'street', 'suburb', 'state', 'postcode'].filter((k) => !d[k]);

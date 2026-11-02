@@ -961,6 +961,29 @@ test('BIG W flow (beta): add → drawer "View cart" → "Proceed to checkout" �
   await dash.close();
 });
 
+test('BIG W signed in (Mugibot 2.1): your account\'s email shown with a plain "Continue" (no guest button) and your saved address already in — the same checkout: "Home delivery", the card in its frame, stops at "Place order"', async () => {
+  store.state.signedIn.bigw = true;
+  try {
+    await useItems([{ url: store.productUrl('bigw', '6012346'), name: 'BIG W Bundle', price: 45 }]);
+    const dash = await ctx.newPage();
+    const shop = await buyFromDashboard(dash, 'BIG W Bundle');
+    await shop.waitForURL(/\/bigw\/checkout$/, { timeout: 25000 });
+    await waitReady(shop, 'Place order');
+    const S = store.shop('bigw');
+    assert.equal(S.data.contact.email, 'ash.bigw@example.com', "the account's email, as BIG W has it");
+    assert.equal(S.data.method.method, 'home', '"Home delivery"');
+    const a = S.data.address;
+    assert.ok(a.firstName && a.lastName && a.phone && a.street && a.suburb && a.state && a.postcode, `every field the order needs: ${JSON.stringify(a)}`);
+    await waitFor(async () => (await cardFrame(shop).inputValue('input[name=cardnumber]')) === '4242 4242 4242 4242', { message: 'card in the frame' });
+    await shop.waitForTimeout(1000);
+    assert.equal(ordersPlaced(), 0, '"Place order" was NOT pressed');
+    await shop.close();
+    await dash.close();
+  } finally {
+    store.state.signedIn.bigw = false;
+  }
+});
+
 test('EB Games (beta, as its real checkout goes): fast to checkout → Click & Collect switched to "Home Delivery" → Australia → the address picked from EB\'s suggestions → its shipping method → Pay Now: "Credit / Debit card" → card number, MM/YY, CVV, name on card → "Done" → stops at "CONFIRM & PAY"', async () => {
   await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'EB ETB' }]);
   const dash = await ctx.newPage();
@@ -2986,6 +3009,26 @@ test('🤖 Auto-checkout at JB Hi-Fi: Shopify\'s cart link → your details → 
   assert.equal(o.form.shipping, 'standard');
   assert.equal(run.total, 109, '$99 + $10 shipping');
   await closeStorePages('jbhifi');
+});
+
+test('🤖 Auto-checkout at JB Hi-Fi signed in to your JB account (Mugibot 2.1): its saved details left as they are, the card typed in → "Pay now" — placed, as for a guest', async () => {
+  store.state.signedIn.jbhifi = 'account';
+  try {
+    const handle = 'pokemon-tcg-30th-celebration-etb';
+    const before = store.shop('jbhifi').orders.length;
+    await useItems([{ store: 'demo-jbhifi', sku: handle, name: 'ACO JB ETB signed in', maxPrice: 120 }]);
+    await testRun('ACO JB ETB signed in');
+    const run = await runOver('the signed-in JB Hi-Fi run over');
+    assert.equal(run.status, 'placed', JSON.stringify(run));
+    const o = store.shop('jbhifi').orders.at(-1);
+    assert.equal(store.shop('jbhifi').orders.length, before + 1, 'one order');
+    assert.deepEqual(o.cart.map((c) => [c.sku, c.qty]), [[handle, 1]]);
+    assert.equal(o.form.card_number, '4242 4242 4242 4242');
+    assert.equal(o.form.email, 'ash.jbhifi@example.com', "the account's saved email, left as it was");
+  } finally {
+    store.state.signedIn.jbhifi = false;
+    await closeStorePages('jbhifi');
+  }
 });
 
 test('🤖 Auto-checkout at Toys"R"Us signed in with Shop: Shop Pay has your details and card (no card boxes) → "Pay now" — placed', async () => {
