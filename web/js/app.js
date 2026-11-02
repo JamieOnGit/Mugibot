@@ -298,10 +298,22 @@ async function detectExtension() {
   };
 }
 
+// This browser's extension was connected to this account before (Mugibot 2.1): a new copy of it — an update loaded from
+// a new folder, its storage empty — reconnects by itself the moment the dashboard's open, and your card comes back from
+// its locked copy (no passphrase, nothing to type). Never another account's, and never a browser that wasn't before.
+const connectedKey = () => `mgb-connected:${state.me.user.id}`;
+const wasConnected = () => { try { return localStorage.getItem(connectedKey()) === '1'; } catch { return false; } };
+let autoReconnect = false;
+
 async function renderExtStatus() {
   state.ext = await detectExtension();
   const ext = state.ext;
   const me = state.me.user;
+  if (ext.installed && ext.paired && ext.userId === me.id) { try { localStorage.setItem(connectedKey(), '1'); } catch { /* private window */ } }
+  if (ext.installed && !ext.paired && !autoReconnect && wasConnected()) {
+    autoReconnect = true;
+    setTimeout(() => pairNow({ auto: true }).catch(() => null), 0);
+  }
   const latest = state.me.app.extensionVersion;
   let level = 'warn';
   let text;
@@ -346,7 +358,8 @@ async function renderExtStatus() {
   }
 }
 
-async function pairNow() {
+async function pairNow(opts = {}) {
+  const auto = !!(opts && opts.auto === true);
   const msg = $('#pair-msg');
   if (!document.documentElement.dataset.mugibotExtension) {
     setMsg(msg, 'Install the extension first, then reload this page.');
@@ -357,8 +370,8 @@ async function pairNow() {
     const { code } = await api('POST', '/api/devices/pair-code');
     const reply = await askExtension('pair', { code }, 10000);
     if (reply && reply.ok) {
-      toast('Extension connected', `This browser is now connected to ${reply.user.username}.`, 'success');
-      setMsg(msg, 'Connected!', true);
+      toast(auto ? 'Extension reconnected' : 'Extension connected', auto ? `A new copy of the extension in this browser — connected to ${reply.user.username} again by itself. Your settings, details and card stay on your profile.` : `This browser is now connected to ${reply.user.username}.`, 'success');
+      setMsg(msg, auto ? 'Reconnected by itself!' : 'Connected!', true);
     } else {
       setMsg(msg, (reply && reply.error) || "The extension didn't answer — reload this page and try again.");
     }
@@ -369,7 +382,7 @@ async function pairNow() {
   loadDevices().catch(() => null);
   // A new copy of the extension (after an update): your card back from its copy, with no passphrase.
   const back = await syncCardKey().catch(() => null);
-  if (back && back.restored) setMsg(msg, `Connected — and ${back.card.brand} •••• ${back.card.last4} is back in this browser.`, true);
+  if (back && back.restored) setMsg(msg, `${auto ? 'Reconnected by itself' : 'Connected'} — and ${back.card.brand} •••• ${back.card.last4} is back in this browser.`, true);
 }
 $('#pair-now').addEventListener('click', pairNow);
 

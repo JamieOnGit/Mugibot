@@ -318,7 +318,7 @@ test("card backup: locked in the extension with a card passphrase and kept in yo
   await opts.close();
 });
 
-test('🔁 an update loaded from a new folder (a new copy of the extension, its storage empty): press Connect this browser and your card is back — no passphrase; your account only ever had a locked copy, and the key stays in this browser', async () => {
+test('🔁 an update loaded from a new folder (a new copy of the extension, its storage empty): open the dashboard and it reconnects by itself, your card back — nothing to press, no passphrase; your account only ever had a locked copy, and the key stays in this browser', async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   // The dashboard handed this browser's extension its restore key: a copy of the card, locked with it, is in the account.
   const dash = await ctx.newPage();
@@ -346,10 +346,11 @@ test('🔁 an update loaded from a new folder (a new copy of the extension, its 
     assert.deepEqual(Object.keys(await sw.evaluate(() => chrome.storage.local.get(null))).filter((k) => k.startsWith('vault:') || k === 'auth'), [], 'it starts empty: no account, no card');
     const page = await ctx.newPage();
     await page.goto(`${env.url}/app#extension`);
-    await page.waitForFunction(() => /installed but not connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 15000 });
-    await page.click('#pair-now');
+    // (This browser was connected to Ash's account before: the new copy reconnects by itself — nothing pressed.)
     await page.waitForFunction(() => /is back in this browser/.test(document.querySelector('#pair-msg').textContent), null, { timeout: 20000 });
-    assert.match(await page.textContent('#pair-msg'), /Visa •••• 4242 is back in this browser/);
+    assert.match(await page.textContent('#pair-msg'), /Reconnected by itself — and Visa •••• 4242 is back in this browser/);
+    await page.waitForFunction(() => /Extension reconnected/.test(document.querySelector('#toasts')?.textContent || ''));
+    await page.waitForFunction(() => /Extension connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 10000 });
     await page.waitForFunction(() => /Your card is back/.test(document.querySelector('#toasts')?.textContent || ''));
     // In the new copy: the card, ready — encrypted with its own key, like any card saved there.
     const local = await sw.evaluate(() => chrome.storage.local.get(null));
