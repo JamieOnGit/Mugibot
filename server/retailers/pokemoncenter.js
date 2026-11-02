@@ -47,7 +47,8 @@ export default {
       text: [/you are (now )?in (the )?(line|queue)/i, /you'?re in the queue/i, /virtual (waiting )?(room|queue)/i],
       wait: /wait(?:ing)? time[^0-9]{0,40}(\d+)\s*min/i,
     },
-    check: { path: '/', everySeconds: 180 },
+    // (A new visitor's look from an admin's browser: every minute — every 30 s while someone's armed here — Mugibot 2.1.)
+    check: { path: '/', everySeconds: 60 },
   },
   flow: {
     product: {

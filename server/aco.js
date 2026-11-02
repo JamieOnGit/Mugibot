@@ -1109,7 +1109,9 @@ export class Aco {
     const url = checkpoint && gates ? gates.link(r) : gates ? gates.checkUrl(r, (r.gate.check && r.gate.check.path) || '/') : r.base;
     const lobby = { id: newId('lob'), store: r.id, storeName: r.name, url, kind: checkpoint ? 'checkpoint' : 'queue', by, at: this.now(), sent: null };
     map.set(r.id, lobby);
-    if (by === 'auto' || by === 'discord') {
+    if (checkpoint && by === 'auto') {
+      this.repo.addEvent(userId, { type: 'aco', level: 'info', message: `🛡️ ${r.name}'s checkpoint is up — its check page is open in your checkout browser: solve it there before the drop, and your armed checkout goes straight through` });
+    } else if (by === 'auto' || by === 'discord') {
       this.repo.addEvent(userId, { type: 'aco', level: 'info', message: `🚦 ${r.name}'s virtual queue is up — ${by === 'auto' ? 'your checkout browser is getting in line for your armed items' : 'your checkout browser is getting in line (Discord)'}` });
     }
     this.wake(userId);
@@ -1145,7 +1147,18 @@ export class Aco {
 
   /** A store's checkpoint went up (monitor/gates.js): members armed there with their pool's leader get its check page opened. */
   checkpointUp(r) {
-    return this.ctx.pools ? this.ctx.pools.checkpointUp(r) : new Set();
+    const told = this.ctx.pools ? this.ctx.pools.checkpointUp(r) : new Set();
+    // (Mugibot 2.1: every member armed at that store gets its check page opened in their checkout browser — to solve
+    //  themselves, before the drop, so their checkout goes straight through. Mugibot never touches the check.)
+    const rows = this.db.all('SELECT DISTINCT user_id FROM items WHERE store = :s AND aco = 1', { s: r.id });
+    for (const { user_id: userId } of rows) {
+      if (told.has(userId) || this.inLobby(userId, r.id)) continue;
+      const user = this.repo.userById(userId);
+      if (!user || user.disabled || !entitlement(user, this.now()).active || !this.settings(userId).enabled) continue;
+      if (!this.checkoutDevice(userId)) continue;
+      this.lobby(userId, r, 'auto');
+    }
+    return told;
   }
 
   /** The queues this (checkout) browser should get in line for now — each handed over once. */

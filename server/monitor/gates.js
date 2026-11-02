@@ -6,14 +6,15 @@
 // puts the checkout browsers of members armed at that store in line (aco.js: lobbies).
 //
 // Each store's gate is seen its own way (monitor/gate.js reads the pages):
-// - JB Hi-Fi's checkpoint: the server looks at /checkpoint every 5 seconds (JB answers servers, as
+// - JB Hi-Fi's checkpoint: the server looks at /checkpoint every 3 seconds (JB answers servers, as
 //   it does the sweeps). Up: the page with its hCaptcha on it. Down: gone (404), sent on to the
-//   store, or no check there. A change is looked at again 2 seconds later, and counts when it's
-//   seen twice in a row: posted within seconds of JB switching it on.
+//   store, or no check there. A change is looked at again a second later, and counts when it's
+//   seen twice in a row: posted within ~4 seconds of JB switching it on. Members armed there get
+//   its check page opened in their checkout browser, to solve themselves before the drop.
 // - EB Games' and Pokémon Center's queues turn servers away, so browsers see them: a browser that
 //   lands in the queue (an admin's counts at once; members' when two of them say so), and an
 //   admin's browser asking for the store's front page as a new visitor — no cookies, so nobody's
-//   place in line is touched — every 3 minutes (every minute while it's up). Down: the store's own
+//   place in line is touched — every minute (every 30 s while someone's armed at that store; every minute while it's up). Down: the store's own
 //   page for a new visitor, twice in a row at least 45 seconds apart. A browser that got through
 //   the queue sees the store too: that's it being let in, not the queue coming down, so it never
 //   counts. Not seen for 30 minutes while it was being looked for (or 3 hours at all): down.
@@ -41,8 +42,10 @@ const DOWN_GAP_MS = 45 * 1000;
 // Not seen up for this long while something was looking for it (or this long at all): down.
 const STALE_MS = 30 * MIN;
 const STALE_MAX_MS = 3 * 60 * MIN;
-// An admin's browser looks at a queue this often while it's up.
+// An admin's browser looks at a queue this often while it's up — and, down, this often while someone's armed at that store
+// (else the store's own pace: a minute).
 const CHECK_UP_SECONDS = 60;
+const CHECK_ARMED_SECONDS = 30;
 const MAX_DMS = 500;
 // The stores are Australian: the footer's clock is Sydney's ("09:55:00 AEDT").
 const CLOCK = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZoneName: 'short' });
@@ -446,7 +449,15 @@ export class Gates {
   // ---------------------------------------------------------------------------
   checkSeconds(r, up) {
     if (this.cfg.monitor.gateCheckSeconds) return this.cfg.monitor.gateCheckSeconds;
-    return up ? CHECK_UP_SECONDS : (r.gate.check && r.gate.check.everySeconds) || 180;
+    if (up) return CHECK_UP_SECONDS;
+    // (Someone armed at this store: their checkout gets in line the moment it's seen — so it's looked for twice as often.)
+    const own = (r.gate.check && r.gate.check.everySeconds) || 60;
+    return this.armedAt(r.id) ? Math.min(own, CHECK_ARMED_SECONDS) : own;
+  }
+
+  /** Is anyone's Auto-checkout armed for something at this store? */
+  armedAt(storeId) {
+    return !!this.db.get('SELECT 1 AS y FROM items WHERE store = :s AND aco = 1 LIMIT 1', { s: storeId });
   }
 
   /**

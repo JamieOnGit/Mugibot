@@ -2376,6 +2376,8 @@ function connectStream() {
   es.addEventListener('event', (e) => {
     const ev = JSON.parse(e.data);
     if (ev.level === 'urgent' || ev.level === 'success' || ev.level === 'warn') toast(ev.title || ev.message, ev.title ? ev.message : '', ev.level, ev.level === 'urgent' ? 15000 : 6000);
+    // (Yours, and it matters now — your SKU back, your checkout needing you, a queue up: the siren, as its pop-up has.)
+    if (ev.level === 'urgent' && ['restock', 'aco', 'gate', 'listed'].includes(ev.type)) monitorUI.importantSound();
     // On the first page of your activity: it shows up at the top (the pages move along on the next load).
     if (listOpen('activity') && state.feedPage === 1) {
       const list = $('#feed');

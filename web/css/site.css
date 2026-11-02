@@ -1004,3 +1004,20 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 .pools .pool:first-child { border-top: 0; padding-top: 4px; }
 .pools .pool .card-head { flex-wrap: wrap; gap: 6px 12px; }
 .pools .pool .pool-invite { margin-top: 8px; }
+
+/* Mugibot 2.1: a drop that's yours (on your watchlist, armed, VIP, monitored) — told apart at a glance. */
+.sn-dropcard.mine { border: 2px solid var(--err, #ef4444); box-shadow: 0 0 0 4px color-mix(in srgb, var(--err, #ef4444) 25%, transparent), var(--shadow); }
+.sn-dropcard.mine .sn-dh { color: var(--err, #ef4444); font-weight: 800; letter-spacing: .02em; }
+.sn-dropcard.mine[data-importance="armed"] { border-color: var(--warn, #f59e0b); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn, #f59e0b) 28%, transparent), var(--shadow); }
+.sn-dropcard.mine[data-importance="armed"] .sn-dh { color: var(--warn, #f59e0b); }
+.sn-dropcard.mine .sn-bar { background: var(--err, #ef4444); }
+@media (prefers-reduced-motion: no-preference) { .sn-dropcard.mine { animation: sn-card .3s cubic-bezier(.2, 1.4, .4, 1), sn-mine 1.2s ease-in-out 3; } }
+@keyframes sn-mine { 50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--err, #ef4444) 10%, transparent), var(--shadow); } }
+/* An ordinary drop: a small card in the corner, never in your way (the pop-up is for what's yours). */
+.sn-corner { position: fixed; right: 16px; bottom: 16px; z-index: 150; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 32px)); pointer-events: none; }
+.sn-mini { pointer-events: auto; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--brand); border-radius: 10px; padding: 10px 12px; box-shadow: var(--shadow); font-size: 13px; animation: sn-in .2s; }
+.sn-mini.k-restock { border-left-color: var(--ok); }
+.sn-mini-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.sn-mini-name { font-weight: 600; margin: 3px 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sn-mini-foot { display: flex; align-items: center; gap: 6px; }
+.sn-mini-foot .pr { font-weight: 700; margin-right: auto; font-variant-numeric: tabular-nums; }

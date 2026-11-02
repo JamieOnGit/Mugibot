@@ -54,7 +54,8 @@ export default {
       text: [/you'?re in the queue/i, /you are (now )?in (the )?(line|queue)/i, /using a virtual queue/i],
       wait: /estimated wait time is\s+(?:about\s+)?(\d+)\s*min/i,
     },
-    check: { path: '/', everySeconds: 180 },
+    // (A new visitor's look from an admin's browser: every minute — every 30 s while someone's armed here — Mugibot 2.1.)
+    check: { path: '/', everySeconds: 60 },
   },
   flow: {
     product: {

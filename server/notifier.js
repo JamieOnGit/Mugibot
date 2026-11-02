@@ -23,6 +23,18 @@ const alertBuyParts = (store, sku, url, name) => [str(store, 40), str(sku, 60), 
  */
 export const buyAction = (kind, id) => `buy:${kind}:${id}`;
 
+// Mugibot 2.1 — two kinds of DM that never sound alike: urgent ones ping, with a header saying what they're about; info and
+// success ones (a listing, a price drop, a store back to normal) arrive silently (Discord's @silent flag).
+const SUPPRESS_NOTIFICATIONS = 1 << 12;
+const QUIET_LEVELS = new Set(['info', 'success']);
+const URGENT_HEADER = {
+  restock: '🚨 ON YOUR WATCHLIST — buy it now',
+  listed: '🚨 YOUR DROP WATCH — just listed',
+  aco: '⚡ AUTO-CHECKOUT — needs you',
+  gate: '🚦 QUEUE / CHECKPOINT — get in line',
+  signin: '🔑 SIGNED OUT — sign in before the drop',
+};
+
 export class Notifier {
   constructor({ cfg, repo, retailers, hub, mailer, discord, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
     Object.assign(this, { cfg, repo, retailers, hub, mailer, discord, fetch: fetchImpl, now });
@@ -95,7 +107,9 @@ export class Notifier {
     const wantsDm = { restock: settings.discordDm, listed: settings.discordDmListed, checkout: settings.discordDmCheckout, aco: true, account: true, signin: true }[ev.channel];
     if (wantsDm && user.discord_id && this.discord.botReady) {
       const t0 = Date.now();
-      jobs.push(this.discord.dm(user, this.message(ev), { urgent }).then((ok) => {
+      // (Mugibot 2.1: what matters now pings, with its header; the rest arrives silently — no sound — so the two never
+      //  sound alike.)
+      jobs.push(this.discord.dm(user, this.message(ev, { quiet: QUIET_LEVELS.has(ev.level) }), { urgent }).then((ok) => {
         if (this.metrics) this.metrics.observe('dm_ms', Date.now() - t0, { ok: !!ok });
         return ok && sent.push('discord-dm');
       }));
@@ -125,7 +139,7 @@ export class Notifier {
    * included, so it works on a phone with no browser — once Discord's interactions are set up;
    * until then, and in emails and webhooks, it's its link.
    */
-  message(ev, { mention = '' } = {}) {
+  message(ev, { mention = '', quiet = false } = {}) {
     const acts = !!(this.discord && this.discord.interactionsReady);
     const pressable = (b) => acts && b.action;
     const buttons = (ev.buttons || []).filter((b) => b && (b.url || pressable(b))).slice(0, 5);
@@ -145,6 +159,10 @@ export class Notifier {
         footer: { text: ev.footer || this.cfg.appName },
       }],
     };
+    // Urgent (your SKU back, your checkout needing you, a queue up, signed out): a header saying so, above the title.
+    if (ev.level === 'urgent' && msg.embeds[0]) msg.embeds[0].author = { name: URGENT_HEADER[ev.type] || '🚨 Needs you now' };
+    // Routine (listed, price drops, back to normal): delivered without a ping (Discord's SUPPRESS_NOTIFICATIONS).
+    if (quiet) msg.flags = SUPPRESS_NOTIFICATIONS;
     if (useButtons && buttons.length) {
       msg.components = [{
         type: 1,

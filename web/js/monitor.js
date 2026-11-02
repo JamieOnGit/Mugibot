@@ -43,6 +43,16 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     setMode: (id, mode) => setMode(id, mode),
     // A store switched off (for you, or for everyone): the products list follows.
     onStores: () => { if (m.loaded) loadProducts().catch(() => null); },
+    // How much a drop matters to you (Mugibot 2.1): armed, on your watchlist, a VIP drop, a product an admin monitors —
+    // its own sound and pop-up; anything else, the ordinary ones.
+    importance: (a) => {
+      const it = watching(a);
+      if (it && it.aco) return { kind: 'armed', label: '⚡ Armed — checking out' };
+      if (it) return { kind: 'mine', label: '🚨 On your watchlist' };
+      if (a.vip) return { kind: 'vip', label: '⭐ VIP drop' };
+      if (a.monitored) return { kind: 'monitored', label: '📌 Monitored' };
+      return null;
+    },
   });
 
   // ---------------------------------------------------------------------------
@@ -927,5 +937,5 @@ export function setupMonitor({ showError, watching = () => null, watch: addToWat
     }, 600);
   }
 
-  return { load, loadSettings, loadChecks, openProduct, onFeed, onProduct, onSweep, refreshWatched };
+  return { load, loadSettings, loadChecks, openProduct, onFeed, onProduct, onSweep, refreshWatched, importantSound: () => live.importantSound() };
 }

@@ -24,6 +24,11 @@ const ROWS_MAX = 220;
 const CHART_WINDOW = 5 * 60 * 1000;
 const PREFS_KEY = 'mgb-live';
 const POP_MS = 10000;
+// An important one (yours: on your watchlist, armed, a VIP drop, a product an admin monitors): the pop-up, up 30 s, with
+// the siren. An ordinary drop: a small card in the corner — never in your way — for 8 s, with a soft blip.
+const IMPORTANT_POP_MS = 30000;
+const CORNER_MS = 8000;
+const CORNER_MAX = 4;
 
 const pad = (n) => String(n).padStart(2, '0');
 const clockOf = (ts) => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
@@ -37,7 +42,7 @@ function loadPrefs() {
   try { return { ...def, ...(JSON.parse(localStorage.getItem(PREFS_KEY)) || {}) }; } catch { return def; }
 }
 
-export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct, panelOpen, sampleProduct, onSettings, resetStore, setMode, onStores = () => {} }) {
+export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct, panelOpen, sampleProduct, onSettings, resetStore, setMode, onStores = () => {}, importance = () => null }) {
   const L = {
     // Stores this member switched off: hidden from their live feed, products and this browser's alerts.
     hidden: new Set(),
@@ -701,32 +706,41 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
     toast('Alerts armed', perm === 'granted' ? 'A sound and a desktop notification for every new drop and restock.' : 'A sound for every new drop and restock. Desktop notifications are blocked: allow them for this site in your browser.', 'success');
   }
 
-  function chirp(kind) {
+  // Two sounds you can tell apart without looking (Mugibot 2.1): an ordinary drop — a soft, single blip; one that's yours
+  // (on your watchlist, armed, VIP, monitored) — a loud rising siren, twice.
+  function tone(notes, { type = 'sine', gain = 0.05, step = 0.13, len = 0.22 } = {}) {
     if (!prefs.sound || !L.audio || L.audio.state !== 'running') return;
     try {
       const t0 = L.audio.currentTime;
-      const notes = kind === 'restock' ? [988, 1319, 1760] : kind === 'price_drop' ? [880] : [1244, 1864];
       notes.forEach((f, i) => {
         const o = L.audio.createOscillator();
         const g = L.audio.createGain();
-        const at = t0 + i * 0.13;
-        o.type = 'square';
+        const at = t0 + i * step;
+        o.type = type;
         o.frequency.setValueAtTime(f, at);
         g.gain.setValueAtTime(0.0001, at);
-        g.gain.exponentialRampToValueAtTime(0.12, at + 0.012);
-        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
+        g.gain.exponentialRampToValueAtTime(gain, at + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + len);
         o.connect(g).connect(L.audio.destination);
         o.start(at);
-        o.stop(at + 0.24);
+        o.stop(at + len + 0.02);
       });
     } catch { /* ignore */ }
   }
+  function chirp(kind) {
+    tone(kind === 'price_drop' ? [660] : kind === 'restock' ? [784, 988] : [880], { type: 'sine', gain: 0.045, step: 0.11, len: 0.18 });
+  }
+  function siren() {
+    tone([740, 988, 1319, 1760, 740, 988, 1319, 1760], { type: 'sawtooth', gain: 0.16, step: 0.12, len: 0.16 });
+  }
 
-  function desktop(a, label) {
+  function desktop(a, label, important = false) {
     if (!prefs.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
     try {
       const n = new Notification(`${label}: ${a.name}`, {
         body: `${storeName(a.store, a.url)} · ${money(a.price) || 'price not shown'}${a.test ? ' (test)' : ''}`, icon: a.image || '/img/icon-192.png', tag: `mugibot-${a.id}`,
+        // (Yours: stays on screen until you look.)
+        requireInteraction: important,
       });
       n.onclick = () => { window.focus(); n.close(); };
     } catch { /* some browsers only allow notifications from a service worker */ }
@@ -744,15 +758,48 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
   }
 
   function alertChain(a) {
-    const label = a.kind === 'restock' ? (a.status === 'preorder' ? 'Pre-order open' : 'Restock') : 'New drop';
-    chirp(a.kind);
-    desktop(a, label);
-    titleFlash(`${label}: ${a.name}`);
+    const kindLabel = a.kind === 'restock' ? (a.status === 'preorder' ? 'Pre-order open' : 'Restock') : 'New drop';
+    // Yours (on your watchlist, armed, a VIP drop, monitored): said as yours, with the siren.
+    const imp = a.test ? null : importance(a);
+    const label = imp ? `${imp.label} · ${kindLabel}` : kindLabel;
+    if (imp) { siren(); L.lastSiren = Date.now(); } else chirp(a.kind);
+    desktop(a, label, !!imp);
+    titleFlash(`${imp ? '🚨 ' : ''}${label}: ${a.name}`);
     $('#sn-announce').textContent = `${label}: ${a.name}, ${money(a.price) || ''} at ${storeName(a.store, a.url)}`;
-    if (prefs.popup) {
-      L.queue.push(a);
+    if (!prefs.popup) return;
+    // Yours (and the ⚙ menu's test alert): the pop-up. Anything else: a card in the corner, never in your way.
+    if (imp || a.test) {
+      L.queue.push({ ...a, imp });
+      // (Yours first in line.)
+      if (imp) L.queue.sort((x, y) => (y.imp ? 1 : 0) - (x.imp ? 1 : 0));
       if (!L.showing) nextPop();
+    } else cornerCard(a, label);
+  }
+
+  function cornerCard(a, label) {
+    let box = $('#sn-corner');
+    if (!box) {
+      box = h('div', { id: 'sn-corner', class: 'sn-corner', role: 'status', 'aria-live': 'polite' });
+      document.body.append(box);
     }
+    const buy = canBuy(a.store) ? h('a', { class: 'btn small primary', href: buyUrl(a), target: '_blank', rel: 'noopener' }, '⚡ Buy') : null;
+    const open = a.url ? h('a', { class: 'btn small', href: a.url, target: '_blank', rel: 'noopener' }, 'Open') : null;
+    const card = h('div', { class: `sn-mini k-${a.kind}`, dataset: { store: a.store, sku: a.sku } },
+      h('div', { class: 'sn-mini-top' }, h('b', {}, label), h('span', { class: 'muted' }, storeName(a.store, a.url))),
+      h('div', { class: 'sn-mini-name' }, a.name),
+      h('div', { class: 'sn-mini-foot' }, h('span', { class: 'pr' }, money(a.price) || ''), buy, open,
+        h('button', { class: 'btn small ghost', type: 'button', 'aria-label': 'Dismiss', onclick: () => card.remove() }, '✕')));
+    box.prepend(card);
+    while (box.children.length > CORNER_MAX) box.lastElementChild.remove();
+    setTimeout(() => card.remove(), CORNER_MS);
+  }
+
+  /** Something of yours just happened (a DM-worthy alert: your SKU back, your checkout needs you): the siren, once. */
+  function importantSound() {
+    // (Not twice in a row for the same drop: its feed alert sounded it a moment ago.)
+    if (L.lastSiren && Date.now() - L.lastSiren < 5000) return;
+    L.lastSiren = Date.now();
+    siren();
   }
 
   function nextPop() {
@@ -764,7 +811,9 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
     const card = $('.sn-dropcard', ov);
     card.classList.toggle('restock', a.kind === 'restock');
     card.classList.toggle('test', !!a.test);
-    $('#sn-ov-type').textContent = `${a.test ? 'Test · ' : ''}${a.kind === 'restock' ? (a.status === 'preorder' ? 'Pre-order open' : 'Restock') : 'New drop'}`;
+    card.classList.toggle('mine', !!a.imp);
+    card.dataset.importance = a.imp ? a.imp.kind : '';
+    $('#sn-ov-type').textContent = `${a.test ? 'Test · ' : ''}${a.imp ? `${a.imp.label} · ` : ''}${a.kind === 'restock' ? (a.status === 'preorder' ? 'Pre-order open' : 'Restock') : 'New drop'}`;
     const st = $('#sn-ov-store');
     st.textContent = '';
     st.append(swatch(a.store), storeName(a.store, a.url));
@@ -782,7 +831,8 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
     open.hidden = !a.url;
     if (a.url) open.href = a.url;
     ov.hidden = false;
-    let left = POP_MS;
+    const total = a.imp ? IMPORTANT_POP_MS : POP_MS;
+    let left = total;
     let last = Date.now();
     const bar = $('#sn-ov-bar');
     const tick = () => {
@@ -790,7 +840,7 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
       if (!card.matches(':hover') && !card.contains(document.activeElement)) left -= now - last; // paused while you're on it
       last = now;
       if (left <= 0) { dismiss(); return; }
-      bar.style.width = `${(left / POP_MS) * 100}%`;
+      bar.style.width = `${(left / total) * 100}%`;
       $('#sn-ov-cnt').textContent = `${L.queue.length ? `${L.queue.length} more · ` : ''}closes in ${Math.ceil(left / 1000)} s`;
     };
     tick();
@@ -938,5 +988,5 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
     renderSub();
   }
 
-  return { load, onSweep, onFeed, setFilter, setSettings, loadOlder, render: renderAll, renderLog, hiddenStores: () => L.hidden };
+  return { load, onSweep, onFeed, setFilter, setSettings, loadOlder, render: renderAll, renderLog, hiddenStores: () => L.hidden, importantSound };
 }

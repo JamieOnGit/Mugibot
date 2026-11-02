@@ -169,12 +169,12 @@ test("🛡️ JB Hi-Fi's checkpoint: the server looks (honestly itself), a chang
   await waitFor(() => discord.dmsTo('d-ash').some((m) => /checkpoint is off/.test(m.body.embeds[0].title)), { message: 'Ash hears it went' });
 });
 
-test("the server keeps looking by itself: JB Hi-Fi's checkpoint every 5 seconds, and again 2 seconds after a change to be sure — up and posted within seconds of JB switching it on", async () => {
+test("the server keeps looking by itself: JB Hi-Fi's checkpoint every 3 seconds, and again a second after a change to be sure — up and posted within seconds of JB switching it on", async () => {
   const g = env.app.gates;
   const cfg = env.app.cfg.monitor;
   // (Its own pace, from its file: no setting needed.)
-  assert.equal(g.probeSeconds(env.app.retailers.get('jbhifi')), 5);
-  assert.equal(cfg.gateConfirmSeconds, 2);
+  assert.equal(g.probeSeconds(env.app.retailers.get('jbhifi')), 3);
+  assert.equal(cfg.gateConfirmSeconds, 1);
   const before = gatePosts().length;
   Object.assign(cfg, { enabled: true });
   try {
@@ -184,7 +184,7 @@ test("the server keeps looking by itself: JB Hi-Fi's checkpoint every 5 seconds,
     const on = Date.now();
     await waitFor(() => g.get('demo-jbhifi').status === 'up', { timeout: 15000, interval: 100, message: 'up, from the loop' });
     const tookMs = Date.now() - on;
-    assert.ok(tookMs <= 9000, `up ${tookMs} ms after JB switched it on (5 s between looks, 2 s to be sure)`);
+    assert.ok(tookMs <= 5500, `up ${tookMs} ms after JB switched it on (3 s between looks, 1 s to be sure)`);
     await waitFor(() => gatePosts().length === before + 1, { timeout: 5000, message: 'posted' });
     store.shop('jbhifi').checkpoint.on = false;
     await waitFor(() => g.get('demo-jbhifi').status === 'down', { timeout: 15000, message: 'down, from the loop' });
@@ -243,7 +243,7 @@ test("🚦 EB Games' queue: members' browsers in it (two of them), or an admin's
   assert.equal(g.get('demo-ebgames').status, 'down');
 });
 
-test("an admin's browser looks at the queues as a new visitor every few minutes (every minute while one's up), with its searches", async () => {
+test("an admin's browser looks at the queues as a new visitor every minute (every 30 s while someone's armed there; every minute while one's up), with its searches", async () => {
   const g = env.app.gates;
   clock += 4 * MIN; // (the last test's looks: long enough ago)
   const due = (await bossBrowser.call('GET', '/api/ext/sweeps?v=1.16.0')).body;
@@ -255,7 +255,7 @@ test("an admin's browser looks at the queues as a new visitor every few minutes 
   assert.ok(due.probes.some((p) => p.store === 'demo-pokemoncenter'));
   assert.ok(!due.probes.some((p) => p.store === 'ebgames'), 'not the real stores (the monitor is off in tests)');
   assert.deepEqual((await ashBrowser.call('GET', '/api/ext/sweeps?v=1.16.0')).body.probes || [], [], 'members never look');
-  // Not again straight away; a minute while it's up, 3 minutes while it's down.
+  // Not again straight away; a minute while it's up, a minute while it's down (30 s while someone's armed there).
   assert.ok(!(await bossBrowser.call('GET', '/api/ext/sweeps?v=1.16.0')).body.probes.some((p) => p.store === 'demo-ebgames'));
   await bossBrowser.call('POST', '/api/ext/gates', { seen: [{ store: 'demo-ebgames', status: 'up', how: 'probe', wait: 5 }] });
   assert.equal(g.get('demo-ebgames').status, 'up');
@@ -266,10 +266,21 @@ test("an admin's browser looks at the queues as a new visitor every few minutes 
   clock += 50 * 1000;
   await bossBrowser.call('POST', '/api/ext/gates', { seen: [{ store: 'demo-ebgames', status: 'down', how: 'probe' }] });
   assert.equal(g.get('demo-ebgames').status, 'down');
-  clock += 61 * 1000;
-  assert.ok(!(await bossBrowser.call('GET', '/api/ext/sweeps?v=1.16.0')).body.probes.some((p) => p.store === 'demo-ebgames'), 'down: every 3 minutes');
-  clock += 3 * MIN;
+  clock += 31 * 1000;
+  assert.ok(!(await bossBrowser.call('GET', '/api/ext/sweeps?v=1.16.0')).body.probes.some((p) => p.store === 'demo-ebgames'), 'down: every minute');
+  clock += 30 * 1000;
   assert.ok((await bossBrowser.call('GET', '/api/ext/sweeps?v=1.16.0')).body.probes.some((p) => p.store === 'demo-ebgames'));
+  // Someone armed at EB Games: every 30 s.
+  const r = env.app.retailers.get('demo-ebgames');
+  assert.equal(g.checkSeconds(r, false), env.app.gates.armedAt('demo-ebgames') ? 30 : 60);
+  env.app.db.run("INSERT INTO items (id, user_id, position, store, sku, name, url, aco, created_at, updated_at) VALUES ('itm_gate_armed', :u, 99, 'demo-ebgames', 'gate-armed-1', 'Armed box', '', 1, 0, 0)", { u: ash.user.id });
+  try {
+    assert.equal(g.checkSeconds(r, false), 30);
+    assert.equal(g.checkSeconds(r, true), 60, 'up: every minute, as before');
+  } finally {
+    env.app.db.run("DELETE FROM items WHERE id = 'itm_gate_armed'");
+  }
+  assert.equal(g.checkSeconds(r, false), 60);
 });
 
 test('while a queue is up, browsers that aren\'t through it ask that store for nothing: no checks, no searches — the ones through it carry on', async () => {
@@ -386,6 +397,26 @@ test('Auto-checkout through a queue: the checkout browsers of members armed ther
   assert.equal((await misty.get('/api/aco')).body.runs.length, 0, "nobody else's");
   g.flip(r, 'down', { source: 'probe' });
   assert.deepEqual((await ashBrowser.call('GET', '/api/ext/aco/next')).body.lobbies, [], 'down: no lobby');
+});
+
+test("🛡️ JB Hi-Fi's checkpoint up: the checkout browsers of members armed there get its check page opened (once) — to solve themselves before the drop; Mugibot never touches it", async () => {
+  const g = env.app.gates;
+  const r = env.app.retailers.get('demo-jbhifi');
+  const url = store.addProduct('jbhifi', { sku: 'gate-chk-1', name: 'Checkpoint Box', price: 99, status: 'out_of_stock' });
+  assert.equal((await ash.put('/api/aco', { enabled: true, agree: true, mode: 'place', maxOrder: 500, perDay: 3, spendPerDay: 1000 })).status, 200);
+  const it = (await ash.post('/api/items', { url, name: 'Checkpoint Box', maxPrice: 300, aco: true })).body;
+  try {
+    await ashBrowser.call('GET', '/api/ext/aco/next');
+    g.flip(r, 'up', { source: 'server' });
+    const next = (await ashBrowser.call('GET', '/api/ext/aco/next')).body;
+    assert.deepEqual(next.lobbies.map((l) => [l.store, l.kind, l.url, l.by]), [['demo-jbhifi', 'checkpoint', `${store.url}/jbhifi/checkpoint`, 'auto']]);
+    assert.deepEqual((await ashBrowser.call('GET', '/api/ext/aco/next')).body.lobbies, [], 'once');
+    assert.ok(env.app.repo.listEvents(ash.user.id, { limit: 10 }).some((e) => /checkpoint is up — its check page is open in your checkout browser/.test(e.message)));
+  } finally {
+    g.flip(r, 'down', { source: 'server' });
+    await ash.del(`/api/items/${it.id}`);
+    await g.settled();
+  }
 });
 
 test('waiting is not forever: lost touch for 10 minutes, a checkpoint unsolved for 20, a queue for 2 hours', async () => {

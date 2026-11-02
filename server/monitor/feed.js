@@ -167,7 +167,8 @@ export class Feed {
       image: product.image || '', category: product.category, status: product.status, price: product.price ?? null,
       previous_price: product.previous_price ?? null, manual: manual ? 1 : 0, vip: vip || (monitor && monitor.vip_watch) ? 1 : 0, note: [note, pct !== null ? `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%` : ''].filter(Boolean).join(' '),
     });
-    const alert = { ...toAlert(row), ttnMs: detectedAt ? Math.max(0, this.now() - detectedAt) : null };
+    // (monitored: a product an admin monitors — announced as important on the dashboard, as members' own SKUs are.)
+    const alert = { ...toAlert(row), ttnMs: detectedAt ? Math.max(0, this.now() - detectedAt) : null, monitored: !!(monitor && !monitor.paused) };
     this.broadcast('feed', alert);
     // (Found by an admin's drop watch for everyone with a channel of its own: posted there.)
     const drop = this.drops ? this.drops.routeFor(dropWatch || (monitor && monitor.drop_watch)) : null;

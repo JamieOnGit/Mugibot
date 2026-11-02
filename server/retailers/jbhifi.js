@@ -61,7 +61,8 @@ export default {
   gate: {
     kind: 'checkpoint', title: 'Checkpoint Monitor', label: 'hcaptcha Checkpoint', module: 'Shopify', url: '/checkpoint',
     page: { path: /\/checkpoint\/?$/i, markers: [/h-captcha|hcaptcha/i] },
-    probe: { path: '/checkpoint', intervalSeconds: 5 },
+    // (Every 3 seconds, a change looked at again a second later: up and posted within ~4 s of JB switching it on — Mugibot 2.1.)
+    probe: { path: '/checkpoint', intervalSeconds: 3 },
   },
   flow: {
     product: {

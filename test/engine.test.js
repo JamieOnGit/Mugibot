@@ -171,3 +171,26 @@ test('drop intelligence: each store\'s drops by Sydney weekday and hour, the win
   assert.equal(k.estimate, 'Thu 9:00–10:00 (estimate: 6 of 7 drops in the last 90 days)');
   assert.equal(out.find((x) => x.store === 'demo-jbhifi').estimate, null, 'two drops: nothing to go on');
 });
+
+test('Discord DMs: urgent ones (your SKU back, your checkout, a queue) ping with a header saying so; routine ones (listed, price drops) arrive silently — never sounding alike', async () => {
+  const n = env.app.notifier;
+  const urgent = n.message({ type: 'restock', level: 'urgent', title: '🟢 In stock: Box', message: 'EB Games' }, { quiet: false });
+  assert.equal(urgent.embeds[0].author.name, '🚨 ON YOUR WATCHLIST — buy it now');
+  assert.equal(urgent.flags, undefined, 'pings');
+  const quiet = n.message({ type: 'listed', level: 'success', title: 'Listed: Box', message: 'EB Games' }, { quiet: true });
+  assert.equal(quiet.flags, 4096, 'silent (@silent)');
+  assert.equal(quiet.embeds[0].author, undefined);
+  // Through notify: a member's in-stock DM pings, their "listed" DM doesn't.
+  const misty = await Client.signup(env.url, 'misty-dm');
+  makeMember(env, misty);
+  env.app.repo.updateUser(misty.user.id, { discord_id: 'd-misty', discord_dm_channel: 'dm-d-misty' });
+  const item = { store: 'demo-kmart', sku: '43818648', name: 'Day UPC', url: store.productUrl('kmart', '43818648'), last_price: 360, quantity: 1, id: 'itm_x' };
+  await n.itemAlert(misty.user.id, item, 'restock', { status: 'in_stock', price: 360 });
+  await n.itemAlert(misty.user.id, item, 'listed', { status: 'coming_soon', price: 360 });
+  const [inStock, listed] = discord.dmsTo('d-misty').slice(-2).map((m) => m.body);
+  assert.match(inStock.embeds[0].title, /In stock: Day UPC/);
+  assert.equal(inStock.embeds[0].author.name, '🚨 ON YOUR WATCHLIST — buy it now');
+  assert.equal(inStock.flags, undefined);
+  assert.match(listed.embeds[0].title, /Listed: Day UPC/);
+  assert.equal(listed.flags, 4096);
+});

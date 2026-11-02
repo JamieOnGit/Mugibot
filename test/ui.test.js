@@ -335,6 +335,11 @@ test('Drops (the monitor): add a monitor, live alerts, product page with price h
   // It pops up (on any tab) with the price and ⚡ Buy, and goes into the event log.
   await page.waitForSelector('#sn-overlay:not([hidden])');
   assert.match(await page.textContent('#sn-overlay'), /Restock.*Day UPC.*\$360\.00.*was \$379\.00/s);
+  // (Yours — on your watchlist, and monitored: announced as important, its own pop-up (and sound), said so; the
+  //  watchlist first.)
+  assert.equal(await page.getAttribute('#sn-overlay .sn-dropcard', 'data-importance'), 'mine');
+  assert.match(await page.getAttribute('#sn-overlay .sn-dropcard', 'class'), /\bmine\b/);
+  assert.match(await page.textContent('#sn-ov-type'), /🚨 On your watchlist · Restock/);
   assert.match(await page.getAttribute('#sn-ov-buy', 'href'), /^\/buy\?store=kmart&sku=43818648/);
   await page.click('#sn-ov-dismiss');
   await page.waitForSelector('#sn-overlay', { state: 'hidden' });
@@ -501,14 +506,14 @@ test('Monitor tab: live sweeps — each store\'s health and settings; new drops,
 
   // The next sweep: a new product and a restock, shown the moment they're seen.
   await sw.ingest(target, term, { products: [found('70000001', 'Pokemon TCG: Test Booster Bundle', true, 50), found('70000003', 'Pokemon TCG: Brand New ETB', true, 89)] }, { source: 'server', url, ms: 380 });
-  // Two alerts: they pop up one after the other.
-  await page.waitForSelector('#sn-overlay:not([hidden])');
-  await page.waitForFunction(() => /1 more/.test(document.querySelector('#sn-ov-cnt').textContent));
-  assert.match(await page.textContent('#sn-overlay'), /Restock.*Test Booster Bundle.*\$50\.00.*alerted \d+ ms after Target answered/s);
-  await page.click('#sn-ov-dismiss');
-  await page.waitForFunction(() => /New drop.*Brand New ETB.*\$89\.00/s.test(document.querySelector('#sn-overlay').textContent) && !document.querySelector('#sn-overlay').hidden);
-  await page.keyboard.press('Escape');
-  await page.waitForSelector('#sn-overlay', { state: 'hidden' });
+  // Two alerts, neither yours (a search's finds): a card each in the corner — never a pop-up in your way (Mugibot 2.1:
+  // the pop-up and the siren are for what's yours).
+  await page.waitForFunction(() => document.querySelectorAll('#sn-corner .sn-mini').length === 2);
+  const corner = await page.textContent('#sn-corner');
+  assert.match(corner, /Restock\s*Target.*Test Booster Bundle.*\$50\.00/s);
+  assert.match(corner, /New drop\s*Target.*Brand New ETB.*\$89\.00/s);
+  assert.equal(await page.isHidden('#sn-overlay'), true, 'no pop-up');
+  assert.match(await page.getAttribute('#sn-corner .sn-mini.k-listed a.btn.primary', 'href'), /^\/buy\?store=target&sku=70000003/);
   await page.waitForFunction(() => /New drop.*Brand New ETB/s.test(document.querySelector('#m-log').textContent));
   assert.match(await page.textContent('#m-log'), /Restock.*Test Booster Bundle.*alerted in \d+ ms/s);
   assert.match(await page.textContent('#m-log'), /Target · "pokemon" — 2 products · 1 new · 1 restock\s*380 ms/);
