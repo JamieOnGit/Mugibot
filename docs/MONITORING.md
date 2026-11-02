@@ -1315,6 +1315,26 @@ bot check: it only stops Mugibot waiting and starts politely again.
 
 **Discord**: `/monitor list`, `/monitor status`, `/restocks` as before.
 
+### Mugibot 2.1: the dashboard, alerts and queues
+
+- **The dashboard** is dark by default (a drop bot's look) and has four pages: **🏠 Home** (the front door — your setup as
+  a checklist with one button per missing step, what's monitored now, your armed tasks, your latest alerts), **📡
+  Monitors** (the live drops, your watchlist, armed items, drop watches), **⚡ Tasks** (Auto-checkout) and **👤 Profile**
+  (everything saved on your account, opening with 📋 *Saved on your profile*). Every old address still lands where it
+  belongs (`#setup`, `#account`, `#checkout`, `#discord`…).
+- **Yours and ordinary drops sound different.** A drop on your watchlist, armed, a VIP drop or a product an admin
+  monitors: a loud siren and the pop-up, said as yours ("🚨 On your watchlist", "⚡ Armed — checking out"), up 30 s. Any
+  other drop: a soft blip and a small card in the corner that never gets in your way. In Discord, urgent DMs ping with a
+  header ("🚨 ON YOUR WATCHLIST — buy it now"); routine ones (listed, price drops, back to normal) arrive silently.
+- **Stores admins' browsers search going quiet** ("BIG W isn't being watched", "…being searched again") are shown in the
+  live log only — never DM'd.
+- **Queues and checkpoints, sooner:** JB Hi-Fi's checkpoint looked at every 3 s (confirmed a second later); EB Games' and
+  Pokémon Center's queues looked for every minute, every 30 s while someone's armed there. A checkpoint up opens its
+  check page in the checkout browser of every member armed at that store, to solve themselves before the drop; a queue
+  up puts their checkout browser in line, as before.
+- **An extension update never loses anything:** a new copy (loaded from a new folder, its storage empty) reconnects by
+  itself the moment the dashboard's open in that browser, and the card comes back from its locked copy.
+
 ### Mugibot 2.0: what changed in the engine
 
 - **Each store in its own lane.** Server page checks used to take the 50 oldest due pages across every store, four at a
