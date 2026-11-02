@@ -23,18 +23,20 @@ const state = { me: null, items: [], retailers: [], profiles: null, editing: nul
 //   👤 Account   membership, then your account
 // The Monitor's admin pages (Settings, Check log) sit under Drops.
 const PAGES = {
+  home: ['home'],
   monitor: ['monitor'], 'monitor-settings': ['monitor-settings'], 'monitor-log': ['monitor-log'],
-  aco: ['aco'], setup: ['extension', 'checkout', 'discord'], account: ['membership', 'account'],
+  // (Profile — "setup" in addresses: everything saved on your account, membership and account settings included.)
+  aco: ['aco'], setup: ['extension', 'checkout', 'discord', 'membership', 'account'],
 };
 // Addresses from before (in DMs, emails, the extension's Update button): the page each is on now, and where on it.
 // (#pool, from a pool invitation's DM: the 🤝 Pool card on Checkout.)
-const MOVED = { checkout: 'setup', extension: 'setup', discord: 'setup', update: 'setup', membership: 'account', pool: 'aco' };
-const SCROLL_TO = { checkout: '[data-panel="checkout"]', discord: '[data-panel="discord"]', update: '#ext-update', membership: '[data-panel="membership"]', pool: '#pool-card' };
+const MOVED = { checkout: 'setup', extension: 'setup', discord: 'setup', update: 'setup', membership: 'setup', account: 'setup', profile: 'setup', 'logins-card': 'setup', 'devices-card': 'setup', pool: 'aco' };
+const SCROLL_TO = { checkout: '[data-panel="checkout"]', discord: '[data-panel="discord"]', update: '#ext-update', membership: '[data-panel="membership"]', account: '#acct-form', 'logins-card': '#logins-card', 'devices-card': '#devices-card', pool: '#pool-card' };
 // The Monitor's own pages (Settings and Check log are for admins): the sidebar's Drops stays lit.
 const MONITOR_PAGES = new Set(['monitor', 'monitor-settings', 'monitor-log']);
-// The lists on the Drops page (tracked products, your watchlist, your armed items, your drop watches,
+// The lists on the Monitors page (tracked products, your watchlist, your armed items, your drop watches,
 // the release news, your activity). #watch and #activity — the old tabs, still in links and DMs —
-// #armed, #drops and #news open the Drops page at that list.
+// #armed, #drops and #news open the Monitors page at that list.
 const LISTS = ['tracked', 'watch', 'armed', 'drops', 'news', 'activity'];
 const LIST_HASH = { watch: 'watch', armed: 'armed', drops: 'drops', news: 'news', activity: 'activity' };
 const LIST_KEY = 'mgb-list';
@@ -46,7 +48,8 @@ function showTab() {
   // #membership (from before) are parts of Checkout, Setup and Account; #monitor/<product> (from a
   // Discord alert's Price history button) opens that product.
   if (LIST_HASH[hash]) state.list = LIST_HASH[hash];
-  const tab = LIST_HASH[hash] ? 'monitor' : PAGES[hash] ? hash : MOVED[hash] || 'monitor';
+  // (No address — the dashboard's front door: 🏠 Home, everything at a glance.)
+  const tab = LIST_HASH[hash] ? 'monitor' : PAGES[hash] ? hash : MOVED[hash] || (hash ? 'monitor' : 'home');
   if (tab === 'monitor' && $$('.side a.active')[0]?.dataset.tab === 'monitor' && productId) {
     monitorUI.openProduct(productId);
     return;
@@ -96,12 +99,12 @@ const dropsUI = setupDrops({
 // 📰 News: what's being released, when and at which stores (news.js).
 const newsUI = setupNews({ isAdmin: () => !!state.me && state.me.user.role === 'admin' });
 
-// --- The lists on the Drops page --------------------------------------------
+// --- The lists on the Monitors page --------------------------------------------
 function savedList() {
   try { const v = localStorage.getItem(LIST_KEY); return LISTS.includes(v) ? v : null; } catch { return null; }
 }
 
-/** Show one of the Drops page's lists. Members start at Tracked products; before a membership, your watchlist. */
+/** Show one of the Monitors page's lists. Members start at Tracked products; before a membership, your watchlist. */
 async function showList(name, { load = true } = {}) {
   const member = state.me.entitlement.active;
   // (No choice yet: what the monitor tracks — or, before a membership, your watchlist.)
@@ -152,9 +155,102 @@ loaders.monitor = async () => {
   $('#pt-armed').hidden = !state.me.entitlement.active;
   $('#pt-drops').hidden = !state.me.entitlement.active;
   $('#pt-news').hidden = !state.me.entitlement.active;
-  renderLoadout().catch(() => null);
   await Promise.all([monitorUI.load(), showList(state.list)]);
 };
+
+// ---------------------------------------------------------------------------
+// 🏠 Home: everything at a glance (Mugibot 2.1) — your loadout, your setup as a checklist, what's monitored now, your
+// armed tasks, queues up, your latest. One request (/api/home), and the extension asked about this browser.
+// ---------------------------------------------------------------------------
+loaders.home = async () => {
+  const [d] = await Promise.all([api('GET', '/api/home'), renderLoadout().catch(() => null)]);
+  state.homeAt = Date.now();
+  state.home = d;
+  renderHome(d).catch(() => null);
+};
+
+// (Kept up to date while it's open — one small request every 15 s — and at once when something of yours happens.)
+let homeTimer = null;
+const homeOpen = () => !$('[data-panel="home"]').hidden && !document.hidden;
+function refreshHome(delay = 400) {
+  clearTimeout(homeTimer);
+  homeTimer = setTimeout(() => { if (homeOpen()) loaders.home().catch(() => null); }, delay);
+}
+setInterval(() => { if (homeOpen()) refreshHome(0); }, 15000);
+
+const STORE_STATE = { ok: ['ok', 'Searching'], slowed: ['warn', 'Slowed'], retrying: ['err', 'Retrying'], waiting: ['warn', 'Waiting'], held: ['warn', 'Queue up'], starting: ['', 'Starting'], off: ['off', 'Off'] };
+
+async function renderHome(d) {
+  const ext = state.ext || await detectExtension();
+  const mine = ext.installed && ext.paired && ext.userId === state.me.user.id;
+  const card = mine ? ((await askExtension('cardStatus').catch(() => null)) || {}).card : null;
+  const s = d.setup;
+  // Your setup, as a checklist: each step done, or one button to do it.
+  const steps = [
+    ['⭐', 'Membership', s.membership, s.membership ? 'Active' : 'Start it to see every drop', '#membership'],
+    ['🧩', 'Extension connected', mine, !ext.installed ? 'Install it in the browser you keep open' : mine ? `v${ext.version} in this browser` : 'Connect it to your account', '#extension'],
+    ['📦', 'Delivery details', s.profile, s.profile ? 'Saved on your profile' : 'Your name and address for checkout', '#checkout'],
+    ['💳', 'Card saved', !!(card && card.ready), card && card.ready ? `${card.brand} •••• ${card.last4} in this browser` : 'Saved once, in your browser', '#checkout'],
+    ['💬', 'Discord connected', s.discord, s.discord ? 'DMs for your drops' : 'Your DMs, and ⚡ Buy from your phone', '#discord'],
+    ['🔑', 'Signed in at your stores', s.signins.kept > 0 && !s.signins.out.length && s.signins.in === s.signins.kept, s.signins.out.length ? `Signed out at ${s.signins.out.map((x) => x.name).join(', ')}` : `${s.signins.in} of ${s.signins.kept} checked signed in`, '#logins-card'],
+    ['🤖', 'Auto-checkout on', s.acoOn, s.acoOn ? (s.acoMode === 'place' ? 'Places orders for you' : 'Stops at the final button') : 'Buys what you arm the moment it drops', '#aco'],
+    ['🎯', 'Something to watch', s.watchlist > 0, s.watchlist ? `${s.watchlist} on your watchlist` : 'Add a product or a drop watch', '#watch'],
+  ];
+  const done = steps.filter((x) => x[2]).length;
+  $('#home-setup-pill').textContent = done === steps.length ? '✓ All set' : `${done} of ${steps.length}`;
+  $('#home-setup-pill').className = `pill ${done === steps.length ? 'ok' : 'warn'}`;
+  $('#home-setup-bar').style.width = `${Math.round((done / steps.length) * 100)}%`;
+  $('#home-checklist').replaceChildren(...steps.map(([icon, label, ok, sub, href]) => h('li', { class: ok ? 'done' : 'todo', dataset: { step: label } },
+    h('span', { class: 'ck', 'aria-hidden': 'true' }, ok ? '✓' : icon),
+    h('div', { class: 'tx' }, h('b', {}, label), h('small', {}, sub)),
+    ok ? null : h('a', { class: 'btn small primary', href }, 'Set up'))));
+  // What's monitored: each store's search, live; your watchlist, armed tasks and drop watches.
+  const m = d.monitoring;
+  const stat = (n, label, href) => h('a', { class: 'stat', href }, h('b', {}, String(n)), h('small', {}, label));
+  $('#home-counts').replaceChildren(stat(m.stores.filter((x) => x.status !== 'off').length, 'stores searched', '#monitor'), stat(m.watching, 'on your watchlist', '#watch'), stat(m.armed, 'armed tasks', '#armed'), stat(m.dropWatches, 'drop watches', '#drops'));
+  $('#home-keywords').textContent = m.keywords.length ? `Searching for ${m.keywords.join(', ')} — every few seconds, at every store below.` : '';
+  $('#home-live-pill').textContent = m.running ? 'Live' : 'Paused';
+  $('#home-live-pill').className = `pill ${m.running ? 'ok' : 'warn'}`;
+  $('#home-stores').replaceChildren(...m.stores.map((x) => {
+    const [tone, word] = STORE_STATE[x.status] || ['', x.status];
+    return h('li', { class: `store ${tone}`, dataset: { store: x.id }, title: x.lastOkAt ? `Last answered ${ago(x.lastOkAt)}` : 'Not answered yet' },
+      h('span', { class: 'dot', 'aria-hidden': 'true' }), h('span', { class: 'nm' }, x.name), h('small', {}, word));
+  }));
+  // Armed tasks.
+  const body = $('#home-task-table tbody');
+  body.replaceChildren(...(d.tasks.length ? d.tasks.map((t) => h('tr', {},
+    h('td', {}, t.url ? h('a', { href: t.url, target: '_blank', rel: 'noopener' }, t.name) : t.name), h('td', {}, t.storeName),
+    h('td', {}, t.quantity === 'most' ? 'Most' : String(t.quantity)), h('td', {}, money(t.maxPrice) || '—'),
+    h('td', {}, h('span', { class: `pill st-${t.status}` }, STATUS[t.status] || t.status))))
+    : [h('tr', {}, h('td', { colspan: '5', class: 'muted' }, 'Nothing armed yet — arm an item (⚡ Auto-checkout) and it\'s bought the moment it drops.'))]));
+  // Your latest (yours only: restocks, drops, checkouts, queues, sign-ins).
+  $('#home-recent-list').replaceChildren(...(d.recent.length ? d.recent.map((e) => h('li', { class: e.level },
+    h('span', { class: 'when' }, ago(e.at)), h('span', { class: 'tx' }, e.message)))
+    : [h('li', { class: 'muted' }, 'Nothing yet — your drops, checkouts and queues show up here.')]));
+}
+
+// 📋 Saved on your profile (the Profile page's top): everything kept on your account.
+async function renderProfileSummary() {
+  const d = state.home && Date.now() - (state.homeAt || 0) < 15000 ? state.home : await api('GET', '/api/home');
+  state.home = d;
+  state.homeAt = Date.now();
+  const p = d.profile;
+  const ext = state.ext || await detectExtension();
+  const mine = ext.installed && ext.paired && ext.userId === state.me.user.id;
+  const card = mine ? ((await askExtension('cardStatus').catch(() => null)) || {}).card : null;
+  const row = (term, value, href) => [h('dt', {}, term), h('dd', {}, value, href ? h('a', { class: 'edit', href }, 'Edit') : null)];
+  const rows = [
+    row('Account', `${p.username}${p.email ? ` · ${p.email}` : ''}`, '#account'),
+    row('Membership', state.me.entitlement.label || (state.me.entitlement.active ? 'Active' : 'Not active'), '#membership'),
+    row('Delivery details', p.delivery.filter((x) => x.name || x.where).map((x) => `${x.label}${x.isDefault ? ' (default)' : ''}: ${[x.name, x.where].filter(Boolean).join(', ')}`).join(' · ') || 'None saved yet', '#checkout'),
+    row('Card', [card && card.ready ? `${card.brand} •••• ${card.last4} in this browser` : 'Not in this browser', p.cards.length ? `locked copy on your account (${p.cards.map((c) => `${c.brand} •••• ${c.last4}`).join(', ')}) — comes back by itself after an update` : ''].filter(Boolean).join(' · '), '#checkout'),
+    row('Store sign-ins', `${p.signins.kept} kept signed in 24/7${p.signins.dm ? ', DM when signed out' : ''}`, '#logins-card'),
+    row('Browsers', p.browsers.length ? p.browsers.map((b) => `${b.name}${b.checkout ? ' (checks out)' : ''}`).join(', ') : 'None connected', '#devices-card'),
+    row('Auto-checkout', p.aco.enabled ? `On — ${p.aco.mode === 'place' ? 'places orders' : 'stops at the final button'}, up to $${p.aco.maxOrder} an order, ${p.aco.perDay} a day` : 'Off', '#aco'),
+    row('Discord', p.discord ? `Connected (${p.discord})` : 'Not connected', '#discord'),
+  ];
+  $('#profile-summary-list').replaceChildren(...rows.flat());
+}
 
 /**
  * Your loadout, at the top of Drops: is everything ready for the next drop? Your membership,
@@ -162,28 +258,7 @@ loaders.monitor = async () => {
  * chip that says so, and takes you to where it's set up when it isn't.
  */
 async function renderLoadout() {
-  const box = $('#loadout');
-  const me = state.me;
-  const [aco, ext] = await Promise.all([api('GET', '/api/aco?limit=1').catch(() => null), detectExtension()]);
-  const mine = ext.installed && ext.paired && ext.userId === me.user.id;
-  const card = mine ? ((await askExtension('cardStatus')) || {}).card : null;
-  const chip = (tone, icon, label, sub, href) => h('a', { class: `lo-chip ${tone}`, href }, h('span', { class: 'lo-ic', 'aria-hidden': 'true' }, icon),
-    h('span', { class: 'lo-tx' }, h('b', {}, label), sub ? h('small', {}, sub) : null));
-  const minV = (aco && aco.extensionVersion) || me.app.extensionVersion;
-  const chips = [
-    me.entitlement.active ? chip(me.entitlement.warning ? 'warn' : 'ok', '⭐', 'Membership', me.entitlement.label || 'Active', '#membership') : chip('warn', '⭐', 'Start your membership', 'to see every drop', '#membership'),
-    aco && aco.settings && aco.settings.enabled
-      ? chip('ok', '🤖', 'Auto-checkout on', `${aco.armed || 0} armed`, '#aco')
-      : chip('idle', '🤖', 'Auto-checkout off', aco && aco.armed ? `${aco.armed} armed` : 'arm an item to buy it the moment it drops', '#aco'),
-    !ext.installed ? chip('warn', '🧩', 'Install the extension', 'for ⚡ Buy in this browser', '#extension')
-      : !mine ? chip('warn', '🧩', 'Connect the extension', 'to your account', '#extension')
-        : versionBelow(ext.version, minV) ? chip('warn', '🧩', `Update the extension`, `v${ext.version} → ${minV}`, '#update')
-          : chip('ok', '🧩', 'Extension ready', `v${ext.version}`, '#extension'),
-    card && card.ready ? chip('ok', '💳', `${card.brand} •••• ${card.last4}`, 'saved in this browser', '#checkout')
-      : chip(mine ? 'warn' : 'idle', '💳', 'Save your card', 'it never leaves your browser', '#checkout'),
-  ];
-  box.replaceChildren(...chips);
-  box.hidden = false;
+  // (Mugibot 2.1: the loadout's chips are Home's checklist now — this keeps the sidebar's store count.)
   const stores = (state.retailers || []).filter((r) => !r.demo && r.id !== 'other').length;
   if (stores) $('#side-stores').textContent = `${stores} stores`;
 }
@@ -420,31 +495,51 @@ async function loadLogins() {
   return state.logins;
 }
 
-// Signed out first (the ones to fix), then the stores not seen yet, then the ones you're signed in at.
-// Stores on your watchlist go first in each group.
+// Signed out first (the ones to fix), then the stores not seen yet, then the ones you're signed in at — the stores you keep
+// signed in to 24/7 ticked (Mugibot 2.1: one card for it all, on Profile), stores on your watchlist first in each group.
 function renderLogins() {
   const d = state.logins;
   const list = $('#logins');
   if (!d || !list) return;
   list.textContent = '';
+  if (d.prefs) $('#signins-dm').checked = !!d.prefs.dm;
   const watched = new Set(state.items.map((it) => it.store));
-  const rank = (s) => ({ out: 0, unknown: 1, in: 3 }[s.status] ?? 2) * 2 + (watched.has(s.id) ? 0 : 1);
+  const rank = (s) => ({ out: 0, unknown: 1, in: 3 }[s.status] ?? 2) * 4 + (s.keep ? 0 : 2) + (watched.has(s.id) ? 0 : 1);
   const stores = [...d.stores].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   const ins = stores.filter((s) => s.status === 'in').length;
   const outs = stores.filter((s) => s.status === 'out');
-  $('#logins-sum').textContent = !d.browsers ? 'Connect the extension (step 2) and this shows where you\'re signed in.'
-    : `Signed in at ${ins} of ${stores.length} stores.${outs.length ? ` Signed out at ${outs.map((s) => s.name).join(', ')}.` : ''}`;
+  const kept = stores.filter((s) => s.keep);
+  $('#logins-sum').textContent = !d.browsers ? 'Connect the extension (above) and this shows where you\'re signed in.'
+    : `Signed in at ${ins} of ${stores.length} stores.${outs.length ? ` Signed out at ${outs.map((s) => s.name).join(', ')}.` : ''} You keep ${kept.length} signed in 24/7.`;
   for (const s of stores) {
-    const seen = s.at ? `${LOGIN_TEXT[s.status] || 'Seen'} · ${s.how === 'check' ? 'checked' : 'seen'} ${ago(s.at)}${d.browsers > 1 && s.device ? ` in ${s.device}` : ''}`
-      : s.checked ? 'Not checked yet' : 'Not seen yet: open the store once';
-    list.append(h('li', { class: `login ${s.status || 'none'}`, dataset: { store: s.id } },
+    const seen = s.at ? `${LOGIN_TEXT[s.status] || 'Seen'}${s.since && s.status === 'out' && s.keep ? ` since ${when(s.since)}` : ''} · ${s.how === 'check' || s.how === 'probe' ? 'checked' : 'seen'} ${ago(s.at)}${d.browsers > 1 && s.device ? ` in ${s.device}` : ''}${s.stale ? ' — not checked lately (is that browser open?)' : ''}`
+      : s.checked || s.keep ? 'Not checked yet' : 'Not seen yet: open the store once';
+    const box = h('input', { type: 'checkbox', name: 'keep', value: s.id, 'aria-label': `Keep signed in at ${s.name} 24/7`, title: 'Keep signed in 24/7: checked around the clock, told when signed out' });
+    box.checked = !!s.keep;
+    list.append(h('li', { class: `login ${s.status || 'none'}`, dataset: { store: s.id, keep: s.keep ? '1' : '0' } },
+      box,
       h('span', { class: 'dot', 'aria-hidden': 'true' }),
       h('div', { class: 'info' },
-        h('div', { class: 'name' }, s.name, watched.has(s.id) ? h('span', { class: 'pill info', title: 'On your watchlist' }, 'watching') : null),
+        h('div', { class: 'name' }, s.name, watched.has(s.id) ? h('span', { class: 'pill info', title: 'On your watchlist' }, 'watching') : null, s.required ? h('span', { class: 'pill warn', title: 'Only sells to signed-in customers' }, 'sign-in only') : null),
         h('div', { class: 'meta', title: seen }, seen)),
       s.status === 'in' ? null : h('a', { class: `btn small${s.status === 'out' ? ' primary' : ''}`, href: s.signInUrl, target: '_blank', rel: 'noopener' }, 'Sign in ↗')));
   }
 }
+
+$('#logins-card').addEventListener('submit', (e) => {
+  e.preventDefault();
+  busy(e.target, async () => {
+    try {
+      const stores = $$('#logins input[name=keep]').filter((b) => b.checked).map((b) => b.value);
+      await api('PUT', '/api/logins/prefs', { stores, dm: $('#signins-dm').checked });
+      await loadLogins();
+      renderLogins();
+      setMsg($('#logins-msg'), 'Saved.', true);
+    } catch (err) {
+      setMsg($('#logins-msg'), err.message);
+    }
+  });
+});
 
 $('#logins-check').addEventListener('click', async (e) => {
   const msg = $('#logins-msg');
@@ -480,6 +575,7 @@ loaders.extension = async () => {
   if (store) { $('#store-link').href = store; $('#update-store-link').href = store; }
   const [retailers, alerts] = await Promise.all([loadRetailers(), loadAlerts(), renderExtStatus(), loadDevices(), loadLogins(), state.items.length ? null : loadItems()]);
   renderLogins();
+  renderProfileSummary().catch(() => null);
   $('#b-checks').checked = alerts.browserChecks;
   const list = $('#stores');
   list.textContent = '';
@@ -957,7 +1053,7 @@ $('#w-demo').addEventListener('click', async () => {
   toast(r.added ? `Added ${r.added} dummy-store item${r.added === 1 ? '' : 's'}` : 'You already have the dummy-store items', `Change their stock at ${state.me.app.demoStoreUrl}`);
 });
 
-// Your watchlist, on the Drops page.
+// Your watchlist, on the Monitors page.
 async function loadWatch() {
   await Promise.all([renderExtStatus(), loadLogins().catch(() => null)]);
   renderItems();
@@ -1185,8 +1281,8 @@ async function renderCard() {
   const box = $('#card-state');
   const ext = state.ext || await detectExtension();
   state.ext = ext;
-  if (!ext.installed) { box.className = 'notice warn'; box.textContent = 'Install the extension (Setup page) to save a card in this browser.'; return; }
-  if (!ext.paired || ext.userId !== state.me.user.id) { box.className = 'notice warn'; box.textContent = 'Connect the extension to your account (Setup page) first.'; return; }
+  if (!ext.installed) { box.className = 'notice warn'; box.textContent = 'Install the extension (Profile page) to save a card in this browser.'; return; }
+  if (!ext.paired || ext.userId !== state.me.user.id) { box.className = 'notice warn'; box.textContent = 'Connect the extension to your account (Profile page) first.'; return; }
   const r = await askExtension('cardStatus');
   const c = r && r.card;
   const b = state.cardBackup;
@@ -1213,7 +1309,7 @@ async function renderCard() {
     : ready ? `${label} — ready: ⚡ Buy fills it in at checkout${c.hasCvc === false ? ' (no CVV saved: you type that in)' : ''}.${several ? ` It's your default, of ${c.cards.length} cards saved in this browser.` : ''}`
       : c.needsPassphrase ? `${label} — saved by an older version. Press Card settings and enter its passphrase once, and it stays ready from then on.`
         : c.unreadable ? `${label} — couldn't be read in this browser. Press Card settings and save it again.`
-          : `${label} — locked. Update the extension (Setup page) and the card stays ready without unlocking.`;
+          : `${label} — locked. Update the extension (Profile page) and the card stays ready without unlocking.`;
   renderCardList(c);
 }
 
@@ -1237,7 +1333,7 @@ function renderCardList(c) {
           onclick: async (e) => {
             e.currentTarget.disabled = true;
             const r = await askExtension('cardDefault', { cardId: x.id }, 8000);
-            if (!r || !r.ok) toast("Couldn't change it", (r && r.error) || 'Update the extension to 1.33 or newer (Setup page), or change it in Card settings.', 'warn');
+            if (!r || !r.ok) toast("Couldn't change it", (r && r.error) || 'Update the extension to 1.33 or newer (Profile page), or change it in Card settings.', 'warn');
             else toast('Default card changed', `${x.brand} •••• ${x.last4} is your default: every checkout uses it from now on.`, 'success');
             renderCard().catch(() => null);
           },
@@ -1246,7 +1342,7 @@ function renderCardList(c) {
 }
 $('#card-open').addEventListener('click', async () => {
   const r = await askExtension('openCardSettings');
-  if (!r) toast('Extension not found', 'Install and connect the extension first (Setup page).', 'warn');
+  if (!r) toast('Extension not found', 'Install and connect the extension first (Profile page).', 'warn');
 });
 
 loaders.checkout = async () => {
@@ -1315,7 +1411,7 @@ function renderAcoSettings() {
 }
 
 // ---------------------------------------------------------------------------
-// 🤖 Armed (a list on the Drops page): your watchlist's items for Auto-checkout, each with its switch,
+// 🤖 Armed (a list on the Monitors page): your watchlist's items for Auto-checkout, each with its switch,
 // its max price, whether everything its run needs is ready, and its buttons
 // ---------------------------------------------------------------------------
 // The delivery details a checkout fills in (the email: the account's, when the address has none).
@@ -1743,7 +1839,7 @@ async function renderAcoChecks() {
   }
   if (s.enabled || (s.remoteBuy && isHere)) {
     rows.push([!!(listening && listening.listening), listening && listening.listening ? (isHere && s.remoteBuy ? 'This browser is listening for runs — your armed items\' drops and Discord\'s ⚡ Buy. Keep Chrome open' : 'This browser is listening for your armed items to drop — keep Chrome open')
-      : state.items.some((it) => it.aco) || isHere ? 'This browser isn\'t listening yet — reload this page, or check the extension is connected (and up to date)' : 'Arm an item on the Armed tab (Drops page), and this browser starts listening for it', 'Armed', '#armed']);
+      : state.items.some((it) => it.aco) || isHere ? 'This browser isn\'t listening yet — reload this page, or check the extension is connected (and up to date)' : 'Arm an item on the Armed tab (Monitors page), and this browser starts listening for it', 'Armed', '#armed']);
   }
   const armed = state.items.filter((it) => it.aco).length;
   rows.push([!!armed, armed ? `${armed} item${armed === 1 ? '' : 's'} armed — each one's own checks (bag, sign-in, card, address) are on the Armed tab` : 'Nothing armed yet', 'Arm an item', '#armed']);
@@ -1777,7 +1873,7 @@ function renderCheckoutBrowser() {
     pill.className = 'pill warn';
     pill.textContent = 'None connected';
     box.className = 'notice warn cb-now';
-    box.append(h('span', { class: 'grow' }, 'No browser with the extension is connected yet: install it and press Connect this browser in the browser on the computer you keep on (', h('a', { href: '#extension' }, 'Setup page'), ').'));
+    box.append(h('span', { class: 'grow' }, 'No browser with the extension is connected yet: install it and press Connect this browser in the browser on the computer you keep on (', h('a', { href: '#extension' }, 'Profile page'), ').'));
   } else if (chosen && chosen.listening) {
     pill.className = 'pill ok';
     pill.textContent = 'Open — ready';
@@ -1798,7 +1894,7 @@ function renderCheckoutBrowser() {
       hereB && chosen && hereB.id !== chosen.id ? use(hereB, 'Use this browser', true) : null);
   }
   // You're in a browser without the extension connected: it can't check out here.
-  if (browsers.length && !hereB) box.append(h('span', { class: 'muted small' }, state.ext && state.ext.installed ? 'This browser\'s extension isn\'t connected to your account (Setup page), so it can\'t check out here.' : 'This browser has no Mugibot extension, so it can\'t check out here.'));
+  if (browsers.length && !hereB) box.append(h('span', { class: 'muted small' }, state.ext && state.ext.installed ? 'This browser\'s extension isn\'t connected to your account (Profile page), so it can\'t check out here.' : 'This browser has no Mugibot extension, so it can\'t check out here.'));
   const list = $('#cb-list');
   list.textContent = '';
   for (const b of browsers) {
@@ -1832,7 +1928,7 @@ function renderAcoRemote() {
   const note = $('#aco-device-note');
   note.textContent = '';
   if (!browsers.length) {
-    note.append('Connect the extension in the browser on the computer you keep on (', h('a', { href: '#extension' }, 'Setup page'), ').');
+    note.append('Connect the extension in the browser on the computer you keep on (', h('a', { href: '#extension' }, 'Profile page'), ').');
     return;
   }
   const old = checkout && versionBelow(checkout.version, state.aco.remoteVersion);
@@ -2006,7 +2102,7 @@ function renderBags() {
   list.textContent = '';
   const device = d.device;
   const old = !!device && versionBelow(device.version, d.extensionVersion);
-  $('#bags-sum').textContent = !device ? "Connect the extension in the browser you check out with (Setup page), and its bags can be emptied from here."
+  $('#bags-sum').textContent = !device ? "Connect the extension in the browser you check out with (Profile page), and its bags can be emptied from here."
     : old ? `Update the extension in ${device.name} to ${d.extensionVersion} or newer to empty its bags from here (it has ${device.version || 'an older one'}).`
       : `Emptied in ${device.name}, your checkout browser${device.listening ? ' (open now)' : " — it isn't open right now: it empties them when it next is"}.`;
   $('#bags-all').disabled = !device || old;
@@ -2259,7 +2355,7 @@ function feedItem(ev) {
     h('time', { datetime: new Date(ev.createdAt).toISOString() }, when(ev.createdAt)),
     h('span', {}, ev.message, /^https?:\/\//i.test(ev.url || '') ? [' ', h('a', { href: ev.url, target: '_blank', rel: 'noopener' }, '↗')] : null));
 }
-// Your activity, on the Drops page: 20 to a page, newest first.
+// Your activity, on the Monitors page: 20 to a page, newest first.
 const FEED_PAGE_SIZE = 20;
 async function loadFeed(page = 1) {
   const r = await api('GET', `/api/events?limit=${FEED_PAGE_SIZE}&page=${page}`);
@@ -2280,68 +2376,6 @@ function renderFeedPager() {
 // ---------------------------------------------------------------------------
 // 👤 Account
 // ---------------------------------------------------------------------------
-// 🔑 Store sign-ins, 24/7 (server/signins.js): the stores you keep signed in to — ticked — each one's state as the
-// browser Mugibot checks out in last saw it, since when, and its "Sign in" button; whether you're DM'd when signed out.
-loaders.account = async () => {
-  await loadLogins().catch(() => null);
-  renderSignins();
-};
-
-function renderSignins() {
-  const d = state.logins;
-  const list = $('#signins');
-  if (!d || !list) return;
-  list.textContent = '';
-  $('#signins-dm').checked = !!(d.prefs && d.prefs.dm);
-  const rank = (s) => (s.keep ? 0 : 4) + ({ out: 0, unknown: 1, in: 3 }[s.status] ?? 2);
-  const stores = [...d.stores].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-  const kept = stores.filter((s) => s.keep);
-  const outs = kept.filter((s) => s.status === 'out');
-  $('#signins-sum').textContent = !d.browsers ? 'Connect the extension (Setup → Extension) and this shows where you\'re signed in.'
-    : `${outs.length ? `⚠️ Signed out at ${outs.map((s) => s.name).join(', ')}. ` : ''}Signed in at ${kept.filter((s) => s.status === 'in').length} of the ${kept.length} store${kept.length === 1 ? '' : 's'} you keep${d.checkoutBrowser ? ` (in ${d.checkoutBrowser}, the browser Mugibot checks out in)` : ''}.`;
-  for (const s of stores) {
-    const seen = s.at ? `${LOGIN_TEXT[s.status] || 'Seen'}${s.since && s.status === 'out' ? ` since ${when(s.since)}` : ''} · ${s.how === 'check' || s.how === 'probe' ? 'checked' : 'seen'} ${ago(s.at)}${d.browsers > 1 && s.device ? ` in ${s.device}` : ''}${s.stale ? ' — not checked lately (is that browser open?)' : ''}`
-      : 'Not seen yet: the extension checks it soon (or open the store once)';
-    const box = h('input', { type: 'checkbox', name: 'keep', value: s.id, 'aria-label': `Keep signed in at ${s.name}` });
-    box.checked = !!s.keep;
-    list.append(h('li', { class: `login ${s.status || 'none'}${s.keep ? '' : ' muted'}`, dataset: { store: s.id } },
-      box,
-      h('span', { class: 'dot', 'aria-hidden': 'true' }),
-      h('div', { class: 'info' },
-        h('div', { class: 'name' }, s.name, s.required ? h('span', { class: 'pill warn', title: 'Only sells to signed-in customers' }, 'sign-in only') : null),
-        h('div', { class: 'meta', title: seen }, seen)),
-      s.status === 'in' ? null : h('a', { class: `btn small${s.status === 'out' && s.keep ? ' primary' : ''}`, href: s.signInUrl, target: '_blank', rel: 'noopener' }, 'Sign in ↗')));
-  }
-}
-
-$('#signins-form').addEventListener('submit', (e) => {
-  e.preventDefault();
-  busy(e.target, async () => {
-    try {
-      const stores = $$('#signins input[name=keep]').filter((b) => b.checked).map((b) => b.value);
-      await api('PUT', '/api/logins/prefs', { stores, dm: $('#signins-dm').checked });
-      await loadLogins();
-      renderSignins();
-      setMsg($('#signins-msg'), 'Saved.', true);
-    } catch (err) {
-      setMsg($('#signins-msg'), err.message);
-    }
-  });
-});
-
-$('#signins-check').addEventListener('click', async () => {
-  const msg = $('#signins-msg');
-  if (!state.ext || !state.ext.paired) { setMsg(msg, 'Install the extension and connect it (Setup → Extension) first.'); return; }
-  await busy($('#signins-form'), async () => {
-    setMsg(msg, 'Checking…', true);
-    const reply = await askExtension('checkLogins', {}, 60000);
-    if (!reply || !reply.ok) { setMsg(msg, 'The extension didn\'t answer: reload this page and try again.'); return; }
-    await loadLogins();
-    renderSignins();
-    setMsg(msg, reply.checked ? `Checked ${reply.checked} store${reply.checked === 1 ? '' : 's'}.` : 'Up to date (checked in the last minute).', true);
-  });
-});
-
 $('#acct-form').addEventListener('submit', (e) => {
   e.preventDefault();
   busy(e.target, async () => {
@@ -2401,6 +2435,7 @@ function connectStream() {
       renderFeedPager();
     }
     if (ev.type === 'billing' || ev.type === 'account') loadMe().catch(() => null);
+    refreshHome();
   });
   // A drop watch looked, or found something (drops.js).
   es.addEventListener('drop', () => { if (listOpen('drops')) dropsUI.refreshSoon(); });
@@ -2448,11 +2483,11 @@ function connectStream() {
     if (listOpen('armed')) loadArmed().catch(() => null);
   });
   es.addEventListener('devices', () => {
+    refreshHome();
     if (!$('[data-panel="extension"]').hidden) {
       loadDevices().catch(() => null);
       loadLogins().then(renderLogins).catch(() => null);
     }
-    if (!$('[data-panel="account"]').hidden) loadLogins().then(renderSignins).catch(() => null);
     if (listOpen('watch')) loadLogins().then(renderItems).catch(() => null);
     if (listOpen('armed')) Promise.all([loadLogins(), loadAco()]).then(renderArmed).catch(() => null);
     renderExtStatus().catch(() => null);

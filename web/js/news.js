@@ -1,4 +1,4 @@
-// 📰 News (docs/NEWS.md), on the Drops page's lists: what's being released, when and at which
+// 📰 News (docs/NEWS.md), on the Monitors page's lists: what's being released, when and at which
 // stores — soonest first — and the latest release news, from the admins and the news sites Mugibot
 // reads. The same news is posted in the Discord server's #news.
 import { $, api, h, when } from './common.js';

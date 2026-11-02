@@ -353,6 +353,64 @@ export function register(router, ctx) {
 
   // The store login monitor: each store, and whether you're signed in there (the latest any of your
   // browsers saw), with where to sign in. Signed in, ⚡ Buy's checkout is faster.
+  // 🏠 Home (Mugibot 2.1): everything at a glance, in one answer — what's monitored (each store's search, live), what
+  // you're watching and have armed, what's needed before the next drop (your setup), queues and checkpoints up, and your
+  // latest alerts. Only what this account may see; nothing that needs the extension (that the dashboard asks it itself).
+  router.get('/api/home', async (req) => {
+    const u = req.user;
+    const now = repo.now();
+    const items = repo.listItems(u.id);
+    const armed = items.filter((it) => it.aco);
+    const aco = ctx.aco.settings(u.id);
+    const devices = repo.listDevices(u.id);
+    const checkout = ctx.aco.checkoutDevice(u.id);
+    const profiles = repo.getProfiles(u.id);
+    const pf = profiles.profiles.find((x) => x.id === profiles.defaultId) || profiles.profiles[0] || {};
+    const view = ctx.signins.view(u.id);
+    const keptIds = new Set(view.prefs.stores);
+    const signins = ctx.signins.candidates().filter((r) => keptIds.has(r.id)).map((r) => {
+      const l = ctx.signins.reading(r, devices, checkout);
+      return { id: r.id, name: r.name, status: l ? l.status : null, at: l ? l.at : null, signInUrl: `${r.base}${r.account.signIn || ''}` };
+    });
+    const live = ctx.sweeper.live();
+    const settings = ctx.sweeper.settings || {};
+    const drops = ctx.drops.watches().filter((w) => w.userId === u.id || w.shared);
+    const important = new Set(['restock', 'listed', 'aco', 'gate', 'signin']);
+    const recent = repo.listEvents(u.id, { limit: 40 }).filter((e) => important.has(e.type) && e.level !== 'info').slice(0, 6);
+    return {
+      now,
+      setup: {
+        membership: !!entitlement(u, now).active,
+        discord: !!u.discord_id,
+        profile: !!(pf.firstName && pf.address1 && pf.postcode),
+        browsers: devices.length,
+        checkoutBrowser: checkout ? { name: checkout.name, listening: ctx.aco.isListening(checkout.id) } : null,
+        acoOn: !!aco.enabled, acoMode: aco.mode,
+        watchlist: items.length,
+        signins: { kept: signins.length, in: signins.filter((x) => x.status === 'in').length, out: signins.filter((x) => x.status === 'out') },
+      },
+      monitoring: {
+        keywords: Array.isArray(settings.keywords) ? settings.keywords : [],
+        running: !!live.running,
+        stores: live.stores.filter((x) => !x.id.startsWith('demo-') || cfg.demoStoreUrl).map((x) => ({ id: x.id, name: x.name, status: x.status, from: x.from, lastAt: x.lastAt, lastOkAt: x.lastOkAt })),
+        watching: items.length, armed: armed.length, dropWatches: drops.length,
+      },
+      tasks: armed.slice(0, 12).map((it) => ({ id: it.id, name: it.name, store: it.store, storeName: retailers.name(it.store), maxPrice: it.maxPrice, quantity: it.qtyRule === 'max' ? 'most' : it.quantity || 1, status: it.status, url: it.url })),
+      gates: ctx.gates ? ctx.gates.upList().map((g) => ({ store: g.store, name: g.name, kind: g.kind, since: g.since, wait: g.wait, url: g.url, inLine: ctx.aco.inLobby(u.id, g.store) })) : [],
+      recent: recent.map((e) => ({ at: e.createdAt, type: e.type, level: e.level, message: e.message, url: e.url || null })),
+      // Profile: everything saved on the account (nothing that could be used to pay: the card's brand, last 4 and expiry).
+      profile: {
+        username: u.username, email: u.email || '', discord: u.discord_id ? (u.discord_username || 'connected') : null,
+        delivery: profiles.profiles.map((x) => ({ label: x.label || 'Home', name: [x.firstName, x.lastName].filter(Boolean).join(' '), where: [x.suburb, x.state, x.postcode].filter(Boolean).join(' '), isDefault: x.id === profiles.defaultId })),
+        cards: (((repo.getData(u.id, 'cardRestore', null) || {}).copies) || []).map((c) => ({ brand: c.brand || 'Card', last4: c.last4 || '', exp: c.expMonth && c.expYear ? `${c.expMonth}/${String(c.expYear).slice(-2)}` : '' })),
+        cardBackup: !!repo.getData(u.id, 'cardBackup', null),
+        browsers: devices.map((d) => ({ name: d.name, version: d.version, checkout: !!(checkout && checkout.id === d.id) })),
+        aco: { enabled: !!aco.enabled, mode: aco.mode, maxOrder: aco.maxOrder, perDay: aco.perDay, spendPerDay: aco.spendPerDay },
+        signins: { kept: view.prefs.stores.length, dm: view.prefs.dm },
+      },
+    };
+  });
+
   // (Mugibot 2.0: keep — a store you keep signed in to, told at once when you're signed out there (server/signins.js);
   //  the reading that counts is the checkout browser's, else the latest of any; since: in that state since; stale: not
   //  checked lately.)

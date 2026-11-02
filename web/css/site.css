@@ -1,27 +1,28 @@
 /* Mugibot — shared styles for the website, dashboard and admin.
-   The look: a bright, clean card-shop table — white cards on a soft lavender ground, an electric
-   violet → pink "holo foil" for what you press, Pikachu yellow for what's new, and clear status
-   colours (green in stock, amber waiting, red sold out). Dark is still there (☾ in the top bar). */
+   Mugibot 2.1: a drop bot's dashboard — dark by default, compact, status first (green live / in stock,
+   amber waiting, red needs you), neon violet for what you press. Light is still there (☀ in the top bar). */
 :root {
-  --bg: #f6f4fd; --surface: #ffffff; --surface-2: #f2effb; --fg: #1a1433; --muted: #615a7e; --line: #e5e0f3;
-  --brand: #6d28d9; --brand-fg: #ffffff; --brand-2: #db2777; --accent: #ffcb05; --accent-fg: #1d1500;
-  --grad: linear-gradient(135deg, #7c3aed 0%, #c026d3 52%, #ec4899 100%);
-  --holo: linear-gradient(90deg, #7c3aed, #ec4899, #f59e0b, #10b981, #06b6d4, #7c3aed);
-  --glow: 0 6px 18px rgba(124, 58, 237, .28);
-  --ok: #047857; --ok-bg: #e2f7ee; --warn: #a14f05; --warn-bg: #fff2d9; --err: #c81e1e; --err-bg: #fde8e8; --info-bg: #e8efff; --info: #1d4ed8;
-  --radius: 14px; --shadow: 0 1px 2px rgba(26, 20, 51, .05), 0 8px 24px rgba(91, 63, 191, .08);
-  --page: radial-gradient(1100px 520px at -10% -12%, #fde7f5 0%, transparent 62%), radial-gradient(900px 480px at 110% -8%, #e0f2fe 0%, transparent 58%), radial-gradient(800px 600px at 50% 120%, #ede9fe 0%, transparent 60%);
-  color-scheme: light;
-}
-:root[data-theme="dark"] {
-  --bg: #120e24; --surface: #1b1634; --surface-2: #241e43; --fg: #f1edff; --muted: #a9a1c9; --line: #322a57;
-  --brand: #a78bfa; --brand-fg: #120e24; --brand-2: #f472b6; --accent: #ffd43b; --accent-fg: #1d1500;
-  --grad: linear-gradient(135deg, #8b5cf6 0%, #d946ef 52%, #f472b6 100%);
-  --glow: 0 6px 22px rgba(167, 139, 250, .3);
-  --ok: #4ade80; --ok-bg: #11301f; --warn: #fbbf24; --warn-bg: #352710; --err: #f87171; --err-bg: #3a1622; --info: #93b4ff; --info-bg: #1c2550;
-  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 28px rgba(0, 0, 0, .3);
-  --page: radial-gradient(1100px 520px at -10% -12%, rgba(236, 72, 153, .16) 0%, transparent 62%), radial-gradient(900px 480px at 110% -8%, rgba(6, 182, 212, .14) 0%, transparent 58%);
+  /* Mugibot 2.1 — the look of a drop bot's dashboard: dark by default (deep blue-black, neon violet for what you press,
+     a teal accent, clear status colours — green live/in stock, amber waiting, red needs you). Light is one click away. */
+  --bg: #0a0d14; --surface: #121722; --surface-2: #1a2030; --fg: #e8ecf5; --muted: #8d97ad; --line: #252d3f;
+  --brand: #8b5cf6; --brand-fg: #ffffff; --brand-2: #22d3ee; --accent: #facc15; --accent-fg: #1d1500;
+  --grad: linear-gradient(135deg, #7c3aed 0%, #6366f1 55%, #22d3ee 100%);
+  --holo: linear-gradient(90deg, #8b5cf6, #22d3ee, #34d399, #facc15, #f472b6, #8b5cf6);
+  --glow: 0 0 0 1px rgba(139, 92, 246, .35), 0 8px 24px rgba(99, 102, 241, .22);
+  --ok: #34d399; --ok-bg: #0e2a22; --warn: #fbbf24; --warn-bg: #2d2410; --err: #f87171; --err-bg: #34141a; --info: #7dd3fc; --info-bg: #0f2433;
+  --radius: 12px; --shadow: 0 1px 2px rgba(0, 0, 0, .45), 0 10px 26px rgba(0, 0, 0, .35);
+  --page: radial-gradient(1000px 480px at -8% -10%, rgba(124, 58, 237, .18) 0%, transparent 60%), radial-gradient(900px 460px at 108% -6%, rgba(34, 211, 238, .10) 0%, transparent 58%);
   color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #f5f6fb; --surface: #ffffff; --surface-2: #f0f2f8; --fg: #121726; --muted: #5b6478; --line: #e1e5ef;
+  --brand: #6d28d9; --brand-fg: #ffffff; --brand-2: #0891b2; --accent: #eab308; --accent-fg: #1d1500;
+  --grad: linear-gradient(135deg, #6d28d9 0%, #4f46e5 55%, #0891b2 100%);
+  --glow: 0 6px 18px rgba(79, 70, 229, .22);
+  --ok: #047857; --ok-bg: #e2f7ee; --warn: #a14f05; --warn-bg: #fff2d9; --err: #c81e1e; --err-bg: #fde8e8; --info-bg: #e6f4fb; --info: #0369a1;
+  --shadow: 0 1px 2px rgba(18, 23, 38, .05), 0 8px 22px rgba(18, 23, 38, .07);
+  --page: radial-gradient(1000px 480px at -8% -10%, #ede9fe 0%, transparent 60%), radial-gradient(900px 460px at 108% -6%, #e0f7fb 0%, transparent 58%);
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -1021,3 +1022,55 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 .sn-mini-name { font-weight: 600; margin: 3px 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sn-mini-foot { display: flex; align-items: center; gap: 6px; }
 .sn-mini-foot .pr { font-weight: 700; margin-right: auto; font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------------------------------------------------------
+   Mugibot 2.1 — 🏠 Home (command centre) and 📋 the profile summary
+   --------------------------------------------------------------------------------------------------------------- */
+.home-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin: 4px 0 12px; flex-wrap: wrap; }
+.home-head h2 { margin: 0; }
+.home-head p { margin: 2px 0 0; }
+.home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+.home-card { margin: 0; }
+.home-card .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.home-card .card-head h3 { margin: 0; }
+.meter { height: 6px; background: var(--surface-2); border-radius: 99px; overflow: hidden; margin: 10px 0 8px; }
+.meter span { display: block; height: 100%; width: 0; background: var(--grad); transition: width .4s; }
+.checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.checklist li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid transparent; }
+.checklist li.todo { border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.checklist .ck { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--surface); font-size: 14px; }
+.checklist li.done .ck { background: var(--ok-bg); color: var(--ok); font-weight: 800; }
+.checklist .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.checklist .tx small { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
+.stat { display: flex; flex-direction: column; padding: 10px; border-radius: 10px; background: var(--surface-2); text-decoration: none; }
+.stat b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.stat small { color: var(--muted); font-size: 12px; }
+.stat:hover { outline: 1px solid var(--brand); }
+.store-grid { list-style: none; padding: 0; margin: 8px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.store-grid .store { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 9px; background: var(--surface-2); font-size: 13px; min-width: 0; }
+.store-grid .store .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.store-grid .store small { color: var(--muted); font-size: 11px; }
+.store-grid .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted); }
+.store-grid .store.ok .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.store-grid .store.warn .dot { background: var(--warn); }
+.store-grid .store.err .dot { background: var(--err); }
+.store-grid .store.off { opacity: .55; }
+.table.compact td, .table.compact th { padding: 6px 8px; font-size: 13px; }
+.recent { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.recent li { display: flex; gap: 10px; font-size: 13px; padding: 7px 9px; border-radius: 9px; background: var(--surface-2); border-left: 3px solid var(--line); }
+.recent li.urgent { border-left-color: var(--err); }
+.recent li.warn { border-left-color: var(--warn); }
+.recent li.success { border-left-color: var(--ok); }
+.recent .when { color: var(--muted); flex: none; min-width: 64px; }
+.summary { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 10px 0 0; }
+.summary dt { color: var(--muted); font-size: 13px; }
+.summary dd { margin: 0; font-size: 14px; display: flex; gap: 10px; justify-content: space-between; align-items: baseline; }
+.summary dd .edit { font-size: 12px; color: var(--brand); flex: none; }
+.logins li.login[data-keep="0"] { opacity: .78; }
+.logins li.login input[name="keep"] { margin: 0; }
+@media (max-width: 900px) { .home-grid { grid-template-columns: minmax(0, 1fr); } .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .summary { grid-template-columns: 1fr; gap: 2px 0; } .summary dt { margin-top: 8px; } }
+
+@media (min-width: 901px) { .jump { flex-wrap: wrap; overflow-x: visible; } }
+.home-card { min-width: 0; }

@@ -109,7 +109,7 @@ export function initThemeToggle(button) {
   button.addEventListener('click', () => {
     const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
     document.documentElement.dataset.theme = next;
-    try { localStorage.setItem('mgb-theme2', next); } catch { /* storage blocked */ }
+    try { localStorage.setItem('mgb-theme3', next); } catch { /* storage blocked */ }
     show();
   });
 }

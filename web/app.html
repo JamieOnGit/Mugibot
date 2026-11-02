@@ -24,13 +24,14 @@
   </header>
 
   <div class="app">
-    <!-- Four pages (a tab bar at the bottom on phones): the live drops, everything about buying, the
-         one-time setup, and your account. -->
+    <!-- Four pages (a tab bar at the bottom on phones — Mugibot 2.1): Home (everything at a glance), Monitors (the live
+         drops), Tasks (Auto-checkout), Profile (everything saved on your account: extension, delivery & card, sign-ins,
+         Discord, membership). -->
     <nav class="side" aria-label="Pages">
-      <a href="#monitor" data-tab="monitor"><span class="ic" aria-hidden="true">🔥</span><span class="lb">Drops</span></a>
-      <a href="#aco" data-tab="aco"><span class="ic" aria-hidden="true">⚡</span><span class="lb">Checkout</span></a>
-      <a href="#setup" data-tab="setup"><span class="ic" aria-hidden="true">🧰</span><span class="lb">Setup</span></a>
-      <a href="#account" data-tab="account"><span class="ic" aria-hidden="true">👤</span><span class="lb">Account</span></a>
+      <a href="#home" data-tab="home"><span class="ic" aria-hidden="true">🏠</span><span class="lb">Home</span></a>
+      <a href="#monitor" data-tab="monitor"><span class="ic" aria-hidden="true">📡</span><span class="lb">Monitors</span></a>
+      <a href="#aco" data-tab="aco"><span class="ic" aria-hidden="true">⚡</span><span class="lb">Tasks</span></a>
+      <a href="#setup" data-tab="setup"><span class="ic" aria-hidden="true">👤</span><span class="lb">Profile</span></a>
       <div class="side-foot" aria-hidden="true"><span class="holo-dot"></span> Live across <b id="side-stores">every store</b></div>
     </nav>
 
@@ -43,17 +44,43 @@
         <button type="button" data-jump="#aco-form">🤖 Auto-checkout</button><button type="button" data-jump="#aco-remote">📱 Phone ⚡ Buy</button><button type="button" data-jump="#pool-card" id="pool-jump" hidden>🤝 Pool</button><button type="button" data-jump="#bags-card">🧹 Bags</button><button type="button" data-jump="#aco-runs-card">📜 Run history</button><a class="jump-link" href="#armed">🎯 Armed items ↗</a>
       </nav>
       <nav class="jump" data-for="setup" aria-label="On this page" hidden>
-        <button type="button" data-jump="[data-panel=&quot;extension&quot;]">🧩 Extension</button><button type="button" data-jump="#logins-card">🔑 Store sign-ins</button><button type="button" data-jump="#devices-card">💻 Browsers</button><button type="button" data-jump="[data-panel=&quot;checkout&quot;]">📦 Delivery &amp; card</button><button type="button" data-jump="[data-panel=&quot;discord&quot;]">💬 Discord &amp; pings</button>
+        <button type="button" data-jump="#profile-summary">📋 Summary</button><button type="button" data-jump="[data-panel=&quot;extension&quot;]">🧩 Extension</button><button type="button" data-jump="#logins-card">🔑 Store sign-ins</button><button type="button" data-jump="#devices-card">💻 Browsers</button><button type="button" data-jump="[data-panel=&quot;checkout&quot;]">📦 Delivery &amp; card</button><button type="button" data-jump="[data-panel=&quot;discord&quot;]">💬 Discord &amp; pings</button><button type="button" data-jump="[data-panel=&quot;membership&quot;]">⭐ Membership</button><button type="button" data-jump="#acct-form">⚙️ Account</button>
       </nav>
-      <nav class="jump" data-for="account" aria-label="On this page" hidden>
-        <button type="button" data-jump="[data-panel=&quot;membership&quot;]">⭐ Membership</button><button type="button" data-jump="#acct-form">👤 Profile</button><button type="button" data-jump="#pw-form">🔒 Password</button><button type="button" data-jump="#del-form">🗑 Delete account</button>
-      </nav>
+
+      <!-- 🏠 Home: everything at a glance — your setup, what's monitored, your armed tasks, queues up, your latest -->
+      <section data-panel="home" hidden>
+        <div class="home-head">
+          <div><h2>Command centre</h2><p class="muted" id="home-sub">Everything Mugibot is doing for you, at a glance.</p></div>
+          <a class="btn small" href="#monitor">📡 Open the live monitor</a>
+        </div>
+        <div class="home-grid">
+          <section class="card home-card" id="home-setup">
+            <div class="card-head"><h3>🚀 Ready for the next drop</h3><span class="pill" id="home-setup-pill"></span></div>
+            <div class="meter" aria-hidden="true"><span id="home-setup-bar"></span></div>
+            <ul class="checklist" id="home-checklist"></ul>
+          </section>
+          <section class="card home-card" id="home-monitoring">
+            <div class="card-head"><h3>📡 Monitoring now</h3><span class="pill ok" id="home-live-pill">Live</span></div>
+            <div class="stat-row" id="home-counts"></div>
+            <p class="muted small" id="home-keywords"></p>
+            <ul class="store-grid" id="home-stores"></ul>
+          </section>
+          <section class="card home-card" id="home-tasks">
+            <div class="card-head"><h3>⚡ Armed tasks</h3><a class="btn small" href="#armed">Manage</a></div>
+            <div class="table-wrap"><table class="table compact" id="home-task-table"><thead><tr><th>Product</th><th>Store</th><th>Qty</th><th>Max</th><th>Status</th></tr></thead><tbody></tbody></table></div>
+          </section>
+          <section class="card home-card" id="home-recent">
+            <div class="card-head"><h3>🔔 Latest for you</h3><a class="btn small" href="#activity">All activity</a></div>
+            <ul class="recent" id="home-recent-list"></ul>
+          </section>
+        </div>
+      </section>
 
       <!-- 📡 Monitor: live (everyone) -->
       <section data-panel="monitor" hidden>
         <div class="mon-head">
           <div class="mon-titles">
-            <div class="mon-title"><h2>Drops</h2><span class="live" id="m-live" title="Updates as they happen">Live</span></div>
+            <div class="mon-title"><h2>Monitors</h2><span class="live" id="m-live" title="Updates as they happen">Live</span></div>
             <p class="mon-sub" id="mon-sub">Every store's search, read every few seconds.</p>
           </div>
           <div class="mon-actions">
@@ -66,8 +93,6 @@
             <button class="btn small primary" id="m-add-toggle" type="button" hidden>+ Add monitor</button>
           </div>
         </div>
-        <!-- Your loadout: is everything ready for the next drop? (Auto-checkout, your browser, card, membership) -->
-        <div class="loadout" id="loadout" hidden></div>
         <nav class="mon-tabs" aria-label="Monitor pages" hidden><a href="#monitor" data-mtab="monitor">Live</a><a href="#monitor-settings" data-mtab="monitor-settings">Settings</a><a href="#monitor-log" data-mtab="monitor-log">Check log</a></nav>
         <div id="m-paywall"></div>
         <div class="mon-attn" id="sn-attention" role="status" hidden></div>
@@ -455,7 +480,7 @@
       <!-- 🤖 Auto-checkout (docs/AUTO-CHECKOUT.md) -->
       <section data-panel="aco" hidden>
         <div class="tab-head"><h2>Auto-checkout</h2><span class="pill" id="aco-state">Off</span></div>
-        <p class="muted aco-lead">When an item you've armed drops, your browser checks out by itself, within your limits: the store, your bag, checkout with your details and card, the order. <b>One purchase per arming</b>. You arm items — and see whether each is ready — on the Drops page's <a href="#armed">🤖 Armed</a> tab; here's your switch and limits, ⚡ Buy from your phone, your bags and how every run went. Your delivery details and card are on the <a href="#checkout">Setup page</a>.</p>
+        <p class="muted aco-lead">When an item you've armed drops, your browser checks out by itself, within your limits: the store, your bag, checkout with your details and card, the order. <b>One purchase per arming</b>. You arm items — and see whether each is ready — on the Monitors page's <a href="#armed">🤖 Armed</a> tab; here's your switch and limits, ⚡ Buy from your phone, your bags and how every run went. Your delivery details and card are on the <a href="#checkout">Profile page</a>.</p>
 
         <div class="aco-stats" id="aco-stats"></div>
 
@@ -550,6 +575,12 @@
 
       <!-- 🧩 Extension -->
       <section data-panel="extension" hidden>
+        <!-- 👤 Profile: everything saved on your account, at a glance (Mugibot 2.1) — kept through extension updates -->
+        <section class="card" id="profile-summary">
+          <div class="card-head"><h3>📋 Saved on your profile</h3><span class="pill ok">Kept on your account</span></div>
+          <p class="muted small">Everything you set up lives on your Mugibot account — an extension update or a new browser never loses it. Your card stays in your browser; your account keeps only a locked copy, so it comes back by itself after an update.</p>
+          <dl class="summary" id="profile-summary-list"></dl>
+        </section>
         <div class="tab-head"><h2>Browser extension</h2></div>
         <div class="notice" id="ext-status-2">Checking for the extension…</div>
         <div class="card">
@@ -608,13 +639,14 @@
           <h3>3. Save your card (optional)</h3>
           <p class="muted">Click the extension's icon → <b>Add your card</b> (or <a href="#checkout">Delivery &amp; card</a>, further down this page → Add your card). Save it once and every ⚡ Buy fills it in, even after you restart the browser. It stays in that browser, encrypted.</p>
         </div>
-        <div class="card" id="logins-card">
-          <div class="card-head"><h3>4. Sign in at the stores</h3><button class="btn small" id="logins-check" type="button">Check now</button></div>
-          <p class="muted">Signed in at a store, ⚡ Buy's checkout is faster: the store fills in your saved address (and often your card) itself. The extension notices whether you're signed in whenever you open a store, and checks the stores you keep signed in to around the clock (<a href="#account">Account → Store sign-ins</a>: you're told the moment you're signed out). It only looks: nothing is clicked or typed.</p>
+        <form class="card" id="logins-card">
+          <div class="card-head"><h3>🔑 Store sign-ins (24/7)</h3><button class="btn small" id="logins-check" type="button">Check now</button></div>
+          <p class="muted">Signed in at a store, ⚡ Buy and Auto-checkout go faster (the store fills in your saved details itself), and some stores only sell to customers who are signed in. Tick the stores to keep signed in to: the extension checks them around the clock in the browser Mugibot checks out in, and the moment you're signed out you're told — here, on the extension's button and in a Discord DM with a <b>Sign in</b> button. It only looks: Mugibot never signs in for you and never sees your passwords.</p>
           <p class="logins-sum" id="logins-sum"></p>
           <ul class="logins" id="logins"></ul>
-          <p class="msg" id="logins-msg"></p>
-        </div>
+          <label class="check"><input type="checkbox" id="signins-dm"> <span>DM me in Discord when I'm signed out at a store I keep signed in to</span></label>
+          <div class="form-actions"><button class="btn primary" type="submit" id="logins-save">Save</button><span class="msg" id="logins-msg"></span></div>
+        </form>
         <div class="card">
           <h3>In-browser checks</h3>
           <p class="muted">Some stores (Kmart, for one) refuse stock checks from servers. For those, this browser re-checks <b>your own</b> SKUs about every <span id="b-interval">60</span> seconds while it's open — the same as refreshing the page yourself. If a store shows a bot check, it backs off. It never tries to get past one.</p>
@@ -721,14 +753,6 @@
           <label for="acct-email">Email <span class="muted">(optional — password resets and email alerts)</span></label><input id="acct-email" name="email" type="email" autocomplete="email">
           <label for="acct-name">Name <span class="muted">(optional)</span></label><input id="acct-name" name="name" autocomplete="name">
           <div class="form-actions"><button class="btn primary" type="submit">Save</button><span class="msg" id="acct-msg"></span></div>
-        </form>
-        <form class="card" id="signins-form">
-          <div class="card-head"><h3>🔑 Store sign-ins (24/7)</h3><button class="btn small" id="signins-check" type="button">Check now</button></div>
-          <p class="muted">Stay signed in at the stores you buy from, in the browser Mugibot checks out in: ⚡ Buy and Auto-checkout go faster (the store fills in your saved details itself), and some stores only sell to customers who are signed in. The extension checks each store ticked here around the clock. The moment it finds you signed out, you're told here, on the extension's button, and in a Discord DM with a <b>Sign in</b> button. Mugibot never signs in for you and never sees your passwords: the button opens the store's own sign-in page.</p>
-          <p class="logins-sum" id="signins-sum"></p>
-          <ul class="logins" id="signins"></ul>
-          <label class="check"><input type="checkbox" id="signins-dm"> <span>DM me in Discord when I'm signed out at one of these</span></label>
-          <div class="form-actions"><button class="btn primary" type="submit">Save</button><span class="msg" id="signins-msg"></span></div>
         </form>
         <form class="card" id="pw-form">
           <h3>Change password</h3>

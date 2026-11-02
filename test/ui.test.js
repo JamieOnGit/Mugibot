@@ -63,12 +63,15 @@ test('landing page: pitch, membership price, honest guardrails', async () => {
   await page.waitForURL(/\/signup$/);
 });
 
-test('sign up with a username and land on the Monitor page, with your watchlist a tab away', async () => {
+test('sign up with a username and land on Home — your setup as a checklist — with the Monitors page (and your watchlist) a tab away', async () => {
   await page.fill('#su-username', 'Owner');
   await page.fill('#su-password', PASSWORD);
   await page.check('#su-terms');
   await page.click('#signup button[type=submit]');
   await page.waitForURL(/\/app\?welcome=1/);
+  await page.waitForSelector('[data-panel="home"]:not([hidden]) #home-checklist li');
+  assert.match(await page.textContent('#home-checklist li[data-step="Extension connected"]'), /Install it in the browser you keep open\s*Set up/);
+  await page.click('a[data-tab="monitor"]');
   await page.waitForSelector('[data-panel="monitor"]:not([hidden]) #pp-tracked:not([hidden])');
   assert.equal(await page.isVisible('a[data-tab="watch"]'), false, 'no Watchlist tab of its own');
   assert.match(await page.textContent('#pt-watch'), /My watchlist\s*7/);
@@ -308,8 +311,8 @@ test('Discord tab: connect (the fake Discord sends straight back), pings, test p
   if (shots) await page.screenshot({ path: path.join(shots, 'discord.png'), fullPage: true });
 });
 
-test('Drops (the monitor): add a monitor, live alerts, product page with price history, alert rules; light by default with a dark switch', async () => {
-  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light', 'the light look by default');
+test('Drops (the monitor): add a monitor, live alerts, product page with price history, alert rules; dark by default (a drop bot\'s look) with a light switch', async () => {
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'the dark look by default');
   await page.click('a[data-tab="monitor"]');
   await page.waitForSelector('#m-stats .sn-stat');
   assert.match(await page.textContent('#m-stats'), /Available now\s*0\s*of 0 tracked/);
@@ -450,9 +453,9 @@ test('Drops (the monitor): add a monitor, live alerts, product page with price h
   if (shots) await page.screenshot({ path: path.join(shots, 'monitor.png'), fullPage: true });
 
   await page.click('#theme-toggle');
-  assert.equal(await page.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('mgb-theme2')].join()), 'dark,dark');
+  assert.equal(await page.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('mgb-theme3')].join()), 'light,light');
   await page.click('#theme-toggle');
-  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
 });
 
 test('Monitor tab: live sweeps — each store\'s health and settings; new drops, restocks and stock changes show up by themselves', async () => {
@@ -634,9 +637,12 @@ test('Setup → Extension: install steps, browser checks switch, stores and thei
   await page.waitForFunction(() => /On/.test(document.querySelector('#b-msg').textContent));
   // The store sign-ins: with no browser connected yet, each store with where to sign in.
   await page.waitForSelector('#logins li.login');
-  assert.match(await page.textContent('#logins-sum'), /Connect the extension \(step 2\)/);
+  assert.match(await page.textContent('#logins-sum'), /Connect the extension \(above\)/);
   const bigw = page.locator('#logins li.login[data-store="bigw"]');
-  assert.match(await bigw.textContent(), /BIG W.*Not seen yet: open the store once/s);
+  // (Kept signed in to 24/7 by default: checked for you — the other stores, seen when you open them.)
+  assert.match(await bigw.textContent(), /BIG W.*Not checked yet/s);
+  assert.equal(await bigw.locator('input[name=keep]').isChecked(), true);
+  assert.match(await page.locator('#logins li.login[data-store="zing"]').textContent(), /Not seen yet: open the store once/);
   assert.equal(await bigw.locator('a').getAttribute('href'), 'https://www.bigw.com.au');
   assert.match(await page.textContent('#logins li.login[data-store="jbhifi"]'), /Not checked yet/);
   assert.equal(await page.getAttribute('#logins li.login[data-store="jbhifi"] a', 'href'), 'https://www.jbhifi.com.au/account');
@@ -673,7 +679,7 @@ test('Membership tab: become a member through Whop, then it shows the membership
   // (The banner is drawn once the page has your account, a moment after the page itself loads.)
   await p2.waitForFunction(() => /Start your membership/.test(document.querySelector('#banner').textContent));
   assert.match(await p2.textContent('#banner'), /Start your membership \(A\$19\.99 \/ month\)/);
-  await p2.click('a[data-tab="account"]');
+  await p2.click('a[data-tab="setup"]');
   await p2.waitForSelector('#m-subscribe:not([hidden])');
   await p2.click('#m-subscribe');
   await p2.waitForURL(/^https:\/\/whop\.test\/checkout\/ch_\d+\/$/);
@@ -763,7 +769,8 @@ test('Activity (on the Monitor page, in pages) and Account tabs', async () => {
   // A reload stays on the same list.
   await page.reload();
   await page.waitForSelector('#pp-activity:not([hidden]) #feed li');
-  await page.click('a[data-tab="account"]');
+  await page.click('a[data-tab="setup"]');
+  await page.waitForSelector('[data-panel="account"]:not([hidden])');
   assert.equal(await page.inputValue('#acct-username'), 'owner');
   await page.fill('#acct-email', 'owner@example.com');
   await page.fill('#acct-name', 'Jamie Owner');
@@ -1552,39 +1559,48 @@ test('Auto-checkout run history in pages; the card backup on Checkout details', 
   env.app.db.run("DELETE FROM aco_runs WHERE id LIKE 'acr_page%'");
 });
 
-test('four pages, not seven: Drops (with your armed items), Checkout (Auto-checkout), Setup (the extension, your delivery details and card, and Discord), Account (membership and your account) — every old address still lands on its part; your loadout on Drops; on a phone, a tab bar at the bottom', async () => {
+test('four pages (Mugibot 2.1): Home (everything at a glance), Monitors (with your armed items), Tasks (Auto-checkout), Profile (everything saved on your account: the extension, delivery details and card, sign-ins, Discord, membership and account) — every old address still lands on its part; on a phone, a tab bar at the bottom', async () => {
   await page.goto(`${env.url}/app#monitor`);
   assert.deepEqual(await page.$$eval('.side a', (as) => as.map((a) => [a.dataset.tab, a.querySelector('.lb').textContent])),
-    [['monitor', 'Drops'], ['aco', 'Checkout'], ['setup', 'Setup'], ['account', 'Account']]);
-  // Drops: your loadout first — membership, Auto-checkout, the extension in this browser, your card.
-  await page.waitForSelector('#loadout:not([hidden]) .lo-chip');
-  assert.equal(await page.locator('#loadout .lo-chip').count(), 4);
-  assert.match(await page.textContent('#loadout'), /Auto-checkout (on|off)/);
+    [['home', 'Home'], ['monitor', 'Monitors'], ['aco', 'Tasks'], ['setup', 'Profile']]);
+  // No address: Home — your setup as a checklist, what's monitored, your armed tasks, your latest.
+  await page.goto(`${env.url}/app`);
+  await page.waitForFunction(() => document.querySelector('.side a.active')?.dataset.tab === 'home');
+  await page.waitForSelector('#home-checklist li');
+  assert.equal(await page.locator('#home-checklist li').count(), 8);
+  assert.match(await page.textContent('#home-checklist'), /Membership.*Extension connected.*Delivery details.*Card saved.*Discord connected.*Signed in at your stores.*Auto-checkout on.*Something to watch/s);
+  assert.match(await page.textContent('#home-setup-pill'), /^(\d of 8|✓ All set)$/);
+  await page.waitForSelector('#home-stores li.store');
+  assert.match(await page.textContent('#home-counts'), /stores searched.*on your watchlist.*armed tasks.*drop watches/s);
+  assert.ok(await page.locator('#home-task-table tbody tr').count() >= 1);
   // Each page, the parts it's made of; the old addresses open the page their part is on now, there.
   const shown = () => page.$$eval('[data-panel]', (ps) => ps.filter((p) => !p.hidden).map((p) => p.dataset.panel));
-  const setup = ['extension', 'checkout', 'discord'];
-  for (const [hash, page_, panels] of [['aco', 'aco', ['aco']], ['checkout', 'setup', setup], ['setup', 'setup', setup],
-    ['extension', 'setup', setup], ['discord', 'setup', setup], ['update', 'setup', setup],
-    ['account', 'account', ['membership', 'account']], ['membership', 'account', ['membership', 'account']], ['watch', 'monitor', ['monitor']], ['armed', 'monitor', ['monitor']]]) {
+  const profile = ['extension', 'checkout', 'discord', 'membership', 'account'];
+  for (const [hash, page_, panels] of [['home', 'home', ['home']], ['aco', 'aco', ['aco']], ['checkout', 'setup', profile], ['setup', 'setup', profile],
+    ['extension', 'setup', profile], ['discord', 'setup', profile], ['update', 'setup', profile],
+    ['account', 'setup', profile], ['membership', 'setup', profile], ['watch', 'monitor', ['monitor']], ['armed', 'monitor', ['monitor']]]) {
     await page.goto(`${env.url}/app#${hash}`);
     await page.waitForFunction((want) => document.querySelector('.side a.active')?.dataset.tab === want, page_);
     assert.deepEqual(await shown(), panels, `#${hash}`);
     assert.equal(await page.getAttribute('.side a.active', 'aria-current'), 'page');
-    assert.equal(await page.isVisible(`.jump[data-for="${page_}"]`), page_ !== 'monitor', `#${hash}: the row of its parts`);
+    assert.equal(await page.isVisible(`.jump[data-for="${page_}"]`), !['monitor', 'home'].includes(page_), `#${hash}: the row of its parts`);
   }
-  // #discord lands on Discord, part way down Setup; the row's chips go to each part.
+  // #discord lands on Discord, part way down Profile; the row's chips go to each part.
   await page.goto(`${env.url}/app#discord`);
   await page.waitForFunction(() => window.scrollY > 200);
-  // #checkout (Delivery & card) lands on it, part way down Setup — after the extension's parts.
+  // #checkout (Delivery & card) lands on it, part way down Profile — after the extension's parts.
   await page.goto(`${env.url}/app#checkout`);
   await page.waitForFunction(() => window.scrollY > 200 && Math.abs(document.querySelector('[data-panel="checkout"]').getBoundingClientRect().top) < 200);
-  assert.deepEqual(await page.$$eval('.jump[data-for="setup"] button', (bs) => bs.map((b) => b.textContent)), ['🧩 Extension', '🔑 Store sign-ins', '💻 Browsers', '📦 Delivery & card', '💬 Discord & pings']);
+  assert.deepEqual(await page.$$eval('.jump[data-for="setup"] button', (bs) => bs.map((b) => b.textContent)), ['📋 Summary', '🧩 Extension', '🔑 Store sign-ins', '💻 Browsers', '📦 Delivery & card', '💬 Discord & pings', '⭐ Membership', '⚙️ Account']);
+  // Profile opens with what's saved on the account.
+  await page.goto(`${env.url}/app#setup`);
+  await page.waitForFunction(() => /Account.*Membership.*Delivery details.*Card.*Store sign-ins.*Browsers.*Auto-checkout.*Discord/s.test(document.querySelector('#profile-summary-list').textContent));
   await page.goto(`${env.url}/app#aco`);
   await page.waitForSelector('[data-panel="aco"]:not([hidden]) #bags-card');
-  assert.equal(await page.locator('[data-panel="aco"] #aco-items').count(), 0, 'the armed items are on the Drops page now');
+  assert.equal(await page.locator('[data-panel="aco"] #aco-items').count(), 0, 'the armed items are on the Monitors page');
   await page.click('.jump[data-for="aco"] [data-jump="#bags-card"]');
   await page.waitForFunction(() => Math.abs(document.querySelector('#bags-card').getBoundingClientRect().top - 120) < 80);
-  // A phone: the four pages along the bottom, in reach of a thumb.
+  // A phone: the four pages along the bottom, in reach of a thumb — and Home fits its width.
   const phone = await browser.newPage({ viewport: { width: 390, height: 800 } });
   await phone.context().addCookies(await page.context().cookies(env.url));
   await phone.goto(`${env.url}/app#aco`);
@@ -1593,6 +1609,9 @@ test('four pages, not seven: Drops (with your armed items), Checkout (Auto-check
   assert.ok(bar.y + bar.height >= 795 && bar.width >= 380, `the tab bar sits along the bottom: ${JSON.stringify(bar)}`);
   await phone.click('.side a[data-tab="setup"]');
   await phone.waitForSelector('[data-panel="extension"]:not([hidden])');
+  await phone.goto(`${env.url}/app#home`);
+  await phone.waitForSelector('#home-checklist li');
+  assert.ok(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no sideways scrolling on Home');
   await phone.close();
 });
 
