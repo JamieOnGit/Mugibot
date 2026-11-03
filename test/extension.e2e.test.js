@@ -5317,6 +5317,14 @@ test("switching this browser to another account: their own details, the first ac
   await popup.goto(`chrome-extension://${extId}/popup.html`);
   await popup.waitForSelector('#signed-out:not([hidden])');
   await popup.close();
+  // Disconnected on purpose: the dashboard, opened again in this browser, never reconnects it by itself (Mugibot 2.2 —
+  // only an update, whose old connection is still on the account, does).
+  await page.goto(`${env.url}/app`);
+  await page.goto(`${env.url}/app#extension`);
+  await page.waitForFunction(() => /installed but not connected/.test(document.querySelector('#ext-status-2').textContent), null, { timeout: 10000 });
+  await page.waitForTimeout(2500);
+  assert.equal(env.app.repo.listDevices(env.app.repo.userByUsername('misty').id).length, 0, 'not reconnected by itself');
+  assert.equal(await page.evaluate((id) => localStorage.getItem(`mgb-connected:${id}`), env.app.repo.userByUsername('misty').id), null, 'this browser forgets it was connected');
   await page.close();
 });
 

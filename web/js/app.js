@@ -390,20 +390,37 @@ async function detectExtension() {
 // This browser's extension was connected to this account before (Mugibot 2.1): a new copy of it — an update loaded from
 // a new folder, its storage empty — reconnects by itself the moment the dashboard's open, and your card comes back from
 // its locked copy (no passphrase, nothing to type). Never another account's, and never a browser that wasn't before.
+// Mugibot 2.2: never a browser that was disconnected on purpose — from the dashboard (here or anywhere), or signed out in
+// the extension. What's kept is which of your connected browsers this one was; it reconnects by itself only while that
+// connection is still on your account (an update replaces the extension, not its connection).
 const connectedKey = () => `mgb-connected:${state.me.user.id}`;
-const wasConnected = () => { try { return localStorage.getItem(connectedKey()) === '1'; } catch { return false; } };
+const connectedAs = () => { try { return localStorage.getItem(connectedKey()) || ''; } catch { return ''; } };
+const forgetConnected = () => { try { localStorage.removeItem(connectedKey()); } catch { /* private window */ } };
 let autoReconnect = false;
+
+/** Was this browser connected to your account — and is that connection still on it (not disconnected since)? */
+async function stillConnectedHere() {
+  const was = connectedAs();
+  if (!was) return false;
+  // (Kept before Mugibot 2.2 — no connection to check against: as before.)
+  if (was === '1') return true;
+  const devices = await api('GET', '/api/devices').then((r) => r.devices || [], () => null);
+  if (!devices) return false;
+  if (devices.some((d) => d.id === was)) return true;
+  forgetConnected();
+  return false;
+}
 
 async function renderExtStatus() {
   state.ext = await detectExtension();
   const ext = state.ext;
   const me = state.me.user;
-  if (ext.installed && ext.paired && ext.userId === me.id) { try { localStorage.setItem(connectedKey(), '1'); } catch { /* private window */ } }
+  if (ext.installed && ext.paired && ext.userId === me.id) { try { localStorage.setItem(connectedKey(), ext.deviceId || '1'); } catch { /* private window */ } }
   // (A downloaded copy only — a Chrome Web Store copy updates itself in place and keeps its connection — and only
   //  when it's the one copy here: never beside another, which says itself which copy acts.)
-  if (ext.installed && !ext.paired && !ext.fromStore && !ext.oldCopy && !autoReconnect && wasConnected()) {
+  if (ext.installed && !ext.paired && !ext.fromStore && !ext.oldCopy && !autoReconnect && connectedAs()) {
     autoReconnect = true;
-    setTimeout(() => pairNow({ auto: true }).catch(() => null), 0);
+    stillConnectedHere().then((ok) => (ok ? pairNow({ auto: true }) : null)).catch(() => null);
   }
   const latest = state.me.app.extensionVersion;
   let level = 'warn';
@@ -507,6 +524,8 @@ async function loadDevices() {
         onclick: async () => {
           if (!confirm(`Disconnect ${d.name}? It will stop working until you connect it again.`)) return;
           await api('DELETE', `/api/devices/${d.id}`);
+          // (This browser's own: it stays disconnected — never reconnected by itself after this.)
+          if (connectedAs() === d.id || (state.ext && state.ext.deviceId === d.id)) forgetConnected();
           loadDevices();
         },
       }, 'Disconnect'))));
