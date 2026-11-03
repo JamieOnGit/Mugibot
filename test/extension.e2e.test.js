@@ -5101,7 +5101,7 @@ async function pageWatchAco() {
   env.app.db.run('UPDATE aco_runs SET created_at = created_at - 2 * 86400000 WHERE user_id = :u', { u: env.app.repo.userByUsername('ash').id });
 }
 
-test("📃 a drop watch on EB Games' \"Trading cards, pre-order\" page (EB turns servers away; its page has no products in it until its own code fetches them): this admin's browser reads it in a tab of its own — learning the data the page fetches, then asking for just that from inside the page every few seconds — and a new Magic: The Gathering pre-order on it is DM'd and bought: added, checked out, \"CONFIRM & PAY\" — placed, once", async () => {
+test("📃 a drop watch on EB Games' \"Trading cards, pre-order\" page (EB turns servers away; its page has no products in it until its own code fetches them): this admin's browser reads it in a tab of its own — learning the data the page fetches, then asking for just that from inside the page every few seconds — and a new Magic: The Gathering pre-order on it is on the watchlist and DM'd at once — never bought (at EB Games, Auto-checkout buys from the 🚨 priority pages alone: the next test)", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;
   const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
@@ -5113,7 +5113,7 @@ test("📃 a drop watch on EB Games' \"Trading cards, pre-order\" page (EB turns
   store.addProduct('ebgames', { sku: '312400', name: 'Magic: The Gathering Avatar The Last Airbender Play Booster Box', price: 99, status: 'preorder' });
   const page = `${store.url}/ebgames/search?category=trading-cards&condition=preorder`;
   const data = `${store.url}/ebgames/search/query?category=trading-cards&condition=preorder`;
-  const added = await browserApi('POST', '/api/drops', { page, phrases: ['magic the gathering', 'one piece op 15'], every: 3, aco: true, maxPrice: 150, shared: false });
+  const added = await browserApi('POST', '/api/drops', { page, phrases: ['magic the gathering', 'one piece op 15'], every: 3, shared: false });
   assert.equal(added.status, 200, JSON.stringify(added.body));
   const w = added.body.watch;
   const key = `demo-ebgames|${page}`;
@@ -5139,19 +5139,17 @@ test("📃 a drop watch on EB Games' \"Trading cards, pre-order\" page (EB turns
     assert.equal(navs(), n0, 'the page stays open: only its data asked for');
     assert.equal(store.shop('ebgames').orders.length, 0);
 
-    // A new Magic: The Gathering pre-order on the page: DM'd, and bought — once.
+    // A new Magic: The Gathering pre-order on the page: on the watchlist and DM'd at once — never bought.
     store.addProduct('ebgames', { sku: '312401', name: 'Magic: The Gathering Lorwyn Eclipsed Collector Booster Box', price: 109, status: 'preorder' });
-    await waitFor(() => store.shop('ebgames').orders.length === 1, { timeout: 90000, message: 'the order placed at the dummy EB Games' });
-    const order = store.shop('ebgames').orders[0];
-    assert.deepEqual(order.cart.map((c) => [c.sku, c.qty]), [['312401', 1]], 'just that one');
-    await waitFor(async () => (await lastRun()).status === 'placed', { message: 'the run says placed' });
+    await waitFor(() => env.app.repo.itemBySku(userId, 'demo-ebgames', '312401'), { timeout: 90000, message: 'on the watchlist' });
     const item = env.app.repo.itemBySku(userId, 'demo-ebgames', '312401');
     assert.equal(item.dropWatch, w.id);
+    assert.equal(item.aco, false, 'alerts only at EB Games');
     await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /Lorwyn Eclipsed Collector Booster Box/.test(m.body.embeds[0].title)), { message: "DM'd" });
-    // Read on: nothing bought twice.
+    // Read on: never bought.
     const a1 = asks();
     await waitFor(() => asks() >= a1 + 2, { timeout: 30000, message: 'read on' });
-    assert.equal(store.shop('ebgames').orders.length, 1, 'placed once');
+    assert.equal(store.shop('ebgames').orders.length, 0, 'nothing bought');
     assert.equal(env.app.repo.itemBySku(userId, 'demo-ebgames', '312400').aco, false);
   } finally {
     await browserApi('DELETE', `/api/drops/${w.id}`);

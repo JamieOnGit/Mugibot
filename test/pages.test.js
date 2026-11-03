@@ -140,6 +140,10 @@ test('🔎 what can be added: a page and a key phrase or more, every 3 s at the 
   assert.match(r.body.error, /Auto-checkout works at stores Mugibot has a checkout for/);
   r = await boss.post('/api/drops', { page: eb, phrases: ['Magic the Gathering', 'One Piece OP-15'], every: 3, aco: true });
   assert.equal(r.status, 400, 'a max price to auto-checkout');
+  // (At EB Games, Auto-checkout buys from the 🚨 priority pages alone — the owner's rule, Nov 2026: a page watch alerts.)
+  r = await boss.post('/api/drops', { page: eb, phrases: ['Magic the Gathering'], every: 3, aco: true, maxPrice: 300, shared: false });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /At EB Games, Auto-checkout buys only from the 🚨 priority pages/);
   r = await boss.post('/api/drops', { page: eb, phrases: ['Magic the Gathering', 'One Piece OP-15'], every: 3, label: 'EB pre-orders', shared: false });
   assert.equal(r.status, 200, r.text);
   const w = r.body.watch;
@@ -149,7 +153,7 @@ test('🔎 what can be added: a page and a key phrase or more, every 3 s at the 
   assert.equal(w.floor, 3);
   assert.equal(w.page, eb);
   assert.equal(w.storeName, 'EB Games (dummy store)');
-  assert.equal(w.canBuy, true);
+  assert.equal(w.canBuy, false, 'no Auto-checkout to arm on it: the priority pages buy at EB Games');
   r = await boss.post('/api/drops', { page: `${eb}#again`, phrases: ['pokemon'] });
   assert.equal(r.status, 400);
   assert.match(r.body.error, /watching that page already/);
@@ -240,11 +244,12 @@ test("🔎 an admin's search page read from the server (Kmart's search, as its s
   assert.equal((await boss.del(`/api/drops/${w.id}`)).status, 200);
 });
 
-test("🔎 EB Games' \"Trading cards, pre-order\" page, read from an admin's browser (its search page has no products in it): the data the page fetches, learned from the page and asked for again from inside it; a member's own watch — on their watchlist, DM'd, and bought within its max price", async () => {
+test("🔎 EB Games' \"Trading cards, pre-order\" page, read from an admin's browser (its search page has no products in it): the data the page fetches, learned from the page and asked for again from inside it; a member's own watch — on their watchlist and DM'd (at EB Games, alerts only: Auto-checkout there buys from the priority pages)", async () => {
   const eb = R('demo-ebgames');
   store.addProduct('ebgames', { sku: '312400', name: 'Magic: The Gathering Avatar The Last Airbender Play Booster Box', price: 229, status: 'preorder' });
   const page = `${store.url}/ebgames/search?category=trading-cards&condition=preorder`;
-  const r = await ash.post('/api/drops', { page, phrases: ['magic the gathering', 'one piece op 15'], every: 3, aco: true, maxPrice: 250 });
+  assert.equal((await ash.post('/api/drops', { page, phrases: ['magic the gathering'], every: 3, aco: true, maxPrice: 250 })).status, 400, 'alerts only at EB Games');
+  const r = await ash.post('/api/drops', { page, phrases: ['magic the gathering', 'one piece op 15'], every: 3 });
   assert.equal(r.status, 200, r.text);
   const w = r.body.watch;
   assert.equal(w.shared, false);
@@ -294,9 +299,8 @@ test("🔎 EB Games' \"Trading cards, pre-order\" page, read from an admin's bro
   await pages().browserResults(admin(), [{ id: t.id, ok: true, how: 'data', ...got }]);
   const item = env.app.repo.itemBySku(ash.user.id, 'demo-ebgames', '312401');
   assert.ok(item, "on Ash's watchlist");
-  assert.equal(item.aco, true);
-  assert.equal(item.maxPrice, 250);
-  assert.equal(runsFor(item.id).length, 1, 'bought the moment it was found');
+  assert.equal(item.aco, false, 'alerts only: never armed');
+  assert.equal(runsFor(item.id).length, 0, 'nothing bought');
   await env.app.monitor.delivered();
   assert.ok(dms('d-ash').slice(dmsBefore).some((m) => /Lorwyn Eclipsed Collector Booster Box/.test(m.body.embeds[0].title)), "DM'd at once");
   assert.equal(env.app.repo.itemBySku(ash.user.id, 'demo-ebgames', '312402'), null, 'no phrase: left alone');
@@ -315,7 +319,7 @@ test("🔎 EB Games' \"Trading cards, pre-order\" page, read from an admin's bro
   await pages().browserResults(admin(), [{ id: t.id, ok: true, how: 'data', ...(await read()) }]);
   view = await watchOf(ash, w.id);
   assert.equal(view.fails, 0);
-  assert.equal(runsFor(item.id).length, 1, 'bought once');
+  assert.equal(runsFor(item.id).length, 0, 'never bought');
   assert.equal((await ash.del(`/api/drops/${w.id}`)).status, 200);
   assert.equal(env.app.repo.itemBySku(ash.user.id, 'demo-ebgames', '312401'), null, 'what it put on the watchlist goes too');
 });
