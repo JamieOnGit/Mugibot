@@ -634,12 +634,18 @@ checkout shows it:
   "Orders after 2pm can't be shipped until tomorrow"), your address, and anything
   in the page's header or footer.
 - **The store to collect from:** the one nearest your postcode, or the postcode
-  or suburb you give under **Collect near**.
+  you give under **Collect near** (a postcode only — never a street).
   - **Kmart, BIG W:** its "Select a store" / "Choose a store", your postcode
     searched, then the first store's "Select".
   - **Target:** the same finder on the page ("Find stores", "Select store").
   - **EB Games** (as its real checkout goes, Nov 2026): "Click & Collect", your
-    postcode (from your delivery details, e.g. 3192) typed into "Collect from",
+    postcode (from your delivery details, e.g. 3192) typed into "Collect from" —
+    **only ever the postcode, never your street** (extension **1.42.0**: EB's box
+    has "address" in its own name and id, and 1.41.0 took it for the address
+    finder and typed "11 MONTEREY DRIVE" into it; it's known now by its label and
+    hint, "Collect from" / "Please enter suburb or postcode", whatever its
+    attributes say, and the address finder never types into it). **Collect
+    near** in your details counts only if it's a postcode (4 digits);
     the first suburb it suggests ("CHELTENHAM, VIC 3192"), then from "Stores near
     …" the store that has it, nearest first:
     - **Has it first:** "2 of 2 items available" before "1 of 2", never "0 of 2"

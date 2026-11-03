@@ -1423,13 +1423,21 @@ test('📃 a store\'s search page in Drop watches: told apart from a product\'s 
   assert.match(await page.textContent('#dw-every-note'), /3 s at the fastest/);
   assert.equal(await page.textContent('#dw-add'), 'Watch this page');
   await page.fill('#dw-phrases', 'Magic the Gathering\nOne Piece OP-15');
-  await page.waitForFunction(() => /✓ EB Games' page, read every 5 seconds: anything on it whose name has one of "Magic the Gathering", "One Piece OP-15" — you're told the moment it's on the page .*⚡ Buy and Auto-checkout work here/.test(document.querySelector('#dw-hint').textContent));
+  // (At EB Games, Auto-checkout buys from the 🚨 pre-order drops alone — the owner's rule: a page watch there alerts.)
+  await page.waitForFunction(() => /✓ EB Games' page, read every 5 seconds: anything on it whose name has one of "Magic the Gathering", "One Piece OP-15" — you're told the moment it's on the page .*⚡ Buy works here \(at EB Games, Auto-checkout buys from the 🚨 pre-order drops alone\)/.test(document.querySelector('#dw-hint').textContent));
   assert.equal(await page.isVisible('#dw-where'), false, 'the page is where to look');
+  assert.equal(await page.isVisible('#dw-aco-wrap'), false, 'no Auto-checkout for an EB Games page watch');
+  // (Elsewhere — City Beach's search: it's offered.)
+  await page.fill('#dw-input', 'https://www.citybeach.com/au/search?q=pokemon');
+  await page.waitForFunction(() => /Auto-checkout work here/.test(document.querySelector('#dw-hint').textContent));
   assert.equal(await page.isVisible('#dw-aco-wrap'), true);
   await page.check('#dw-aco');
   await page.waitForSelector('#dw-aco-note:not([hidden])');
   assert.match(await page.textContent('#dw-aco-note'), /Bought only if it's new on the page after the watch's first look/);
-  await page.fill('#dw-max', '250');
+  await page.uncheck('#dw-aco');
+  await page.fill('#dw-input', EB);
+  await page.waitForFunction(() => /EB Games' page/.test(document.querySelector('#dw-hint').textContent));
+  await page.fill('#dw-every', '5');
   await page.fill('#dw-label', 'EB pre-orders');
   await page.waitForSelector('#dw-post-wrap:not([hidden]) #dw-post:not([disabled])');
   await page.selectOption('#dw-post', general);
@@ -1438,11 +1446,12 @@ test('📃 a store\'s search page in Drop watches: told apart from a product\'s 
   await page.waitForFunction(() => /Watching — its page is read in a moment, then every 5 seconds/.test(document.querySelector('#dw-msg').textContent));
   const row = page.locator('#dw-mine .dw-row', { hasText: 'EB pre-orders' });
   await row.waitFor();
-  assert.match(await row.textContent(), /EB pre-orders.*Page · EB Games · every 5 s · 📣 for everyone in #general · pings @Drop pings · 🤖 auto-checkout up to \$250\.00 \(a box 1, packs the most allowed\) · for "magic the gathering", "one piece op 15"/s);
+  assert.match(await row.textContent(), /EB pre-orders.*Page · EB Games · every 5 s · 📣 for everyone in #general · pings @Drop pings · for "magic the gathering", "one piece op 15"/s);
+  assert.doesNotMatch(await row.textContent(), /auto-checkout up to/);
   assert.match(await row.textContent(), /EB Games' page is read from an admin's browser — waiting for one/);
   const w = env.app.drops.watches().find((x) => x.page === EB);
-  assert.equal(w.qty, 'auto', 'a new watch\'s quantity: by the kind of product (Mugibot 2.0)');
-  assert.deepEqual([w.phrases, w.every, w.channelId, w.roleId, w.aco, w.maxPrice, w.shared], [['magic the gathering', 'one piece op 15'], 5, general, PINGS, true, 250, true]);
+  assert.equal(w.aco, false, 'alerts only at EB Games (its Auto-checkout: the 🚨 pre-order drops)');
+  assert.deepEqual([w.phrases, w.every, w.channelId, w.roleId, w.aco, w.maxPrice, w.shared], [['magic the gathering', 'one piece op 15'], 5, general, PINGS, false, null, true]);
   assert.equal(await page.inputValue('#dw-phrases'), '', 'ready for the next one');
   // ✎: its key phrases and pace (and, an admin's for everyone, where it posts).
   await row.getByRole('button', { name: /^Change / }).click();
@@ -1450,8 +1459,7 @@ test('📃 a store\'s search page in Drop watches: told apart from a product\'s 
   await ed.waitFor();
   assert.equal(await ed.locator('textarea').inputValue(), 'magic the gathering\none piece op 15');
   assert.equal(await ed.locator('select[aria-label$="post in"]').inputValue(), general);
-  assert.equal(await ed.locator('input[aria-label$="Auto-checkout what drops"]').isChecked(), true, 'its Auto-checkout, armed');
-  assert.equal(await ed.locator('input[aria-label$="max price for Auto-checkout"]').inputValue(), '250');
+  assert.equal(await ed.locator('input[aria-label$="Auto-checkout what drops"]').count(), 0, 'no Auto-checkout to arm at EB Games');
   await ed.locator('textarea').fill('Magic the Gathering\nLorcana');
   await ed.locator('input[aria-label$="read the page every (seconds)"]').fill('3');
   await ed.locator('button[type=submit]').click();
@@ -1514,13 +1522,14 @@ test('🚨 priority drops (Mugibot 2.2): an admin watches EB Games\' pre-order p
   await page.fill('#dw-eb-min', '20');
   await page.selectOption('#dw-eb-qty', 'max');
   await page.click('#dw-eb-go');
-  await page.waitForFunction(() => /Watching 2 EB Games pre-order pages/.test(document.querySelector('#dw-eb-msg').textContent));
+  await page.waitForFunction(() => /Watching 3 EB Games pre-order pages/.test(document.querySelector('#dw-eb-msg').textContent));
   assert.equal(await page.textContent('#dw-eb-go'), '✓ Watching EB pre-order drops');
   assert.equal(await page.isDisabled('#dw-eb-go'), true);
   const ws = env.app.drops.watches().filter((w) => w.priority);
   assert.deepEqual(ws.map((w) => [w.label, w.phrases, w.minPrice, w.qty, w.every]).sort(), [
+    ['EB Games One Piece boosters', ['one piece booster'], 20, 'max', 3],
     ['EB Games One Piece pre-orders', [], 20, 'max', 3],
-    ['EB Games Pokémon booster pre-orders', ['booster', 'blister'], 20, 'max', 3],
+    ['EB Games Pokémon pre-orders (boosters, collections, decks)', [], 20, 'max', 3],
   ]);
   const row = page.locator('#dw-priority li.dw-row', { hasText: 'EB Games One Piece pre-orders' });
   assert.match(await row.locator('.meta').first().textContent(), /🚨 priority — every member DM'd · Page · EB Games · every 3 s · from \$20\.00/);
@@ -1558,7 +1567,7 @@ test('🚨 priority drops (Mugibot 2.2): an admin watches EB Games\' pre-order p
   await fan.waitForSelector('#home-priority:not([hidden]) li');
   const home = await fan.textContent('#home-priority');
   assert.match(home, /EB Games One Piece pre-orders[\s\S]*your Auto-checkout buys its drops \(up to \$300\.00 each, one\)/);
-  assert.match(home, /EB Games Pokémon booster pre-orders[\s\S]*you're DM'd its drops[\s\S]*Auto-checkout it/);
+  assert.match(home, /EB Games Pokémon pre-orders \(boosters, collections, decks\)[\s\S]*you're DM'd its drops[\s\S]*Auto-checkout it/);
   // A phone: nothing wider than the screen.
   await fan.setViewportSize({ width: 390, height: 844 });
   for (const hash of ['#drops', '#home']) {

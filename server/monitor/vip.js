@@ -19,7 +19,7 @@ import { newId } from '../crypto.js';
 import { bad, bool, httpUrl, item as checkItem, num, str } from '../schema.js';
 import { mentions, norm } from './listing.js';
 import { STATUS, isOrderable } from './status.js';
-import { qtySetting, quantityFor, typeOf } from './classify.js';
+import { isSealed, isSingle, qtySetting, quantityFor } from './classify.js';
 
 // Fast from 15 minutes before the drop time to 3 hours after it.
 export const VIP_BEFORE_MS = 15 * 60 * 1000;
@@ -307,8 +307,10 @@ export class Vip {
     if (!user || user.disabled || !r || !r.flow) return null;
     const existing = this.repo.itemBySku(user.id, product.store, product.sku);
     if (existing && existing.aco) return existing;
-    // ("auto" quantities: only a card product Mugibot recognises is bought — never an accessory with the words.)
-    if (w.qty === 'auto' && typeOf(product.name) === 'other') return null;
+    // ("auto" quantities: only a card product Mugibot recognises is bought — never an accessory with the words. And a
+    //  keyword watch never buys a single card, already unpacked — Mugibot 2.2.)
+    if (w.qty === 'auto' && !isSealed(product.name)) return null;
+    if (!w.url && isSingle(product.name)) return null;
     try {
       let saved;
       if (existing) {

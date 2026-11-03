@@ -30,6 +30,7 @@
 // store with the product (its cart link) for the member to pass the check and pay there: toPhone().
 
 import { entitlement } from './entitlement.js';
+import { isSingle } from './monitor/classify.js';
 import { newId, purposeKey, signParts, verifyParts } from './crypto.js';
 import { MOST_EXTENSION_VERSION, PHONE_EXTENSION_VERSION, QTY_EXTENSION_VERSION } from './extension.js';
 import { olderVersion } from './monitor/sweep.js';
@@ -78,6 +79,11 @@ const PHONE_LINK_MS = 30 * 60 * 1000;
 export const REMOTE_DESKTOP_URL = 'https://remotedesktop.google.com/access';
 
 /** Why a run stopped, in words (the extension and this file give the code). */
+/** An item armed in the moment its watch found it (put on the watchlist armed) — not armed by its member after. */
+export function armedByFind(it) {
+  return typeof it.aco_at === 'number' && typeof it.created_at === 'number' && it.aco_at - it.created_at <= 5000;
+}
+
 export const REASONS = {
   membership: "Your membership isn't active",
   no_flow: "Mugibot doesn't have a checkout for this store yet",
@@ -108,6 +114,8 @@ export const REASONS = {
   others: 'Other things were already in the bag: they were bought too',
   collect: "Click & Collect: the store doesn't offer home delivery for this order",
   home_only: "The store doesn't offer home delivery for this order, and your delivery details say home delivery only",
+  single: 'An individual card (already unpacked): Auto-checkout only buys sealed products a watch finds',
+  eb_priority: 'At EB Games, Auto-checkout buys only from the priority pages (EB Games pre-order drops)',
   no_store: "The store doesn't offer home delivery for this order, and no store near you has it for Click & Collect",
   store_denied: 'The store\'s bot protection turned your browser away ("Access Denied")',
   wrong_item: "The checkout wasn't for this item alone",
@@ -442,6 +450,16 @@ export class Aco {
     const user = this.repo.userById(userId);
     if (!user || user.disabled) return null;
     if (!entitlement(user, now).active) return skip('membership');
+    // (Mugibot 2.2: armed by a watch's find — a drop watch's, or a pool leader's — that it may not buy: an individual card,
+    //  already unpacked; or at EB Games, anything but a 🚨 priority page's find (the owner's rule). Disarmed; ⚡ Buy it
+    //  yourself if you want it. A link the member watches by its own page, or an item they armed themselves, is theirs.)
+    const veto = !info.test && !info.manual && info.source !== 'remote' ? this.searchVeto(row, item) : '';
+    if (veto) {
+      this.disarm(userId, item.id);
+      return skip(veto, veto === 'single'
+        ? `${item.name} is an individual card — Auto-checkout only buys sealed products a watch finds. ⚡ Buy it yourself if you want it.`
+        : `${item.name}: at EB Games, Auto-checkout buys only from the 🚨 priority pages. ⚡ Buy it yourself if you want it.`);
+    }
     const r = this.retailers.get(item.store);
     if (!r || !r.flow) return skip('no_flow');
     if (!item.url) return skip('no_page');
@@ -694,6 +712,26 @@ export class Aco {
     if (later) later.push(tell);
     else await tell();
     return toRun(run);
+  }
+
+  /**
+   * An item armed by a watch's find (a drop watch's words or page, or a pool leader's) — not by its member, nor a link —
+   * that Auto-checkout may not buy: 'single' (an individual card), 'eb_priority' (at EB Games, not a 🚨 priority page's
+   * find), or ''.
+   */
+  searchVeto(row, item) {
+    const it = this.db.get('SELECT drop_watch, pool_watch, pool_src, created_at, aco_at FROM items WHERE id = :i', { i: item.id }) || row;
+    // (A pool copy: the leader's item's arming is the one judged — the group buys what the leader's would.)
+    const src = !it.drop_watch && it.pool_watch && it.pool_src ? this.db.get('SELECT drop_watch, created_at, aco_at FROM items WHERE id = :i', { i: it.pool_src }) : it;
+    const watchId = (src && src.drop_watch) || it.pool_watch;
+    if (!watchId) return '';
+    // (Armed by the find itself — put on the watchlist armed, that one moment — never by its member after: theirs.)
+    if (src && !armedByFind(src)) return '';
+    const w = this.db.get('SELECT url, priority FROM drop_watches WHERE id = :w', { w: watchId });
+    if (w && w.url) return '';
+    if (isSingle(item.name)) return 'single';
+    if ((item.store === 'ebgames' || item.store === 'demo-ebgames') && !(w && w.priority)) return 'eb_priority';
+    return '';
   }
 
   /** One purchase per drop watch (monitor/drops.js): its other armed finds disarmed, and the watch's own Auto-checkout off. */

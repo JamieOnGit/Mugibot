@@ -111,8 +111,8 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
       if (s && !s.pages) {
         hint.textContent = `Mugibot doesn't read ${whose(s.name)} pages for key phrases at the moment — paste a product's link instead.`;
       } else if (s) {
-        aco = s.aco;
-        hint.textContent = `✓ ${whose(s.name)} page, read every ${n} seconds: anything on it whose name has ${list.length > 1 ? 'one of ' : ''}${words} — you're told the moment it's on the page (and when it comes back or gets cheaper)${s.aco ? ', and ⚡ Buy and Auto-checkout work here' : ''}.`;
+        aco = s.aco && s.acoFinds !== false;
+        hint.textContent = `✓ ${whose(s.name)} page, read every ${n} seconds: anything on it whose name has ${list.length > 1 ? 'one of ' : ''}${words} — you're told the moment it's on the page (and when it comes back or gets cheaper)${aco ? ', and ⚡ Buy and Auto-checkout work here' : s.aco ? `, and ⚡ Buy works here (at ${s.name}, Auto-checkout buys from the 🚨 pre-order drops alone)` : ''}.`;
       } else {
         let host = '';
         try { host = new URL(linkOf(raw)).host.replace(/^www\./, ''); } catch { /* not yet a link */ }
@@ -135,11 +135,11 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
       const words = list.length > 1 ? list.map((x) => `"${x}"`).join(', ') : `"${list[0] || ''}"`;
       const several = list.length > 1 ? `${list.length} key phrases, a watch each: ` : '';
       const s = (d.data.stores || []).find((x) => x.id === where);
-      aco = !!(s && s.aco) || where === ALL;
+      aco = !!(s && s.aco && s.acoFinds !== false) || where === ALL;
       const said = list.every((x) => x.length < 3) ? 'Type a few words of its name.' : where === OTHER
         ? `${several}anything at that website whose name has ${words} — its search is read every couple of minutes, and you're told when one drops, comes back, opens for pre-order or gets cheaper. Alerts only there.`
         : where === ALL ? `${several}anything at every store Mugibot searches whose name has ${words} — each store's own search in turn (about every ${d.data.sweepSeconds} seconds), and every product its card searches read — and you're told the moment one drops, comes back or gets cheaper.`
-        : s ? `${several}anything at ${s.name} whose name has ${words} — searched in turn with the card keywords (every ${d.data.sweepSeconds} seconds or so, more when ${s.name} is busy), and you're told when one drops, comes back or gets cheaper.` : 'Now choose where to look.';
+        : s ? `${several}anything at ${s.name} whose name has ${words} — searched in turn with the card keywords (every ${d.data.sweepSeconds} seconds or so, more when ${s.name} is busy), and you're told when one drops, comes back or gets cheaper.${s.aco && s.acoFinds === false ? ` (At ${s.name}, Auto-checkout buys from the 🚨 pre-order drops alone: ⚡ Buy from the alert.)` : ''}` : 'Now choose where to look.';
       hint.textContent = said.charAt(0).toUpperCase() + said.slice(1);
       note = 'Words buy only what drops after the watch has looked — never what\'s on sale already.';
     }
@@ -282,9 +282,10 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     }
     // 🚨 The EB Games pre-order preset (admins): its two pages, or that they're watched already.
     $('#dw-preset-eb').hidden = !admin;
-    const ebOn = watches.filter((w) => w.priority && /ebgames/.test(w.store) && /condition=preorder/.test(w.page || '')).length;
-    $('#dw-eb-go').disabled = ebOn >= 2;
-    $('#dw-eb-go').textContent = ebOn >= 2 ? '✓ Watching EB pre-order drops' : 'Watch EB pre-order drops';
+    // (Its three pages: One Piece pre-orders, Pokémon pre-orders, every One Piece product — each newest first.)
+    const ebOn = watches.filter((w) => w.priority && /ebgames/.test(w.store) && /subcategory=trading-cards-(one-piece|pokemon)/.test(w.page || '') && /sort=releasedate/.test(w.page || '')).length;
+    $('#dw-eb-go').disabled = ebOn >= 3;
+    $('#dw-eb-go').textContent = ebOn >= 3 ? '✓ Watching EB pre-order drops' : 'Watch EB pre-order drops';
     const list = $('#dw-mine');
     list.textContent = '';
     if (!mine.length) list.append(h('li', { class: 'empty' }, narrowed && watches.some((w) => w.mine && !w.priority) ? 'None of yours match — change the search or press Clear.' : prio.some((w) => w.mine) ? 'No others yet (your priority ones are at the top) — paste a product\'s link above, or type the words in its name.' : 'No drop watches yet — paste a product\'s link above, or type the words in its name.'));
@@ -611,7 +612,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     });
   });
 
-  // 🏴‍☠️ One Piece drops: every One Piece set at EB Games and Premium Bandai, armed for Auto-checkout (a box one, packs the most).
+  // 🏴‍☠️ One Piece drops: every One Piece set at EB Games (alerts) and Premium Bandai (armed for Auto-checkout: a box one, packs the most).
   $('#dw-preset-op').addEventListener('submit', (e) => {
     e.preventDefault();
     const max = Number($('#dw-preset-max').value);
@@ -629,7 +630,8 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     });
   });
 
-  // 🚨 EB Games pre-order drops (admins): its One Piece and Pokémon booster pre-order pages, priority watches for everyone.
+  // 🚨 EB Games pre-order drops (admins): its One Piece and Pokémon pre-order pages and every One Piece product ("one piece
+  // booster"), priority watches for everyone.
   $('#dw-preset-eb').addEventListener('submit', (e) => {
     e.preventDefault();
     const min = $('#dw-eb-min').value ? Number($('#dw-eb-min').value) : undefined;

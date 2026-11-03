@@ -779,10 +779,15 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     const sub = params.get('subcategory');
     if (sub === 'trading-cards-one-piece') hits = hits.filter((x) => /\bone piece\b/i.test(x.name));
     else if (sub === 'trading-cards-pokemon') hits = hits.filter((x) => /\bpok[eé]mon\b/i.test(x.name));
-    if (params.getAll('attributes').includes('trading-card-type:boosters')) hits = hits.filter((x) => /\b(booster|blister|pack|bundle)s?\b/i.test(x.name));
+    //  — and collections (collection boxes, tins, ETBs) and decks: what has any of the card types asked for.)
+    const types = params.getAll('attributes').filter((a) => a.startsWith('trading-card-type:')).map((a) => a.slice(18));
+    const TYPE_RE = { boosters: /\b(booster|blister|pack|bundle)s?\b/i, collections: /\b(collection|tin|elite trainer|gift box)s?\b/i, decks: /\bdecks?\b/i };
+    if (types.length) hits = hits.filter((x) => types.some((t) => TYPE_RE[t] && TYPE_RE[t].test(x.name)));
     const cond = params.get('condition');
     if (cond === 'preorder') hits = hits.filter((x) => x.status === 'preorder');
     else if (cond === 'new') hits = hits.filter((x) => x.status !== 'preorder');
+    // (sort=releasedate&order=desc: the newest first — the last put up, here.)
+    if (params.get('sort') === 'releasedate' && params.get('order') === 'desc') hits = hits.slice().reverse();
     return hits;
   }
   function ebSearchPage(u) {
@@ -1560,7 +1565,10 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         <div class="toggle" role="group"><button type="button" id="eb-t-cc" aria-pressed="${signed ? 'false' : 'true'}">Click &amp; Collect</button><button type="button" id="eb-t-home" aria-pressed="${signed ? 'true' : 'false'}">Home Delivery</button></div>
         <div id="eb-home" ${signed ? '' : 'hidden'}><h3>Shipping Address</h3>${signed ? '<p>Ash Ketchum<br>1 PALLET TOWN RD<br>SYDNEY NSW 2000<br>Australia</p>' : '<label>Country <select name="country"><option value="">Select country</option><option value="AU">Australia</option></select></label>'}</div>
         <div id="eb-cnc" ${signed ? 'hidden' : ''}>
-          <div class="mat-form-field"><label for="eb-cc-q">Collect from</label><input id="eb-cc-q" type="text" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" value="${esc(S.ccNear || '')}"><button type="button" id="eb-cc-clear" aria-label="Clear" style="background:none;color:#555">✕</button></div>
+          ${S.ccMarkup === 'plain' ? `<div class="mat-form-field"><label for="eb-cc-q">Collect from</label><input id="eb-cc-q" type="text" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" value="${esc(S.ccNear || '')}"><button type="button" id="eb-cc-clear" aria-label="Clear" style="background:none;color:#555">✕</button></div>`
+    // (As EB Games' real one is drawn (Nov 2026): a Material field whose label isn't tied to the box, its hint under it,
+    //  and "address" in the box's own name and id — what made extension 1.41.0 type your street into it.)
+    : `<div class="mat-form-field cc-search"><div class="mat-form-field-flex"><div class="mat-form-field-infix"><input id="addressSearch" name="address" formcontrolname="address" class="mat-input-element" type="text" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-describedby="eb-cc-hint" value="${esc(S.ccNear || '')}"><span class="mat-form-field-label-wrapper"><label class="mat-form-field-label"><mat-label>Collect from</mat-label></label></span></div><button type="button" id="eb-cc-clear" aria-label="Clear" style="background:none;color:#555">✕</button></div><div class="mat-form-field-subscript-wrapper"><mat-hint id="eb-cc-hint" class="mat-hint">Please enter suburb or postcode</mat-hint></div></div>`}
           <h3 id="eb-cc-head" ${S.ccNear ? '' : 'hidden'}>Stores near ${esc(S.ccNear || '')}</h3>
           <ul id="eb-cc-stores" class="store-list"></ul>
           <div id="eb-pick" class="notice notice--danger" style="background:#f8d7da;color:#c0392b;padding:12px;text-align:center">ⓘ Please select a store to check for availability.</div>
@@ -1606,8 +1614,11 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
         $('eb-t-cc').addEventListener('click', () => { mode = 'cnc'; show(); post('fulfilment', { fulfilment: 'cnc' }); });
         $('eb-t-home').addEventListener('click', () => { mode = 'home'; show(); post('fulfilment', { fulfilment: 'home' }); });
         // "Collect from": its suburbs as you type a postcode (a moment later), in a list over the page.
-        const q = $('eb-cc-q');
+        const q = $('eb-cc-q') || $('addressSearch');
         const opts = $('eb-cc-opts');
+        // (Everything ever typed into "Collect from", for the tests: only ever a postcode.)
+        const typed = [];
+        q.addEventListener('input', () => { const v = q.value.trim(); if (v && typed[typed.length - 1] !== v) { typed.push(v); post('ccTyped', { all: typed.slice() }); } });
         const place = () => { const r = q.getBoundingClientRect(); opts.style.left = (r.left + scrollX) + 'px'; opts.style.top = (r.bottom + scrollY) + 'px'; };
         q.addEventListener('input', () => {
           clearTimeout(window.__ccT);
@@ -3259,10 +3270,12 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     if (shop === 'ebgames' && sub === '/search/query') {
       const all = ebHits(u.searchParams);
       const day = 86400000;
+      // (pageSize: one page of results, as EB Games' real one gives — its count still all of them.)
+      const size = shopOf('ebgames').pageSize || 0;
       return json(200, {
         totalResults: all.length,
         aggregation: {},
-        results: all.map((x) => ({
+        results: (size ? all.slice(0, size) : all).map((x) => ({
           sku: x.sku, title: x.name, productUrl: pathFor(shop, x).replace(/^\/ebgames/, ''), imageUrl: `http://${req.headers.host}${imagePath(shop, x)}`,
           price: x.was || x.price, promotionPrice: x.was ? x.price : null, isOutOfStock: x.status === 'out_of_stock', isUnavailable: false,
           isComingSoon: x.status === 'coming_soon', isPreowned: false, releaseDate: new Date(Date.now() + (x.status === 'preorder' ? 30 : -30) * day).toISOString(),

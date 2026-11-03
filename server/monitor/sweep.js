@@ -1050,7 +1050,7 @@ export class Sweeper {
         const lastPage = term.page > 1 && term.page >= Math.min(10, r.sweep.pages || 1);
         const intoView = !(whole || (newest && r.sweep.newestFresh === false) || !!knownBelow[i]);
         const newCard = cardsBefore && !known && !baseline && !edge && !lastPage && !intoView && !republished && !mkt && !!row && !!row.last_ok_at;
-        const seen = mkt ? new Map() : this.sight(r, p, { title, status, own, way, before, newSince: newCard ? row.last_ok_at : null, now });
+        const seen = mkt ? new Map() : this.sight(r, p, { title, status, own, way, before, newSince: newCard ? row.last_ok_at : null, now, below: r.sweep.newestFirst ? codesIn.slice(i + 1).flat() : null });
         const verdict = (w) => (seen.get(w.id) || {}).verdict || 'pending';
         // (Alerts: listed already as far as a drop watch knows — found by another search than its own words', unless it's
         //  new; or seen by the watch before.)
@@ -1113,7 +1113,7 @@ export class Sweeper {
    * not on sale and is on sale now. What's bought is what the watch saw (monitor/sightings.js): this read is
    * the page's watches' own — whole: it holds every result the store has for the page.
    */
-  async ingestPage(r, watches, products, { fresh = null, whole = false, how = '', look = true, now = this.now(), wait = false } = {}) {
+  async ingestPage(r, watches, products, { fresh = null, whole = false, how = '', look = true, now = this.now(), wait = false, newestFirst = false } = {}) {
     const s = this.settings;
     const counted = { found: products.length, kept: 0, new: 0, restock: 0, price: 0 };
     const counts = this.filters(s);
@@ -1124,7 +1124,7 @@ export class Sweeper {
     // (Every product on the page goes in its watches' first look — whatever it's called, blocked or a marketplace's.)
     const codesIn = products.map((p) => [p.sku, ...(p.aliases || [])].filter(Boolean));
     try {
-      for (const p of products) {
+      for (const [i, p] of products.entries()) {
         const status = p.inStock === true ? (p.inStoreOnly ? STATUS.IN_STORE : p.preorder ? STATUS.PREORDER : STATUS.IN_STOCK) : p.inStock === false ? STATUS.OUT_OF_STOCK : null;
         // Members' own SKUs, whatever they are (a page read is as good as a search's).
         await this.members(r, p, status, later);
@@ -1137,7 +1137,8 @@ export class Sweeper {
         const codes = [p.sku, ...(p.aliases || [])];
         const before = codes.map((k) => this.catalog.productFor(r.id, k)).find(Boolean) || null;
         // What each VIP and drop watch at this store saw of it (monitor/sightings.js): this page's watches, their own read.
-        const seen = this.sight(r, p, { title, status, own, way: how, before, now });
+        // (A page sorted newest first: what's below it in this read, for whether it can be an old product coming into view.)
+        const seen = this.sight(r, p, { title, status, own, way: how, before, now, below: newestFirst ? codesIn.slice(i + 1).flat() : null });
         const verdict = (w) => (seen.get(w.id) || {}).verdict || 'pending';
         // (A key phrase in its name — or, a page with none, any product — at the watch's lowest price or more.)
         const hits = watches.map((w) => ({ w, phrase: this.drops.pageHit(w, title, typeof p.price === 'number' ? p.price : null) })).filter((x) => x.phrase);
@@ -1189,7 +1190,7 @@ export class Sweeper {
    * card listing's; the store's own creation time, p.createdAt). before: the catalogue's product before this read (or
    * null: it's new to the catalogue). Returns each watch's { verdict, before }.
    */
-  sight(r, p, { title, status, own, way = '', before = null, newSince = null, now = this.now() }) {
+  sight(r, p, { title, status, own, way = '', before = null, newSince = null, now = this.now(), below = null }) {
     const out = new Map();
     if (!this.sightings) return out;
     const codes = [p.sku, ...(p.aliases || [])];
@@ -1211,7 +1212,7 @@ export class Sweeper {
     const opts = { reading, how: 'search', created: typeof p.createdAt === 'number' ? p.createdAt : null, published, knownAt: before ? before.created_at : null, hides: !!r.sweep.goneMeansSoldOut };
     // (Each watch's own read first: a product its whole first look didn't have is new to the others too.)
     const mine = list.filter(own);
-    for (const w of mine) out.set(w.id, this.sightings.see(w, r.id, codes, { ...opts, own: true, way }));
+    for (const w of mine) out.set(w.id, this.sightings.see(w, r.id, codes, { ...opts, own: true, way, below }));
     for (const w of list) if (!out.has(w.id)) out.set(w.id, this.sightings.see(w, r.id, codes, opts));
     return out;
   }

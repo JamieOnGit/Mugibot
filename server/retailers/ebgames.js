@@ -87,6 +87,9 @@ export default {
       afterCard: [/^done$/i],
       // The delivery address is one line, picked from EB's suggestions as you type.
       addressLookup: true,
+      // (Click & Collect's "Collect from" box: never an address box — your postcode alone goes in it, collectStep. For
+      //  every copy of the extension, older ones included: a box like this isn't filled with your details at all.)
+      fields: { 'input[id*="collect" i], input[name*="collect" i], input[formcontrolname*="collect" i], input[aria-label*="collect" i], input[placeholder*="collect" i]': null },
       final: [/^confirm (&|and) pay$/i, /\bplace (my |your )?order\b/i],
       // "Pay Now" is EB's kind of payment (vs Pay Later), not its final button.
       notFinal: [/^pay now$/i, /^pay later$/i],

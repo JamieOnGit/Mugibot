@@ -1328,18 +1328,46 @@ bot check: it only stops Mugibot waiting and starts politely again.
 ### 🚨 Priority drops: EB Games' pre-order pages (Mugibot 2.2)
 
 A priority drop watch is an admin's search page watch for everyone that tells **every member** and can be
-**auto-checked out by each member**. It's built for EB Games' pre-order pages:
+**auto-checked out by each member**. It's built for EB Games' pages — the owner's three (Nov 2026), each read newest
+first (`sort=releasedate&order=desc`), so what's new is on the page read:
 
 - **One Piece pre-orders**:
-  `https://www.ebgames.com.au/search?category=trading-cards&subcategory=trading-cards-one-piece&condition=preorder`.
+  `https://www.ebgames.com.au/search?category=trading-cards&subcategory=trading-cards-one-piece&condition=preorder&sort=releasedate&order=desc`.
   It has no key phrases, so anything new on the page counts.
-- **Pokémon booster pre-orders**:
-  `https://www.ebgames.com.au/search?category=trading-cards&subcategory=trading-cards-pokemon&attributes=trading-card-type%3Aboosters&condition=preorder`.
-  Its key phrases are **booster** and **blister** by default.
+- **Pokémon pre-orders: boosters, collections and decks**:
+  `https://www.ebgames.com.au/search?category=trading-cards&subcategory=trading-cards-pokemon&attributes=trading-card-type%3Aboosters&attributes=trading-card-type%3Acollections&attributes=trading-card-type%3Adecks&condition=preorder&sort=releasedate&order=desc`.
+  No key phrases either: anything new on it counts.
+- **Every One Piece product**, for names with **One Piece Booster** (every word, any order: "One Piece TCG OP-19
+  Hangsell Booster"):
+  `https://www.ebgames.com.au/search?category=trading-cards&subcategory=trading-cards-one-piece&sort=releasedate&order=desc`.
+
+**What Auto-checkout buys from them — and never.** Anything new on them from the lowest price, but **never an
+individual card** (already unpacked: "One Piece - TCG - … OP01-079 - NM/M", "Charizard ex 199/165 - Near Mint" — its
+card number or condition says so) **nor an accessory** (sleeves, a playmat, a binder, a deck box). Those are still
+alerted and DM'd — a drop is a drop — and never bought ("Auto-checkout doesn't buy it — it's an individual card").
+
+**At EB Games, Auto-checkout buys from these pages alone.** A keyword watch, or an ordinary page watch, at EB Games
+alerts only (its Auto-checkout can't be turned on; ⚡ Buy from the alert). A product watched by its own link is bought
+as its member chose. Anywhere, a single card a keyword or page watch finds is never bought.
+
+**A page longer than one read** (EB Games gives one page of results; every One Piece product is hundreds): read newest
+first, a product above one the watch's first look saw can't be an old one coming into view — it's new, and bought.
+(The same for Premium Bandai's newest 100.)
+
+**One DM a drop.** A new booster up for pre-order is on two of the pages (One Piece pre-orders, One Piece boosters):
+each member is DM'd once, by whichever page has it first — a member who muted one is still told by the other.
+
+**Upgrading (Nov 2026, once, when the server starts).** The pages set up before are brought to these: their links
+(newest first; Pokémon's widened to collections and decks, its key phrases cleared), each changed page given a fresh
+first look (what's on it already is there before — never a drop bought on the first read); the One Piece boosters page
+added for each admin with the preset, as their One Piece page is set (lowest price, how many, channel, role), with
+each member's Auto-checkout of the One Piece page carried over (they're told); the EB Games keyword watches' (the old
+"One Piece drops" preset's) Auto-checkout off, their alerts kept; and whatever those armed and hadn't bought,
+disarmed — and any single card a search armed — each owner told.
 
 **Setting them up (admins).** On the Monitors page, open **🎯 Drop watches → 🚨 EB Games pre-order drops**.
 Set **Only from $** (anything cheaper isn't a drop: it isn't alerted and isn't bought) and **Buy: Max or Min**
-(what members' Auto-checkout buys unless they choose). Press **Watch EB pre-order drops**. Both pages are added
+(what members' Auto-checkout buys unless they choose). Press **Watch EB pre-order drops**. The three pages are added
 as priority watches, read every 3 seconds (EB Games' fastest).
 
 **Changing them later (✎ on the watch).** You can change:

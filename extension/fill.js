@@ -208,6 +208,14 @@ var MGBFill = (function () {
     return m ? m[1] : '';
   }
 
+  /** The postcode stores are found near: the one you gave for that (4 digits), else your address's. Never anything else. */
+  function collectPostcode(profile) {
+    var own = String(profile.collectNear || '').trim();
+    if (/^\d{4}$/.test(own)) return own;
+    var pc = String(profile.postcode || '').match(/\b\d{4}\b/);
+    return pc ? pc[0] : postcodeIn(profile);
+  }
+
   /** What we can type, from your delivery details and your saved card. */
   function fieldValues(profile, card) {
     profile = profile || {};
@@ -215,9 +223,9 @@ var MGBFill = (function () {
       email: profile.email || '', phone: profile.phone || '', firstName: profile.firstName || '', lastName: profile.lastName || '',
       fullName: [profile.firstName, profile.lastName].filter(Boolean).join(' '), address1: profile.address1 || '', address2: profile.address2 || '',
       suburb: profile.suburb || '', state: profile.state || '', postcode: profile.postcode || '', country: 'Australia',
-      // Click & collect when home delivery isn't offered (on unless your details say home delivery only), near
-      // where you say (else your address's postcode — "3192" — however your address was saved).
-      collect: profile.collect !== false, collectNear: String(profile.collectNear || profile.postcode || postcodeIn(profile) || '').trim(),
+      // Click & collect when home delivery isn't offered (on unless your details say home delivery only), near your
+      // postcode — "3192", however your address was saved — and only ever a postcode: never your street (1.42.0).
+      collect: profile.collect !== false, collectNear: collectPostcode(profile),
     };
     if (card) {
       v.cardNumber = card.number;
@@ -446,9 +454,45 @@ var MGBFill = (function () {
     return line.slice(0, 80);
   }
 
+  /**
+   * The words around a box that aren't its own attributes: its hint (aria-describedby: "Please enter suburb or
+   * postcode") and its field's own text — the label over it, however it's drawn (EB Games' "Collect from").
+   */
+  function hintOf(el) {
+    var parts = [];
+    var db = el.getAttribute('aria-describedby');
+    if (db) db.split(/\s+/).forEach(function (id) { var x = document.getElementById(id); if (x) parts.push(x.innerText || x.textContent || ''); });
+    // (Its own field: the nearest wrapper with this box alone in it, and few words.)
+    var node = el.parentElement;
+    for (var i = 0; node && i < 4 && node !== document.body; i += 1, node = node.parentElement) {
+      if (node.querySelectorAll('input, select, textarea').length > 1) break;
+      var t = node.innerText || '';
+      if (t.length > 200) break;
+      if (t.trim()) parts.push(t);
+    }
+    return parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 300);
+  }
+
+  /**
+   * A box only ever for finding a store to collect from — EB Games' "Collect from" ("Please enter suburb or postcode"):
+   * known by its label or the words around it, whatever its own attributes say (an "address" in its name or id included).
+   * Never typed your address into: only your postcode (collectStep).
+   */
+  function isCollectBox(el) {
+    if (el.tagName !== 'INPUT' || /^(checkbox|radio|hidden)$/i.test(el.type || '')) return false;
+    var d = describe(el);
+    if (/\bcard\b|cvv|cvc|expir/.test(d)) return false;
+    var hint = hintOf(el);
+    if (COLLECT_BOX_RE.test(d) || COLLECT_BOX_RE.test(hint)) return true;
+    // (Its own words say it's the address — "Delivery address", "Start typing your address" — never a collect box.)
+    if (/\b(delivery|shipping|billing|home|your|street) address\b|start typing|enter (your |an )?address/.test(d + ' ' + hint)) return false;
+    return SUBURB_POSTCODE_RE.test(d + ' ' + hint) && !!el.closest(COLLECT_AREA);
+  }
+
   /** A box for finding stores near a postcode or suburb (not your address's postcode box). */
   function isStoreBox(el) {
     if (el.tagName !== 'INPUT' || /^(checkbox|radio|hidden)$/i.test(el.type || '')) return false;
+    if (isCollectBox(el)) return true;
     var d = describe(el);
     if (/address|street|card/.test(d)) return false;
     return STORE_BOX_RE.test(d) || (/post.?code|suburb/.test(d) && !!el.closest(STORE_AREA));
@@ -875,6 +919,9 @@ var MGBFill = (function () {
   var STORE_BOX_RE = /\bstores?\b|postcode or suburb|suburb or postcode|\blocation\b|near (me|you)|find a|collect (from|at|in)\b|pick ?up (from|at)\b/;
   // (A box that's only ever for finding a store — EB Games' "Collect from": never typed your address into.)
   var COLLECT_BOX_RE = /collect (from|at|in)\b|pick ?up (from|at|location|store)|\bstores? near\b|find (a )?store|store (finder|search|locator)/;
+  // ("Please enter suburb or postcode" — a store finder's, in a Click & Collect part of the page.)
+  var SUBURB_POSTCODE_RE = /suburb (or|\/) post ?code|post ?code (or|\/) suburb/;
+  var COLLECT_AREA = '[class*="collect" i], [id*="collect" i], [class*="pickup" i], [id*="pickup" i], [class*="pick-up" i], [class*="store-search" i], [class*="store-finder" i], [class*="storefinder" i]';
   var STORE_ITEM_RE = /\bstores?\b|\bkm\b|\d ?km\b|\bopen\b|\bready\b|pick ?up|collect|\b\d{4}\b|\b(nsw|vic|qld|wa|sa|tas|act|nt)\b/;
   var STORE_AREA = '[role="dialog"], [aria-modal="true"], [class*="store" i], [id*="store" i], [class*="pickup" i], [id*="pickup" i], [class*="collect" i], [id*="collect" i], [class*="location" i]';
   // Payments that aren't the card (a store's default can be one): switched to the card when the flow pays by card.
@@ -995,7 +1042,7 @@ var MGBFill = (function () {
         if (isStoreBox(el)) return;
       }
       // (A box only ever for finding a store — EB Games' "Collect from" — never gets your address, collecting or not.)
-      if (!opts.onlyCard && el.tagName === 'INPUT' && isStoreBox(el) && COLLECT_BOX_RE.test(describe(el))) return;
+      if (!opts.onlyCard && el.tagName === 'INPUT' && isCollectBox(el)) return;
       var kind = fieldKind(el, C, ctx);
       if (!kind) return;
       out.kinds[kind] = true;
@@ -1157,10 +1204,11 @@ var MGBFill = (function () {
   var SUGGESTIONS = '[role="option"], [role="listbox"] li, .pac-item, [class*="suggest" i] li, [class*="suggest" i] [class*="item" i], [class*="autocomplete" i] li, [class*="address-result" i], [class*="addressResult" i], [id*="listbox" i] li';
 
   /** The address-lookup box on the page (the one-line "start typing your address" box), or null. */
-  function lookupBox(C) {
+  function lookupBox(C, collecting) {
     var fields = toArray(document.querySelectorAll('input')).filter(function (el) { return isVisible(el) && !inPanel(el); });
     var ctx = { hasParts: addressParts(fields, C) };
-    return fields.find(function (el) { return fieldKind(el, C, ctx) === 'addressLookup'; }) || null;
+    // (Never the box for finding a store — "Collect from" gets your postcode alone: collectStep.)
+    return fields.find(function (el) { return !isCollectBox(el) && !(collecting && isStoreBox(el)) && fieldKind(el, C, ctx) === 'addressLookup'; }) || null;
   }
 
   /**
@@ -1169,8 +1217,8 @@ var MGBFill = (function () {
    * shorter each time (some lookups find nothing for the whole line). Resolves to what happened:
    * 'picked', 'none' (no suggestions came up) or 'no-box'.
    */
-  async function useAddressLookup(values, C, attempt) {
-    var box = lookupBox(C);
+  async function useAddressLookup(values, C, attempt, collecting) {
+    var box = lookupBox(C, collecting);
     if (!box || !values.address1) return 'no-box';
     var tries = [values.address1 + ', ' + values.suburb + ' ' + values.state + ' ' + values.postcode, values.address1 + ' ' + values.suburb, values.address1];
     var query = tries[Math.min(attempt || 0, tries.length - 1)].replace(/\s+/g, ' ').trim();
@@ -1369,12 +1417,12 @@ var MGBFill = (function () {
       // A one-line address box with suggestions: "Enter address manually" if the store has it, else
       // type it and pick the suggestion (up to 3 tries, written a little shorter each time).
       // (A box that already has your address — from your store account — is left as it is.)
-      var lbox = !fill.kinds.address1 && fill.kinds.addressLookup && !picked ? lookupBox(C) : null;
+      var lbox = !fill.kinds.address1 && fill.kinds.addressLookup && !picked ? lookupBox(C, cc.on) : null;
       if (lbox && (lookups > 0 || !lbox.value)) {
         if (manual && !manualTried) { manualTried = true; manual.el.click(); await wait(300); continue; }
         if (!manual && lookups < 3) {
           setStatus('Looking up your address…');
-          var how = await useAddressLookup(opts.values, C, lookups);
+          var how = await useAddressLookup(opts.values, C, lookups, cc.on);
           lookups += 1;
           if (how === 'picked') { picked = true; report('step', 'Picked your address from the store\'s suggestions'); }
           else if (lookups === 3) report('error', 'The store\'s address finder didn\'t suggest your address — pick it yourself');
@@ -1509,6 +1557,9 @@ var MGBFill = (function () {
     noHomeWords: function (C) { return noHomeWords(C || {}, null); },
     storeChoices: function () { return storeChoices().map(function (s) { return { name: s.name, km: s.km, stock: s.stock, target: s.target.tagName.toLowerCase() }; }); },
     bestStore: function () { var b = bestStore(storeChoices()); return b ? { name: b.name, km: b.km, stock: b.stock } : null; },
+    isCollectBox: isCollectBox,
+    isStoreBox: isStoreBox,
+    lookupBox: lookupBox,
     CARD_KINDS: CARD_KINDS,
   };
 })();

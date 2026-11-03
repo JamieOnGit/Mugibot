@@ -52,7 +52,9 @@ Their open dashboards update by themselves.
 A copy is the leader's to change, so members get no Edit, Pause or ✕ on it,
 only **🤝 Skip**. They keep their own ⚡ Buy and ↻, and put the copies in their own order. If a member already
 watches the same store and SKU themselves, theirs stays as it is and no copy is
-made.
+made — and when the leader checks it out, the member's own one is checked out
+with them, as a copy would be (up to their most for the pool if it has no max
+price of its own): nobody in the group is left out of the leader's order.
 
 **Armed.** A copy is armed only when:
 
@@ -78,6 +80,11 @@ that are "for everyone" show to every member anyway, as before.
 | presses **Trigger ACO** (or 🚦 Wait for queue, then ACO) | each one's copy starts now, armed or not (unless they skipped it) |
 | presses **⚡ Buy** in Discord, or ⚡ Buy on the dashboard with "Place the order for me" | the same |
 | has an armed item drop | each one's **armed** copy starts |
+| has a 🚨 priority drop bought for them (their Auto-checkout of an EB Games pre-order page) | the same: each one's copy starts at that moment |
+
+What the leader's Auto-checkout may not buy, theirs doesn't either: a single
+card a watch found, or at EB Games anything but a 🚨 priority page's find
+(docs/MONITORING.md) — never bought for the leader, never for the group.
 
 The member's run is an ordinary Auto-checkout run of their own, labelled
 **🤝 with your pool** in their run history. Its DM says that the leader started

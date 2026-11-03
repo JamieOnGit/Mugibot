@@ -140,8 +140,39 @@ test('🏬 your postcode for "Collect from": your details\' own, else the one in
     assert.equal(await near({ address1: '11 Monterey Dr, Cheltenham VIC 3192' }), '3192');
     assert.equal(await near({ address1: '1341 Dandenong Rd', suburb: 'Chadstone 3148' }), '3148');
     assert.equal(await near({ address1: '1341 Dandenong Rd', suburb: 'Chadstone' }), '', 'a street number is never taken for a postcode');
-    assert.equal(await near({ postcode: '3192', collectNear: 'Southland' }), 'Southland', 'where your details say to collect near, if they say');
+    // (Only ever a postcode — the owner's rule, Nov 2026: a postcode your details give for collecting, else your own.)
+    assert.equal(await near({ postcode: '3192', collectNear: '3150' }), '3150', 'the postcode your details say to collect near');
+    assert.equal(await near({ postcode: '3192', collectNear: 'Southland' }), '3192', 'a suburb there: your postcode instead');
+    assert.equal(await near({ address1: '11 MONTEREY DRIVE', postcode: '3192', collectNear: '11 MONTEREY DRIVE' }), '3192', 'never your street');
+    assert.equal(await near({ address1: '11 Monterey Dr', suburb: 'Cheltenham', state: 'VIC', postcode: 'VIC 3192' }), '3192');
   } finally { await page.close(); }
+});
+
+test('🏬 "Collect from" is known for what it is however it\'s drawn — EB Games\' real one has "address" in its own name and id — and an address box is never taken for it', async () => {
+  const kinds = async (body) => {
+    const page = await pageWith(body);
+    try {
+      return await page.evaluate((f) => {
+        const C = MGBFlows.revive(JSON.parse(f));
+        return Array.from(document.querySelectorAll('input')).map((el) => [el.id, MGBFill.isCollectBox(el), MGBFill.isStoreBox(el), (MGBFill.lookupBox(C) || {}).id || '']);
+      }, EB_FLOW);
+    } finally { await page.close(); }
+  };
+  // EB Games' (Nov 2026): a Material field — its label not tied to the box, its hint under it, "address" in its name and id.
+  const eb = '<div class="mat-form-field"><div class="mat-form-field-flex"><div class="mat-form-field-infix"><input id="addressSearch" name="address" formcontrolname="address" type="text" autocomplete="off" role="combobox" aria-autocomplete="list" aria-describedby="h1"><span><label><mat-label>Collect from</mat-label></label></span></div></div><div><mat-hint id="h1">Please enter suburb or postcode</mat-hint></div></div>';
+  assert.deepEqual(await kinds(eb), [['addressSearch', true, true, '']], 'a collect box, never the address lookup');
+  // Its label tied to it; only its aria-label; only its hint, in a Click & Collect part of the page.
+  assert.deepEqual(await kinds('<label for="a1">Collect from</label><input id="a1" name="deliveryAddress" role="combobox">'), [['a1', true, true, '']]);
+  assert.deepEqual(await kinds('<input id="a2" aria-label="Pick up from" name="address">'), [['a2', true, true, '']]);
+  assert.deepEqual(await kinds('<div class="click-collect"><div><input id="a3" name="addressQuery" aria-describedby="h3"></div><small id="h3">Please enter suburb or postcode</small></div>'), [['a3', true, true, '']]);
+  // Delivery's own address boxes: never a collect box — the address lookup is the address lookup.
+  assert.deepEqual(await kinds('<label for="d1">Delivery address</label><input id="d1" name="address" placeholder="Start typing your address" role="combobox">'), [['d1', false, false, 'd1']]);
+  // (A "Suburb or postcode" box outside Click & Collect: never a collect box — a store finder's only while collecting.)
+  assert.deepEqual(await kinds('<div class="delivery"><label for="d2">Suburb or postcode</label><input id="d2" name="suburb"></div>'), [['d2', false, true, '']]);
+  // Both on one page (Home Delivery's lookup, and Click & Collect's box): the lookup is the delivery one.
+  assert.deepEqual((await kinds(`<div><label for="d3">Address</label><input id="d3" name="address" placeholder="Start typing your address" role="combobox"></div>${eb}`)).map((x) => x.slice(0, 3).concat(x[3])), [['d3', false, false, 'd3'], ['addressSearch', true, true, 'd3']]);
+  // A card box is never one, whatever's around it.
+  assert.deepEqual(await kinds('<div class="collect"><label for="c1">Card number</label><input id="c1" name="cardnumber"></div>'), [['c1', false, false, '']]);
 });
 
 /** The dummy EB Games checkout (signed in: your address and saved card) for a Click & Collect-only order, in a tab. */
@@ -157,6 +188,14 @@ async function ebCheckout(setup = () => {}) {
   await page.addScriptTag({ content: SCRIPTS });
   return { page, S };
 }
+/** Everything typed into "Collect from" (the dummy store's own record): your postcode, never anything else. */
+function assertPostcodeOnly(S, postcode) {
+  const typed = S.steps.filter((x) => x.step === 'ccTyped').flatMap((x) => x.data.all);
+  assert.ok(typed.length > 0, 'something typed into "Collect from"');
+  for (const v of typed) assert.ok(postcode.startsWith(v) || /^[A-Z ]+, [A-Z]{2,3} \d{4}$/.test(v), `only the postcode typed into "Collect from" (and the suburb it suggested, chosen) — it had "${v}": ${JSON.stringify(typed)}`);
+  assert.ok(!typed.some((v) => /monterey|pallet|drive|\bdr\b|\brd\b/i.test(v)), `never the street: ${JSON.stringify(typed)}`);
+}
+
 /** Mugibot's checkout fill there, as Auto-checkout runs it: where it got to, what it said, and the final button. */
 const fillIn = (page, profile) => page.evaluate(async ({ f, profile: p }) => {
   const steps = [];
@@ -178,6 +217,7 @@ test("🏬 EB Games, signed in, an order it won't deliver: Click & Collect, 3192
     assert.deepEqual(r.fin, { text: 'CONFIRM & PAY', off: false });
     assert.equal(S.data.ccSearch.typed, '3192', 'the postcode typed');
     assert.equal(S.data.ccSuburb.suburb, 'CHELTENHAM, VIC 3192', 'the first suburb suggested');
+    assertPostcodeOnly(S, '3192');
     assert.deepEqual([S.data.store.fulfilment, S.data.store.store, S.data.store.km], ['cnc', 'EB Games Southlands', 1.34]);
     assert.ok(r.steps.some((m) => /^🏬 EB Games doesn't offer home delivery for this order \("unfortunately the items below are not in stock for delivery/.test(m)), r.steps.join('\n'));
     assert.ok(r.steps.includes('🏬 Looking for stores near CHELTENHAM, VIC 3192'), r.steps.join('\n'));
@@ -194,6 +234,30 @@ test('🏬 EB Games saying it in other words (in an alert box), and "Collect fro
     assert.equal(r.result, 'final', JSON.stringify(r.steps));
     assert.equal(S.data.ccSearch.typed, '2000');
     assert.equal(S.data.ccSuburb.suburb, 'SYDNEY, NSW 2000');
+    assert.equal(S.data.store.store, 'EB Games Southlands');
+    assertPostcodeOnly(S, '2000');
+  } finally { await page.close(); }
+});
+
+test('🏬 EB Games, its real "Collect from" (\"address\" in its name and id, the label not tied to it): your postcode alone typed — never "11 Monterey Dr" — and the order goes on to CONFIRM & PAY', async () => {
+  const { page, S } = await ebCheckout();
+  try {
+    const r = await fillIn(page, HOME);
+    assert.equal(r.result, 'final', JSON.stringify(r.steps));
+    assert.deepEqual(r.fin, { text: 'CONFIRM & PAY', off: false });
+    assertPostcodeOnly(S, '3192');
+    assert.equal(S.data.ccSuburb.suburb, 'CHELTENHAM, VIC 3192');
+    assert.equal(S.data.store.store, 'EB Games Southlands');
+    assert.ok(!r.steps.some((m) => /Looking up your address|address finder/.test(m)), r.steps.join('\n'));
+  } finally { await page.close(); }
+});
+
+test('🏬 the plainer "Collect from" (its label tied to it): the same — your postcode alone', async () => {
+  const { page, S } = await ebCheckout((x) => { x.ccMarkup = 'plain'; });
+  try {
+    const r = await fillIn(page, HOME);
+    assert.equal(r.result, 'final', JSON.stringify(r.steps));
+    assertPostcodeOnly(S, '3192');
     assert.equal(S.data.store.store, 'EB Games Southlands');
   } finally { await page.close(); }
 });

@@ -34,7 +34,8 @@ import { BlockedUrlError, safeFetch } from './safeurl.js';
 import { STATUS, isOrderable } from './status.js';
 import { readingOf } from './sightings.js';
 import { buyAction } from '../notifier.js';
-import { qtySetting, quantityFor, typeOf } from './classify.js';
+import { isAccessory, isSealed, isSingle, qtySetting, quantityFor, typeOf } from './classify.js';
+import { armedByFind } from '../aco.js';
 
 const KINDS = ['restock', 'listed', 'price_drop'];
 export const DROP_NOTE = 'Drop watch';
@@ -103,6 +104,41 @@ export function otherSku(url) {
 /** A name from a product link ("…/products/xbox-series-x-console" → "Xbox Series X Console"). */
 export const nameFromLink = linkName;
 
+// EB Games' pages the priority preset reads (the owner's own, Nov 2026), newest first: One Piece pre-orders; Pokémon
+// pre-orders — boosters, collections and decks; and every One Piece product (for "one piece booster").
+export const EB_PAGES = Object.freeze({
+  onepiece: '/search?category=trading-cards&subcategory=trading-cards-one-piece&condition=preorder&sort=releasedate&order=desc',
+  pokemon: '/search?category=trading-cards&subcategory=trading-cards-pokemon&attributes=trading-card-type%3Aboosters&attributes=trading-card-type%3Acollections&attributes=trading-card-type%3Adecks&condition=preorder&sort=releasedate&order=desc',
+  boosters: '/search?category=trading-cards&subcategory=trading-cards-one-piece&sort=releasedate&order=desc',
+});
+
+// (EB Games, and the dummy store's copy of it.)
+export const EB_STORES = new Set(['ebgames', 'demo-ebgames']);
+
+/**
+ * The owner's rule for EB Games (Nov 2026): Auto-checkout buys what a watch finds there only from the 🚨 priority pages
+ * (the preset's three) — never a keyword watch's find, nor an ordinary page watch's. (A product's own link: as chosen.)
+ */
+export function ebNeedsPriority(w, store = w.store) {
+  return EB_STORES.has(store) && !w.url && !w.priority;
+}
+
+export const EB_ONLY_PRIORITY = 'At EB Games, Auto-checkout buys only from the 🚨 priority pages (EB Games pre-order drops) — this watch alerts you instead. ⚡ Buy it yourself from the alert, or watch the product by its link';
+
+/** Which of the preset's EB Games pages a link is (its own filters, whatever their order), or ''. */
+export function ebPageOf(url) {
+  let u;
+  try { u = new URL(url); } catch { return ''; }
+  if (!/\/search\/?$/.test(u.pathname)) return '';
+  const q = u.searchParams;
+  const attrs = q.getAll('attributes').sort().join(',');
+  if (q.get('category') !== 'trading-cards' || q.get('q')) return '';
+  if (q.get('subcategory') === 'trading-cards-one-piece' && q.get('condition') === 'preorder' && !attrs) return 'onepiece';
+  if (q.get('subcategory') === 'trading-cards-one-piece' && !q.get('condition') && !attrs) return 'boosters';
+  if (q.get('subcategory') === 'trading-cards-pokemon' && q.get('condition') === 'preorder') return attrs === 'trading-card-type:boosters' ? 'pokemon-old' : 'pokemon';
+  return '';
+}
+
 // Ready-made watches, one click on the Drops page. One Piece: every set at EB Games and Premium Bandai — OP and EB sets,
 // premium boosters, hangsells, booster packs and boxes ("one piece tcg" is how EB Games names them: "One Piece TCG OP-19
 // Hangsell Booster"; Premium Bandai: "ONE PIECE CARD GAME …") — Auto-checkout buying a box one, packs and hangsells as many
@@ -110,21 +146,25 @@ export const nameFromLink = linkName;
 export const PRESETS = Object.freeze({
   // 🚨 EB Games' pre-order pages (Mugibot 2.2), for everyone — priority watches: every member DM'd the moment
   // something new is up for pre-order there, and each member's own Auto-checkout buys it if they've turned that on
-  // (up to their own max, as many as EB allows or one — their choice). One Piece: anything new on the page (from the
-  // lowest price the admin sets); Pokémon boosters: what has "booster" or "blister" in its name (the admin's phrases).
+  // (up to their own max, as many as EB allows or one — their choice). Anything new on the One Piece and Pokémon pages
+  // (from the lowest price the admin sets); on every One Piece product, what has "one piece booster" in its name.
+  // (Nov 2026, the owner's own three — Auto-checkout buys from these and nothing else at EB Games, and only sealed
+  //  products: never a single card, already unpacked. Each read newest first, so what's new is on the page read.)
   ebpreorders: {
     label: 'EB Games pre-order drops',
     store: 'ebgames',
     pages: [
-      { key: 'onepiece', label: 'EB Games One Piece pre-orders', path: '/search?category=trading-cards&subcategory=trading-cards-one-piece&condition=preorder', phrases: [] },
-      { key: 'pokemon', label: 'EB Games Pokémon booster pre-orders', path: '/search?category=trading-cards&subcategory=trading-cards-pokemon&attributes=trading-card-type%3Aboosters&condition=preorder', phrases: ['booster', 'blister'] },
+      { key: 'onepiece', label: 'EB Games One Piece pre-orders', path: EB_PAGES.onepiece, phrases: [] },
+      { key: 'pokemon', label: 'EB Games Pokémon pre-orders (boosters, collections, decks)', path: EB_PAGES.pokemon, phrases: [] },
+      { key: 'onepiece-boosters', label: 'EB Games One Piece boosters', path: EB_PAGES.boosters, phrases: ['one piece booster'] },
     ],
   },
   onepiece: {
     label: 'One Piece drops',
+    // (EB Games': alerts only — Auto-checkout at EB Games comes from the priority preset's pages alone, Nov 2026.)
     watches: [
-      { store: 'ebgames', words: 'one piece tcg' },
-      { store: 'ebgames', words: 'one piece card game' },
+      { store: 'ebgames', words: 'one piece tcg', alertOnly: true },
+      { store: 'ebgames', words: 'one piece card game', alertOnly: true },
       { store: 'pbandai', words: 'one piece card game' },
     ],
   },
@@ -449,10 +489,28 @@ export class Drops {
   armFor(w, store, url, verdict, name = null) {
     // (A priority watch: always — every member's DM, and the Auto-checkout of each who's turned it on: armAll.)
     if (!(w.priority || (w.aco && w.maxPrice !== null)) || !url || !this.retailers.canBuy(store)) return '';
-    // ("auto" — by the kind of product: only a card product Mugibot recognises — a box, a case, a pack, a hangsell, a
-    //  deck, a collection — is bought; a One Piece playmat or deck case that has the words is found and told, not bought.)
-    if (w.qty === 'auto' && name && typeOf(name) === 'other') return '';
+    // (What it may buy at all — mayBuy: never a single card; a priority watch, or "auto", only a sealed product. What it
+    //  may not is found and told, never bought.)
+    if (name !== null && !this.mayBuy(w, name, store)) return '';
     return verdict === 'new' || verdict === 'armed' ? 'armed' : verdict === 'skipped' ? 'skipped' : 'pending';
+  }
+
+  /**
+   * May Auto-checkout buy this find of the watch's, by its name (Mugibot 2.2)? Never an individual card (already unpacked:
+   * "… OP01-079 - NM/M"); at EB Games, only a 🚨 priority page's find (the owner's rule). A priority watch's: never an
+   * accessory either. An "auto" one's: only a sealed product — a booster box, pack, hangsell, blister, bundle, ETB, deck,
+   * collection, tin or case. (A link watch's own product, its owner chose: as they chose.)
+   */
+  mayBuy(w, name, store = w.store) {
+    if (w.url) return true;
+    // (EB Games: only the 🚨 priority pages' finds — ebNeedsPriority. A keyword watch at every store: not there.)
+    if (ebNeedsPriority(w, store)) return false;
+    if (isSingle(name)) return false;
+    // (A priority page's: anything new on it but an accessory — it's the admin's own page of card products, from their
+    //  lowest price. "auto": only a card product Mugibot recognises.)
+    if (w.priority) return !isAccessory(name);
+    if (w.qty === 'auto') return isSealed(name);
+    return true;
   }
 
   /** On the watch owner's watchlist, armed for Auto-checkout up to the watch's max price. status: its stock now. */
@@ -469,6 +527,8 @@ export class Drops {
     if (!user || user.disabled || !p || !p.url || !this.retailers.canBuy(p.store) || maxPrice === null || maxPrice === undefined) return null;
     // (A member's own Auto-checkout of an admin's watch: theirs while their membership is.)
     if (follower && !entitlement(user, this.now()).active) return null;
+    // (Never a single card; a priority watch's or "auto": only a sealed product — mayBuy. Told, not bought.)
+    if (!w.url && !this.mayBuy(w, p.name || '', p.store)) return null;
     if (qty === 'auto' && typeOf(p.name || w.label) === 'other') return null; // (not a card product: told, not bought)
     const existing = this.repo.itemBySku(user.id, p.store, p.sku);
     if (existing && existing.aco) return existing;
@@ -702,6 +762,7 @@ export class Drops {
   // ---------------------------------------------------------------------------
   start() {
     this.priceDropsInNonTcg();
+    try { this.upgradePresets(); } catch (e) { this.cfg.log('[drops] upgrade:', e.message); }
     if (this.timer || !this.cfg.monitor.enabled) return;
     this.timer = setInterval(() => { this.tick().catch((e) => this.cfg.log('[drops]', e.message)); }, 5000);
     this.timer.unref?.();
@@ -1006,12 +1067,98 @@ export class Drops {
       const r = this.retailers.get(x.store);
       if (!r || !this.retailers.enabled(r) || (this.sweeper && this.sweeper.modeFor(r) === 'off')) { skipped.push({ store: x.store, words: x.words, why: `${r ? r.name : x.store} isn't searched at the moment` }); continue; }
       try {
-        added.push(await this.add({ store: x.store, words: x.words, label: `${p.label} — ${r.name}`, shared: false, aco, maxPrice, qty: x.qty || 'auto' }, user));
+        const buys = aco && !x.alertOnly;
+        added.push(await this.add({ store: x.store, words: x.words, label: `${p.label} — ${r.name}`, shared: false, aco: buys, maxPrice: buys ? maxPrice : null, qty: x.qty || 'auto' }, user));
       } catch (e) {
         skipped.push({ store: x.store, words: x.words, why: e.message });
       }
     }
     return { added, skipped };
+  }
+
+  /**
+   * The EB Games watches already set up, brought to the owner's rules (Nov 2026, once): Auto-checkout at EB Games comes
+   * only from the priority preset's three pages — and buys only sealed products.
+   * - Its One Piece pre-orders page: read newest first.
+   * - Its Pokémon page: boosters, collections and decks (not boosters alone), every product on it, newest first.
+   * - Every One Piece product, for "one piece booster": added for each admin with the preset, as their One Piece page
+   *   is (lowest price, how many, channel, role), and each member who has Auto-checkout on for the One Piece page gets it
+   *   for this one too (told so).
+   * - The old "One Piece drops" preset's EB Games keyword watches: their Auto-checkout off (their alerts kept), owner told.
+   */
+  upgradePresets() {
+    if (Number(this.repo.getSetting('ebPresetsVersion')) >= 2) return;
+    const now = this.now();
+    const ebIds = new Set(['ebgames', 'demo-ebgames']);
+    const all = this.db.all('SELECT * FROM drop_watches').map(toWatch);
+    const owners = new Map();
+    for (const w of all.filter((x) => x.priority && ebIds.has(x.store) && x.page)) {
+      const kind = ebPageOf(w.page);
+      const r = this.retailers.get(w.store);
+      if (!kind || !r) continue;
+      if (!owners.has(w.userId)) owners.set(w.userId, { r, watches: {} });
+      const o = owners.get(w.userId);
+      const want = kind === 'pokemon-old' ? 'pokemon' : kind;
+      o.watches[want] = w;
+      const page = `${r.base}${EB_PAGES[want]}`;
+      const set = { page };
+      if (kind === 'pokemon-old') { set.phrases = '[]'; set.label = 'EB Games Pokémon pre-orders (boosters, collections, decks)'; }
+      if (w.page !== page || set.phrases) {
+        this.db.run(`UPDATE drop_watches SET page = :page${set.phrases ? ', phrases = :phrases, label = :label' : ''}, baseline_at = NULL WHERE id = :id`, { ...set, id: w.id });
+        // (A fresh first look at the page as it is now: what's on it already — the Pokémon page's collections and decks,
+        //  new to it — is there before, never a drop bought on the first read.)
+        if (this.sightings) this.sightings.forget(w.id);
+        else for (const t of ['watch_sightings', 'watch_looks']) this.db.run(`DELETE FROM ${t} WHERE watch = :w`, { w: w.id });
+        this.repo.audit(w.userId, null, 'drop-upgrade', `${w.id}: ${w.page} → ${page}`);
+      }
+    }
+    for (const [userId, o] of owners) {
+      const op = o.watches.onepiece;
+      if (!op || o.watches.boosters) continue;
+      const id = newId('drp');
+      this.db.run(`INSERT INTO drop_watches (id, user_id, shared, store, site, words, url, label, category, aco, max_price, qty, channel_id, role_id, page, phrases, every_seconds, min_price, priority, created_at)
+        VALUES (:id, :u, 1, :store, '', '', '', :label, 'onepiece', :aco, :max, :qty, :ch, :role, :page, :phrases, :every, :min, 1, :t)`, {
+        id, u: userId, store: op.store, label: 'EB Games One Piece boosters', aco: op.aco && op.maxPrice !== null ? 1 : 0, max: op.aco ? op.maxPrice : null, qty: op.qty, ch: op.channelId, role: op.roleId,
+        page: `${o.r.base}${EB_PAGES.boosters}`, phrases: JSON.stringify(['one piece booster']), every: op.every || floorFor(o.r), min: op.minPrice, t: now,
+      });
+      this.repo.audit(userId, null, 'drop-upgrade', `added ${id}: one piece booster @ ${o.r.base}${EB_PAGES.boosters}`);
+      // (Members with Auto-checkout on for the One Piece page: on for this one too, as they have it there.)
+      for (const f of this.followers(op.id)) {
+        this.db.run(`INSERT OR IGNORE INTO watch_follows (watch_id, user_id, aco, max_price, qty, mute, agreed_at, updated_at)
+          VALUES (:w, :u, :aco, :max, :qty, :mute, :agreed, :t)`, { w: id, u: f.user_id, aco: f.aco, max: f.max_price, qty: f.qty, mute: f.mute, agreed: f.agreed_at, t: now });
+        if (f.aco) this.repo.addEvent(f.user_id, { type: 'aco', level: 'info', message: `🚨 EB Games One Piece boosters: your Auto-checkout of One Piece pre-orders covers EB Games' new One Piece boosters too (up to $${Number(f.max_price).toFixed(2)} each) — sealed products only, never a single card. Change it on the Monitors page.` });
+      }
+    }
+    // EB Games' keyword watches and ordinary page watches (the old "One Piece drops" preset's among them): alerts only
+    // from now on — and what they armed and haven't bought yet, disarmed (each owner told).
+    for (const w of all.filter((x) => ebNeedsPriority(x) && x.aco)) {
+      this.db.run('UPDATE drop_watches SET aco = 0 WHERE id = :id', { id: w.id });
+      this.repo.addEvent(w.userId, { type: 'aco', level: 'info', message: `Drop watch "${nameOf(w)}": its Auto-checkout is off — at EB Games, Auto-checkout now buys only from the 🚨 priority pages (sealed products, never a single card). Its alerts carry on.` });
+      this.repo.audit(w.userId, null, 'drop-upgrade', `${w.id}: aco off (EB Games: priority pages only)`);
+    }
+    // (Only what a find armed itself — never what its member armed after: theirs, as they chose. A pool copy: as the
+    //  leader's item was armed.)
+    const searchIds = new Set(all.filter((x) => !x.url && !x.priority).map((x) => x.id));
+    const linkIds = new Set(all.filter((x) => x.url).map((x) => x.id));
+    const byFind = (it) => {
+      const src = !it.drop_watch && it.pool_src ? this.db.get('SELECT drop_watch, created_at, aco_at FROM items WHERE id = :i', { i: it.pool_src }) : it;
+      return !!src && armedByFind(src);
+    };
+    const armedRows = this.db.all('SELECT id, user_id, name, store, drop_watch, pool_watch, pool_src, created_at, aco_at FROM items WHERE aco = 1 AND (drop_watch IS NOT NULL OR pool_watch IS NOT NULL)');
+    const ebArmed = armedRows.filter((it) => EB_STORES.has(it.store) && searchIds.has(it.drop_watch || it.pool_watch) && byFind(it));
+    // (And any search's find that's a single card, wherever it was armed.)
+    const singles = armedRows.filter((it) => isSingle(it.name) && !linkIds.has(it.drop_watch || it.pool_watch) && byFind(it));
+    const seen = new Set();
+    for (const it of [...ebArmed, ...singles]) {
+      if (seen.has(it.id)) continue;
+      seen.add(it.id);
+      this.db.run('UPDATE items SET aco = 0, aco_at = NULL WHERE id = :id', { id: it.id });
+      this.repo.addEvent(it.user_id, { type: 'aco', level: 'info', message: `${it.name}: Auto-checkout disarmed — ${isSingle(it.name) ? "it's an individual card, and Auto-checkout only buys sealed products a watch finds" : 'at EB Games, Auto-checkout now buys only from the 🚨 priority pages'}. It stays on your watchlist; ⚡ Buy it yourself if you want it.`, name: it.name });
+      this.repo.audit(it.user_id, null, 'drop-upgrade', `${it.id}: disarmed (${isSingle(it.name) ? 'single card' : 'EB Games: priority pages only'})`);
+      this.hub.publish(it.user_id, 'watch', { id: it.id, aco: false });
+    }
+    this.repo.setSetting('ebPresetsVersion', 2);
+    this.changed();
   }
 
   /**
@@ -1036,7 +1183,7 @@ export class Drops {
       const phrases = input.phrases && input.phrases[pg.key] !== undefined ? input.phrases[pg.key] : pg.phrases;
       try {
         added.push(await this.add({
-          page, phrases, label: pg.label, shared: true, priority: true, category: pg.key === 'onepiece' ? 'onepiece' : 'pokemon', every: floorFor(r),
+          page, phrases, label: pg.label, shared: true, priority: true, category: pg.key.startsWith('onepiece') ? 'onepiece' : 'pokemon', every: floorFor(r),
           minPrice: input.minPrice, qty: input.qty || 'max', aco: !!input.aco, maxPrice: input.maxPrice, channelId: input.channelId, roleId: input.roleId,
         }, user));
       } catch (e) {
@@ -1125,6 +1272,7 @@ export class Drops {
       }
       if (mine.some((w) => w.words === words && w.store === store && w.site === site)) throw bad('You have that drop watch already');
     }
+    if (aco && ebNeedsPriority({ store, url, priority })) throw bad(EB_ONLY_PRIORITY);
     const id = newId('drp');
     this.db.run(`INSERT INTO drop_watches (id, user_id, shared, store, site, words, url, label, category, aco, max_price, qty, channel_id, role_id, page, phrases, every_seconds, min_price, priority, created_at)
       VALUES (:id, :u, :shared, :store, :site, :words, :url, :label, :category, :aco, :max, :qty, :ch, :role, :page, :phrases, :every, :min, :priority, :t)`, {
@@ -1261,6 +1409,7 @@ export class Drops {
       const aco = bool(input.aco, false);
       const max = aco ? num(input.maxPrice ?? w.maxPrice, { min: 1, max: 100000, def: null }) : w.maxPrice;
       if (aco && w.store !== ALL_STORES && !this.retailers.canBuy(w.store)) throw bad(NO_ACO);
+      if (aco && ebNeedsPriority(w)) throw bad(EB_ONLY_PRIORITY);
       if (aco && max === null) throw bad('Set a max price to auto-checkout it: Mugibot never pays more than that');
       Object.assign(set, { aco: aco ? 1 : 0, max_price: max });
     }
@@ -1352,6 +1501,8 @@ export class Drops {
   stores() {
     return this.retailers.list.filter((r) => r.id !== 'other' && this.retailers.enabled(r)).map((r) => ({
       id: r.id, name: r.name, hosts: r.hosts, pathPrefix: r.pathPrefix || null, aco: !!r.flow,
+      // (Auto-checkout of what a keyword or page watch finds there: never at EB Games — its 🚨 priority pages only.)
+      acoFinds: !!r.flow && !EB_STORES.has(r.id),
       words: !!r.sweep && (!this.sweeper || this.sweeper.modeFor(r) !== 'off'), demo: !!r.demo,
       // (Its search pages read for key phrases (monitor/pages.js), every `floor` seconds at the fastest; its product pages' paths.)
       pages: !!r.sweep && !!planFor(r, r.base) && (!this.sweeper || this.sweeper.modeFor(r) !== 'off'), floor: floorFor(r),
@@ -1410,7 +1561,8 @@ export class Drops {
    */
   tellAll(w, product, alert = null) {
     if (!w || !w.priority || !product || !this.notifier) return;
-    const key = `${w.id}|${product.id || `${product.store}|${product.sku}`}`;
+    const pkey = product.id || `${product.store}|${product.sku}`;
+    const key = `${w.id}|${pkey}`;
     const now = this.now();
     this.toldAll ||= new Map();
     if (now - (this.toldAll.get(key) || 0) < TELL_AGAIN_MS) return;
@@ -1418,20 +1570,34 @@ export class Drops {
     if (this.toldAll.size > 2000) this.toldAll.delete(this.toldAll.keys().next().value);
     const a = alert || (product.id ? this.catalog.lastAlert(product.id, 'listed') || this.catalog.lastAlert(product.id, 'restock') : null);
     const muted = new Set(this.db.all('SELECT user_id FROM watch_follows WHERE watch_id = :w AND mute = 1', { w: w.id }).map((r) => r.user_id));
-    const armed = new Set(this.followers(w.id, { aco: true }).map((r) => r.user_id));
+    // (What Auto-checkout may buy of it — never an individual card, nor an accessory: mayBuy.)
+    const buys = this.mayBuy(w, product.name || '', product.store);
+    const following = new Set(this.followers(w.id, { aco: true }).map((r) => r.user_id));
+    const armed = new Set(buys ? following : []);
+    // (Armed for them by another priority watch with it, or by their own: buying it too.)
+    for (const r of this.db.all('SELECT user_id FROM items WHERE store = :s AND sku = :k AND aco = 1', { s: product.store, k: product.sku })) armed.add(r.user_id);
     const users = this.db.all(`SELECT u.id AS id FROM users u WHERE u.disabled = 0 AND u.discord_id IS NOT NULL AND u.discord_id <> '' AND ${ENTITLED_SQL}`, { now });
     const storeName = this.retailers.siteName(product.store, product.url);
     const price = typeof product.price === 'number' ? ` · $${product.price.toFixed(2)}` : '';
     const stock = product.status === STATUS.PREORDER ? ' · Pre-order' : product.status === STATUS.IN_STOCK ? ' · In stock' : '';
     const buy = a && a.id ? { label: '⚡ Buy with Mugibot', url: this.notifier.alertBuyLink(a), action: buyAction('a', a.id) } : null;
     const jobs = [];
+    // (Each member once a product, whichever priority watch has it first — EB Games' One Piece pre-orders and its One
+    //  Piece boosters both list a new booster pre-order: a member who muted one is still told by the other.)
+    this.toldUser ||= new Map();
     for (const { id } of users) {
       if (muted.has(id)) continue;
+      const uk = `${pkey}|${id}`;
+      if (now - (this.toldUser.get(uk) || 0) < TELL_AGAIN_MS) continue;
+      this.toldUser.set(uk, now);
+      if (this.toldUser.size > 50000) this.toldUser.delete(this.toldUser.keys().next().value);
       const mine = armed.has(id);
       jobs.push(this.notifier.notify(id, {
         type: 'restock', level: 'urgent', channel: 'priority', header: '🚨 PRIORITY DROP — buy it now',
         title: `🚨 ${productName(product)}`,
-        message: `${storeName}${price}${stock}\nNew on ${nameOf(w)}.${mine ? ' Your Auto-checkout is buying it (you turned that on for these drops).' : ' ⚡ Buy checks out in your checkout browser — or turn on Auto-checkout for these drops on the Monitors page.'}`,
+        message: `${storeName}${price}${stock}\nNew on ${nameOf(w)}.${mine ? ' Your Auto-checkout is buying it (you turned that on for these drops).'
+          : following.has(id) ? ` Auto-checkout doesn't buy it — ${isSingle(product.name) ? "it's an individual card" : 'not a sealed card product'}. ⚡ Buy it yourself if you want it.`
+          : ' ⚡ Buy checks out in your checkout browser — or turn on Auto-checkout for these drops on the Monitors page.'}`,
         name: product.name || null, sku: product.sku, url: product.url || null,
         buttons: [...(buy ? [buy] : []), ...(product.url ? [{ label: 'Open product', url: product.url }] : [])],
       }).catch((e) => this.cfg.log('[drops] tell all:', e.message)));
@@ -1487,7 +1653,7 @@ export class Drops {
       id: w.id, kind: w.url ? 'link' : w.page ? 'page' : 'words', shared: w.shared, mine, by: w.shared || admin || pooled ? w.username : '',
       ...(pooled ? { pool: w.username } : {}),
       store: w.store, storeName: this.where(w), site: w.site, words: w.words, url: w.url, label: w.label,
-      category: w.category, aco: mine && w.aco, maxPrice: mine ? w.maxPrice : null, qty: mine ? w.qty : null, canBuy: w.store === ALL_STORES || this.retailers.canBuy(w.store),
+      category: w.category, aco: mine && w.aco, maxPrice: mine ? w.maxPrice : null, qty: mine ? w.qty : null, canBuy: (w.store === ALL_STORES || this.retailers.canBuy(w.store)) && !ebNeedsPriority(w),
       // (A search page's note on a read that went fine, saying where it's read from: admins only.)
       lastAt: w.lastAt, lastOkAt: w.lastOkAt, fails: w.fails, error: admin ? w.error : pg && !w.fails && publicError(w.error) !== w.error ? '' : publicError(w.error), seen: w.seen,
       looked: !!w.baselineAt, nextAt: pg ? pg.nextAt : w.store === 'other' ? w.nextAt : null, createdAt: w.createdAt,

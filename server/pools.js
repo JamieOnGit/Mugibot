@@ -592,9 +592,25 @@ export class Pools {
     const leader = this.repo.userById(leaderId);
     const tell = later || [];
     const runs = [];
+    const src = this.db.get('SELECT store, sku, max_price FROM items WHERE id = :i', { i: srcItemId });
     for (const m of members) {
-      const row = this.db.get('SELECT * FROM items WHERE user_id = :u AND pool_src = :s', { u: m.user_id, s: srcItemId });
-      if (!row || row.pool_hold || (!explicit && !row.aco)) continue;
+      let row = this.db.get('SELECT * FROM items WHERE user_id = :u AND pool_src = :s', { u: m.user_id, s: srcItemId });
+      // (Mugibot 2.2: the member has the same product on their own watchlist — so the pool's copy was never made for it
+      //  (sync) — then theirs is checked out with the leader's, as the copy would be: never left out of the group's order.
+      //  Up to their most for the pool, if theirs has no max price of its own.)
+      let own = false;
+      if (!row && src) {
+        row = this.db.get('SELECT * FROM items WHERE user_id = :u AND store = :s AND sku = :k COLLATE NOCASE AND pool_src IS NULL ORDER BY aco DESC LIMIT 1', { u: m.user_id, s: src.store, k: src.sku }) || null;
+        own = !!row;
+        if (own && (row.max_price === null || row.max_price === undefined)) {
+          const max = m.aco_cap === null || m.aco_cap === undefined ? src.max_price : src.max_price === null || src.max_price === undefined ? m.aco_cap : Math.min(src.max_price, m.aco_cap);
+          if (max !== null && max !== undefined) {
+            this.db.run('UPDATE items SET max_price = :m WHERE id = :id', { m: max, id: row.id });
+            row = { ...row, max_price: max };
+          }
+        }
+      }
+      if (!row || row.pool_hold || (!explicit && !row.aco && !own)) continue;
       if (!this.ctx.aco.settings(m.user_id).enabled) {
         this.repo.addEvent(m.user_id, { type: 'aco', level: 'warn', message: `🤝 ${leader ? leader.username : 'Your pool\'s leader'} started Auto-checkout on ${row.name}, but yours is switched off — nothing started on your account`, name: row.name, sku: row.sku, url: row.url || null });
         continue;
@@ -603,7 +619,7 @@ export class Pools {
       // (Mugibot 2.0: one member's run failing to start never stops the members after them.)
       try {
         const run = await this.ctx.aco.trigger(row, {
-          price, test: explicit, later: tell, variantId, queue: queue && s.mode === 'place',
+          price, test: explicit || (own && !row.aco), later: tell, variantId, queue: queue && s.mode === 'place',
           pool: { leader: leader ? leader.username : '', explicit },
         });
         if (run) runs.push(run);

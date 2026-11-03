@@ -128,6 +128,10 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // even said only once Mugibot is at the final button — your postcode in its store box ("Collect from"), the first
 // suburb it suggests, and of the stores it lists the one that has it, nearest by its km. Home delivery is still always
 // tried first. An older copy waits on the final button there. Nothing else changed in how searches or checkouts go.
+// 1.42.0: Click & Collect's "Collect from" box gets your postcode alone ("3192") — never your street. A store-finder box
+// is known by its label and the words around it ("Collect from", "Please enter suburb or postcode"), whatever its own
+// attributes say (EB Games' has "address" in them: 1.41.0 took it for the address lookup and typed your street into
+// it). The address lookup never types into it. Nothing else changed in how searches or checkouts go.
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that buys "as many as the store allows" (an older copy is asked for one).
 export const MOST_EXTENSION_VERSION = '1.40.0';

@@ -61,6 +61,19 @@ export function floorFor(r) {
   return Math.max(PAGE_MIN_SECONDS, Number(r && r.sweep && r.sweep.minSeconds) || 0);
 }
 
+/**
+ * Is a page's list sorted newest first — so what's new is at its top, and an old product only ever comes into view from
+ * below? EB Games' sort=releasedate&order=desc; Premium Bandai's sortType=NewArrival (its page, or the data it asks for).
+ */
+export function newestFirst(...links) {
+  return links.some((link) => {
+    let u;
+    try { u = new URL(String(link || '')); } catch { return false; }
+    const q = u.searchParams;
+    return (/^release-?date$/i.test(q.get('sort') || '') && /^desc$/i.test(q.get('order') || '')) || /^newarrival$/i.test(q.get('sortType') || '');
+  });
+}
+
 /** A page's link as it's kept: no #part. */
 export function pageLink(url) {
   try {
@@ -492,7 +505,7 @@ export class PageWatches {
     //  as the browser reads it is.)
     const look = !(serverEmpty && !products.length && this.browserAround());
     try {
-      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now, whole, how, look, wait: how !== 'server' });
+      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now, whole, how, look, wait: how !== 'server', newestFirst: newestFirst(g.page, st.dataUrl) });
       else await this.settleSite(peers, products, { fresh });
     } finally {
       for (const p of products) { const k = keyOf(p); if (k && st.seen.size < 5000) st.seen.add(k); }

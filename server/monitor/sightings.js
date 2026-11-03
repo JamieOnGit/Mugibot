@@ -167,7 +167,7 @@ export class Sightings {
    * at this store, before this read (null: it didn't). hides: the store leaves sold-out products out of its results.
    * Returns { verdict, before } — before: its verdict until now (null: never seen by the watch).
    */
-  see(w, store, codes, { reading = '', how = '', own = false, way = '', created = null, published = null, knownAt = null, hides = false } = {}) {
+  see(w, store, codes, { reading = '', how = '', own = false, way = '', created = null, published = null, knownAt = null, hides = false, below = null } = {}) {
     codes = codes.filter(Boolean).map(String);
     if (!codes.length) return { verdict: 'pending', before: null };
     const now = this.now();
@@ -191,8 +191,11 @@ export class Sightings {
     if (!row.new_at) {
       // Not listed at `since` — at or after the watch was added, and before the watch first saw it.
       const fresh = (since) => typeof since === 'number' && since >= w.createdAt && row.at > since;
-      // (Its own search shows it, and its whole first look — read the same way — didn't: not there then.)
-      const missed = own && !!look && !!look.done_at && !!look.whole && look.how === way && !codes.some((c) => look.seen.has(low(c)))
+      // (Its own search shows it, and its whole first look — read the same way — didn't: not there then. Or its first look
+      //  was the top of a list sorted newest first (Premium Bandai's newest 100, EB Games' pages by release date) and this
+      //  read shows it above a product that look saw — an old product coming into view comes up from below, never above.)
+      const above = !!look && Array.isArray(below) && below.some((c) => c && look.seen.has(low(c)));
+      const missed = own && !!look && !!look.done_at && (!!look.whole || above) && look.how === way && !codes.some((c) => look.seen.has(low(c)))
         && fresh(look.done_at)
         // …not seen by the watch long before its own search showed it (that search wasn't showing everything)…
         && (before === null || row.at >= now - SEEN_LATELY_MS)
