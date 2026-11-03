@@ -687,6 +687,28 @@ const MIGRATIONS = [
     PRIMARY KEY (user_id, store)
   );
   `,
+  // 26 — priority drops (Mugibot 2.2: EB Games' pre-order pages). A drop watch's lowest price (min_price: what's
+  //      cheaper isn't its drop — never alerted for it, never bought) and whether an admin's watch for everyone is a
+  //      priority one (priority: every member DM'd the moment something drops, each member can have Auto-checkout buy
+  //      every new product it finds — not just one). watch_follows: each member's own say on a priority watch —
+  //      Auto-checkout its drops for them (aco, up to their max_price each, qty: 'max' as many as the store allows, or
+  //      '1'…'10'), agreed by them (agreed_at), and its DMs muted for them (mute).
+  `
+  ALTER TABLE drop_watches ADD COLUMN min_price REAL;
+  ALTER TABLE drop_watches ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE IF NOT EXISTS watch_follows (
+    watch_id TEXT NOT NULL REFERENCES drop_watches(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    aco INTEGER NOT NULL DEFAULT 0,
+    max_price REAL,
+    qty TEXT NOT NULL DEFAULT 'max',
+    mute INTEGER NOT NULL DEFAULT 0,
+    agreed_at INTEGER,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (watch_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS watch_follows_user ON watch_follows (user_id);
+  `,
 ];
 
 export class Db {

@@ -1507,6 +1507,71 @@ test('📃 a store\'s search page in Drop watches: told apart from a product\'s 
   assert.ok(env.app.drops.remove(w.id, env.app.repo.userByUsername('owner')));
 });
 
+test('🚨 priority drops (Mugibot 2.2): an admin watches EB Games\' pre-order pages in one press (from a lowest price, Max); a member turns on "Auto-checkout its drops for me" (their max, Min) right on the watch — and Home shows both pages, read how lately, and that their Auto-checkout buys them; on a phone, nothing wider than the screen', async () => {
+  await page.goto(`${env.url}/app#drops`);
+  await page.waitForSelector('#pp-drops:not([hidden]) #dw-preset-eb:not([hidden])');
+  assert.match(await page.textContent('#dw-preset-eb'), /every member gets a 🚨 DM/);
+  await page.fill('#dw-eb-min', '20');
+  await page.selectOption('#dw-eb-qty', 'max');
+  await page.click('#dw-eb-go');
+  await page.waitForFunction(() => /Watching 2 EB Games pre-order pages/.test(document.querySelector('#dw-eb-msg').textContent));
+  assert.equal(await page.textContent('#dw-eb-go'), '✓ Watching EB pre-order drops');
+  assert.equal(await page.isDisabled('#dw-eb-go'), true);
+  const ws = env.app.drops.watches().filter((w) => w.priority);
+  assert.deepEqual(ws.map((w) => [w.label, w.phrases, w.minPrice, w.qty, w.every]).sort(), [
+    ['EB Games One Piece pre-orders', [], 20, 'max', 3],
+    ['EB Games Pokémon booster pre-orders', ['booster', 'blister'], 20, 'max', 3],
+  ]);
+  const row = page.locator('#dw-priority li.dw-row', { hasText: 'EB Games One Piece pre-orders' });
+  assert.match(await row.locator('.meta').first().textContent(), /🚨 priority — every member DM'd · Page · EB Games · every 3 s · from \$20\.00/);
+  // ✎ on it: its lowest price, priority, and what members buy unless they choose.
+  await row.locator('button[title^="Its key phrases"]').click();
+  await page.waitForSelector('#dw-priority form.dw-edit');
+  assert.match(await page.textContent('#dw-priority form.dw-edit'), /Only products from \$ \(empty: any price\)[\s\S]*🚨 Priority/);
+  await page.click('#dw-priority form.dw-edit button:has-text("Cancel")');
+
+  // A member: both, at the top (🚨 Priority drops), each with their own Auto-checkout of its drops.
+  const c = await Client.signup(env.url, 'prefan');
+  env.app.repo.updateUser(c.user.id, { plan: 'comped' });
+  const fan = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  fan.on('pageerror', (e) => errors.push(e.message));
+  await fan.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
+  await fan.goto(`${env.url}/app#drops`);
+  await fan.waitForSelector('#dw-priority form.dw-follow');
+  assert.equal(await fan.isVisible('#dw-preset-eb'), false, 'the preset: admins only');
+  assert.equal(await fan.evaluate(() => document.querySelector('#dw-priority-box').compareDocumentPosition(document.querySelector('#dw-form')) & Node.DOCUMENT_POSITION_FOLLOWING), 4, 'above the form');
+  const op = fan.locator('#dw-priority li.dw-row', { hasText: 'EB Games One Piece pre-orders' });
+  assert.match(await op.locator('form.dw-follow').textContent(), /Your Auto-checkout is off — switch it on/);
+  await op.locator('form.dw-follow input[type=checkbox]').first().check();
+  await op.locator('form.dw-follow button[type=submit]').click();
+  await fan.waitForFunction(() => /Set your max price/.test(document.querySelector('#toasts')?.textContent || ''));
+  await op.locator('form.dw-follow input[type=number]').fill('300');
+  await op.locator('form.dw-follow select').selectOption('min');
+  await op.locator('form.dw-follow button[type=submit]').click();
+  await fan.waitForFunction(() => /your Auto-checkout buys what drops there — up to \$300\.00 each, one/.test(document.querySelector('#toasts')?.textContent || ''));
+  const f = env.app.db.get('SELECT * FROM watch_follows WHERE user_id = :u', { u: c.user.id });
+  assert.deepEqual([f.aco, f.max_price, f.qty, f.mute], [1, 300, '1', 0]);
+  await fan.waitForSelector('#dw-priority form.dw-follow.on');
+  if (shots) await fan.screenshot({ path: path.join(shots, 'priority-drops-member.png'), fullPage: true });
+  // Home: both pages, and that their Auto-checkout buys the One Piece one's drops.
+  await fan.goto(`${env.url}/app#home`);
+  await fan.waitForSelector('#home-priority:not([hidden]) li');
+  const home = await fan.textContent('#home-priority');
+  assert.match(home, /EB Games One Piece pre-orders[\s\S]*your Auto-checkout buys its drops \(up to \$300\.00 each, one\)/);
+  assert.match(home, /EB Games Pokémon booster pre-orders[\s\S]*you're DM'd its drops[\s\S]*Auto-checkout it/);
+  // A phone: nothing wider than the screen.
+  await fan.setViewportSize({ width: 390, height: 844 });
+  for (const hash of ['#drops', '#home']) {
+    await fan.goto(`${env.url}/app${hash}`);
+    await fan.waitForSelector(hash === '#drops' ? '#dw-priority form.dw-follow' : '#home-priority li');
+    assert.equal(await fan.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${hash}: no sideways scrolling`);
+  }
+  if (shots) await fan.screenshot({ path: path.join(shots, 'priority-drops-phone.png'), fullPage: true });
+  await fan.close();
+  // (Gone again, for the tests after this.)
+  for (const w of ws) env.app.drops.remove(w.id, env.app.repo.userByUsername('owner'));
+});
+
 test('Auto-checkout run history in pages; the card backup on Checkout details', async () => {
   const owner = env.app.repo.userByUsername('owner');
   const it = env.app.repo.listItems(owner.id)[0];

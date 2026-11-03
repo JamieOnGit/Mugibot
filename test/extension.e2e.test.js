@@ -5163,6 +5163,49 @@ test("📃 a drop watch on EB Games' \"Trading cards, pre-order\" page (EB turns
   }
 });
 
+test("🚨 priority drops: the EB Games pre-order preset (One Piece — anything new on its page, from $20) read in this admin's browser every few seconds; a member who's turned on \"Auto-checkout its drops for me\" (Max) — a new OP-15 booster box up for pre-order there (EB: \"Limit 2 per customer\") is bought at once, both, \"CONFIRM & PAY\" — placed, once — and the 🚨 PRIORITY DROP DM goes out", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ browserEverySeconds: 5, stores: { ...off, 'demo-ebgames': 'browser' } }, null);
+  store.state.blockNonBrowsers = true; // (like EB Games' Cloudflare)
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  await useItems([]);
+  await pageWatchAco();
+  store.addProduct('ebgames', { sku: '313100', name: 'One Piece TCG OP-14 Booster Box', price: 120, status: 'preorder' });
+  const preset = await browserApi('POST', '/api/drops/presets/ebpreorders', { demo: true, minPrice: 20, qty: 'max' });
+  assert.equal(preset.status, 200, JSON.stringify(preset.body));
+  const [onePiece] = preset.body.added;
+  assert.equal(onePiece.label, 'EB Games One Piece pre-orders');
+  const follow = await browserApi('PUT', `/api/drops/${onePiece.id}/follow`, { aco: true, maxPrice: 200, qty: 'max' });
+  assert.equal(follow.status, 200, JSON.stringify(follow.body));
+  const dmsBefore = discord.dmsTo('d-ash').length;
+  try {
+    await acoListen();
+    await sw.evaluate(() => { globalThis.mugibotSweepLoop(); return true; });
+    await waitFor(() => env.app.drops.get(onePiece.id).baselineAt, { timeout: 40000, message: "the One Piece page's first read, from this browser" });
+    assert.equal(env.app.repo.itemBySku(userId, 'demo-ebgames', '313100'), null, 'up for pre-order before: never bought');
+    // EB puts the OP-15 booster box up for pre-order — 2 a customer.
+    store.addProduct('ebgames', { sku: '313101', name: 'One Piece TCG OP-15 Booster Box', price: 99, status: 'preorder', maxQty: 2, hideMax: true, limitNote: 'Limit 2 per customer' });
+    await waitFor(() => store.shop('ebgames').orders.length === 1, { timeout: 90000, message: 'the order placed at the dummy EB Games' });
+    assert.deepEqual(store.shop('ebgames').orders[0].cart.map((c) => [c.sku, c.qty]), [['313101', 2]], 'as many as EB allows');
+    await waitFor(async () => (await lastRun()).status === 'placed', { message: 'the run says placed' });
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => m.body.embeds[0].author && m.body.embeds[0].author.name === '🚨 PRIORITY DROP — buy it now' && /OP-15 Booster Box/.test(m.body.embeds[0].title)), { message: 'the priority DM' });
+    // Read on: nothing bought twice.
+    const asks = () => store.state.requests.filter((x) => x.path === '/ebgames/search/query').length;
+    const a1 = asks();
+    await waitFor(() => asks() >= a1 + 2, { timeout: 30000, message: 'read on' });
+    assert.equal(store.shop('ebgames').orders.length, 1, 'placed once');
+  } finally {
+    for (const w of preset.body.added) await browserApi('DELETE', `/api/drops/${w.id}`);
+    env.app.repo.updateUser(userId, { role: 'user' });
+    store.state.blockNonBrowsers = false;
+    sweeper.save({ stores: off }, null);
+    await useItems([]);
+    await closeStorePages('ebgames');
+  }
+});
+
 test("📃 an admin's drop watch for everyone on Kmart's search page, read from Mugibot's server (Kmart's search provider, as its page has it): a new Magic: The Gathering listing on it is posted in the channel chosen, pinging the role chosen, with ⚡ Buy — and this browser checks it out by itself: added, checkout filled in, \"Checkout securely\" — placed, once", async () => {
   const userId = env.app.repo.userByUsername('ash').id;
   const sweeper = env.app.sweeper;

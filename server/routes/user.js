@@ -394,6 +394,11 @@ export function register(router, ctx) {
         running: !!live.running,
         stores: live.stores.filter((x) => !x.id.startsWith('demo-') || cfg.demoStoreUrl).map((x) => ({ id: x.id, name: x.name, status: x.status, from: x.from, lastAt: x.lastAt, lastOkAt: x.lastOkAt })),
         watching: items.length, armed: armed.length, dropWatches: drops.length,
+        // 🚨 Priority drops (EB Games' pre-order pages): each read how lately, and the member's own Auto-checkout of it.
+        priority: drops.filter((w) => w.priority && w.active !== false).map((w) => {
+          const v = ctx.drops.view(w, u);
+          return { id: w.id, label: v.label || v.storeName, storeName: v.storeName, page: w.page, lastOkAt: v.lastOkAt, looked: v.looked, waiting: v.waiting || '', minPrice: v.minPrice, follow: v.follow };
+        }),
       },
       tasks: armed.slice(0, 12).map((it) => ({ id: it.id, name: it.name, store: it.store, storeName: retailers.name(it.store), maxPrice: it.maxPrice, quantity: it.qtyRule === 'max' ? 'most' : it.quantity || 1, status: it.status, url: it.url })),
       gates: ctx.gates ? ctx.gates.upList().map((g) => ({ store: g.store, name: g.name, kind: g.kind, since: g.since, wait: g.wait, url: g.url, inLine: ctx.aco.inLobby(u.id, g.store) })) : [],

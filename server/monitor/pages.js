@@ -531,7 +531,7 @@ export class PageWatches {
     for (const p of products) {
       const title = p.title || p.name;
       for (const w of peers) {
-        if (!this.drops.phraseIn(w, title)) continue;
+        if (!this.drops.pageHit(w, title, typeof p.price === 'number' ? p.price : null)) continue;
         const drop = !!w.baselineAt && !!fresh && fresh.has(keyOf(p));
         if (w.shared) await this.drops.foundSharedSite(w, p, { baseline: !drop }).catch((e) => this.cfg.log('[pages]', e.message));
         else await this.drops.foundOwnSite(w, p, { baseline: !drop }).catch((e) => this.cfg.log('[pages]', e.message));

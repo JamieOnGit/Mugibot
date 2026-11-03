@@ -159,7 +159,11 @@ test('🔎 what can be added: a page and a key phrase or more, every 3 s at the 
   assert.deepEqual(r.body.watch.phrases, ['magic the gathering', 'lorcana']);
   assert.equal(r.body.watch.every, 10);
   assert.equal((await boss.put(`/api/drops/${w.id}`, { every: 1 })).status, 400);
-  assert.equal((await boss.put(`/api/drops/${w.id}`, { phrases: [] })).status, 400);
+  assert.equal((await boss.put(`/api/drops/${w.id}`, { phrases: ['x'] })).status, 400, 'too short to be a key phrase');
+  // (Mugibot 2.2: no key phrases at all — every product on the page counts.)
+  r = await boss.put(`/api/drops/${w.id}`, { phrases: [] });
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual(r.body.watch.phrases, []);
   assert.equal((await ash.put(`/api/drops/${w.id}`, { phrases: ['hi there'] })).status, 404, 'only its owner changes it');
   // (A switched-off store's pages aren't read: nothing to add there.)
   r = await boss.post('/api/drops', { page: `${store.url}/pokebox/collections/all`, phrases: ['pokemon'] });

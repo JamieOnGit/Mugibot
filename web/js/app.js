@@ -208,6 +208,18 @@ async function renderHome(d) {
   const m = d.monitoring;
   const stat = (n, label, href) => h('a', { class: 'stat', href }, h('b', {}, String(n)), h('small', {}, label));
   $('#home-counts').replaceChildren(stat(m.stores.filter((x) => x.status !== 'off').length, 'stores searched', '#monitor'), stat(m.watching, 'on your watchlist', '#watch'), stat(m.armed, 'armed tasks', '#armed'), stat(m.dropWatches, 'drop watches', '#drops'));
+  // 🚨 Priority drops: each page, read how lately — and whether your Auto-checkout buys what drops there.
+  const pr = m.priority || [];
+  $('#home-priority').hidden = !pr.length;
+  $('#home-priority').replaceChildren(...pr.map((w) => {
+    const read = w.waiting ? 'waiting to be read' : w.looked ? `read ${ago(w.lastOkAt)}` : 'first read in a moment';
+    const f = w.follow || {};
+    const yours = f.aco ? `🤖 your Auto-checkout buys its drops (up to ${money(f.maxPrice)} each, ${f.qty === 'min' ? 'one' : 'as many as allowed'})` : '🔔 you\'re DM\'d its drops';
+    return h('li', { class: f.aco ? 'on' : '', dataset: { watch: w.id } },
+      h('span', { class: 'pri', 'aria-hidden': 'true' }, '🚨'),
+      h('div', { class: 'tx' }, h('b', {}, w.label), h('small', {}, `${read} · ${yours}`)),
+      h('a', { class: `btn small${f.aco ? '' : ' primary'}`, href: '#drops' }, f.aco ? 'Change' : 'Auto-checkout it'));
+  }));
   $('#home-keywords').textContent = m.keywords.length ? `Searching for ${m.keywords.join(', ')} — every few seconds, at every store below.` : '';
   $('#home-live-pill').textContent = m.running ? 'Live' : 'Paused';
   $('#home-live-pill').className = `pill ${m.running ? 'ok' : 'warn'}`;

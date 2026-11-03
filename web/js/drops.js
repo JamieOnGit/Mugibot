@@ -20,7 +20,8 @@ const phrasesOf = (raw) => [...new Set(String(raw || '').split(/[\n;]+/).map((x)
 export function setupDrops({ isAdmin = () => false, watching = () => null, watch = null, buyUrl }) {
   // (draft: what's chosen in an open ✎ editor — kept when the list refreshes underneath it. kinds: a pasted link → 'product'
   //  or 'page', as you chose it — else as it looks.)
-  const d = { data: null, timer: null, dest: null, editing: null, draft: null, kinds: new Map() };
+  // (follows: what's chosen in a priority watch's "Auto-checkout its drops for me", not saved yet — kept through refreshes.)
+  const d = { data: null, timer: null, dest: null, editing: null, draft: null, kinds: new Map(), follows: new Map() };
 
   // ---------------------------------------------------------------------------
   // The form: one box for a link or words; where to look appears for words
@@ -148,6 +149,8 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     if (!aco) $('#dw-aco').checked = false;
     const admin = isAdmin();
     $('#dw-share-wrap').hidden = !admin;
+    $('#dw-priority-wrap').hidden = !admin || !$('#dw-share').checked || kind !== 'page';
+    if ($('#dw-priority-wrap').hidden) $('#dw-priority').checked = false;
     $('#dw-cat-wrap').hidden = !admin || !$('#dw-share').checked;
     $('#dw-post-wrap').hidden = !admin || !$('#dw-share').checked;
     const postNote = $('#dw-post-note');
@@ -222,7 +225,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
 
   // Search, filter and sort the watches (kept in this browser): what's found, where, and how it's going.
   const BUYABLE = new Set(['in_stock', 'preorder']);
-  const phrasesText = (w) => (w.phrases || []).map((x) => `"${x}"`).join(', ');
+  const phrasesText = (w) => ((w.phrases || []).length ? w.phrases.map((x) => `"${x}"`).join(', ') : 'every product');
   const titleOf = (w) => w.label || (w.kind === 'link' ? (w.found[0] && w.found[0].name) || w.url : w.kind === 'page' ? phrasesText(w) : w.words) || '';
   const lastFind = (w) => Math.max(0, ...w.found.map((p) => p.statusAt || p.at || 0));
   const tools = listTools($('#dw-tools'), {
@@ -253,8 +256,10 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const admin = isAdmin();
     tools.setOptions('store', [...new Map(watches.map((w) => [w.store, w.storeName || w.store])).entries()].sort((a, b) => a[1].localeCompare(b[1])));
     const shown = tools.apply(watches, { text: watchText, match: MATCH, order: ORDER });
-    const mine = shown.filter((w) => w.mine);
-    const others = shown.filter((w) => !w.mine && !w.pool);
+    // (🚨 Priority drops first, a box of their own at the top: everyone's — each with your own Auto-checkout of them.)
+    const prio = shown.filter((w) => w.priority);
+    const mine = shown.filter((w) => w.mine && !w.priority);
+    const others = shown.filter((w) => !w.mine && !w.pool && !w.priority);
     // (Your pool's leader's own watches: theirs, as they are — what they find is on your watchlist as their items are.)
     const pooled = shown.filter((w) => w.pool);
     const narrowed = shown.length !== watches.length;
@@ -275,9 +280,14 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
         chan.append('No #non-tcg-alerts channel yet — until there is, drops for everyone go to #misc-retailers. ', b);
       }
     }
+    // 🚨 The EB Games pre-order preset (admins): its two pages, or that they're watched already.
+    $('#dw-preset-eb').hidden = !admin;
+    const ebOn = watches.filter((w) => w.priority && /ebgames/.test(w.store) && /condition=preorder/.test(w.page || '')).length;
+    $('#dw-eb-go').disabled = ebOn >= 2;
+    $('#dw-eb-go').textContent = ebOn >= 2 ? '✓ Watching EB pre-order drops' : 'Watch EB pre-order drops';
     const list = $('#dw-mine');
     list.textContent = '';
-    if (!mine.length) list.append(h('li', { class: 'empty' }, narrowed && watches.some((w) => w.mine) ? 'None of yours match — change the search or press Clear.' : 'No drop watches yet — paste a product\'s link above, or type the words in its name.'));
+    if (!mine.length) list.append(h('li', { class: 'empty' }, narrowed && watches.some((w) => w.mine && !w.priority) ? 'None of yours match — change the search or press Clear.' : prio.some((w) => w.mine) ? 'No others yet (your priority ones are at the top) — paste a product\'s link above, or type the words in its name.' : 'No drop watches yet — paste a product\'s link above, or type the words in its name.'));
     for (const w of mine) list.append(row(w));
     $('#dw-shared-box').hidden = !others.length;
     const sl = $('#dw-shared');
@@ -288,6 +298,8 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const pl = $('#dw-pool');
     pl.textContent = '';
     for (const w of pooled) pl.append(row(w));
+    $('#dw-priority-box').hidden = !prio.length;
+    $('#dw-priority').replaceChildren(...prio.map(row));
   }
 
   function whereText(w) {
@@ -330,7 +342,10 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const title = w.label || (w.kind === 'link' ? (w.found[0] && w.found[0].name) || w.url : w.kind === 'page' ? phrasesText(w) : `"${w.words}"`);
     const admin = isAdmin();
     const meta = [
+      w.priority ? '🚨 priority — every member DM\'d' : '',
       whereText(w),
+      w.kind === 'page' && typeof w.minPrice === 'number' ? `from ${money(w.minPrice)}` : '',
+      w.priority && admin && typeof w.followers === 'number' ? `🤖 ${w.followers} member${w.followers === 1 ? '' : 's'} auto-checkout it` : '',
       w.pool ? `🤝 ${w.pool}'s — what it finds is on your watchlist as theirs is` : w.shared ? `📣 for everyone${admin && w.channelId !== undefined ? ` ${postsIn(w)}` : ''}` : '🔒 just for you',
       w.aco && w.maxPrice !== null ? `🤖 auto-checkout up to ${money(w.maxPrice)}${w.qty === 'auto' ? ' (a box 1, packs the most allowed)' : w.qty === 'max' ? ' (the most allowed)' : w.qty && w.qty !== '1' ? ` (×${w.qty})` : ''}` : '',
       w.by && !w.mine && !w.pool ? `by ${w.by}` : '',
@@ -349,7 +364,7 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
       }, 'Remove'));
     }
     const found = w.found.length ? h('ul', { class: 'dw-found' }, ...w.found.map((p) => foundRow(w, p)))
-      : h('div', { class: 'meta dw-none' }, w.kind === 'link' ? 'Reading its page…' : w.kind === 'page' ? (w.looked ? 'Nothing with those key phrases on the page yet — you\'re told the moment something shows up.' : '')
+      : h('div', { class: 'meta dw-none' }, w.kind === 'link' ? 'Reading its page…' : w.kind === 'page' ? (w.looked ? `Nothing ${(w.phrases || []).length ? 'with those key phrases ' : ''}on the page yet — you're told the moment something shows up.` : '')
         : w.looked ? 'Nothing with those words yet — you\'re told the moment something shows up.' : '');
     return h('li', { class: `dw-row${w.shared ? ' shared' : ''}`, dataset: { id: w.id } },
       h('div', { class: 'dw-head' },
@@ -359,7 +374,53 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
           h('div', { class: 'meta' }, meta, state ? ' · ' : '', state)),
         h('div', { class: 'acts' }, ...acts)),
       d.editing === w.id ? editor(w, title) : null,
+      w.priority && w.follow ? followPanel(w, title) : null,
       found);
+  }
+
+  /**
+   * 🚨 A priority watch, for each member: Auto-checkout its drops for them — every new product it finds, bought at once
+   * up to their max for one, as many as the store allows (Max) or one (Min), within their Auto-checkout limits — and
+   * whether they're DM'd.
+   */
+  function followPanel(w, title) {
+    const f = w.follow;
+    const draft = d.follows.get(w.id) || { aco: !!f.aco, max: f.maxPrice ?? '', qty: f.qty === 'min' ? 'min' : 'max', dm: f.dm !== false };
+    const on = h('input', { type: 'checkbox', 'aria-label': `${title}: Auto-checkout its drops for me` });
+    const max = h('input', { type: 'number', min: '1', step: '0.01', placeholder: 'Max $ each', inputmode: 'decimal', 'aria-label': `${title}: your max price for one` });
+    const qty = h('select', { 'aria-label': `${title}: how many it buys` }, h('option', { value: 'max' }, 'Max — as many as allowed'), h('option', { value: 'min' }, 'Min — one'));
+    const dm = h('input', { type: 'checkbox', 'aria-label': `${title}: DM me its drops` });
+    on.checked = draft.aco;
+    max.value = draft.max === null || draft.max === undefined ? '' : String(draft.max);
+    qty.value = draft.qty;
+    dm.checked = draft.dm;
+    const keep = () => d.follows.set(w.id, { aco: on.checked, max: max.value, qty: qty.value, dm: dm.checked });
+    for (const el of [on, qty, dm]) el.addEventListener('change', keep);
+    max.addEventListener('input', keep);
+    on.addEventListener('change', () => { if (on.checked && !max.value) max.focus(); });
+    const save = h('button', { class: 'btn small primary', type: 'submit' }, 'Save');
+    const form = h('form', { class: `dw-follow${f.aco ? ' on' : ''}`, dataset: { follow: w.id } },
+      h('label', { class: 'check inline' }, on, ' 🤖 Auto-checkout its drops for me, up to'), max, h('span', { class: 'small' }, ' each, buying '), qty,
+      h('label', { class: 'check inline' }, dm, ' 🔔 DM me'), save,
+      f.aco ? h('p', { class: 'small muted' }, `On: what drops here from now on is bought at once in your checkout browser — up to ${money(f.maxPrice)} each, ${f.qty === 'min' ? 'one' : 'as many as the store allows'}, within your Auto-checkout limits.`) : null,
+      f.acoOn ? null : h('p', { class: 'small warn-text' }, 'Your Auto-checkout is off — ', h('a', { href: '#aco' }, 'switch it on'), ' for this to buy anything.'));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (on.checked && !(Number(max.value) > 0)) { toast('Set your max price', 'Mugibot never pays more than that for one.', 'warn'); max.focus(); return; }
+      save.disabled = true;
+      try {
+        const r = await api('PUT', `/api/drops/${w.id}/follow`, { aco: on.checked, maxPrice: max.value ? Number(max.value) : null, qty: qty.value, dm: dm.checked });
+        d.follows.delete(w.id);
+        d.data = { ...d.data, ...r };
+        render();
+        const v = r.watch.follow;
+        toast('Saved', v.aco ? `${title}: your Auto-checkout buys what drops there — up to ${money(v.maxPrice)} each, ${v.qty === 'min' ? 'one' : 'as many as allowed'}.${v.acoOn ? '' : ' Switch Auto-checkout on for it to buy.'}` : `${title}: ${v.dm ? "you're DM'd its drops" : 'no DMs'}, no Auto-checkout.`, 'success');
+      } catch (err) {
+        save.disabled = false;
+        toast("Couldn't change that", err.message, 'warn');
+      }
+    });
+    return form;
   }
 
   /** An admin's watch for everyone: change where it posts, and who it pings. A search page's: its key phrases and pace too. */
@@ -370,23 +431,34 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const ping = h('select', { 'aria-label': `${title}: ping` });
     const phrases = h('textarea', { rows: '2', maxlength: '1500', 'aria-label': `${title}: key phrases, one a line` });
     // (Your own page watch's Auto-checkout: armed again after the one purchase it makes, or its max price changed.)
-    const arms = page && w.mine && w.canBuy;
+    const arms = page && w.mine && w.canBuy && !w.priority;
+    // (A search page's lowest price; an admin's for everyone: whether it's a priority one, and what its members buy unless they choose.)
+    const minP = h('input', { type: 'number', min: '0', step: '0.01', placeholder: 'any price', 'aria-label': `${title}: only products from $` });
+    const pri = h('input', { type: 'checkbox', 'aria-label': `${title}: priority` });
+    const qtyDef = h('select', { 'aria-label': `${title}: members buy, unless they choose` }, h('option', { value: 'max' }, 'Max — as many as allowed'), h('option', { value: 'min' }, 'Min — one'));
+    const canPri = page && posts;
     const aco = h('input', { type: 'checkbox', 'aria-label': `${title}: Auto-checkout what drops` });
     const max = h('input', { type: 'number', min: '1', step: '0.01', placeholder: 'Max price $', 'aria-label': `${title}: max price for Auto-checkout` });
     const every = h('input', { type: 'number', min: String(w.floor || 3), max: '3600', step: '1', inputmode: 'numeric', 'aria-label': `${title}: read the page every (seconds)` });
-    const draft = d.draft && d.draft.id === w.id ? d.draft : { id: w.id, channelId: w.channelId, roleId: w.roleId, phrases: (w.phrases || []).join('\n'), every: w.every, aco: !!w.aco, max: w.maxPrice ?? '' };
+    const draft = d.draft && d.draft.id === w.id ? d.draft : { id: w.id, channelId: w.channelId, roleId: w.roleId, phrases: (w.phrases || []).join('\n'), every: w.every, aco: !!w.aco, max: w.maxPrice ?? '', min: w.minPrice ?? '', pri: !!w.priority, qty: w.qtyRule === '1' ? 'min' : 'max' };
+    minP.value = draft.min === null || draft.min === undefined ? '' : String(draft.min);
+    pri.checked = !!draft.pri;
+    qtyDef.value = draft.qty || 'max';
     fillDest(post, ping, { channelId: draft.channelId, roleId: draft.roleId, category: w.category });
     phrases.value = draft.phrases || '';
     every.value = String(draft.every || '');
     aco.checked = !!draft.aco;
     max.value = draft.max === null || draft.max === undefined ? '' : String(draft.max);
-    const keep = () => { d.draft = { id: w.id, channelId: post.value, roleId: ping.value, phrases: phrases.value, every: every.value, aco: aco.checked, max: max.value }; };
-    for (const el of [post, ping, aco]) el.addEventListener('change', keep);
-    for (const el of [phrases, every, max]) el.addEventListener('input', keep);
+    const keep = () => { d.draft = { id: w.id, channelId: post.value, roleId: ping.value, phrases: phrases.value, every: every.value, aco: aco.checked, max: max.value, min: minP.value, pri: pri.checked, qty: qtyDef.value }; };
+    for (const el of [post, ping, aco, pri, qtyDef]) el.addEventListener('change', keep);
+    for (const el of [phrases, every, max, minP]) el.addEventListener('input', keep);
     const save = h('button', { class: 'btn small primary', type: 'submit' }, 'Save');
     const form = h('form', { class: 'dw-edit' },
-      page ? h('label', {}, 'Key phrases to look for on the page (one a line)', phrases) : null,
+      page ? h('label', {}, 'Key phrases to look for on the page (one a line — empty: every product on it)', phrases) : null,
+      page ? h('label', {}, 'Only products from $ (empty: any price)', minP) : null,
       page ? h('label', {}, `Read the page every (seconds — ${w.floor || 3} at the fastest)`, every) : null,
+      canPri ? h('label', { class: 'check inline' }, pri, ' 🚨 Priority — every member DM\'d; members can auto-checkout every drop') : null,
+      canPri ? h('label', {}, "Members' Auto-checkout buys, unless they choose", qtyDef) : null,
       arms ? h('div', { class: 'dw-aco' }, h('label', { class: 'check inline' }, aco, ' 🤖 Auto-checkout what drops, up to'), max) : null,
       posts ? h('label', {}, 'Post its drops and restocks in', post) : null, posts ? h('label', {}, 'Ping', ping) : null,
       h('div', { class: 'form-actions' }, save, h('button', { class: 'btn small ghost', type: 'button', onclick: () => { d.editing = null; d.draft = null; render(); } }, 'Cancel')),
@@ -397,7 +469,8 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
       try {
         const body = {
           ...(posts ? { channelId: post.value, roleId: ping.value } : {}),
-          ...(page ? { phrases: phrasesOf(phrases.value), every: Number(every.value) || undefined } : {}),
+          ...(page ? { phrases: phrasesOf(phrases.value), every: Number(every.value) || undefined, minPrice: minP.value ? Number(minP.value) : 0 } : {}),
+          ...(canPri ? { priority: pri.checked, qty: qtyDef.value } : {}),
           ...(arms ? { aco: aco.checked, maxPrice: max.value ? Number(max.value) : undefined } : {}),
         };
         const r = await api('PUT', `/api/drops/${w.id}`, body);
@@ -502,14 +575,14 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const list = isLink(raw) ? [] : phrasesOf(raw);
     const page = isLink(raw) && kindOf(raw) === 'page';
     // (A search page: its key phrases are one watch — the page read once for them all.)
-    if (page) Object.assign(body, { page: linkOf(raw), phrases: phrasesOf($('#dw-phrases').value), every: Number($('#dw-every').value) || undefined });
+    if (page) Object.assign(body, { page: linkOf(raw), phrases: phrasesOf($('#dw-phrases').value), every: Number($('#dw-every').value) || undefined, minPrice: $('#dw-min').value ? Number($('#dw-min').value) : undefined });
     else if (isLink(raw)) body.url = linkOf(raw);
     // (Several key phrases, one a line: a watch each.)
     else if (list.length > 1) Object.assign(body, { phrases: list, store: $('#dw-store').value, site: $('#dw-store').value === OTHER ? $('#dw-site').value.trim() : '' });
     else Object.assign(body, { words: list[0] || raw, store: $('#dw-store').value, site: $('#dw-store').value === OTHER ? $('#dw-site').value.trim() : '' });
     if ($('#dw-aco').checked) Object.assign(body, { aco: true, maxPrice: $('#dw-max').value ? Number($('#dw-max').value) : null, qty: $('#dw-qty').value });
     if (isAdmin()) Object.assign(body, { shared: $('#dw-share').checked, category: $('#dw-category').value });
-    if (isAdmin() && $('#dw-share').checked) Object.assign(body, { channelId: $('#dw-post').value, roleId: $('#dw-ping').value });
+    if (isAdmin() && $('#dw-share').checked) Object.assign(body, { channelId: $('#dw-post').value, roleId: $('#dw-ping').value, ...(page && $('#dw-priority').checked ? { priority: true } : {}) });
     const form = e.target;
     busy(form, async () => {
       try {
@@ -518,6 +591,8 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
         render();
         $('#dw-input').value = '';
         $('#dw-phrases').value = '';
+        $('#dw-min').value = '';
+        $('#dw-priority').checked = false;
         $('#dw-label').value = '';
         $('#dw-site').value = '';
         $('#dw-aco').checked = false;
@@ -552,6 +627,24 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
         setMsg($('#dw-preset-msg'), err.message);
       }
     });
+  });
+
+  // 🚨 EB Games pre-order drops (admins): its One Piece and Pokémon booster pre-order pages, priority watches for everyone.
+  $('#dw-preset-eb').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const min = $('#dw-eb-min').value ? Number($('#dw-eb-min').value) : undefined;
+    // (Its button says whether they're watched already once it's done: drawn again after busy() lets go of it.)
+    busy(e.target, async () => {
+      try {
+        const r = await api('POST', '/api/drops/presets/ebpreorders', { minPrice: min, qty: $('#dw-eb-qty').value });
+        d.data = { ...d.data, ...r };
+        render();
+        const skipped = (r.skipped || []).map((x) => `${x.label}: ${x.why}`).join('; ');
+        setMsg($('#dw-eb-msg'), `Watching ${r.added.length} EB Games pre-order page${r.added.length === 1 ? '' : 's'} — every 3 seconds, every member DM'd when something drops${min ? ` (from ${money(min)})` : ''}.${skipped ? ` Not added: ${skipped}` : ''}`, true);
+      } catch (err) {
+        setMsg($('#dw-eb-msg'), err.message);
+      }
+    }).then(() => { if (d.data) render(); });
   });
 
   /** A search page from elsewhere ("Add a monitor"): in the form as a page watch, its key phrases next. */

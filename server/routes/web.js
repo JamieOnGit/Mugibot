@@ -119,6 +119,9 @@ export function alertItem(ctx, user, a) {
   if (!it) {
     const add = repo.countItems(user.id) < cfg.limits.items ? fromLink() : null;
     if (!add) return null;
+    // (A priority watch's find — EB Games' pre-orders: as many as the member said for its drops, else as the watch says.)
+    const q = ctx.drops && ctx.drops.quantityForAlert ? ctx.drops.quantityForAlert(a, user) : null;
+    if (q !== null && q !== undefined) Object.assign(add, checkItem({ ...add, quantity: q }, { retailers }));
     it = repo.addItem(user.id, add);
   } else if (!it.url) {
     // On the watchlist before its page was found: the alert has it (kept).

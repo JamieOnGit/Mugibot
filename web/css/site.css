@@ -844,6 +844,20 @@ a.ck:hover { border-color: currentColor; }
 .dw-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; flex: 1 1 180px; min-width: 0; }
 .dw-edit select { max-width: 100%; }
 .dw-edit .form-actions { margin: 0; }
+/* 🚨 Priority drops (Mugibot 2.2): the EB pre-order preset, and each member's own "Auto-checkout its drops for me". */
+.dw-preset-eb { border-color: color-mix(in srgb, var(--err) 45%, var(--line)); }
+.dw-follow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 0 36px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); }
+.dw-follow.on { border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.dw-follow input[type=number] { max-width: 120px; }
+.dw-follow select { max-width: min(240px, 100%); }
+.dw-priority-box { margin: 0 0 14px; }
+.dw-follow p { flex-basis: 100%; margin: 0; }
+.home-priority { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr); }
+.home-priority li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); border-left: 3px solid var(--err); min-width: 0; }
+.home-priority li.on { border-left-color: var(--ok); }
+.home-priority .tx { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.home-priority .tx small { color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 520px) { .dw-follow { margin-left: 0; } }
 .dw-icon { font-size: 18px; width: 26px; text-align: center; flex: 0 0 auto; }
 .dw-none { margin: 6px 0 0 36px; }
 .dw-found { list-style: none; margin: 8px 0 0; padding: 0 0 0 36px; }

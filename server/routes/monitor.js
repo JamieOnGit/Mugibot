@@ -266,6 +266,13 @@ export function register(router, ctx) {
     if (!watch) throw new HttpError(404, 'That drop watch no longer exists');
     return { watch, ...ctx.drops.viewFor(req.user) };
   }, member);
+  // 🚨 A priority watch (Mugibot 2.2): the member's own say — Auto-checkout its drops for them (their max, Min or Max), DM'd.
+  router.put('/api/drops/:id/follow', async (req) => {
+    if (!limiter.hit(`dropfollow:${req.user.id}`, 60, 10 * 60 * 1000)) throw new HttpError(429, 'Slow down a little — try again in a few minutes');
+    const watch = ctx.drops.follow(req.params.id, req.body || {}, req.user);
+    if (!watch) throw new HttpError(404, 'That priority drop watch no longer exists');
+    return { watch, ...ctx.drops.viewFor(req.user) };
+  }, member);
   router.post('/api/drops/:id/check', async (req) => {
     if (!limiter.hit(`dropcheck:${req.user.id}`, 20, 10 * 60 * 1000)) throw new HttpError(429, 'You can ask for 20 checks every 10 minutes');
     if (!ctx.drops.checkNow(req.params.id, req.user)) throw new HttpError(404, 'That drop watch no longer exists');

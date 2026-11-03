@@ -710,6 +710,9 @@ export class Aco {
       return others.length;
     }
     if (!it || !it.drop_watch) return 0;
+    // (A priority watch — EB Games' pre-order pages, Mugibot 2.2: every new product it finds is bought, within the
+    //  member's own limits — never just the first.)
+    if (this.db.get('SELECT 1 AS y FROM drop_watches WHERE id = :w AND priority = 1', { w: it.drop_watch })) return 0;
     const others = this.db.all('SELECT id, name FROM items WHERE user_id = :u AND drop_watch = :w AND aco = 1 AND id != :i', { u: userId, w: it.drop_watch, i: itemId });
     for (const o of others) this.disarm(userId, o.id);
     const off = this.db.run('UPDATE drop_watches SET aco = 0 WHERE id = :w AND user_id = :u AND aco = 1', { w: it.drop_watch, u: userId }).changes;

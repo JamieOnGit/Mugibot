@@ -774,6 +774,12 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
     let hits = q ? searchHits('ebgames', q) : shopOf('ebgames').products.filter((x) => x.listed);
     const cat = params.get('category');
     if (cat) hits = hits.filter((x) => (x.category ? x.category === cat : cat === 'trading-cards' && EB_CARDS.test(x.name)));
+    // (Its game — subcategory=trading-cards-one-piece, trading-cards-pokemon — and its card type: attributes=
+    //  trading-card-type:boosters, what's sold as packs — boosters, blisters, bundles, boxes of packs.)
+    const sub = params.get('subcategory');
+    if (sub === 'trading-cards-one-piece') hits = hits.filter((x) => /\bone piece\b/i.test(x.name));
+    else if (sub === 'trading-cards-pokemon') hits = hits.filter((x) => /\bpok[eé]mon\b/i.test(x.name));
+    if (params.getAll('attributes').includes('trading-card-type:boosters')) hits = hits.filter((x) => /\b(booster|blister|pack|bundle)s?\b/i.test(x.name));
     const cond = params.get('condition');
     if (cond === 'preorder') hits = hits.filter((x) => x.status === 'preorder');
     else if (cond === 'new') hits = hits.filter((x) => x.status !== 'preorder');

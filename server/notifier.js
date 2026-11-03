@@ -104,7 +104,8 @@ export class Notifier {
     const settings = { ...DEFAULT_ALERTS, ...(this.repo.getData(userId, 'alerts', {}) || {}) };
     const jobs = [];
     // 'aco': Auto-checkout (it spends their money): always DM'd.
-    const wantsDm = { restock: settings.discordDm, listed: settings.discordDmListed, checkout: settings.discordDmCheckout, aco: true, account: true, signin: true }[ev.channel];
+    // ('priority': a priority watch's drop, to every member — muted per watch on the Monitors page.)
+    const wantsDm = { restock: settings.discordDm, listed: settings.discordDmListed, checkout: settings.discordDmCheckout, aco: true, account: true, signin: true, priority: true }[ev.channel];
     if (wantsDm && user.discord_id && this.discord.botReady) {
       const t0 = Date.now();
       // (Mugibot 2.1: what matters now pings, with its header; the rest arrives silently — no sound — so the two never
@@ -160,7 +161,7 @@ export class Notifier {
       }],
     };
     // Urgent (your SKU back, your checkout needing you, a queue up, signed out): a header saying so, above the title.
-    if (ev.level === 'urgent' && msg.embeds[0]) msg.embeds[0].author = { name: URGENT_HEADER[ev.type] || '🚨 Needs you now' };
+    if (ev.level === 'urgent' && msg.embeds[0]) msg.embeds[0].author = { name: ev.header || URGENT_HEADER[ev.type] || '🚨 Needs you now' };
     // Routine (listed, price drops, back to normal): delivered without a ping (Discord's SUPPRESS_NOTIFICATIONS).
     if (quiet) msg.flags = SUPPRESS_NOTIFICATIONS;
     if (useButtons && buttons.length) {

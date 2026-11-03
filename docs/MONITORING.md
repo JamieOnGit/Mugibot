@@ -1315,6 +1315,70 @@ bot check: it only stops Mugibot waiting and starts politely again.
 
 **Discord**: `/monitor list`, `/monitor status`, `/restocks` as before.
 
+### 🚨 Priority drops: EB Games' pre-order pages (Mugibot 2.2)
+
+A priority drop watch is an admin's search page watch for everyone that tells **every member** and can be
+**auto-checked out by each member**. It's built for EB Games' pre-order pages:
+
+- **One Piece pre-orders**:
+  `https://www.ebgames.com.au/search?category=trading-cards&subcategory=trading-cards-one-piece&condition=preorder`.
+  It has no key phrases, so anything new on the page counts.
+- **Pokémon booster pre-orders**:
+  `https://www.ebgames.com.au/search?category=trading-cards&subcategory=trading-cards-pokemon&attributes=trading-card-type%3Aboosters&condition=preorder`.
+  Its key phrases are **booster** and **blister** by default.
+
+**Setting them up (admins).** On the Monitors page, open **🎯 Drop watches → 🚨 EB Games pre-order drops**.
+Set **Only from $** (anything cheaper isn't a drop: it isn't alerted and isn't bought) and **Buy: Max or Min**
+(what members' Auto-checkout buys unless they choose). Press **Watch EB pre-order drops**. Both pages are added
+as priority watches, read every 3 seconds (EB Games' fastest).
+
+**Changing them later (✎ on the watch).** You can change:
+
+- the key phrases (one a line; leave them empty for every product on the page);
+- the lowest price;
+- how often the page is read;
+- Priority on or off;
+- what members buy unless they choose (Min or Max);
+- the Discord channel it posts in, and the role it pings.
+
+Any store's search page watch can be made a priority one the same way, with the **🚨 Priority** box when you add it.
+
+**How a page is read.** EB Games turns servers away, so each page is read from an **admin's browser**: Chrome with
+Mugibot's extension, signed in as an admin.
+
+- The page opens in a tab of its own in the extension's window. From then on, every 3 seconds, only the data the
+  page itself fetches is asked for, from inside that page.
+- When several admins' browsers are open, they share the reads. A page is never read by two at once.
+- With no admin's browser open, the watch says **"Waiting to read EB Games' page"** on every dashboard. The first
+  admin's browser to open reads it straight away.
+- **For round-the-clock monitoring, keep an admin's browser open 24/7**, ideally two, on different computers.
+- The first read of a page is how things are: nothing on it then is a drop. EB Games saying "too many" or showing
+  its bot check is waited out as for any page (never got around); its virtual queue is waited in, never refreshed.
+
+**When something new is up for pre-order**:
+
+- **The Discord channel**: posted with **⚡ Buy with Mugibot**, pinging the chosen role.
+- **Every member's DM**: a 🚨 **PRIORITY DROP** DM with ⚡ Buy, unless they've muted that watch.
+- **Every dashboard**: the important alert (siren and pop-up), since it's a monitored product.
+- **Auto-checkout, for each member who's turned it on for that watch**: their checkout browser starts at once, all
+  of them together. It uses their card and details and buys up to their max for one: as many as EB allows
+  ("Limit 2 per customer" → 2), or one. Their own Auto-checkout limits apply (an order, a day, spending).
+  - A priority watch buys **every** new product it finds, not just the first; the usual "one purchase per drop
+    watch" doesn't apply.
+  - A product over a member's max isn't armed for them. They're told it dropped and that it was over their max.
+
+A drop found a moment earlier by EB's card keyword search still counts: it's bought and everyone's told, once.
+
+**Members.** The 🚨 Priority drops box at the top of 🎯 Drop watches shows each watch with:
+
+- **🤖 Auto-checkout its drops for me, up to $… each, buying Max / Min**;
+- **🔔 DM me** (on by default);
+- **Save**.
+
+Auto-checkout itself must be switched on (Tasks page). The watch says so if it isn't. **⚡ Buy** on a priority
+alert (in Discord or on the dashboard) buys as many as the member chose for that watch, or what the watch says.
+**Home** shows each priority page: how lately it was read, and whether the member's Auto-checkout buys its drops.
+
 ### Mugibot 2.1: the dashboard, alerts and queues
 
 - **The dashboard** is dark by default (a drop bot's look) and has four pages: **🏠 Home** (the front door — your setup as

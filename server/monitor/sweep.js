@@ -1091,7 +1091,8 @@ export class Sweeper {
         // What each VIP and drop watch at this store saw of it (monitor/sightings.js): this page's watches, their own read.
         const seen = this.sight(r, p, { title, status, own, way: how, before, now });
         const verdict = (w) => (seen.get(w.id) || {}).verdict || 'pending';
-        const hits = watches.map((w) => ({ w, phrase: this.drops.phraseIn(w, title) })).filter((x) => x.phrase);
+        // (A key phrase in its name — or, a page with none, any product — at the watch's lowest price or more.)
+        const hits = watches.map((w) => ({ w, phrase: this.drops.pageHit(w, title, typeof p.price === 'number' ? p.price : null) })).filter((x) => x.phrase);
         if (!hits.length) continue;
         counted.kept += 1;
         const isFresh = !!fresh && fresh.has(String(p.sku || '').toLowerCase());

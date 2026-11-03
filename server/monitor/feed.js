@@ -172,6 +172,12 @@ export class Feed {
     this.broadcast('feed', alert);
     // (Found by an admin's drop watch for everyone with a channel of its own: posted there.)
     const drop = this.drops ? this.drops.routeFor(dropWatch || (monitor && monitor.drop_watch)) : null;
+    // (A priority watch's — Mugibot 2.2: new, or on sale again — every member's DM too, never waited for: straight after
+    //  what this read sets going, Auto-checkout runs first.)
+    if (this.drops && (kind === 'listed' || kind === 'restock')) {
+      const pw = this.drops.get(dropWatch || (monitor && monitor.drop_watch));
+      if (pw && pw.priority) setImmediate(() => { try { this.drops.tellAll(pw, product, alert); } catch (e) { this.cfg.log('[feed] tell all:', e.message); } });
+    }
     const posting = this.post(alert, product, { drop }).then((posted) => {
       if (posted.length) {
         this.catalog.setPosted(row.id, posted);
