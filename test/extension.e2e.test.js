@@ -5568,9 +5568,15 @@ test("🔒 BIG W in a private window of its own: allowed in Incognito, an admin'
     //  would say it was seen by the live monitor last — which it would have been, rightly.)
     const own = store.addProduct('bigw', { sku: '6099202', name: 'Garden Hose Reel', price: 39, status: 'in_stock' });
     await useItems([{ url: own, name: 'BIG W Bundle' }]);
-    env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
     since = store.state.requests.length;
-    const r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+    // (A round of its own: the extension's alarm may have one going this moment — never two at once ({ busy: true }) —
+    //  so asked again till it isn't, the item due each time.)
+    let r;
+    await waitFor(async () => {
+      env.app.db.run('UPDATE items SET browser_next_at = 0 WHERE user_id = :u', { u: userId });
+      r = await sw.evaluate(() => globalThis.mugibotRunChecks());
+      return !r.busy;
+    }, { timeout: 60000, interval: 500, message: 'a check round of its own' });
     // (Your item — and, in its private window, the products its searches found too: as many a round as there's room for.)
     assert.ok(r.checked >= 1, JSON.stringify(r));
     const pages = asked(since, /^\/bigw\/product\//);
