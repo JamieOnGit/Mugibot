@@ -618,16 +618,42 @@ checkout shows it:
   - its Home delivery option is greyed out or says "Not available for this order";
   - it isn't there at all, with only a pick-up option left (WooCommerce's "Local
     pickup", Magento's "Store Pickup");
-  - or the checkout says so: Shopify's "Your order cannot be shipped", "No
-    shipping options available", "Click & Collect only".
+  - or the checkout says so, in any words (extension **1.41.0**): EB Games'
+    "Unfortunately the items below are not in stock for delivery. Please choose
+    Click & Collect to proceed.", Shopify's "Your order cannot be shipped", "No
+    shipping options available", "Click & Collect only", "Not available for home
+    delivery", "Can only be collected in store", or a warning on the page (an
+    alert box, or red words) saying delivery isn't possible for these items.
+  - That's looked for after Home Delivery is chosen, and still while Mugibot waits
+    for the final button to turn on, so a store that says it a few seconds late
+    (EB Games' "CONFIRM & PAY" staying grey) still gets Click & Collect.
 
-  "Express delivery unavailable to your area" doesn't count.
+  These don't count: one kind of delivery ("Express delivery unavailable to your
+  area", "Same day delivery not available"), places it won't go ("We can't deliver
+  to PO Boxes"), costs and times ("Free delivery isn't available under $50",
+  "Orders after 2pm can't be shipped until tomorrow"), your address, and anything
+  in the page's header or footer.
 - **The store to collect from:** the one nearest your postcode, or the postcode
   or suburb you give under **Collect near**.
   - **Kmart, BIG W:** its "Select a store" / "Choose a store", your postcode
     searched, then the first store's "Select".
   - **Target:** the same finder on the page ("Find stores", "Select store").
-  - **EB Games:** the first store in its drop-down.
+  - **EB Games** (as its real checkout goes, Nov 2026): "Click & Collect", your
+    postcode (from your delivery details, e.g. 3192) typed into "Collect from",
+    the first suburb it suggests ("CHELTENHAM, VIC 3192"), then from "Stores near
+    …" the store that has it, nearest first:
+    - **Has it first:** "2 of 2 items available" before "1 of 2", never "0 of 2"
+      or "Unavailable".
+    - **Then the fewest km away** ("1.34km away" before "9.86km away"), whatever
+      order EB lists them in.
+    - "Collect from" already showing stores near somewhere else (a search from
+      before) is searched again, near your postcode.
+    - No store near you has it: the run stops for you, with nothing bought, and
+      says so.
+
+    (Its older checkout's drop-down of stores: the first one.)
+  - **Every store's list** is read the same way: a store that says it has the
+    order first, then the nearest by its km.
   - **City Beach:** the first in its list of stores.
   - **Shopify** (JB Hi-Fi, Toys"R"Us, the card shops): "Pick up", then the first
     pick-up location.
@@ -637,6 +663,9 @@ checkout shows it:
 - **You're told:**
   - The run says "🏬 Click & Collect from Kmart Cheltenham — Kmart doesn't offer
     home delivery for this order".
+  - Your activity says what the store said, the suburb searched, and why that
+    store ("🏬 Click & Collect from EB Games Southlands (has it, 1.34 km away —
+    the nearest of 5 stores that has it)").
   - The order's DM and Discord's ⚡ Buy reply say where to pick it up.
   - ⚡ Buy's panel says so beside the final button.
 - **Home delivery only?** Untick **"No home delivery for an order? Click &

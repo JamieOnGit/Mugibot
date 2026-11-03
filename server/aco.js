@@ -108,6 +108,7 @@ export const REASONS = {
   others: 'Other things were already in the bag: they were bought too',
   collect: "Click & Collect: the store doesn't offer home delivery for this order",
   home_only: "The store doesn't offer home delivery for this order, and your delivery details say home delivery only",
+  no_store: "The store doesn't offer home delivery for this order, and no store near you has it for Click & Collect",
   store_denied: 'The store\'s bot protection turned your browser away ("Access Denied")',
   wrong_item: "The checkout wasn't for this item alone",
   stopped: 'You stopped it',

@@ -222,6 +222,15 @@ export function defaultShops() {
       // Shopify's pick-up locations. (pickup: a Shopify shop's Ship / Pick up choice, Ship chosen — JB Hi-Fi's.)
       // (A product page whose only buy button adds it for Click & Collect: addLabel "Add to cart for Click & Collect".)
       collectOnly: false, pickup: id === 'jbhifi',
+      // EB Games' real Click & Collect-only order (stockless, Nov 2026 — a pre-order or a product it won't deliver): its
+      // checkout as the real one shows it — "How would you like to receive your items?" Click & Collect | Home Delivery;
+      // Home Delivery says "Unfortunately the items below are not in stock for delivery. Please choose Click & Collect
+      // to proceed." (stockless: true — or other words: a string; or in a role="alert" box: stocklessAlert) with
+      // CONFIRM & PAY off; Click & Collect has "Collect from" (a postcode → its suburbs, as suggestions) and "Stores
+      // near …" (each store's stock and km: ccStores, else EB_CC_STORES — the nearest has none). ccNear: "Collect
+      // from" already showing stores near somewhere else (a search from before).
+      // (stocklessLateMs: EB taking this long to say so — after Mugibot's already at CONFIRM & PAY.)
+      stockless: false, stocklessAlert: false, stocklessLateMs: 0, ccStores: null, ccNear: '',
       // (log: every request while it's on — { id, at, path, what } — to show nothing asked again too soon.)
       queue: { on: false, admitAfterMs: 4000, refreshMs: 1500, tooSoonMs: 700, wait: 23, lateMs: 0, places: {}, admittedIds: [], kicks: 0, shown: 0, admitted: 0, cookieless: 0, log: [] },
     };
@@ -1396,6 +1405,7 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
   // delivery one (ticked) → "Done" → "CONFIRM & PAY". Signed in (state.signedIn.ebgames): it's all in —
   // home delivery, your address, your saved card — and only "CONFIRM & PAY" is left.
   function ebgamesCheckout() {
+    if (shopOf('ebgames').stockless) return ebgamesCollectOnly();
     const sum = total('ebgames');
     // (collectOnly: Home Delivery switched off — Click & Collect, its store chosen from the drop-down, then payment.)
     const co = !!shopOf('ebgames').collectOnly;
@@ -1493,6 +1503,167 @@ export async function startMockStore({ port = 0, cardPort = 0, host = '127.0.0.1
           $('eb-card').hidden = true; $('eb-card-saved').hidden = false; $('eb-card-saved').textContent = 'Card ending in ' + card.cardNumber.replace(/\\D/g, '').slice(-4);
           $('eb-confirm').disabled = false;
         });
+      </script>`;
+  }
+
+  // EB Games' stores near you for Click & Collect (stockless): in the order its list shows them — not by distance — and
+  // whether each has your order (true: all of it; 'some'; false: "0 of N items"; 'none': "Unavailable"). The nearest has none.
+  const EB_CC_STORES = [
+    { brand: 'EB Games', name: 'Keysborough', km: 11.32, has: true, hours: 'Tue: 10:00am - 5:00pm' },
+    { brand: 'EB Games / ZiNG', name: 'Chadstone', km: 0.86, has: false, hours: 'Tue: 10:00am - 5:00pm' },
+    { brand: 'EB Games', name: 'Moorabbin', km: 1.02, has: 'none', hours: 'Tue: 10:00am - 5:00pm' },
+    { brand: 'EB Games', name: 'Southlands', km: 1.34, has: true, hours: 'Tue: 10:00am - 5:00pm' },
+    { brand: 'EB Games / ZiNG', name: 'The Glen', km: 14.6, has: true, hours: 'Tue: 10:00am - 5:00pm' },
+  ];
+  // The suburbs EB suggests for a postcode, first one first.
+  const EB_SUBURBS = {
+    2000: ['SYDNEY, NSW 2000', 'BARANGAROO, NSW 2000', 'DAWES POINT, NSW 2000', 'THE ROCKS, NSW 2000'],
+    3192: ['CHELTENHAM, VIC 3192', 'CHELTENHAM EAST, VIC 3192', 'SOUTHLAND CENTRE, VIC 3192'],
+    4000: ['BRISBANE CITY, QLD 4000', 'PETRIE TERRACE, QLD 4000', 'SPRING HILL, QLD 4000'],
+  };
+
+  /**
+   * EB Games' checkout for an order it won't deliver (stockless), as the real one shows it (Nov 2026): signed in, your
+   * Member Information, Home Delivery chosen, your address and saved card — and "Unfortunately the items below are not
+   * in stock for delivery. Please choose Click & Collect to proceed.", CONFIRM & PAY off. As a guest: your details,
+   * Click & Collect chosen for you. Click & Collect: "Collect from" — type a postcode, its suburbs come up (a moment
+   * later); choose one and "Stores near …" lists its stores ("1 of 1 items / available", "1.34km away"); a store's
+   * line is pressed to choose it. CONFIRM & PAY turns on once a store that has it all is chosen (and, a guest, the card
+   * is done). Steps posted: fulfilment, ccSearch (what was typed), ccSuburb, store, payment, card.
+   */
+  function ebgamesCollectOnly() {
+    const S = shopOf('ebgames');
+    const signed = !!state.signedIn.ebgames;
+    const n = S.cart.length;
+    const stores = S.ccStores || EB_CC_STORES;
+    const said = typeof S.stockless === 'string' ? S.stockless : 'Unfortunately the items below are not in stock for delivery. Please choose Click & Collect to proceed.';
+    const banner = S.stocklessAlert ? `<div id="eb-stock" role="alert" class="checkout-alert" hidden>${esc(said)}</div>`
+      : `<div id="eb-stock" class="notice notice--danger" hidden style="background:#f8d7da;color:#c0392b;padding:12px;text-align:center">ⓘ ${esc(said)}</div>`;
+    const items = S.cart.map((c) => `<div class="line-item"><img alt="" width="40" height="50" style="background:#ddd"> <span>${esc(c.name)}</span> <span>QTY: ${c.qty}</span> <span>$${(c.price * c.qty).toFixed(2)}</span></div>`).join('');
+    return `<style>.toggle{display:inline-flex;background:#f1f3f5;border-radius:24px;padding:4px}.toggle button{background:none;color:#555;border-radius:20px}.toggle button[aria-pressed=true]{background:#1a73e8;color:#fff}
+      .store-list{list-style:none;padding:0}.store-row{border-bottom:1px solid #ddd;padding:8px;cursor:pointer;display:flex;justify-content:space-between}.store-row.is-selected{background:#e8f0fe}
+      .cc-opts{position:absolute;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);width:360px;z-index:30}.cc-opt{padding:10px;cursor:pointer}.avail-ok{color:green}.avail-no{color:#999}</style>
+      <h1>secure checkout</h1>
+      <form method="post" action="/ebgames/checkout/place" id="eb-form">
+      ${signed ? `<section id="eb-member"><h2>Member Information</h2><p>ash.eb@example.com<br>Ash Ketchum<br>0412345678</p></section>` : `<section id="eb-contact"><h2>Contact details</h2>
+        <label>Email address <input name="email" type="email" required></label>
+        <label>First name <input name="firstName" required></label>
+        <label>Last name <input name="lastName" required></label>
+        <label>Mobile number <input name="phone" type="tel" required></label></section>`}
+      <section id="eb-delivery"><h2>How would you like to receive your items?</h2>
+        <div class="toggle" role="group"><button type="button" id="eb-t-cc" aria-pressed="${signed ? 'false' : 'true'}">Click &amp; Collect</button><button type="button" id="eb-t-home" aria-pressed="${signed ? 'true' : 'false'}">Home Delivery</button></div>
+        <div id="eb-home" ${signed ? '' : 'hidden'}><h3>Shipping Address</h3>${signed ? '<p>Ash Ketchum<br>1 PALLET TOWN RD<br>SYDNEY NSW 2000<br>Australia</p>' : '<label>Country <select name="country"><option value="">Select country</option><option value="AU">Australia</option></select></label>'}</div>
+        <div id="eb-cnc" ${signed ? 'hidden' : ''}>
+          <div class="mat-form-field"><label for="eb-cc-q">Collect from</label><input id="eb-cc-q" type="text" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" value="${esc(S.ccNear || '')}"><button type="button" id="eb-cc-clear" aria-label="Clear" style="background:none;color:#555">✕</button></div>
+          <h3 id="eb-cc-head" ${S.ccNear ? '' : 'hidden'}>Stores near ${esc(S.ccNear || '')}</h3>
+          <ul id="eb-cc-stores" class="store-list"></ul>
+          <div id="eb-pick" class="notice notice--danger" style="background:#f8d7da;color:#c0392b;padding:12px;text-align:center">ⓘ Please select a store to check for availability.</div>
+        </div>
+        ${banner}
+        <div id="eb-items">${items}</div></section>
+      <section id="eb-pay"><h2>Pay now</h2>
+        ${signed ? `<label class="saved-card"><input type="radio" name="savedCard" value="1157" checked> VISA ...1157 10/31</label>` : `<div role="tablist"><button type="button" role="tab" aria-selected="true" class="pay-tab is-active">Pay Now</button> <button type="button" role="tab" aria-selected="false" class="pay-tab">Pay Later</button></div>
+        <div class="pay-options"><button type="button" class="pay-option" data-m="card">Credit / Debit card</button> <button type="button" class="pay-option" data-m="paypal">PayPal</button></div>
+        <div id="eb-card" hidden><iframe id="eb-card-frame" title="Card details" src="${cardOrigin}/card-frame?style=eb" width="360" height="230" style="border:1px solid #ccc"></iframe>
+          <label><input type="checkbox" name="billingSame" checked> Billing address same as delivery address</label>
+          <p><button type="button" id="eb-done">Done</button></p></div>
+        <p id="eb-card-saved" hidden></p>`}</section>
+      <p class="order-total">Total amount (inc GST) $${total('ebgames').toFixed(2)}</p>
+      <p><button type="submit" id="eb-confirm" disabled>CONFIRM &amp; PAY</button></p>
+      <input type="hidden" name="cardDone" value="${signed ? 'saved' : ''}">
+      </form>
+      <div id="eb-cc-opts" class="cc-opts" role="listbox" hidden></div>
+      <p id="eb-error" class="err"></p>
+      <script>
+        (() => {
+        const $ = (id) => document.getElementById(id);
+        const post = (step, data) => fetch('/ebgames/api/checkout/step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ step, data }) });
+        const STORES = ${JSON.stringify(stores)};
+        const SUBURBS = ${JSON.stringify(EB_SUBURBS)};
+        const N = ${n};
+        const signed = ${signed};
+        let mode = signed ? 'home' : 'cnc';
+        let chosen = null;
+        let cardDone = signed;
+        const ok = () => { $('eb-confirm').disabled = !(mode === 'cnc' && chosen && chosen.has === true && cardDone); };
+        const show = () => {
+          $('eb-t-cc').setAttribute('aria-pressed', String(mode === 'cnc'));
+          $('eb-t-home').setAttribute('aria-pressed', String(mode === 'home'));
+          $('eb-home').hidden = mode !== 'home';
+          $('eb-cnc').hidden = mode !== 'cnc';
+          $('eb-stock').hidden = true;
+          $('eb-pick').hidden = mode !== 'cnc' || !!chosen;
+          // (Home Delivery: EB looks up its stock for delivery — a moment — and says it has none.)
+          if (mode === 'home') setTimeout(() => { if (mode === 'home') $('eb-stock').hidden = false; }, ${shopOf('ebgames').stocklessLateMs || 300});
+          ok();
+        };
+        $('eb-t-cc').addEventListener('click', () => { mode = 'cnc'; show(); post('fulfilment', { fulfilment: 'cnc' }); });
+        $('eb-t-home').addEventListener('click', () => { mode = 'home'; show(); post('fulfilment', { fulfilment: 'home' }); });
+        // "Collect from": its suburbs as you type a postcode (a moment later), in a list over the page.
+        const q = $('eb-cc-q');
+        const opts = $('eb-cc-opts');
+        const place = () => { const r = q.getBoundingClientRect(); opts.style.left = (r.left + scrollX) + 'px'; opts.style.top = (r.bottom + scrollY) + 'px'; };
+        q.addEventListener('input', () => {
+          clearTimeout(window.__ccT);
+          const v = q.value.trim();
+          window.__ccT = setTimeout(() => {
+            const hits = /^\\d{4}$/.test(v) ? (SUBURBS[v] || ['SUBURBIA, VIC ' + v]) : v.length >= 3 ? [].concat(...Object.values(SUBURBS)).filter((s) => s.toLowerCase().includes(v.toLowerCase())) : [];
+            if (hits.length) post('ccSearch', { typed: v });
+            opts.innerHTML = hits.map((s) => '<div role="option" class="mat-option cc-opt">' + s.replace(/(\\d{4})$/, '<b>$1</b>') + '</div>').join('');
+            opts.hidden = !hits.length;
+            q.setAttribute('aria-expanded', String(!!hits.length));
+            place();
+          }, 350);
+        });
+        const storesNear = (sub) => {
+          $('eb-cc-head').hidden = false;
+          $('eb-cc-head').textContent = 'Stores near ' + sub.replace(/^(\\S+)/, (w) => w[0] + w.slice(1).toLowerCase());
+          $('eb-cc-stores').innerHTML = '<li class="loading">Loading stores…</li>';
+          setTimeout(() => {
+            $('eb-cc-stores').innerHTML = STORES.map((s, i) => {
+              const got = s.has === true ? N : s.has === 'some' ? Math.max(1, N - 1) : 0;
+              const avail = s.has === 'none' ? '<span class="avail-no">Unavailable</span>' : '<span class="avail-count">' + got + ' of ' + N + ' items</span><br><span class="' + (got ? 'avail-ok' : 'avail-no') + '">available</span>';
+              return '<li class="store-row" tabindex="0" data-i="' + i + '"><div><div class="brand">' + s.brand + '</div><div class="name">' + s.name + '</div><div class="hours">' + s.hours + '</div></div><div class="avail">' + avail + '<div class="dist">📍 ' + s.km.toFixed(2) + 'km away</div></div></li>';
+            }).join('');
+          }, 300);
+        };
+        opts.addEventListener('click', (e) => {
+          const o = e.target.closest('[role=option]'); if (!o) return;
+          q.value = o.textContent; opts.hidden = true; q.setAttribute('aria-expanded', 'false');
+          chosen = null; show();
+          post('ccSuburb', { suburb: o.textContent });
+          storesNear(o.textContent);
+        });
+        $('eb-cc-clear').addEventListener('click', () => { q.value = ''; $('eb-cc-stores').innerHTML = ''; $('eb-cc-head').hidden = true; chosen = null; show(); });
+        if (q.value) storesNear(q.value);
+        $('eb-cc-stores').addEventListener('click', (e) => {
+          const li = e.target.closest('.store-row'); if (!li) return;
+          for (const x of document.querySelectorAll('.store-row')) x.classList.remove('is-selected');
+          li.classList.add('is-selected');
+          chosen = STORES[li.dataset.i];
+          $('eb-pick').hidden = true;
+          $('eb-error').textContent = chosen.has === true ? '' : 'Not all of your items are available at this store';
+          post('store', { fulfilment: 'cnc', store: chosen.brand.split(' / ')[0] + ' ' + chosen.name, near: q.value, km: chosen.km, has: chosen.has });
+          ok();
+        });
+        for (const b of document.querySelectorAll('.pay-option')) b.addEventListener('click', () => {
+          for (const x of document.querySelectorAll('.pay-option')) x.classList.remove('is-selected');
+          b.classList.add('is-selected');
+          $('eb-card').hidden = b.dataset.m !== 'card';
+          post('payment', { method: b.dataset.m });
+        });
+        const card = {};
+        addEventListener('message', (e) => { if (e.data && e.data.ebCard) card[e.data.ebCard] = e.data.value; });
+        $('eb-done')?.addEventListener('click', () => {
+          if (!(card.cardNumber && card.expiry && card.cvv && card.nameOnCard)) { $('eb-error').textContent = 'Please complete your card details'; return; }
+          document.querySelector('[name=cardDone]').value = card.cardNumber.slice(-4);
+          post('card', { last4: card.cardNumber.replace(/\\D/g, '').slice(-4), expiry: card.expiry, name: card.nameOnCard });
+          $('eb-card').hidden = true; $('eb-card-saved').hidden = false; $('eb-card-saved').textContent = 'Card ending in ' + card.cardNumber.replace(/\\D/g, '').slice(-4);
+          cardDone = true;
+          ok();
+        });
+        show();
+        })();
       </script>`;
   }
 

@@ -8,6 +8,13 @@
 //   to pay?": "Pay Now", then "Credit / Debit card" → card number, MM/YY, CVV and name on card (the
 //   billing address left as the delivery one) → "Done" (once the card is in) → STOP at
 //   "CONFIRM & PAY". Signed in: only "CONFIRM & PAY" (the card EB has for you, if it shows one).
+//
+// Click & Collect only (Mugibot 2.2 — many pre-orders, and some products): Home Delivery is tried first, always; EB
+//   then says "Unfortunately the items below are not in stock for delivery. Please choose Click & Collect to
+//   proceed." (or the like, in any words — extension/fill.js reads what any checkout says, and noHome below is EB's
+//   own) and CONFIRM & PAY stays off → "Click & Collect" → your postcode (from your delivery details: "3192") typed
+//   into "Collect from" → the first suburb it suggests ("CHELTENHAM, VIC 3192") → of "Stores near …", the nearest
+//   store that has it: "available" first ("1 of 1 items available" before "0 of 1"), then the fewest km away.
 
 import { ADD_WORDS } from '../monitor/words.js';
 
@@ -18,7 +25,7 @@ export default {
   hosts: ['www.ebgames.com.au'],
   devPath: '/ebgames',
   flowStatus: 'beta',
-  flowNote: 'Built from a walk-through of EB Games\' real checkout; tested on the EB Games-style dummy store. Home Delivery (not Click & Collect), your address from EB\'s suggestions, Credit / Debit card, then CONFIRM & PAY.',
+  flowNote: 'Built from a walk-through of EB Games\' real checkout; tested on the EB Games-style dummy store. Home Delivery, your address from EB\'s suggestions, Credit / Debit card, then CONFIRM & PAY — or, when EB says it can\'t deliver the order (a Click & Collect-only pre-order), Click & Collect at the nearest store near your postcode that has it.',
   skuLabel: 'Product code',
   skuHint: 'The number in the link, e.g. …/product/toys-and-collectibles/312345-…',
   skuFromPath: /\/product\/[^/]+\/(\d+)/,
@@ -83,6 +90,8 @@ export default {
       final: [/^confirm (&|and) pay$/i, /\bplace (my |your )?order\b/i],
       // "Pay Now" is EB's kind of payment (vs Pay Later), not its final button.
       notFinal: [/^pay now$/i, /^pay later$/i],
+      // EB's own words for an order it won't deliver (as well as any checkout's, in fill.js): Click & Collect then.
+      noHome: [/\bnot in stock for (home )?delivery\b/i, /\bchoose click (&|and) collect to (proceed|continue)\b/i],
       delivery: 'home',
       payment: 'card',
       done: /confirmation|thank-?you|order-?(complete|success)/i,

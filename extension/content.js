@@ -563,6 +563,27 @@
     return true;
   }
 
+  // Click & Collect after all (fill.js collectFallback): the checkout said it can't deliver this order only once
+  // Mugibot was at its final button (EB Games' "not in stock for delivery" can come a moment after Home Delivery's
+  // chosen) — Click & Collect chosen, its store too, then the checkout filled in again from there. Resolves to the
+  // final button as it is now, or null when it stopped (said, and the run told).
+  let lastAssist = null;
+  async function collectNow(fin) {
+    const a = lastAssist;
+    if (!a || !MGBFill.collectNeeded(checkoutFlow, a.cc)) return fin;
+    const r = await MGBFill.collectFallback(a);
+    if (r === 'home_only' || r === 'no_store') { await acoStop('needs_you', r, a.stuck.message, fin); return null; }
+    if (!r) return fin;
+    let next = null;
+    const o = { ...a, onFinal: (f) => { next = f; }, patientMs: 2 * 60 * 1000 };
+    const res = await MGBFill.assist(o);
+    if (res === 'final' && next) return next;
+    if (res === 'done') { await acoReport('placed', '', `Order confirmed at ${retailer.name}`); return null; }
+    if (res === 'stopped') return null;
+    await acoStop('needs_you', o.stuck ? o.stuck.reason : 'needs_details', o.stuck ? o.stuck.message : `Checkout got stuck at ${retailer.name} after choosing Click & Collect — finish it yourself in this tab.`, fin);
+    return null;
+  }
+
   /**
    * At the final button of an Auto-checkout run: the order checked (instant reads only — nothing waited for
    * before pressing), then pressed. And while the store's struggling (a hot drop: it's busy, something went
@@ -571,6 +592,8 @@
    */
   async function acoFinish(run, fin, data) {
     lookLogin();
+    // (The checkout saying now that it can't deliver this order: Click & Collect first.)
+    if (!run.placing) { fin = await collectNow(fin); if (!fin) return; }
     // The store says it won't sell it now (Shop checkout links: "This Product is not available for purchase"): nothing's bought.
     const refused = MGBChecks.unavailable(document, checkoutFlow);
     if (refused) return acoStop('failed', 'sold_out', `${retailer.name} says "${refused}" — nothing was bought.`, fin);
@@ -695,9 +718,19 @@
       // done with whatever it's at (its page loading, a spinner, "Processing…").
       let btn = finalNow(fin);
       let waited = false;
+      let ccAt = 0;
       for (const since = Date.now(); isOff(btn) || stillWorking() || (n > 0 && (finalBusy() || MGBQuick.pageBusy()));) {
         waited = true;
         if (leaving) return;
+        // Off, and the checkout saying (now) it can't deliver this order — EB Games' "not in stock for delivery": Click &
+        // Collect, its store, then the final button as it is after that. (Looked at twice a second; never once pressed.)
+        if (n === 0 && isOff(btn) && Date.now() - ccAt > 500) {
+          ccAt = Date.now();
+          const was = fin;
+          fin = await collectNow(fin);
+          if (!fin) return;
+          if (fin !== was) { btn = finalNow(fin); continue; }
+        }
         if (Date.now() - since > (live ? W.forMs : MGBChecks.RETRY_MS)) return acoStop('needs_you', n > 0 ? 'unconfirmed' : 'needs_details', n > 0 ? `${retailer.name} was still busy with "${fin.text}" after 30 minutes — check your email for an order confirmation before buying it again.` : `"${fin.text}" didn't become available in 30 minutes — check the page and press it yourself.`, fin, total);
         const o = outcome();
         if (o) return said(o, total);
@@ -971,7 +1004,10 @@
         onBeat: run ? beat : null,
         // Home delivery not offered for this order: Click & Collect, said on the run (and in the order's DM).
         onCollect: run ? (c) => ask({ type: 'acoCollect', store: c.store || '', message: `🏬 Click & Collect${c.store ? ` from ${c.store}` : ''} — ${retailer.name} doesn't offer home delivery for this order` }) : null,
+        // (Click & Collect's state on this page: kept for the final button's wait — collectNow.)
+        cc: { on: false, store: '' },
       };
+      lastAssist = assistOpts;
       const result = await MGBFill.assist(assistOpts);
       if (result === 'final' && run && fin) {
         await acoFinish(run, fin, data);

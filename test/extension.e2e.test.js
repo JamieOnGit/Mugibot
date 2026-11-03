@@ -3912,6 +3912,49 @@ test("🏬 Click & Collect when the store doesn't offer home delivery for the or
   }
 });
 
+test("🏬 EB Games' Click & Collect-only order as its real checkout shows it (Nov 2026), signed in and as a guest: Home Delivery first, then — EB saying \"Unfortunately the items below are not in stock for delivery. Please choose Click & Collect to proceed.\" — Click & Collect: your postcode in \"Collect from\", the first suburb it suggests, and EB Games Southlands, the nearest store that has it (Chadstone and Moorabbin are nearer, with none); the order placed, and you're told where to pick it up", async () => {
+  for (const signed of [true, false]) {
+    const label = signed ? 'signed in' : 'as a guest';
+    store.reset();
+    if (signed) store.state.signedIn.ebgames = true;
+    store.shop('ebgames').stockless = true;
+    const name = `ACO EB Click & Collect only ${label}`;
+    await useItems([{ url: store.productUrl('ebgames', '312346'), name, maxPrice: 120 }]);
+    const dmsBefore = discord.dmsTo('d-ash').length;
+    await testRun(name);
+    const run = await runOver(`${label}: the run over`);
+    const S = store.shop('ebgames');
+    assert.equal(run.status, 'placed', `${label}: ${JSON.stringify(run.steps.slice(-5))}`);
+    assert.equal(S.orders.length, 1, `${label}: one order`);
+    const d = S.orders[0].data;
+    assert.deepEqual([d.fulfilment.fulfilment, d.store.fulfilment, d.store.store, d.store.km], ['cnc', 'cnc', 'EB Games Southlands', 1.34], `${label}: Click & Collect from Southlands`);
+    assert.deepEqual([d.ccSearch.typed, d.ccSuburb.suburb], ['2000', 'SYDNEY, NSW 2000'], `${label}: your postcode typed, the first suburb chosen`);
+    assert.ok(S.steps.some((x) => x.step === 'fulfilment' && x.data.fulfilment === 'home') || signed, `${label}: Home Delivery tried first`);
+    assert.ok(run.steps.some((x) => x.message.startsWith('🏬 Click & Collect from EB Games Southlands — ')), `${label}: said on the run: ${JSON.stringify(run.steps.map((x) => x.message))}`);
+    // (In your activity: why, and which store and why that one.)
+    const said = env.app.repo.listEvents(env.app.repo.userByUsername('ash').id, { limit: 60 }).map((e) => e.message);
+    assert.ok(said.some((m) => /🏬 EB Games \(dummy store\) doesn't offer home delivery for this order \("unfortunately the items below are not in stock for delivery/.test(m)), `${label}: why, said: ${JSON.stringify(said.slice(0, 12))}`);
+    assert.ok(said.some((m) => m.includes('🏬 Click & Collect from EB Games Southlands (has it, 1.34 km away — the nearest of 5 stores that has it)')), `${label}: ${JSON.stringify(said.slice(0, 12))}`);
+    await waitFor(() => discord.dmsTo('d-ash').slice(dmsBefore).some((m) => /^✅ Auto-checkout placed your order/.test(m.body.embeds[0].title) && m.body.embeds[0].description.includes('🏬 Click & Collect from EB Games Southlands (no home delivery for this order) — pick it up once')), { message: `${label}: the order's DM says where to pick it up` });
+    await closeStorePages('ebgames');
+  }
+});
+
+test('🏬 EB Games saying it can\'t deliver the order only after Mugibot is at "CONFIRM & PAY" (9 s late — it was waiting for the button to turn on): Click & Collect there and then, its store, and the order placed', async () => {
+  store.reset();
+  store.state.signedIn.ebgames = true;
+  Object.assign(store.shop('ebgames'), { stockless: true, stocklessLateMs: 9000 });
+  const name = 'ACO EB Click & Collect said late';
+  await useItems([{ url: store.productUrl('ebgames', '312346'), name, maxPrice: 120 }]);
+  await testRun(name);
+  const run = await runOver('the run over');
+  const S = store.shop('ebgames');
+  assert.equal(run.status, 'placed', JSON.stringify(run.steps.slice(-5)));
+  assert.equal(S.orders.length, 1);
+  assert.deepEqual([S.orders[0].data.store.fulfilment, S.orders[0].data.store.store], ['cnc', 'EB Games Southlands']);
+  await closeStorePages('ebgames');
+});
+
 test("🏬 your delivery details saying home delivery only: a checkout that doesn't offer it for the order stops for you — nothing bought, and you're told why", async () => {
   await browserApi('PUT', '/api/profiles', { profiles: [{ ...PROFILE_A, collect: false }] });
   try {

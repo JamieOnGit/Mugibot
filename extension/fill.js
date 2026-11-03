@@ -201,6 +201,13 @@ var MGBFill = (function () {
     return shown ? local.replace(/^0/, '') : phone;
   }
 
+  /** The postcode in an address saved without its own ("11 Monterey Dr, Cheltenham VIC 3192"): after its state, else at its end. */
+  function postcodeIn(profile) {
+    var all = [profile.address1, profile.address2, profile.suburb, profile.state].filter(Boolean).join(' ');
+    var m = all.match(/\b(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\b[\s,]*(\d{4})\b/i) || String(profile.suburb || '').match(/\b(\d{4})\s*$/);
+    return m ? m[1] : '';
+  }
+
   /** What we can type, from your delivery details and your saved card. */
   function fieldValues(profile, card) {
     profile = profile || {};
@@ -209,8 +216,8 @@ var MGBFill = (function () {
       fullName: [profile.firstName, profile.lastName].filter(Boolean).join(' '), address1: profile.address1 || '', address2: profile.address2 || '',
       suburb: profile.suburb || '', state: profile.state || '', postcode: profile.postcode || '', country: 'Australia',
       // Click & collect when home delivery isn't offered (on unless your details say home delivery only), near
-      // where you say (else your postcode).
-      collect: profile.collect !== false, collectNear: profile.collectNear || profile.postcode || '',
+      // where you say (else your address's postcode — "3192" — however your address was saved).
+      collect: profile.collect !== false, collectNear: String(profile.collectNear || profile.postcode || postcodeIn(profile) || '').trim(),
     };
     if (card) {
       v.cardNumber = card.number;
@@ -502,10 +509,206 @@ var MGBFill = (function () {
     });
   }
 
+  // --- Home delivery not possible for this order: in any words (Mugibot 2.2) ------------------------------------
+  /** The checkout's words, sentence by sentence (never its header's, footer's or menu's, nor Mugibot's own). */
+  function pageSentences(root) {
+    var text = String((root && root.innerText) || '');
+    toArray((root || document).querySelectorAll('header, footer, nav')).forEach(function (el) {
+      var t = el.innerText || '';
+      if (t) text = text.split(t).join('\n');
+    });
+    ['#mugibot-qc', '#mugibot-banner'].forEach(function (sel) { var el = document.querySelector(sel); if (el && el.innerText) text = text.split(el.innerText).join('\n'); });
+    return text.split(/\n+|(?<=[.!?])\s+/).map(norm).filter(function (t) { return t && t.length < 300; });
+  }
+
+  /** Whether a sentence says this order can't be delivered (and isn't about one kind of delivery, or somewhere it won't go). */
+  function noHomeSaid(t, C) {
+    if (PARTLY_SENT_RE.test(t)) return false;
+    if (NO_HOME_RE.test(t) || NO_HOME_MORE.some(function (re) { return re.test(t); })) return true;
+    return !!(C && C.noHome && any(C.noHome, t));
+  }
+
+  /** Is this box coloured as a warning — red words, or a red or pink background (EB Games': red on pink)? */
+  function warningColoured(el) {
+    var s = getComputedStyle(el);
+    var rgb = function (c) { var m = String(c || '').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/); return m && (m[4] === undefined || parseFloat(m[4]) > 0.2) ? [+m[1], +m[2], +m[3]] : null; };
+    var fg = rgb(s.color);
+    var bg = rgb(s.backgroundColor);
+    return !!((fg && fg[0] >= 150 && fg[1] < 110 && fg[2] < 110) || (bg && bg[0] >= 200 && bg[0] - bg[1] >= 20 && bg[0] - bg[2] >= 15 && bg[1] < 235));
+  }
+
+  /**
+   * The checkout saying, in a warning of its own, that this order can't be delivered — however it words it ("the
+   * items below aren't currently stocked for delivery", "delivery isn't possible for some items"): a box shown as
+   * an alert, error or notice, or coloured as one, whose words are about delivery not being possible.
+   */
+  function warnsNoHome() {
+    var seen = [];
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (var n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!/deliver|ship|postage|collect|pick ?up|stock/i.test(n.nodeValue)) continue;
+      var el = n.parentElement;
+      if (!el || inPanel(el) || el.closest('header, footer, nav, script, style, button, a, label, select, option')) continue;
+      for (var i = 0, box = el; box && box !== document.body && i < 4; i++, box = box.parentElement) {
+        if (seen.indexOf(box) !== -1) break;
+        seen.push(box);
+        var t = norm(box.innerText || '');
+        if (!t || t.length > 300) break;
+        if (!(box.matches(ALERTISH) || warningColoured(box)) || !isVisible(box)) continue;
+        if (pageSentences(box).some(function (x) { return noHomeSaid(x) || (WARN_DELIVERY_RE.test(x) && WARN_NOT_RE.test(x) && WARN_AVAIL_RE.test(x) && !WARN_OTHER_RE.test(x) && !PARTLY_SENT_RE.test(x)); })) return t;
+        break;
+      }
+    }
+    return '';
+  }
+
+  /** The words saying home delivery isn't possible for this order (in the checkout's main part), or ''. */
+  function noHomeWords(C, col) {
+    var area = (col && col.closest('main, [role="main"]')) || document.querySelector('main, [role="main"]') || document.body;
+    var said = pageSentences(area).find(function (t) { return noHomeSaid(t, C); });
+    if (!said && area !== document.body) said = pageSentences(document.body).find(function (t) { return noHomeSaid(t, C); });
+    return said || warnsNoHome();
+  }
+
+  /** The page asking for a store to collect from, in a warning ("Please select a store to check for availability"). */
+  function storeAsked() {
+    return toArray(document.querySelectorAll(ALERTISH)).some(function (el) {
+      if (inPanel(el) || el.closest('header, footer, nav') || !isVisible(el)) return false;
+      var t = norm(el.innerText || '');
+      return t.length < 200 && STORE_ASK_RE.test(t);
+    });
+  }
+
+  // --- The store to collect from: the one that has it, nearest first --------------------------------------------
+  /** A store's distance in km from its line ("1.34km away", "850 m away"), or Infinity. */
+  function kmIn(t) {
+    var m = String(t).match(KM_RE);
+    if (m) return parseFloat(m[1].replace(',', '.'));
+    m = String(t).match(METRES_RE);
+    return m ? parseFloat(m[1]) / 1000 : Infinity;
+  }
+
+  /**
+   * Whether a store has your order, from its line: 0 all of it ("available", "In stock", "2 of 2 items available"),
+   * 1 some of it ("1 of 2 items available") or not for a few days, 2 not said, 3 none of it ("Unavailable",
+   * "0 of 1 items available", "Out of stock").
+   */
+  function stockAt(t) {
+    t = norm(t);
+    var m = t.match(/\b(\d+)\s*(?:of|\/)\s*(\d+)\s*(?:items?|products?|units?)?\s*(?:are |is )?(?:available|in stock)\b/);
+    if (m) return +m[1] === 0 ? 3 : +m[1] >= +m[2] ? 0 : 1;
+    if (/\b(unavailable|not available|not in stock|out of stock|no stock|sold out|none available|not stocked|0 available)\b/.test(t)) return 3;
+    if (/\b(available|ready) (in|within|from) \d|\btransfer\b|\bin \d+\s?(-|to)?\s?\d* (business )?days?\b|\bsome items\b|\bpartial/.test(t)) return 1;
+    if (/\b(available|in stock|limited stock|low stock|ready (for|to) (pick ?up|collect(ion)?)|ready today|ready now)\b/.test(t)) return 0;
+    return 2;
+  }
+
+  /** A store's name from its line: its own lines, without its hours, stock, distance or buttons ("EB Games Southlands"). */
+  function rowName(row, skip) {
+    var lines = String(row.innerText || '').split(/\n|\s[|·•–—]\s/).map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).filter(function (l) {
+      var t = norm(l);
+      return t && t.length <= 60 && (!skip || l !== skip) && !STORE_PICK_RE.test(t) && kmIn(l) === Infinity && stockAt(l) === 2
+        && !/\d(:\d\d)?\s?(am|pm)\b|\b(open|opens|closed|closes|hours|today|tomorrow)\b|^\W*$|^\d+\s*(of|\/)\s*\d+/.test(t);
+    });
+    // (A brand line and the store's own — "EB Games", "Southlands" — together; one line that's the whole name, alone.)
+    var name = lines[0] && lines[1] && lines[0].split(' ').length <= 4 && !/\d/.test(lines[1]) && lines[1].length <= 30 ? lines[0] + ' ' + lines[1] : lines[0] || '';
+    if (!name) {
+      // (All on one line — "EB Games Preston available 1.10 km away": its words up to the first of the rest.)
+      var one = String(row.innerText || '').replace(/\s+/g, ' ').trim();
+      if (skip) one = one.split(skip).join(' ').trim();
+      var cut = one.search(/\b(\d+(?:[.,]\d+)?\s?(?:km|kms|kilomet\w*|m away)|available|unavailable|in stock|out of stock|open|closed|\d+\s*(?:of|\/)\s*\d+|\d{1,2}(?::\d\d)?\s?(?:am|pm))/i);
+      name = (cut > 0 ? one.slice(0, cut) : '').replace(/[\s·|•–—,:-]+$/, '').trim();
+    }
+    return name.slice(0, 80);
+  }
+
+  /**
+   * What to press to choose this store: its own "Select", its radio, else the line itself (EB Games' rows) — the
+   * line as the page marks it pressable (a list item, an option, a button), or the biggest box around its distance
+   * that shows a hand to press it with.
+   */
+  function rowTarget(row, kmEl) {
+    var b = toArray(row.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]')).find(function (x) { return isVisible(x) && !x.disabled && STORE_PICK_RE.test(norm(textOf(x))); });
+    if (b) return b;
+    var r = row.querySelector('input[type="radio"]');
+    if (r && !r.disabled) return r;
+    var marked = row.closest('[role="option"], [role="radio"], [role="button"], [role="listitem"], li, label, button, a, [tabindex], tr');
+    if (marked) return marked;
+    var hand = null;
+    for (var x = kmEl; x && row.contains(x); x = x.parentElement) if (getComputedStyle(x).cursor === 'pointer') hand = x;
+    return hand || row;
+  }
+
+  /**
+   * The stores the order can be collected from, as the page lists them: each store's own line — around its "Select",
+   * or around its distance ("1.34km away": the biggest box holding no other store's) — with its name, distance,
+   * stock (stockAt) and what to press.
+   */
+  function storeChoices() {
+    var rows = [];
+    var add = function (row) { if (row && rows.indexOf(row) === -1 && !rows.some(function (r) { return r.contains(row); })) { rows = rows.filter(function (r) { return !row.contains(r); }); rows.push(row); } };
+    buttonsMatching(STORE_PICK_RE).forEach(function (b) {
+      var row = b.closest(STORE_ROW);
+      var t = row ? norm(row.innerText || '') : '';
+      if (row && t.length <= 300 && STORE_ITEM_RE.test(t)) add(row);
+    });
+    var count = function (el) { return (String(el.innerText || '').match(KM_ALL_RE) || []).length; };
+    var kmEls = new Map();
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (var n = walker.nextNode(); n; n = walker.nextNode()) {
+      // (Only a distance's own words — "1.34km away", or "km away" beside its number — never a price or a date.)
+      if (!/km|kilomet|met(re|er)s?\b|\baway\b/i.test(n.nodeValue)) continue;
+      var el = n.parentElement;
+      // (Its distance in it, or in the box just around it — "1.34" and "km away" apart — and no other store's.)
+      for (var up = 0; el && el !== document.body && up < 2 && kmIn(el.innerText || '') === Infinity; up++) el = el.parentElement;
+      if (!el || el === document.body || count(el) !== 1 || inPanel(el) || el.closest('header, footer, nav, script, style') || !isVisible(el)) continue;
+      // (Never past the list itself — one store listed is still one line of it — nor into the box it was found with.)
+      var row = el;
+      var kmEl = el;
+      while (row.parentElement && row.parentElement !== document.body && !LIST_BOX.test(row.parentElement.tagName) && !row.parentElement.matches(LIST_ROLE)
+        && count(row.parentElement) === 1 && (row.parentElement.innerText || '').length <= 400
+        && !row.parentElement.querySelector('input:not([type="radio"]):not([type="hidden"]), select, textarea')) row = row.parentElement;
+      if (rows.indexOf(row) === -1) kmEls.set(row, kmEl);
+      add(row);
+    }
+    return rows.filter(function (r) { return isVisible(r); }).map(function (row) {
+      var target = rowTarget(row, kmEls.get(row));
+      var t = row.innerText || '';
+      return { row: row, target: target, name: rowName(row, target !== row ? textOf(target) : ''), km: kmIn(t), stock: stockAt(t), loading: /\b(checking|loading|fetching)\b/i.test(t), order: rows.indexOf(row) };
+    });
+  }
+
+  /** The store to collect from: one that has it all, else some of it, else one that doesn't say — the nearest of them. */
+  function bestStore(list) {
+    return list.filter(function (s) { return s.stock < 3; }).sort(function (a, b) { return a.stock - b.stock || a.km - b.km || a.order - b.order; })[0] || null;
+  }
+
+  /** Suggestions under a box you type in (EB Games' suburbs for a postcode — "CHELTENHAM, VIC 3192"), in the order shown. */
+  function suggestionsShown() {
+    return toArray(document.querySelectorAll(SUGGESTIONS)).filter(function (o) {
+      var t = (o.innerText || '').trim();
+      return isVisible(o) && !inPanel(o) && t.length >= 3 && t.length < 120 && kmIn(t) === Infinity && !o.closest('header, footer, nav');
+    });
+  }
+
+  function press(el) {
+    ['mousedown', 'mouseup'].forEach(function (t) { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); });
+    el.click();
+  }
+
+  /** A box for finding stores to collect from, on the page now. */
+  function storeBox() {
+    return toArray(document.querySelectorAll('input')).find(function (el) { return !inPanel(el) && isVisible(el) && !el.disabled && isStoreBox(el); }) || null;
+  }
+
   /**
    * One step of click & collect, when home delivery isn't offered for this order (assist's loop; cc: its state —
-   * allowed, on, store, …). Returns 'home_only' (your details say home delivery only), 'acted' (something was
-   * chosen, clicked or typed: the page gets a moment), or null (nothing to do).
+   * allowed, on, store, …). Home delivery first, always: Click & Collect only once the checkout says it can't deliver
+   * this order — its home delivery switched off or not there, or its words (in any wording: noHomeWords). Then the
+   * store: your postcode typed into its box ("Collect from"), the first suburb it suggests, and of the stores it lists
+   * the nearest one that has it (stock first, then the km). Returns 'home_only' (your details say home delivery
+   * only), 'no_store' (no store near you has it), 'acted' (something was chosen, clicked or typed: the page gets a
+   * moment), or null (nothing to do).
    */
   async function collectStep(cc, C, values, fill, say) {
     if (C.collect === false || C.delivery === 'collect') return null;
@@ -520,47 +723,74 @@ var MGBFill = (function () {
       var off = offer.home.length > 0 && offer.home.every(choiceOff);
       // (Not there at all — no home choice and no home radio — once the page has had a couple of seconds to draw it.)
       var missing = !offer.home.length && !homeRadio() && Date.now() - cc.since > 2000;
-      // (What the checkout says about it — Shopify's "Your order cannot be shipped", under its shipping methods.)
-      var area = col.closest('form, main, [role="main"]') || document.body;
-      var says = NO_HOME_RE.test(norm(area.innerText || ''));
+      // (What the checkout says about it — Shopify's "Your order cannot be shipped", EB Games' "not in stock for delivery".)
+      var says = off || missing ? '' : noHomeWords(C, col);
       if (!(off || missing || says)) return null;
       if (!values.collect) return 'home_only';
       cc.on = true;
+      cc.why = says || '';
       say('on');
       if (!isChosen(col)) {
         var input = col.matches('label') ? (col.htmlFor ? document.getElementById(col.htmlFor) : col.querySelector('input[type="radio"]')) : null;
-        (input || col).click();
+        press(input || col);
       }
       await wait(400);
       return 'acted';
     }
-    // Collecting: the store to collect from — a store's "Select" in the list (nearest first), else find the stores near
-    // you (your postcode, or where your details say), else open the store finder.
-    if (cc.store) return null;
-    var rowOf = function (b) {
-      var row = b.closest(STORE_ROW);
-      var t = row ? norm(row.innerText || '') : '';
-      return row && t.length <= 300 && STORE_ITEM_RE.test(t) ? row : null;
-    };
-    var pick = buttonsMatching(STORE_PICK_RE).find(rowOf);
-    if (pick) {
-      var row = rowOf(pick);
-      var words = (row.innerText || '').replace(textOf(pick), ' ');
-      cc.store = storeName(words) || 'the nearest store';
-      pick.click();
+    // Collecting: the store to collect from. (Chosen, but the page still asking for one: chosen again — at most 3 times.)
+    if (cc.store && !((cc.picks || 0) > 0 && (cc.picks || 0) < 3 && storeAsked() && storeChoices().length)) return null;
+    var near = values.collectNear;
+    var box = storeBox();
+    var list = storeChoices();
+    // (Stores listed near somewhere else — a search from before — searched again, near you.)
+    var elsewhere = box && near && list.length && !cc.searched && norm(box.value).indexOf(norm(near)) === -1;
+    if (list.length && !elsewhere) {
+      // (Their stock still being looked up: a moment.)
+      if (list.some(function (s) { return s.loading; }) && (cc.loads || 0) < 20) { cc.loads = (cc.loads || 0) + 1; await wait(250); return 'acted'; }
+      var best = bestStore(list);
+      if (!best) { cc.noStore = list.length; return 'no_store'; }
+      cc.picks = (cc.picks || 0) + 1;
+      cc.store = best.name || 'the nearest store';
+      cc.storeNote = [best.stock === 0 ? 'has it' : best.stock === 1 ? 'has some of it' : '', best.km < Infinity ? (Math.round(best.km * 100) / 100) + ' km away' : ''].filter(Boolean).join(', ');
+      cc.storeOf = list.length;
+      press(best.target);
       say('store');
       await wait(500);
       return 'acted';
     }
-    var box = toArray(document.querySelectorAll('input')).find(function (el) { return !inPanel(el) && isVisible(el) && !el.disabled && isStoreBox(el); });
-    if (box && (cc.searched || 0) < 2 && values.collectNear) {
+    if (box && (cc.searched || 0) < 3 && near) {
       cc.searched = (cc.searched || 0) + 1;
-      if (box.value !== values.collectNear) { if (box.value) setNative(box, ''); typeInto(box, values.collectNear, 'storeSearch', true); }
-      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-      var near = box.closest(STORE_AREA + ', form, section') || document;
-      var go = toArray(near.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]')).find(function (b) { return isVisible(b) && !b.disabled && STORE_SEARCH_RE.test(norm(textOf(b))); });
-      if (go) go.click();
-      await wait(800);
+      // (The stores listed before — near somewhere else — aren't the answer: only a list that's new. Nor is anything
+      //  that looked like a suggestion before typing.)
+      var before = list.map(function (x) { return x.row; });
+      var had = suggestionsShown();
+      if (box.value !== near) { if (box.value) setNative(box, ''); typeInto(box, near, 'storeSearch', true); }
+      box.dispatchEvent(new KeyboardEvent('keyup', { key: near.slice(-1), bubbles: true }));
+      // Its suggestions as you type (EB Games': the suburbs for your postcode — the first one), or its stores; else
+      // Enter and its search button, as a store finder takes it (Kmart's).
+      // (A box that suggests as you type — a combobox, EB Games' — gets a moment for its suggestions before Enter.)
+      var entered = false;
+      var enterAt = Date.now() + (isSuggestBox(box) ? 1500 : 0);
+      for (var end = Date.now() + 6000; Date.now() < end;) {
+        await wait(150);
+        var sug = suggestionsShown().filter(function (o) { return had.indexOf(o) === -1; });
+        if (sug.length) {
+          var first = sug[0];
+          cc.near = (first.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+          press(first);
+          say('near');
+          await wait(600);
+          return 'acted';
+        }
+        if (storeChoices().some(function (x) { return before.indexOf(x.row) === -1; })) return 'acted';
+        if (!entered && Date.now() >= enterAt) {
+          entered = true;
+          box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          var area = box.closest(STORE_AREA + ', form, section') || document;
+          var go = toArray(area.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]')).find(function (b) { return isVisible(b) && !b.disabled && STORE_SEARCH_RE.test(norm(textOf(b))); });
+          if (go) go.click();
+        }
+      }
       return 'acted';
     }
     var open = (cc.opened || 0) < 2 ? buttonsMatching(STORE_OPEN_RE)[0] : null;
@@ -571,6 +801,19 @@ var MGBFill = (function () {
       return 'acted';
     }
     return null;
+  }
+
+  /**
+   * Does this checkout want Click & Collect from Mugibot now (content.js, while waiting on its final button)? The
+   * checkout saying, after all, that it can't deliver this order — or Click & Collect on, and no store chosen yet.
+   */
+  function collectNeeded(C, cc) {
+    C = C || {};
+    if (C.collect === false || C.delivery === 'collect' || !cc) return false;
+    if (cc.on) return !cc.store ? !!(storeBox() || storeChoices().length) : (cc.picks || 0) < 3 && storeAsked() && storeChoices().length > 0;
+    var offer = deliveryOffer();
+    var col = offer.collect.find(function (h) { return !choiceOff(h); });
+    return !!(col && ((offer.home.length > 0 && offer.home.every(choiceOff)) || noHomeWords(C, col)));
   }
 
   var COLLECT_RE = /collect|pick ?up|in-?store|click (&|and) collect/;
@@ -586,13 +829,52 @@ var MGBFill = (function () {
   // (What a checkout says when it won't deliver this order — never "Express delivery unavailable to your area".)
   var NO_HOME_RE = /\b(not available|unavailable|not eligible|ineligible) for (home )?(delivery|shipping)\b|\bhome delivery (is )?(not available|unavailable)\b|\bhome delivery isn.?t available\b|\b(order|item|items|product|products) (can(not|.?t)|is not|isn.?t|are not|aren.?t) (be )?(delivered|shipped)\b|\bno (shipping|delivery) (options|methods|rates)( are)? available\b|\b(click (&|and) collect|pick ?up|collect in[- ]?store|in-?store pick ?up)( is)? only\b(?! (available )?(at|from|in) )|\bonly available (for|via|with|as) (click (&|and) collect|pick ?up|in-?store)|\bwe (don.?t|do not) (ship|deliver) (this|these)\b/;
   var PARTLY_RE = /\b(express|same.?day|next.?day|priority|overnight)\b[^.]{0,25}\b(not available|unavailable)\b/;
+  // More of how checkouts say it, in any words (Mugibot 2.2 — EB Games', Nov 2026: "Unfortunately the items below are
+  // not in stock for delivery. Please choose Click & Collect to proceed."): not in stock, not available or out of stock
+  // for delivery; delivery not possible; can't be delivered; asked to choose Click & Collect to go on; collect only.
+  var CC_WORDS = '(click (&|and) collect|pick ?up|collect(ion)? in[- ]?store|in[- ]?store (pick ?up|collection)|store (pick ?up|collection))';
+  var NO_HOME_MORE = [
+    /\b(not|no longer|isn.?t|aren.?t|currently not|not currently)( currently)? (in stock|stocked|available|eligible|offered|deliverable) (for|to|via|with|by) (home |standard )?(delivery|deliver|shipping|ship|postage|post)\b/,
+    /\b(out of stock|no stock|insufficient stock|sold out|unavailable|ineligible) (for|to|via|with|by) (home |standard )?(delivery|deliver|shipping|ship|postage)\b/,
+    /\bno (home |online )?(delivery|shipping) stock\b/,
+    /\b(home |standard )?(delivery|shipping|postage) (is |are )?(currently )?(not available|unavailable|not possible|not offered|not supported|disabled)\b/,
+    /\b(home |standard )?(delivery|shipping) (isn.?t|aren.?t) (currently )?(available|possible|offered)\b/,
+    /\b(can(not|.?t)|unable to|not able to|won.?t) (be )?(deliver(ed)?|ship(ped)?|posted|sent)\b(?! ((to|outside|within) (this|your|the|that|some|po|p o|parcel|rural|remote|certain|selected|international|overseas)|until|before|after|on|today|tomorrow|the same|same)\b)/,
+    new RegExp('\\b(please|you (must|need to|will need to|.?ll need to)|need to|kindly) (choose|select|use|switch to|change to|pick|try|opt for) ' + CC_WORDS + '\\b'),
+    new RegExp('\\b(choose|select|use|switch to|change to|pick) ' + CC_WORDS + ' (to|in order to) (proceed|continue|check ?out|complete|place|order|purchase)\\b'),
+    new RegExp('\\b(available|eligible) (for|via|with|as) ' + CC_WORDS + ' only\\b'),
+    /\b(can only|must|will need to|need to) be (collected|picked up)\b/,
+    /\bonly available (in[- ]?store|in store|for (in[- ]?store|store) (pick ?up|collection))\b/,
+  ];
+  // (A sentence about one kind of delivery, a place it doesn't go, or what it costs — "Express delivery isn't
+  //  available for this postcode", "We can't deliver to PO Boxes", "Free delivery isn't available under $50" — isn't
+  //  about this order.)
+  var PARTLY_SENT_RE = /\b(express|same.?day|next.?day|priority|overnight|international|overseas|free (home )?(delivery|shipping)|po box(es)?|p o box|parcel lockers?|rural|remote|bulky|oversized|public holidays?|weekends?|(mon|tues|wednes|thurs|fri|satur|sun)days?|gift ?wrap\w*|after ?pay|zip ?pay|gift cards?)\b/;
+  // (A warning's words about delivery not being possible, however put: these three together, never about the address.)
+  var WARN_DELIVERY_RE = /\b(deliver(y|ed|ing)?|shipping|ship(ped)?|postage|posted)\b/;
+  var WARN_NOT_RE = /\b(not|no longer|never|unavailable|unable|ineligible|out of stock|no stock|sold out|(isn|aren|wasn|weren|don|doesn|didn|can|couldn|won|wouldn|hasn|haven) ?'? ?t)\b/;
+  var WARN_AVAIL_RE = /\b(in stock|stock(ed)?|availab\w*|unavailable|eligible|ineligible|possible|offered|deliverable|deliver(ed)?|ship(ped)?)\b/;
+  var WARN_OTHER_RE = /\b(address|postcode|post code|suburb|street|enter|valid|required|calculat\w*|estimat\w*|guarantee\w*|date|time|fee|cost|price)\b/;
+  // Boxes a page shows as a warning (what warnsNoHome and storeAsked read).
+  var ALERTISH = '[role="alert"], [role="status"], [aria-live], [class*="error" i], [class*="alert" i], [class*="warn" i], [class*="danger" i], [class*="notice" i], [class*="notification" i], [class*="message" i], [class*="banner" i], [class*="callout" i], [class*="invalid" i]';
+  // (A store still to choose: "Please select a store to check for availability".)
+  var STORE_ASK_RE = /\b(please )?(select|choose|pick) (a |your )?(store|pick ?up (store|location|point)|collection (store|point)|location)\b/;
+  // A store's distance: "1.34km away", "12 km", "850 m away".
+  var KM_RE = /(\d+(?:[.,]\d+)?)\s?(?:km|kms|kilomet(?:re|er)s?)\b/i;
+  var KM_ALL_RE = /\d+(?:[.,]\d+)?\s?(?:km|kms|kilomet(?:re|er)s?)\b|\d+\s?(?:m|metres?|meters?)\s+away\b/gi;
+  var METRES_RE = /(\d+)\s?(?:m|metres?|meters?)\s+away\b/i;
+  // (A list of stores: its own lines are the stores — never the list itself.)
+  var LIST_BOX = /^(UL|OL|TBODY|TABLE|SELECT|DL)$/;
+  var LIST_ROLE = '[role="list"], [role="listbox"], [role="radiogroup"], [role="grid"]';
   // The store to collect from: its "Select" in a list of stores, a box to find stores near a postcode, the button that opens them.
   var STORE_PICK_RE = /^((select|choose|pick)( this)?( store)?|collect (from )?(here|this store)|pick ?up (from )?here|set as (my )?(preferred )?store|use this store|collect here|make (this )?my store)$/;
   // (A store's own line in the list it's picked from: one store's card, not the whole finder.)
   var STORE_ROW = 'li, article, tr, [role="option"], [role="listitem"], [class*="store" i], [class*="location" i], [class*="result" i]';
   var STORE_OPEN_RE = /^((select|choose|find|pick|change)( a| your)? (store|pick ?up (store|location|point)|collection (store|point)|location)|find (a )?store( near (me|you))?)$/;
   var STORE_SEARCH_RE = /^(search|find|go|find stores?|search stores?|look ?up|show stores)$/;
-  var STORE_BOX_RE = /\bstores?\b|postcode or suburb|suburb or postcode|\blocation\b|near (me|you)|find a/;
+  var STORE_BOX_RE = /\bstores?\b|postcode or suburb|suburb or postcode|\blocation\b|near (me|you)|find a|collect (from|at|in)\b|pick ?up (from|at)\b/;
+  // (A box that's only ever for finding a store — EB Games' "Collect from": never typed your address into.)
+  var COLLECT_BOX_RE = /collect (from|at|in)\b|pick ?up (from|at|location|store)|\bstores? near\b|find (a )?store|store (finder|search|locator)/;
   var STORE_ITEM_RE = /\bstores?\b|\bkm\b|\d ?km\b|\bopen\b|\bready\b|pick ?up|collect|\b\d{4}\b|\b(nsw|vic|qld|wa|sa|tas|act|nt)\b/;
   var STORE_AREA = '[role="dialog"], [aria-modal="true"], [class*="store" i], [id*="store" i], [class*="pickup" i], [id*="pickup" i], [class*="collect" i], [id*="collect" i], [class*="location" i]';
   // Payments that aren't the card (a store's default can be one): switched to the card when the flow pays by card.
@@ -712,6 +994,8 @@ var MGBFill = (function () {
         }
         if (isStoreBox(el)) return;
       }
+      // (A box only ever for finding a store — EB Games' "Collect from" — never gets your address, collecting or not.)
+      if (!opts.onlyCard && el.tagName === 'INPUT' && isStoreBox(el) && COLLECT_BOX_RE.test(describe(el))) return;
       var kind = fieldKind(el, C, ctx);
       if (!kind) return;
       out.kinds[kind] = true;
@@ -868,6 +1152,8 @@ var MGBFill = (function () {
     b.textContent = message;
   }
 
+  // (A final button still off at the end of the fill: this long for the checkout to say it can't deliver the order.)
+  var FINAL_OFF_MS = 6000;
   var SUGGESTIONS = '[role="option"], [role="listbox"] li, .pac-item, [class*="suggest" i] li, [class*="suggest" i] [class*="item" i], [class*="autocomplete" i] li, [class*="address-result" i], [class*="addressResult" i], [id*="listbox" i] li';
 
   /** The address-lookup box on the page (the one-line "start typing your address" box), or null. */
@@ -954,6 +1240,71 @@ var MGBFill = (function () {
   }
 
   /**
+   * What's said about Click & Collect, once each (opts: assist's — report, setStatus, storeName, onCollect, stuck): it's
+   * on, and why; where it's near ("SYDNEY, NSW 2000"); the store chosen; or, stopped, why (homeOnly, noStore).
+   */
+  function collectTalk(cc, opts) {
+    var report = opts.report || function () {};
+    var setStatus = opts.setStatus || function () {};
+    var name = opts.storeName || 'The store';
+    var stop = function (reason, msg) {
+      setStatus(msg);
+      report('error', msg);
+      opts.stuck = { reason: reason, message: msg };
+      return 'needs_you';
+    };
+    return {
+      say: function (what) {
+        if (what === 'on' && !cc.saidOn) {
+          cc.saidOn = true;
+          report('step', '🏬 ' + name + ' doesn\'t offer home delivery for this order' + (cc.why ? ' ("' + cc.why.slice(0, 120) + '")' : '') + ' — Click & Collect chosen instead');
+          setStatus('Home delivery isn\'t offered for this order — choosing Click & Collect…');
+          if (opts.onCollect) opts.onCollect({ store: cc.store || '' });
+        } else if (what === 'near' && cc.near && cc.saidNear !== cc.near) {
+          cc.saidNear = cc.near;
+          report('step', '🏬 Looking for stores near ' + cc.near);
+          setStatus('Click & Collect: stores near ' + cc.near + '…');
+        } else if (what === 'store' && cc.store && cc.saidStore !== cc.store) {
+          cc.saidStore = cc.store;
+          report('step', '🏬 Click & Collect from ' + cc.store + (cc.storeNote ? ' (' + cc.storeNote + (cc.storeOf > 1 ? ' — the nearest of ' + cc.storeOf + ' stores that has it' : '') + ')' : ''));
+          setStatus('Click & Collect from ' + cc.store + '…');
+          if (opts.onCollect) opts.onCollect({ store: cc.store });
+        }
+      },
+      homeOnly: function () {
+        return stop('home_only', name + ' doesn\'t offer home delivery for this order, and your delivery details say home delivery only — choose Click & Collect yourself if you want it.');
+      },
+      noStore: function () {
+        return stop('no_store', name + ' doesn\'t offer home delivery for this order, and none of the ' + (cc.noStore || '') + ' stores near ' + (cc.near || 'you') + ' has it for Click & Collect — nothing bought. Pick a store further away yourself if you want it.');
+      },
+    };
+  }
+
+  /**
+   * Click & Collect from content.js, once the checkout's said (after Mugibot got to its final button) that it can't
+   * deliver this order: chosen, its store found and chosen — a few seconds at most. opts: assist's, with its cc.
+   * Resolves to 'collecting' (done what it could), 'home_only' or 'no_store' (stopped: opts.stuck says why), or null.
+   */
+  async function collectFallback(opts) {
+    var C = opts.flow || {};
+    var cc = opts.cc;
+    if (!cc) return null;
+    var talk = collectTalk(cc, opts);
+    var acted = false;
+    for (var end = Date.now() + 20000; Date.now() < end;) {
+      if (opts.isActive && !opts.isActive()) return null;
+      var fill = fillFields(document, opts.values, { flow: C, collect: cc });
+      var step = await collectStep(cc, C, opts.values, fill, talk.say);
+      if (step === 'home_only') { talk.homeOnly(); return 'home_only'; }
+      if (step === 'no_store') { talk.noStore(); return 'no_store'; }
+      if (!step) break;
+      acted = true;
+    }
+    if (acted) fillFields(document, opts.values, { flow: C, collect: cc });
+    return acted ? 'collecting' : null;
+  }
+
+  /**
    * Walk through the checkout. opts: { values, flow (the store's checkout flow), storeName, setStatus, report, isActive(), hasCard, cardIssue,
    *   auto: an Auto-checkout run — at the final button, onFinal({ el, text }) is called and 'final' returned (nothing highlighted) }
    * Resolves to 'ready' | 'final' | 'needs_you' | 'stopped' | 'timeout' | 'done'.
@@ -982,26 +1333,10 @@ var MGBFill = (function () {
       opts.onBeat(text);
     };
     // Click & collect, when home delivery isn't offered for this order (collectStep): said once, and the store once it's known.
-    var cc = { on: false, store: '' };
-    var say = function (what) {
-      if (what === 'on' && !cc.saidOn) {
-        cc.saidOn = true;
-        report('step', '🏬 ' + (opts.storeName || 'The store') + ' doesn\'t offer home delivery for this order — Click & Collect chosen instead');
-        setStatus('Home delivery isn\'t offered for this order — choosing Click & Collect…');
-        if (opts.onCollect) opts.onCollect({ store: cc.store || '' });
-      } else if (what === 'store' && cc.store && cc.saidStore !== cc.store) {
-        cc.saidStore = cc.store;
-        report('step', '🏬 Click & Collect from ' + cc.store);
-        if (opts.onCollect) opts.onCollect({ store: cc.store });
-      }
-    };
-    var homeOnly = function () {
-      var msg = (opts.storeName || 'The store') + ' doesn\'t offer home delivery for this order, and your delivery details say home delivery only — choose Click & Collect yourself if you want it.';
-      setStatus(msg);
-      report('error', msg);
-      opts.stuck = { reason: 'home_only', message: msg };
-      return 'needs_you';
-    };
+    // (opts.cc: kept by the page across runs of this — content.js asks again while it waits on the final button.)
+    var cc = opts.cc || { on: false, store: '' };
+    var talk = collectTalk(cc, opts);
+    var say = talk.say;
     setStatus('Filling in checkout…');
     while (Date.now() < deadline) {
       if (opts.isActive && !opts.isActive()) { setStatus('Stopped.'); return 'stopped'; }
@@ -1020,7 +1355,8 @@ var MGBFill = (function () {
       // Home delivery not offered for this order: click & collect (and the store to collect from) — or, your details
       // saying home delivery only, it's for you.
       var cstep = await collectStep(cc, C, opts.values, fill, say);
-      if (cstep === 'home_only') return homeOnly();
+      if (cstep === 'home_only') return talk.homeOnly();
+      if (cstep === 'no_store') return talk.noStore();
       if (cstep) { idle = 0; continue; }
       var list = buttons(C);
       var finals = list.filter(function (b) { return b.kind === 'final'; });
@@ -1096,6 +1432,11 @@ var MGBFill = (function () {
           await wait(200);
           continue;
         }
+        // The final button still off, with Click & Collect on offer and no store chosen: the checkout may yet say it
+        // can't deliver this order (EB Games' "not in stock for delivery" comes up a moment after Home Delivery is
+        // chosen) — looked for a few seconds more, Click & Collect chosen if so, before the final wait.
+        if (!finals.some(function (b) { return !b.disabled; }) && !cc.store && C.collect !== false && C.delivery !== 'collect'
+          && Date.now() - finalAt < FINAL_OFF_MS && deliveryOffer().collect.length) { await wait(250); continue; }
         await wait(200); // let the last fields settle
         fillFields(document, opts.values, { flow: C, collect: cc });
         var fin = finals.find(function (b) { return !b.disabled; }) || finals[0];
@@ -1162,6 +1503,12 @@ var MGBFill = (function () {
     fieldValues: fieldValues,
     fillFields: fillFields,
     assist: assist,
+    collectNeeded: collectNeeded,
+    collectFallback: collectFallback,
+    // (For tests: how a checkout's words and its list of stores are read.)
+    noHomeWords: function (C) { return noHomeWords(C || {}, null); },
+    storeChoices: function () { return storeChoices().map(function (s) { return { name: s.name, km: s.km, stock: s.stock, target: s.target.tagName.toLowerCase() }; }); },
+    bestStore: function () { var b = bestStore(storeChoices()); return b ? { name: b.name, km: b.km, stock: b.stock } : null; },
     CARD_KINDS: CARD_KINDS,
   };
 })();

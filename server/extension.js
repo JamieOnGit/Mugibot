@@ -123,6 +123,11 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // the product page's own per-customer limit, drop-down, box or + button decide how many go in the bag, never more than
 // the run says. And your store sign-ins checked at every store, each one that's signed out shown on the toolbar button
 // with a "Sign in" button in the popup. Nothing else changed in how searches or checkouts go.
+// 1.41.0: Click & Collect when a checkout won't deliver the order, however it says so (EB Games' Click & Collect-only
+// pre-orders: "Unfortunately the items below are not in stock for delivery. Please choose Click & Collect to proceed."),
+// even said only once Mugibot is at the final button — your postcode in its store box ("Collect from"), the first
+// suburb it suggests, and of the stores it lists the one that has it, nearest by its km. Home delivery is still always
+// tried first. An older copy waits on the final button there. Nothing else changed in how searches or checkouts go.
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that buys "as many as the store allows" (an older copy is asked for one).
 export const MOST_EXTENSION_VERSION = '1.40.0';
