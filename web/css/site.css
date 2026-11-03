@@ -1035,8 +1035,8 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 .home-card .card-head h3 { margin: 0; }
 .meter { height: 6px; background: var(--surface-2); border-radius: 99px; overflow: hidden; margin: 10px 0 8px; }
 .meter span { display: block; height: 100%; width: 0; background: var(--grad); transition: width .4s; }
-.checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.checklist li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid transparent; }
+.checklist { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.checklist li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid transparent; min-width: 0; }
 .checklist li.todo { border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
 .checklist .ck { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--surface); font-size: 14px; }
 .checklist li.done .ck { background: var(--ok-bg); color: var(--ok); font-weight: 800; }
@@ -1058,7 +1058,9 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 .store-grid .store.off { opacity: .55; }
 .table.compact td, .table.compact th { padding: 6px 8px; font-size: 13px; }
 .recent { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
-.recent li { display: flex; gap: 10px; font-size: 13px; padding: 7px 9px; border-radius: 9px; background: var(--surface-2); border-left: 3px solid var(--line); }
+.recent { grid-template-columns: minmax(0, 1fr); }
+.recent li { display: flex; gap: 10px; font-size: 13px; padding: 7px 9px; border-radius: 9px; background: var(--surface-2); border-left: 3px solid var(--line); min-width: 0; }
+.recent .tx { min-width: 0; overflow-wrap: anywhere; }
 .recent li.urgent { border-left-color: var(--err); }
 .recent li.warn { border-left-color: var(--warn); }
 .recent li.success { border-left-color: var(--ok); }
@@ -1074,3 +1076,7 @@ h2, .main h2, .mon-title h2 { font-weight: 800; letter-spacing: -.02em; }
 
 @media (min-width: 901px) { .jump { flex-wrap: wrap; overflow-x: visible; } }
 .home-card { min-width: 0; }
+
+.store-grid { grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); }
+.stat-row .stat { min-width: 0; }
+@media (max-width: 520px) { #home-task-table th:nth-child(3), #home-task-table td:nth-child(3), #home-task-table th:nth-child(4), #home-task-table td:nth-child(4) { display: none; } }
