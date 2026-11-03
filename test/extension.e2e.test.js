@@ -4918,6 +4918,8 @@ test("🚦 EB Games' virtual queue: an Auto-checkout run opens the store into th
   await useItems([{ url: store.productUrl('ebgames', '312346'), name: 'ACO EB queue', maxPrice: 120 }]);
   const S = store.shop('ebgames');
   Object.assign(S.queue, { on: true, admitAfterMs: 9000, refreshMs: 1500, tooSoonMs: 900, wait: 23 });
+  // (Its queue put back however it ends — a failure here never leaves the next tests in EB's line.)
+  try {
   await testRun('ACO EB queue');
   await waitFor(async () => (await lastRun()).status === 'waiting', { timeout: 30000, message: 'the run waiting in the queue' });
   const waiting = await lastRun();
@@ -4943,7 +4945,10 @@ test("🚦 EB Games' virtual queue: an Auto-checkout run opens the store into th
   env.app.repo.setSetting('retailer:demo-ebgames', {});
   assert.ok(eb() - asked <= 2, 'no check of it (only the queue page refreshing itself) — the gaps below prove it');
   // Through (the queue page moved on by itself), then checked out and placed.
-  const run = await runOver('the EB Games run through the queue');
+  // (Not through: what the line saw — kicked for asking too soon, or the page's own refreshes stopping — said.)
+  const run = await runOver('the EB Games run through the queue').catch((e) => {
+    throw new Error(`${e.message} | the line: ${JSON.stringify({ kicks: S.queue.kicks, shown: S.queue.shown, admitted: S.queue.admitted, log: S.queue.log.slice(-20) })}`);
+  });
   assert.equal(run.status, 'placed', JSON.stringify(run));
   assert.equal(S.orders.length, 1);
   assert.deepEqual(S.orders[0].cart.map((c) => [c.sku, c.qty]), [['312346', 1]]);
@@ -4957,9 +4962,11 @@ test("🚦 EB Games' virtual queue: an Auto-checkout run opens the store into th
   assert.ok(gaps.length >= 2 && Math.min(...gaps) >= 1200, `only the page's own refreshes: ${gaps.join(', ')} ms`);
   const after = await gatesHere();
   assert.ok(after.through.includes('demo-ebgames'), 'through it now');
-  await closeStorePages('ebgames');
-  S.queue.on = false;
-  await browserApi('PUT', '/api/aco', { enabled: false });
+  } finally {
+    await closeStorePages('ebgames');
+    S.queue.on = false;
+    await browserApi('PUT', '/api/aco', { enabled: false });
+  }
 });
 
 test("🚦 ⚡ Buy into Pokémon Center's queue (/?queue): it waits in line with you, then — through, on the store's front page — opens the product and checks out (stopping at the final button)", async () => {
