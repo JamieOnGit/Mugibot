@@ -148,6 +148,9 @@ const ADDED_KEYWORDS = ['riftbound', 'gundam card game'];
 export const SWEEP_DEFAULTS = Object.freeze({
   enabled: true,
   keywords: ['pokemon', 'one piece', ...ADDED_KEYWORDS],
+  // (Mugibot 2.2: a store with keywords of its own — Premium Bandai's, JB Hi-Fi's — searched for those instead of the
+  //  keywords above: store id → [keyword, …]. A store not in it: the keywords above.)
+  storeKeywords: {},
   everySeconds: 5, // between two searches at one store, from the server
   browserEverySeconds: 15, // …from an admin's browser
   stores: {}, // store id → 'auto' (server first) | 'server' | 'browser' | 'off' (unset: the store's own default)
@@ -311,6 +314,16 @@ export function sweepSettings(input, current, retailers) {
   const keywords = list(src.keywords, { max: 12, maxLen: 60, minLen: 2, lower: true });
   const enabled = bool(src.enabled, true);
   if (enabled && !keywords.length) throw bad('Add at least one keyword to search for, e.g. pokemon');
+  // A store's keywords of its own (each store searched for its own — Premium Bandai's needn't be JB Hi-Fi's): only a
+  // store that's swept, and only a list that isn't the main one (an empty one, or the same: the main keywords).
+  const storeKeywords = {};
+  for (const [id, kws] of Object.entries(src.storeKeywords && typeof src.storeKeywords === 'object' ? src.storeKeywords : {})) {
+    const r = retailers.get(id);
+    if (!r || !r.sweep) continue;
+    let own;
+    try { own = list(kws, { max: 12, maxLen: 60, minLen: 2, lower: true }); } catch (e) { throw bad(`${r.name}: ${e.message}`); }
+    if (own.length && JSON.stringify(own) !== JSON.stringify(keywords)) storeKeywords[id] = own;
+  }
   const stores = {};
   for (const [id, mode] of Object.entries(src.stores && typeof src.stores === 'object' ? src.stores : {})) {
     const r = retailers.get(id);
@@ -326,6 +339,7 @@ export function sweepSettings(input, current, retailers) {
   return {
     enabled,
     keywords,
+    storeKeywords,
     keywordsVersion: 2, // (ADDED_KEYWORDS offered: what's saved now is the admin's choice)
     termsVersion: 2, // (ADDED_TCG_TERMS offered too)
     modesVersion: 3, // stores: only the modes that differ from each store's default (server first, since 3)
@@ -397,7 +411,7 @@ export class Sweeper {
   get settings() {
     const saved = this.repo.getSetting('sweep') || {};
     // (Saved before server first became every store's default: see ownModes.)
-    const out = { ...SWEEP_DEFAULTS, ...saved, stores: saved.modesVersion >= 3 ? { ...(saved.stores || {}) } : this.ownModes(saved.stores) };
+    const out = { ...SWEEP_DEFAULTS, ...saved, stores: saved.modesVersion >= 3 ? { ...(saved.stores || {}) } : this.ownModes(saved.stores), storeKeywords: { ...(saved.storeKeywords || {}) } };
     // (Before priceAlerts existed, a price drop % of 0 meant no price drop alerts.)
     if (saved.priceDropPercent === 0 && saved.priceAlerts === undefined) Object.assign(out, { priceAlerts: false, priceDropPercent: SWEEP_DEFAULTS.priceDropPercent });
     // (Saved before Riftbound and Gundam were searched for: they're on the list too.)
@@ -432,9 +446,23 @@ export class Sweeper {
       this.db.run('UPDATE sweep_terms SET baseline_at = NULL');
       this.prune();
     }
-    // (A store's whole-range and newest lists are kept: they hold every keyword's products.)
-    this.db.run(`DELETE FROM sweep_terms WHERE keyword NOT IN ('${ALL}', '${NEWEST}') AND keyword NOT IN (${next.keywords.map((_, i) => `:k${i}`).join(', ') || "''"})`, Object.fromEntries(next.keywords.map((k, i) => [`k${i}`, k])));
-    this.repo.audit(user ? user.id : null, null, 'sweep-settings', `${next.enabled ? 'on' : 'off'}: ${next.keywords.join(', ')}`);
+    // (A store whose own keywords changed — and nothing else did: only that store's next searches set the scene again.)
+    else {
+      for (const id of new Set([...Object.keys(before.storeKeywords || {}), ...Object.keys(next.storeKeywords || {})])) {
+        const r = this.retailers.get(id);
+        if (r && JSON.stringify(this.keywordsFor(r, before)) !== JSON.stringify(this.keywordsFor(r, next))) {
+          this.db.run('UPDATE sweep_terms SET baseline_at = NULL WHERE store = :s', { s: id });
+          this.prune();
+        }
+      }
+    }
+    // (A store's whole-range and newest lists are kept: they hold every keyword's products. Each store's own: its own.)
+    for (const r of this.retailers.list.filter((x) => x.sweep)) {
+      const kws = this.keywordsFor(r, next);
+      this.db.run(`DELETE FROM sweep_terms WHERE store = :s AND keyword NOT IN ('${ALL}', '${NEWEST}') AND keyword NOT IN (${kws.map((_, i) => `:k${i}`).join(', ') || "''"})`, { s: r.id, ...Object.fromEntries(kws.map((k, i) => [`k${i}`, k])) });
+    }
+    const own = Object.entries(next.storeKeywords || {}).map(([id, kws]) => `${this.retailers.name(id)}: ${kws.join(', ')}`).join(' · ');
+    this.repo.audit(user ? user.id : null, null, 'sweep-settings', `${next.enabled ? 'on' : 'off'}: ${next.keywords.join(', ')}${own ? ` · own: ${own}` : ''}`);
     // (A store no longer server first: nothing stands in for the server there.)
     for (const { retailer: r, mode } of this.stores()) {
       const st = this.state.get(r.id);
@@ -442,12 +470,30 @@ export class Sweeper {
     }
     const changed = Object.keys(next).filter((k) => JSON.stringify(before[k]) !== JSON.stringify(next[k]));
     if (changed.length) {
-      const what = changed.includes('keywords') ? `keywords: ${next.keywords.join(', ')}` : changed.includes('enabled') ? (next.enabled ? 'sweeps on' : 'sweeps off')
+      const storeChanged = changed.includes('storeKeywords') ? Object.keys({ ...before.storeKeywords, ...next.storeKeywords }).filter((id) => JSON.stringify((before.storeKeywords || {})[id]) !== JSON.stringify((next.storeKeywords || {})[id])) : [];
+      const what = changed.includes('keywords') ? `keywords: ${next.keywords.join(', ')}`
+        : storeChanged.length ? storeChanged.map((id) => `${this.retailers.name(id)}'s keywords: ${(next.storeKeywords[id] || next.keywords).join(', ')}${next.storeKeywords[id] ? '' : ' (the main ones)'}`).join(' · ')
+        : changed.includes('enabled') ? (next.enabled ? 'sweeps on' : 'sweeps off')
         : changed.includes('everySeconds') ? `a search every ${next.everySeconds} s at each store` : 'settings changed';
       this.sys(`${user ? user.username : 'An admin'} changed the sweeps — ${what}`);
     }
     this.restart();
     return next;
+  }
+
+  /**
+   * The keywords a store is searched for (Mugibot 2.2): its own, where an admin gave it some — Premium Bandai's needn't
+   * be JB Hi-Fi's — else the main ones. (A dummy-store copy: its own, else its real store's, else the main ones.)
+   */
+  keywordsFor(r, s = this.settings) {
+    return this.ownKeywords(r, s) || s.keywords;
+  }
+
+  /** A store's keywords of its own (keywordsFor), or null: it's searched for the main ones. */
+  ownKeywords(r, s = this.settings) {
+    const own = (s && s.storeKeywords) || {};
+    if (!r) return null;
+    return own[r.id] || (r.demo ? own[String(r.id).replace(/^demo-/, '')] : null) || null;
   }
 
   /**
@@ -521,7 +567,7 @@ export class Sweeper {
       const before = c ? c.list.map((x) => x.handle).join() : '';
       this.collections.set(r.id, { list, nextAt: now + REBASELINE_MS });
       if (before !== list.map((x) => x.handle).join()) {
-        const used = this.settings.keywords.map((k) => [k, this.collectionFor(r, k)]).filter(([, h]) => h);
+        const used = this.keywordsFor(r).map((k) => [k, this.collectionFor(r, k)]).filter(([, h]) => h);
         if (used.length) this.sys(`${r.name}: reading each game's whole collection — ${used.map(([k, h]) => `"${k}" → ${h}`).join(', ')}`, { store: r.id });
       }
     } catch (e) {
@@ -643,7 +689,7 @@ export class Sweeper {
       } else {
         // ('round': once a round of the keywords — the turn their second page had, so each keyword's first page comes
         //  as often as before.)
-        const every = r.sweep.newestEvery === 'round' ? this.settings.keywords.length + 1 : r.sweep.newestEvery || 2;
+        const every = r.sweep.newestEvery === 'round' ? this.keywordsFor(r).length + 1 : r.sweep.newestEvery || 2;
         st.newestTurn = ((st.newestTurn || 0) + 1) % Math.max(2, every);
         if (st.newestTurn === 1) return { keyword: NEWEST, page: 1 };
       }
@@ -658,7 +704,7 @@ export class Sweeper {
       if (pages > 1 && st.allTurn === 0) return { keyword: ALL, page: 2 + ((st.allDeep = (st.allDeep || 0) + 1) % (pages - 1)), all: true };
       return { keyword: ALL, page: 1, all: true };
     }
-    const kws = this.settings.keywords;
+    const kws = this.keywordsFor(r);
     // Drop mode at a store whose search is newest first (sweep.hot): the keyword a new listing just came up for.
     const hotKw = hot && hot.keyword && kws.includes(hot.keyword) ? hot.keyword : null;
     const pages = Math.max(1, Math.min(10, r.sweep.pages || 1));
@@ -759,7 +805,7 @@ export class Sweeper {
     const ms = Date.now() - started;
     // (The whole-range list answered, but not with a list: each keyword's own search instead, now — unless that's the
     //  same list, Gamerholic's, whose search is its newest products whatever the words: then it failed as any search does.)
-    const fallback = term.keyword === ALL && this.urlFor(r, this.settings.keywords[0] || '', 1) !== url;
+    const fallback = term.keyword === ALL && this.urlFor(r, this.keywordsFor(r)[0] || '', 1) !== url;
     if (fallback && !res.ok && ![401, 403, 429, 503].includes(res.status)) return this.allFailed(r, `HTTP ${res.status}`);
     if (!res.ok) {
       const refused = [401, 403, 429, 503].includes(res.status);
@@ -851,10 +897,12 @@ export class Sweeper {
       WHERE p.sweep_seen_at IS NOT NULL AND m.id IS NULL`);
     let n = 0;
     for (const p of rows) {
-      const kws = s.keywords.includes(p.sweep_keyword) ? [p.sweep_keyword] : s.keywords;
+      // (A store with keywords of its own: those.)
+      const r = this.retailers.get(p.store);
+      const own = this.keywordsFor(r, s);
+      const kws = own.includes(p.sweep_keyword) ? [p.sweep_keyword] : own;
       // (A store whose searches are only trading cards — Kmart's — or that reads a game's own collection (the card shops':
       // cardsOnlyRead): a card word isn't needed there. Its collections aren't known yet at a start, so the whole store.)
-      const r = this.retailers.get(p.store);
       const fits = r && r.sweep && (r.sweep.cardsOnly || r.sweep.collectionPath) ? scoped : counts;
       if (!kws.some((k) => fits({ title: p.name }, k))) {
         this.db.run('UPDATE products SET sweep_seen_at = NULL WHERE id = :id', { id: p.id });
@@ -871,7 +919,7 @@ export class Sweeper {
   readByEveryKeyword(r, term, url, now) {
     if (term.keyword !== ALL && term.keyword !== NEWEST) return false;
     const rows = this.db.all(`SELECT keyword, baseline_at, last_ok_at FROM sweep_terms WHERE store = :s AND url = :u AND keyword NOT IN ('${ALL}', '${NEWEST}')`, { s: r.id, u: url });
-    const kws = this.settings.keywords;
+    const kws = this.keywordsFor(r);
     return kws.length > 0 && kws.every((k) => rows.some((x) => x.keyword === k && x.baseline_at && x.last_ok_at && now - x.last_ok_at <= REBASELINE_MS));
   }
 
@@ -970,7 +1018,7 @@ export class Sweeper {
         }
         const title = p.title || p.name;
         const mkt = s.skipMarketplace && p.marketplace;
-        const keyword = all ? s.keywords.find((k) => counts_(p, k)) || null : term.keyword;
+        const keyword = all ? this.keywordsFor(r, s).find((k) => counts_(p, k)) || null : term.keyword;
         const cardsNow = !term.vip && !term.drop && (all ? !!keyword : counts_(p, term.keyword));
         // (A card search's new listing — new to the catalogue, in a read that isn't setting its scene: a drop for a
         //  drop watch whose words are in its name too, whichever search found it first.)
@@ -988,7 +1036,7 @@ export class Sweeper {
         //  a watch only when its own search finds it, as ever — the catalogue never tracked it, so "new" says nothing.)
         // (Counted by the widened card words alone, lately (widenedLately): tracked quietly — and, as before they widened,
         //  not a card listing: a VIP or drop watch whose words are in its name makes it theirs, a drop, alerted and armed.)
-        const cardsBefore = cardsNow && (all ? s.keywords.some((k) => legacy(p, k)) : legacy(p, term.keyword));
+        const cardsBefore = cardsNow && (all ? this.keywordsFor(r, s).some((k) => legacy(p, k)) : legacy(p, term.keyword));
         const quiet = widened && cardsNow && !known && !cardsBefore;
         const cards = cardsNow && !quiet;
         // (A card listing new to the catalogue, by the card words as they were: only the widened words count it — a
@@ -1108,7 +1156,7 @@ export class Sweeper {
         if (!shared.length) continue;
         const lead = shared.find((x) => dropFor(x.w)) || shared[0];
         // (A trading-card product the card keywords count too: its category from its name, as their searches give it.)
-        const cards = s.keywords.some((k) => counts(p, k));
+        const cards = this.keywordsFor(r, s).some((k) => counts(p, k));
         const ev = await this.track(r, p, { status, keyword: lead.phrase, baseline: !shared.some((x) => dropFor(x.w)), now, drop: true, category: cards ? null : lead.w.category, dropWatch: lead.w.id, posting });
         for (const k of ev) counted[k] += 1;
         const product = codes.map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
@@ -1605,7 +1653,7 @@ export class Sweeper {
    * found products for (so an answer with none is told apart from one that works).
    */
   tryTerm(r) {
-    const kws = this.settings.keywords;
+    const kws = this.keywordsFor(r);
     const row = this.db.get("SELECT keyword FROM sweep_terms WHERE store = :s AND page = 1 AND source = 'browser' AND found > 0 ORDER BY last_ok_at DESC LIMIT 1", { s: r.id });
     return { keyword: row && kws.includes(row.keyword) ? row.keyword : kws[0], page: 1 };
   }
@@ -1764,7 +1812,7 @@ export class Sweeper {
       if (mode === 'browser' || mode === 'auto') st.freshTab = true;
       const server = mode === 'server' || mode === 'auto';
       if (server) {
-        try { dropConnections(new URL(this.urlFor(r, this.settings.keywords[0] || '')).host); } catch { /* no address */ }
+        try { dropConnections(new URL(this.urlFor(r, this.keywordsFor(r)[0] || '')).host); } catch { /* no address */ }
       }
       this.db.run("UPDATE sweep_terms SET fails = 0, error = '' WHERE store = :s", { s: r.id });
       // (A store with a budget for what each browser reads of it — BIG W's: the browsers it turned away asked again,
@@ -1988,7 +2036,7 @@ export class Sweeper {
    */
   termOf(r, res) {
     const words = str(res.keyword, 60);
-    const keyword = this.settings.keywords.find((k) => k === words);
+    const keyword = this.keywordsFor(r).find((k) => k === words);
     if (keyword) return { keyword, page: num(res.page, { min: 1, max: 10, int: true, def: 1 }) };
     // (The store's newest products, at a store whose list an admin's browser reads too: the card shops'.)
     if (words === NEWEST && r.sweep.newestPath && r.sweep.newestBrowser) return { keyword: NEWEST, page: 1 };
@@ -2065,7 +2113,7 @@ export class Sweeper {
 
   /** What a store's searches read, for the live monitor ("/search?text=", "ac.cnstrc.com/search/"). */
   endpoint(r) {
-    if (this.settings.keywords.some((k) => this.collectionFor(r, k))) return r.sweep.collectionPath.replace('{collection}', '…').split('?')[0];
+    if (this.keywordsFor(r).some((k) => this.collectionFor(r, k))) return r.sweep.collectionPath.replace('{collection}', '…').split('?')[0];
     const p = r.sweep.path.split('{q}')[0];
     if (!r.sweep.apiBase) return p;
     try { return `${new URL(r.sweep.apiBase).host}${p}`; } catch { return p; }
@@ -2083,6 +2131,8 @@ export class Sweeper {
         // Who's searching it now ('server' | 'browser'), and server first's stand-in, if the browser's standing in.
         source: this.sourceOf(r, mode), backup: this.backupOf(mode, st, r),
         defaultMode: this.defaultMode(r),
+        // (What it's searched for: its own keywords — ownKeywords — else the main ones.)
+        keywords: this.keywordsFor(r), ownKeywords: !!this.ownKeywords(r),
         searches: st.searches || 0, fails: st.fails, lastAt: st.lastAt, lastOkAt: st.lastOkAt, lastMs: lastOk ? lastOk.ms : null, lastError: st.lastError,
         // (What its last search said, when it found nothing: "BIG W has no results for …" — a note, not a problem.)
         lastNote: st.lastNote || '',

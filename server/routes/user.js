@@ -392,7 +392,7 @@ export function register(router, ctx) {
       monitoring: {
         keywords: Array.isArray(settings.keywords) ? settings.keywords : [],
         running: !!live.running,
-        stores: live.stores.filter((x) => !x.id.startsWith('demo-') || cfg.demoStoreUrl).map((x) => ({ id: x.id, name: x.name, status: x.status, from: x.from, lastAt: x.lastAt, lastOkAt: x.lastOkAt })),
+        stores: live.stores.filter((x) => !x.id.startsWith('demo-') || cfg.demoStoreUrl).map((x) => ({ id: x.id, name: x.name, status: x.status, from: x.from, lastAt: x.lastAt, lastOkAt: x.lastOkAt, ...(x.ownKeywords ? { keywords: x.keywords } : {}) })),
         watching: items.length, armed: armed.length, dropWatches: drops.length,
         // 🚨 Priority drops (EB Games' pre-order pages): each read how lately, and the member's own Auto-checkout of it.
         priority: drops.filter((w) => w.priority && w.active !== false).map((w) => {

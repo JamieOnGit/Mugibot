@@ -846,6 +846,10 @@ a.ck:hover { border-color: currentColor; }
 .dw-edit .form-actions { margin: 0; }
 /* 🚨 Priority drops (Mugibot 2.2): the EB pre-order preset, and each member's own "Auto-checkout its drops for me". */
 .dw-preset-eb { border-color: color-mix(in srgb, var(--err) 45%, var(--line)); }
+/* A store's own keywords (Mugibot 2.2), in its details on the Monitors page. */
+.st-kw { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 4px; min-width: 0; }
+.st-kw input { width: 100%; min-width: 0; }
+.st-kw .st-acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .dw-follow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 0 36px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); }
 .dw-follow.on { border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
 .dw-follow input[type=number] { max-width: 120px; }

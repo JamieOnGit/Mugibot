@@ -1572,6 +1572,31 @@ test('🚨 priority drops (Mugibot 2.2): an admin watches EB Games\' pre-order p
   for (const w of ws) env.app.drops.remove(w.id, env.app.repo.userByUsername('owner'));
 });
 
+test("🏪 a store's own keywords (Mugibot 2.2): an admin opens Premium Bandai on the Monitors page and gives it its own — it's searched for those, not the main ones — said in its details, under the title and on Home; \"Use the main keywords\" puts it back", async () => {
+  await page.goto(`${env.url}/app#monitor`);
+  await page.waitForSelector('#sn-channels .sn-chan[data-store="pbandai"]');
+  await page.click('#sn-channels .sn-chan[data-store="pbandai"] .st-toggle');
+  await page.waitForSelector('#sn-channels .sn-chan[data-store="pbandai"] form.st-kw');
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="pbandai"] .sn-rows'), /keywords\s*pokemon, one piece[^(]*\(the main ones\)/);
+  await page.fill('#sn-channels .sn-chan[data-store="pbandai"] form.st-kw input', 'One Piece Card Game, Gundam');
+  await page.click('#sn-channels .sn-chan[data-store="pbandai"] form.st-kw button[type=submit]');
+  await page.waitForFunction(() => /Premium Bandai: searched for one piece card game, gundam/.test(document.querySelector('#toasts')?.textContent || ''));
+  assert.deepEqual(env.app.sweeper.settings.storeKeywords, { pbandai: ['one piece card game', 'gundam'] });
+  assert.deepEqual(env.app.sweeper.keywordsFor(env.app.retailers.get('pbandai')), ['one piece card game', 'gundam']);
+  assert.deepEqual(env.app.sweeper.keywordsFor(env.app.retailers.get('jbhifi')), env.app.sweeper.settings.keywords, 'JB Hi-Fi: the main ones');
+  assert.match(await page.textContent('#sn-channels .sn-chan[data-store="pbandai"] .sn-rows'), /keywords\s*one piece card game, gundam \(its own\)/);
+  assert.match(await page.textContent('#mon-sub'), /— Premium Bandai for its own\./);
+  await page.goto(`${env.url}/app#home`);
+  await page.waitForFunction(() => /Premium Bandai for one piece card game, gundam/.test(document.querySelector('#home-keywords').textContent));
+  // Back to the main keywords.
+  await page.goto(`${env.url}/app#monitor`);
+  await page.waitForSelector('#sn-channels .sn-chan[data-store="pbandai"] form.st-kw');
+  await page.click('#sn-channels .sn-chan[data-store="pbandai"] form.st-kw button:has-text("Use the main keywords")');
+  await page.waitForFunction(() => /Premium Bandai: the main keywords/.test(document.querySelector('#toasts')?.textContent || ''));
+  assert.deepEqual(env.app.sweeper.settings.storeKeywords, {});
+  await page.click('#sn-channels .sn-chan[data-store="pbandai"] .st-toggle');
+});
+
 test('Auto-checkout run history in pages; the card backup on Checkout details', async () => {
   const owner = env.app.repo.userByUsername('owner');
   const it = env.app.repo.listItems(owner.id)[0];

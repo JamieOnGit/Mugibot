@@ -2267,6 +2267,52 @@ test('the keywords: Pokémon, One Piece, Riftbound and Gundam by default — add
   }
 });
 
+test("🏪 each store's own keywords (Mugibot 2.2): Premium Bandai searched for its own — not JB Hi-Fi's — a store without any searched for the main ones; checked like any setting, said on every store's card, and \"Use the main keywords\" puts it back", async () => {
+  const saved = env.app.repo.getSetting('sweep');
+  try {
+    sw.save({ stores: { 'demo-pbandai': 'server', 'demo-jbhifi': 'server', 'demo-kmart': 'server' }, keywords: ['pokemon', 'one piece'] }, null);
+    // Members can't; a keyword too short is said with the store's name; an unknown store is let go; the main list again is no list of its own.
+    assert.equal((await ash.put('/api/monitor/sweep', { storeKeywords: { pbandai: ['gundam'] } })).status, 404, 'admins only');
+    let r = await boss.put('/api/monitor/sweep', { storeKeywords: { 'demo-pbandai': ['x'] } });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /^Premium Bandai \(dummy store\): "x" is too short/);
+    r = await boss.put('/api/monitor/sweep', { storeKeywords: { 'demo-pbandai': ['One Piece Card Game', 'gundam card game'], 'demo-jbhifi': 'pokemon', 'no-such-store': ['x y'], 'demo-kmart': ['pokemon', 'one piece'] } });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.body.settings.storeKeywords, { 'demo-pbandai': ['one piece card game', 'gundam card game'], 'demo-jbhifi': ['pokemon'] });
+    // Each store's searches: its own keywords, else the main ones.
+    const kws = (id) => [...new Set(Array.from({ length: 12 }, () => sw.nextTerm(R(id), { all: false })).map((t) => t.keyword).filter((k) => k !== NEWEST && k !== ALL))].sort();
+    assert.deepEqual(kws('demo-pbandai'), ['gundam card game', 'one piece card game']);
+    assert.deepEqual(kws('demo-jbhifi'), ['pokemon']);
+    assert.deepEqual(kws('demo-kmart'), ['one piece', 'pokemon']);
+    // On every store's card (members too).
+    const live = (await ash.get('/api/monitor/live')).body.stores;
+    const card = (id) => live.find((x) => x.id === id);
+    assert.deepEqual([card('demo-pbandai').keywords, card('demo-pbandai').ownKeywords], [['one piece card game', 'gundam card game'], true]);
+    assert.deepEqual([card('demo-kmart').keywords, card('demo-kmart').ownKeywords], [['pokemon', 'one piece'], false]);
+    // A product counts at a store by its own keywords: JB Hi-Fi's "One Piece" box isn't one of its finds now.
+    store.addProduct('jbhifi', { sku: 'one-piece-card-game-op-15-booster-box-own-kw', name: 'One Piece Card Game OP-15 Booster Box', price: 199, status: 'in_stock' });
+    const before = env.app.catalog.productFor('demo-jbhifi', 'one-piece-card-game-op-15-booster-box-own-kw');
+    await sweep('demo-jbhifi', 'pokemon');
+    assert.equal(env.app.catalog.productFor('demo-jbhifi', 'one-piece-card-game-op-15-booster-box-own-kw'), before, 'not found by its pokemon search');
+    // A store's keywords changed: only its own scene set again; another store's kept.
+    await sweep('demo-kmart', 'pokemon');
+    const base = (id, k) => (env.app.db.get('SELECT baseline_at FROM sweep_terms WHERE store = :s AND keyword = :k AND page = 1', { s: id, k }) || {}).baseline_at;
+    assert.ok(base('demo-kmart', 'pokemon'));
+    await sweep('demo-jbhifi', 'pokemon');
+    r = await boss.put('/api/monitor/sweep', { storeKeywords: { 'demo-pbandai': ['one piece card game', 'gundam card game'], 'demo-jbhifi': ['pokemon', 'lorcana'] } });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(base('demo-jbhifi', 'pokemon'), null, "JB Hi-Fi's searches set the scene again");
+    assert.ok(base('demo-kmart', 'pokemon'), "Kmart's kept");
+    // "Use the main keywords": its list gone, and its own keywords' searches with it.
+    r = await boss.put('/api/monitor/sweep', { storeKeywords: { 'demo-jbhifi': ['pokemon', 'lorcana'] } });
+    assert.deepEqual(r.body.settings.storeKeywords, { 'demo-jbhifi': ['pokemon', 'lorcana'] });
+    assert.deepEqual(kws('demo-pbandai'), ['one piece', 'pokemon']);
+    assert.equal(env.app.db.get("SELECT 1 AS y FROM sweep_terms WHERE store = 'demo-pbandai' AND keyword = 'gundam card game'"), null);
+  } finally {
+    env.app.repo.setSetting('sweep', saved);
+  }
+});
+
 test("🔎 a product BIG W's searches found that nobody monitors is read off its own page in an admin's browser (its tile may not say it's on sale): on sale there after sold out or coming soon, or after being listed a while with no buy button, it alerts and updates everyone watching it — each page in turn within BIG W's budget (monitor/access.js), every half hour once it's buyable", async () => {
   clearOfMidnight(2);
   env.app.repo.setSetting('retailer:demo-bigw', { serverChecks: false });

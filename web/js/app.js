@@ -220,7 +220,9 @@ async function renderHome(d) {
       h('div', { class: 'tx' }, h('b', {}, w.label), h('small', {}, `${read} · ${yours}`)),
       h('a', { class: `btn small${f.aco ? '' : ' primary'}`, href: '#drops' }, f.aco ? 'Change' : 'Auto-checkout it'));
   }));
-  $('#home-keywords').textContent = m.keywords.length ? `Searching for ${m.keywords.join(', ')} — every few seconds, at every store below.` : '';
+  // (Stores with keywords of their own: each said, by name.)
+  const ownKw = m.stores.filter((x) => x.keywords && x.status !== 'off');
+  $('#home-keywords').textContent = m.keywords.length ? `Searching for ${m.keywords.join(', ')} — every few seconds, at every store below${ownKw.length ? `; ${ownKw.map((x) => `${x.name} for ${x.keywords.join(', ')}`).join('; ')}` : ''}.` : '';
   $('#home-live-pill').textContent = m.running ? 'Live' : 'Paused';
   $('#home-live-pill').className = `pill ${m.running ? 'ok' : 'warn'}`;
   $('#home-stores').replaceChildren(...m.stores.map((x) => {

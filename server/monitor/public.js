@@ -21,6 +21,8 @@ export function publicStore(s) {
     searches: s.searches, fails: s.fails, lastAt: s.lastAt, lastOkAt: s.lastOkAt, lastMs: s.lastMs,
     lastError: waiting ? '' : publicError(s.lastError), lastNote: waiting ? '' : publicError(s.lastNote), nextAt: waiting ? null : s.nextAt, slowedUntil: s.slowedUntil,
     retryAt: s.retryAt, resetAt: s.resetAt, latency: s.latency,
+    // (What it's searched for: its own keywords, or the main ones.)
+    keywords: s.keywords, ownKeywords: !!s.ownKeywords,
   };
 }
 

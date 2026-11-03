@@ -145,6 +145,9 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
     const n = L.stores.size;
     sub.append(`Searching ${n} store${n === 1 ? '' : 's'} every few seconds for `);
     L.settings.keywords.forEach((k, i) => { sub.append(i ? (i === L.settings.keywords.length - 1 ? ' and ' : ', ') : '', h('b', {}, k)); });
+    // (Stores with keywords of their own: said, by name.)
+    const own = [...L.stores.values()].filter((s) => s.ownKeywords);
+    if (own.length) sub.append(` — ${own.map((s) => s.name).join(', ')} for ${own.length === 1 ? 'its' : 'their'} own`);
     sub.append('. New drops and restocks pop up here the moment a search sees them.');
   }
 
@@ -169,8 +172,11 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
 
   // One line a store: its colour, name and state, and underneath what it's doing now (or what's wrong).
   // Admins get a Reset button on each. A click on the name opens the details.
-  function renderChannels() {
+  function renderChannels(force = false) {
     const box = $('#sn-channels');
+    // (An admin typing a store's own keywords: not redrawn under them — the searches' counters catch up after.)
+    const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#sn-channels .st-kw');
+    if (typing && !force) return;
     box.textContent = '';
     // (Switched off — for everyone, or by you — at the bottom: the stores being searched come first.)
     const offNow = (s) => s.status === 'off' || hiddenStore(s.id);
@@ -200,6 +206,9 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
         swatch(s.id), h('span', { class: 'st-name' }, s.name), h('span', { class: `sn-state ${cls}`, title: s.lastError || '' }, label));
       toggle.addEventListener('click', () => { if (L.open.has(s.id)) L.open.delete(s.id); else L.open.add(s.id); renderChannels(); });
       const rows = h('div', { class: 'sn-rows', hidden: !open },
+        // (What it's searched for: its own keywords, or the main ones — admins change them here.)
+        s.keywords ? h('div', { class: 'r' }, h('span', {}, 'keywords'), h('b', {}, `${s.keywords.join(', ')}${s.ownKeywords ? ' (its own)' : ' (the main ones)'}`)) : null,
+        L.admin && s.status !== 'off' && s.keywords ? storeKeywords(s) : null,
         h('div', { class: 'r' }, h('span', {}, 'searches'), h('b', {}, s.searches.toLocaleString())),
         h('div', { class: 'r' }, h('span', {}, 'last answer'), h('b', {}, msText(s.lastMs))),
         h('div', { class: 'r' }, h('span', {}, 'next search'), h('b', { class: 'sn-next' }, nextText(s))),
@@ -223,6 +232,42 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
         h('div', { class: `st-sub${s.fails ? ' bad' : waiting ? ' warn' : ''}` }, sub),
         rows));
     }
+  }
+
+  /**
+   * A store's own keywords (admins, in its details): what it's searched for instead of the main ones — Premium Bandai's
+   * needn't be JB Hi-Fi's — comma-separated; "Use the main keywords" puts it back on those.
+   */
+  function storeKeywords(s) {
+    const input = h('input', { type: 'text', maxlength: '400', placeholder: L.settings.keywords.join(', '), 'aria-label': `${s.name}'s own keywords, comma-separated` });
+    // (What's typed and not saved yet: kept through a redraw.)
+    L.kwDraft ||= new Map();
+    input.value = L.kwDraft.has(s.id) ? L.kwDraft.get(s.id) : s.ownKeywords ? s.keywords.join(', ') : '';
+    input.addEventListener('input', () => L.kwDraft.set(s.id, input.value));
+    const save = h('button', { class: 'btn small primary', type: 'submit' }, 'Save');
+    const reset = s.ownKeywords ? h('button', { class: 'btn small ghost', type: 'button', onclick: () => put([]) }, 'Use the main keywords') : null;
+    const form = h('form', { class: 'st-kw', dataset: { store: s.id } },
+      h('label', { class: 'small' }, `Search ${s.name} for its own keywords (comma-separated — empty: the main ones)`), input,
+      h('div', { class: 'st-acts' }, save, reset));
+    async function put(list) {
+      save.disabled = true;
+      const own = { ...(L.settings.storeKeywords || {}) };
+      if (list.length) own[s.id] = list; else delete own[s.id];
+      const d = await saveSweep({ storeKeywords: own });
+      save.disabled = false;
+      if (!d) return;
+      const kept = (d.settings.storeKeywords || {})[s.id];
+      Object.assign(s, { keywords: kept || d.settings.keywords, ownKeywords: !!kept });
+      L.kwDraft.delete(s.id);
+      renderChannels(true);
+      renderSub();
+      toast(kept ? `${s.name}: searched for ${kept.join(', ')}` : `${s.name}: the main keywords`, kept ? 'Its own keywords from its next search — the first look notes what is already there, without alerts.' : `Searched for ${d.settings.keywords.join(', ')} again, like every store.`, 'success');
+    }
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      put(input.value.split(/[,\n]+/).map((x) => x.trim().toLowerCase()).filter(Boolean));
+    });
+    return form;
   }
 
   /**
@@ -315,8 +360,8 @@ export function setupLive({ storeName, buyUrl, canBuy = () => true, openProduct,
     $('#sn-kw-count').textContent = plural(s.keywords.length, 'keyword');
     $('#sn-kw-form').hidden = !L.admin;
     $('#sn-kw-note').textContent = L.admin
-      ? 'Each keyword is searched at every store. A product counts when its name has every word of the keyword and a trading-card word in it. A new keyword starts by noting what is already there, without alerts.'
-      : 'Every store is searched for these. Admins choose them.';
+      ? 'Each keyword is searched at every store — unless a store has keywords of its own (open a store below → keywords). A product counts when its name has every word of the keyword and a trading-card word in it. A new keyword starts by noting what is already there, without alerts.'
+      : 'Every store is searched for these, unless it has keywords of its own (a store\'s details say). Admins choose them.';
   }
 
   function sw(label, on, onchange, { disabled = false } = {}) {

@@ -637,6 +637,16 @@ stores.
      3:40 pm" while the server's refused), and **↻ Reset** for each store (or
      **Reset all**).
    - **Keywords**: what to search for at every store (type + **Add**, × to remove).
+   - **A store's own keywords** (Mugibot 2.2): what you want at Premium Bandai needn't be what you want at JB Hi-Fi.
+     - **Setting them:** open the store in the Stores list (click its name), type its own keywords, comma-separated
+       ("one piece card game, gundam"), and press **Save**. That store is then searched for those, not the main ones.
+     - **The rest:** every other store keeps the main keywords. **Use the main keywords** puts a store back on them.
+     - **First search:** a store's new keywords start the same way new keywords do. Its next searches note what's
+       there already, without alerts. Only that store's are set afresh.
+     - **Where it shows:** each store's details say what it's searched for, "(its own)" or "(the main ones)". So do
+       the line under the Monitors title and Home, where the stores with their own keywords are named.
+     - **What still applies:** the same rules decide what counts at every store: a trading-card word in the name, no
+       marketplace sellers, and the "not trading cards" words. For anything else, use a drop watch.
    - **Seconds between searches at one store**: 5 to start with (3 at least).
    - **…from an admin's browser**: 15 to start with.
    - **Price drop alert from**: 10% to start with; 0 turns price drop alerts off.
