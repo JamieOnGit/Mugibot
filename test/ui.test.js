@@ -908,7 +908,8 @@ test('Auto-checkout: switched on only with the agreement; limits; arming (on the
   await page.goto(`${env.url}/app#aco`);
   await page.waitForSelector('[data-panel="aco"]:not([hidden]) #aco-enabled');
   assert.match(await page.textContent('#aco-state'), /^Off$/);
-  assert.match(await page.textContent('#aco-runs'), /Nothing yet/);
+  // (The run history is drawn once the page's Auto-checkout settings have come in: waited for, not read before.)
+  await page.waitForFunction(() => /Nothing yet/.test(document.querySelector('#aco-runs').textContent));
   await page.click('#aco-enabled');
   await page.waitForFunction(() => /agree first/.test(document.querySelector('#aco-msg').textContent));
   assert.equal(env.app.aco.settings(owner.id).enabled, false);
