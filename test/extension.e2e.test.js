@@ -113,8 +113,9 @@ async function buyFromDashboard(page, name) {
   assert.equal(await row.locator('input.qty').count(), 0, 'no quantity box by ⚡ Buy (how many is the item\'s)');
   // (The tab ⚡ Buy opens on the dummy store — never one the extension opens of its own meanwhile: a store's home page
   //  looked at for your sign-in, a real store's or Chrome's error page.)
+  // (A new tab has no address at first — "" or about:blank, ⚡ Buy's sent on once its code's in: waited for.)
   const onStore = async (p) => {
-    if (p.url() === 'about:blank') await p.waitForURL((u) => u.href !== 'about:blank', { timeout: 15000 }).catch(() => null);
+    for (const end = Date.now() + 15000; /^(about:blank)?$/.test(p.url()) && !p.isClosed() && Date.now() < end;) await new Promise((r) => setTimeout(r, 50));
     return p.url().startsWith(store.url);
   };
   const [shop] = await Promise.all([ctx.waitForEvent('page', { predicate: onStore }), row.getByRole('button', { name: '⚡ Buy' }).click()]);
