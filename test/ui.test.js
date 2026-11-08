@@ -1581,6 +1581,47 @@ test('🚨 priority drops (Mugibot 2.2): an admin watches EB Games\' pre-order p
   for (const w of ws) env.app.drops.remove(w.id, env.app.repo.userByUsername('owner'));
 });
 
+test('🚨 Premium Bandai drops (Nov 2026): an admin watches its One Piece Card Game page and Bandai Card Shop in one press — whatever drops, every 3 s — and a watch says when its next pre-order opens (read every second around it); members see them with their own Auto-checkout, not the button', async () => {
+  await page.goto(`${env.url}/app#drops`);
+  await page.waitForSelector('#pp-drops:not([hidden]) #dw-preset-pb:not([hidden])');
+  assert.match(await page.textContent('#dw-preset-pb'), /whatever drops[\s\S]*every second around a pre-order's opening time[\s\S]*every member gets a 🚨 DM/);
+  assert.equal(await page.getAttribute('#dw-preset-pb a[href*="brand/onepiececardgame"]', 'href'), 'https://p-bandai.com/au/brand/onepiececardgame');
+  assert.equal(await page.getAttribute('#dw-preset-pb a[href*="shop/bandaicardshop"]', 'href'), 'https://p-bandai.com/au/shop/bandaicardshop');
+  await page.selectOption('#dw-pb-qty', 'max');
+  await page.click('#dw-pb-go');
+  await page.waitForFunction(() => /Watching 2 Premium Bandai pages/.test(document.querySelector('#dw-pb-msg').textContent));
+  assert.equal(await page.textContent('#dw-pb-go'), '✓ Watching Premium Bandai drops');
+  assert.equal(await page.isDisabled('#dw-pb-go'), true);
+  const ws = env.app.drops.watches().filter((w) => w.priority && w.store === 'pbandai');
+  assert.deepEqual(ws.map((w) => [w.label, w.page, w.phrases, w.minPrice, w.qty, w.every]).sort(), [
+    ['Premium Bandai Card Shop', 'https://p-bandai.com/au/shop/bandaicardshop', [], null, 'max', 3],
+    ['Premium Bandai One Piece Card Game', 'https://p-bandai.com/au/brand/onepiececardgame', [], null, 'max', 3],
+  ]);
+  // Its page read (as if): a pre-order on it opens in an hour — the watch says so.
+  const op = ws.find((w) => /One Piece/.test(w.label));
+  env.app.db.run('UPDATE drop_watches SET baseline_at = :t, last_at = :t, last_ok_at = :t, seen = 20 WHERE id = :id', { t: Date.now(), id: op.id });
+  env.app.drops.changed();
+  env.app.pages.st(`pbandai|${op.page}`).opens = [Date.now() + 3600 * 1000];
+  await page.reload();
+  const row = page.locator('#dw-priority li.dw-row', { hasText: 'Premium Bandai One Piece Card Game' });
+  await row.waitFor();
+  await page.waitForFunction(() => /⏱ next pre-order opens .* — read every second around it/.test(document.querySelector('#dw-priority').textContent));
+  assert.match(await row.locator('.meta').first().textContent(), /🚨 priority — every member DM'd · Page · Premium Bandai · every 3 s/);
+  // A member: both at the top, with their own Auto-checkout of each — not the button.
+  const c = await Client.signup(env.url, 'pbfan');
+  env.app.repo.updateUser(c.user.id, { plan: 'comped' });
+  const fan = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  fan.on('pageerror', (e) => errors.push(e.message));
+  await fan.context().addCookies([{ name: 'mgb_session', value: c.cookie.split('=')[1], url: env.url }]);
+  await fan.goto(`${env.url}/app#drops`);
+  await fan.waitForSelector('#dw-priority form.dw-follow');
+  assert.equal(await fan.isVisible('#dw-preset-pb'), false, 'the preset: admins only');
+  assert.equal(await fan.locator('#dw-priority li.dw-row', { hasText: 'Premium Bandai' }).count(), 2);
+  assert.equal(await fan.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'a phone: no sideways scrolling');
+  await fan.close();
+  for (const w of ws) env.app.drops.remove(w.id, env.app.repo.userByUsername('owner'));
+});
+
 test("🏪 a store's own keywords (Mugibot 2.2): an admin opens Premium Bandai on the Monitors page and gives it its own — it's searched for those, not the main ones — said in its details, under the title and on Home; \"Use the main keywords\" puts it back", async () => {
   await page.goto(`${env.url}/app#monitor`);
   await page.waitForSelector('#sn-channels .sn-chan[data-store="pbandai"]');
