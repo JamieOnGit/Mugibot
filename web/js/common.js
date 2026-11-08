@@ -70,7 +70,7 @@ export function looksLikeListing(link) {
   const path = u.pathname.toLowerCase();
   if (/\/products?\/search(\/|$)/.test(path)) return true; // (The Games Cube's search: /products/search?q=…)
   if (/\/(products?|p|dp|gp\/product|item|items)\/[^/]+/.test(path) || /\/[^/]*-\d{6,10}\/?$/.test(path) || /\.html?$/.test(path)) return false;
-  if (/(^|\/)(search|collections?|category|categories|catalogsearch|product-category|browse|shop|c|s|b|deals|new-arrivals|pre-?orders?|trading-cards?)(\/|$)/.test(path)) return true;
+  if (/(^|\/)(search|collections?|category|categories|catalogsearch|product-category|browse|shop|brand|c|s|b|deals|new-arrivals|pre-?orders?|trading-cards?)(\/|$)/.test(path)) return true;
   return ['q', 'query', 'text', 'searchterm', 'keyword', 'k', 's', 'category', 'condition', 'filter'].some((k) => [...u.searchParams.keys()].some((x) => x.toLowerCase() === k || x.toLowerCase().startsWith('filter.')));
 }
 

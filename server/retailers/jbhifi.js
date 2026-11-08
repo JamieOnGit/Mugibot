@@ -47,9 +47,11 @@ export default {
     sellers: { path: '/products/{sku}.js', own: /^jb ?hi-?fi$/i },
   },
   // Store login monitor: Shopify puts the signed-in customer's number in every page ("cid" in __st),
-  // so the extension checks the store's front page with your cookies (every 10 minutes, and when you
-  // open the store). /account goes to the store's sign-in when you're signed out.
-  account: { signIn: '/account', check: { path: '/', signedIn: /var __st=\{[^}]*"cid":\s*\d+|"customerId":\s*\d+/, signedOut: /var __st=\{/ } },
+  // so the extension checks the store's front page with your cookies (and when you open the store).
+  // /account goes to the store's sign-in when you're signed out.
+  // (Read every 2 minutes — a sign-out DM'd on Discord within a couple of minutes, Nov 2026, extension 1.43.0 — not every
+  //  minute: its home page is a big one, and its checkpoint looks at how often a browser asks.)
+  account: { signIn: '/account', check: { path: '/', minutes: 2, signedIn: /var __st=\{[^}]*"cid":\s*\d+|"customerId":\s*\d+/, signedOut: /var __st=\{/ } },
   monitor: { server: true, browser: true },
   // Its checkpoint (Shopify's bot check: an hCaptcha page at /checkpoint), switched on before big
   // drops, then off again (docs/MONITORING.md, "Checkpoints and virtual queues"). The server looks

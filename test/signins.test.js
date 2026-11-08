@@ -152,3 +152,25 @@ test('🔑 a lapsed member: the state is kept, no alert (nothing can be bought f
   assert.equal(dms('d-misty').length, 0);
   assert.equal((await logins(misty)).stores.find((s) => s.id === 'target').status, 'out');
 });
+
+test('🔑 signed out at Premium Bandai, EB Games and JB Hi-Fi (Nov 2026, the owner\'s three): each DM\'d by Mugibot at once, its own "Sign in" button — and the extension reads them often enough to see it within minutes (Premium Bandai every minute, JB Hi-Fi every 2, EB Games every 5)', async () => {
+  // (The pace the extension is given with each store's flow: account.check.minutes, account.probeMinutes.)
+  const flows = env.app.retailers.forExtension();
+  const acct = (id) => flows.find((r) => r.id === id).account;
+  assert.equal(acct('pbandai').check.minutes, 1);
+  assert.equal(acct('jbhifi').check.minutes, 2);
+  assert.equal(acct('ebgames').probeMinutes, 5);
+  assert.equal(acct('bigw').probeMinutes, 60, 'BIG W as before');
+  const before = dms('d-boss').length;
+  await report(bossChrome, { pbandai: seen('in'), ebgames: seen('in'), jbhifi: seen('in') });
+  assert.equal(dms('d-boss').length, before, 'signed in at all three: nothing to say');
+  await report(bossChrome, { pbandai: seen('out'), ebgames: seen('out'), jbhifi: seen('out') });
+  const fresh = dms('d-boss').slice(before);
+  assert.equal(fresh.length, 3, fresh.join('\n'));
+  for (const [name, link] of [['Premium Bandai', /https:\/\/p-bandai\.com\/au/], ['EB Games', /https:\/\/www\.ebgames\.com\.au/], ['JB Hi-Fi', /https:\/\/www\.jbhifi\.com\.au\/account/]]) {
+    const dm = fresh.find((x) => x.includes(`Signed out of ${name}`));
+    assert.ok(dm, `${name} DM'd`);
+    assert.match(dm, new RegExp(`Sign in at ${name}`), `${name}: its own Sign in button`);
+    assert.match(dm, link);
+  }
+});

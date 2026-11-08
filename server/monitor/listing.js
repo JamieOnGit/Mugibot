@@ -262,6 +262,9 @@ export function parseEbGames(text, { base, storeBase, now = Date.now() } = {}) {
 // productResults.products: productCode (the code in /<region>/item/<code>), productName.en,
 // fixedListPrice.amount, saleStatus (On, Waiting = not on sale yet, End), productType (PreOrder…),
 // flags (PRE_ORDER, PRE_ORDER_CLOSED, OUT_OF_STOCK…) and productImages[].fileUrl (under the site).
+// saleStartExpectedDt: when its order window opens (a pre-order's, published ahead: "2026-10-26T02:00:00Z").
+// A window that's closed (End) is over for good — the same product's next window is a new code (…001, then …002, as
+// the real store lists them, Nov 2026): ended. One that hasn't opened yet (Waiting): opensAt, when it does.
 export function parsePBandai(text, { base, storeBase } = {}) {
   const j = typeof text === 'string' ? shopifyJson(text) : text;
   if (j === undefined) return { products: [], problem: pageProblem(text) || 'layout' };
@@ -277,11 +280,14 @@ export function parsePBandai(text, { base, storeBase } = {}) {
     if (!sku || !name) continue;
     const flags = Array.isArray(p.flags) ? p.flags.map(String) : [];
     const image = Array.isArray(p.productImages) && p.productImages.find((x) => x && x.fileUrl && x.mediaType !== 'Video');
+    const opens = p.saleStatus === 'Waiting' && typeof p.saleStartExpectedDt === 'string' ? Date.parse(p.saleStartExpectedDt) : NaN;
     products.push({
       sku, aliases: [], title: clean(name), price: money(p.fixedListPrice && p.fixedListPrice.amount), wasPrice: null,
       inStock: p.saleStatus === 'On' && !flags.includes('OUT_OF_STOCK') && !flags.includes('PRE_ORDER_CLOSED'),
       preorder: p.productType === 'PreOrder' || flags.includes('PRE_ORDER'),
       url: storeLink(storeBase || base, `/item/${sku}`), image: image ? httpsUrl(image.fileUrl, `${site}/`) : '', marketplace: false,
+      ...(p.saleStatus === 'End' ? { ended: true } : {}),
+      ...(Number.isFinite(opens) ? { opensAt: opens } : {}),
     });
   }
   return { products, total: typeof r.totalCount === 'number' ? r.totalCount : null, perPage: r.products.length, problem: null };

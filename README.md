@@ -85,6 +85,15 @@ community. Built on TCGCopBot's working Kmart flow.
   Auto-checkout work at every store Mugibot knows, the same way as for cards;
   other websites get the alert only. See
   [docs/MONITORING.md](docs/MONITORING.md#-drop-watches-anything-that-isnt-the-card-keywords).
+- **🚨 Premium Bandai drops.** Whatever drops on Premium Bandai's
+  [One Piece Card Game](https://p-bandai.com/au/brand/onepiececardgame) page and
+  its [Bandai Card Shop](https://p-bandai.com/au/shop/bandaicardshop) is bought
+  straight away through Premium Bandai's own checkout, for each member who turns
+  on Auto-checkout of these drops (up to their own max), and every member's DM'd.
+  Read from Mugibot's server every 3 seconds, and every second around each
+  pre-order's published opening time; a pre-order listed ahead is bought the moment
+  its window opens. Set up by itself for the owner. See
+  [docs/MONITORING.md](docs/MONITORING.md#-premium-bandai-drops-nov-2026).
 - **📃 Search pages, read every few seconds for your key phrases.** Paste any
   store's search, category or collection page (EB Games' "Trading cards,
   pre-order" search, a Shopify collection) with key phrases ("Magic the
@@ -146,7 +155,9 @@ community. Built on TCGCopBot's working Kmart flow.
   left out.
 - **Store sign-ins.** The extension notices whether you're signed in at each
   store (when you open it, and every 10 minutes for the stores whose pages
-  show it), and the Setup page lists where you are and aren't, with a
+  show it — Premium Bandai every minute, JB Hi-Fi every 2 and EB Games every 5,
+  extension 1.43.0), Mugibot DMs you on Discord the moment you're signed out
+  of one (with a **Sign in** button), and the Setup page lists where you are and aren't, with a
   **Sign in** link for each: signed in, ⚡ Buy's checkout is faster because the
   store fills in your saved details. The watchlist reminds you about a store
   you watch where you're signed out. It only looks: nothing is clicked or typed.

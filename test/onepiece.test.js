@@ -229,3 +229,33 @@ test('a store only admins\' browsers search (EB Games, Premium Bandai): unsearch
     Object.assign(sw, was);
   }
 });
+
+test('🏴‍☠️ Premium Bandai\'s keyword search: an order window closed for good ("End") is never a watch\'s find — never armed — and what a watch armed while it was open (sold out then) is disarmed once it closes; one not open yet ("Waiting") is armed', async () => {
+  const w = await boss.post('/api/drops', { store: 'demo-pbandai', words: 'one piece card game', aco: true, maxPrice: 300, qty: 'auto', shared: false });
+  assert.equal(w.status, 200, w.text);
+  const item = async (sku) => (await boss.get('/api/items')).body.items.find((i) => i.sku === sku);
+  try {
+    // Its first look: a box whose window closed for good, one whose window opens next week, one open but sold out.
+    await pbSearch([
+      { ...pbTile('N4000000001', 'ONE PIECE CARD GAME OP-16 Booster Box', false, 179), ended: true },
+      { ...pbTile('N4000000002', 'ONE PIECE CARD GAME OP-22 Booster Box', false, 189), opensAt: Date.now() + 7 * 86400000 },
+      pbTile('N4000000003', 'ONE PIECE CARD GAME OP-17 Booster Box', false, 179),
+    ]);
+    assert.equal((await item('N4000000001')) && (await item('N4000000001')).aco, undefined, 'closed for good: never armed');
+    assert.equal((await item('N4000000002')).aco, true, 'not open yet: armed');
+    assert.equal((await item('N4000000003')).aco, true, 'sold out in its window: armed for its return');
+    // The sold-out one\'s window closes: disarmed (it can\'t come back), the member told.
+    clock.offset += 10 * 1000;
+    await pbSearch([
+      { ...pbTile('N4000000001', 'ONE PIECE CARD GAME OP-16 Booster Box', false, 179), ended: true },
+      { ...pbTile('N4000000002', 'ONE PIECE CARD GAME OP-22 Booster Box', false, 189), opensAt: Date.now() + 7 * 86400000 },
+      { ...pbTile('N4000000003', 'ONE PIECE CARD GAME OP-17 Booster Box', false, 179), ended: true },
+    ]);
+    assert.equal((await item('N4000000003')).aco, false, 'disarmed');
+    assert.equal((await item('N4000000002')).aco, true, 'the one not open yet: still armed');
+    assert.ok(env.app.repo.listEvents(boss.user.id, { limit: 10 }).some((e) => /OP-17 Booster Box.*order window has closed/.test(e.message)));
+  } finally {
+    await boss.del(`/api/drops/${w.body.watch.id}`);
+    for (const it of (await boss.get('/api/items')).body.items) await boss.del(`/api/items/${it.id}`);
+  }
+});

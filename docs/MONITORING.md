@@ -1088,8 +1088,8 @@ switch it if it's wrong), and asks for:
   "One Piece OP-15"). A product counts when its name has every word of **one** of
   them (the same matching as key phrases above), whatever the card keywords are.
 - **Read the page every … seconds**: **3 at the fastest**. At a store whose
-  searches go slower, its own pace is the fastest: Pokémon Center and
-  Premium Bandai 30 s, BIG W 20 s while it's read in an ordinary window (3 s in its
+  searches go slower, its own pace is the fastest: Pokémon Center 30 s (Premium
+  Bandai's pages 3 s, its searches 30 s), BIG W 20 s while it's read in an ordinary window (3 s in its
   private window), Amazon 20 s, Gamesworld, Gamerholic and Trainer Town 15 s,
   City Beach 10 s. Every store's pages together are read about once a second at
   most, so a store with many pages watched never sees a burst.
@@ -1121,7 +1121,7 @@ price, its key phrases and how often it's read.
 | Store | Read from | What's read |
 |---|---|---|
 | EB Games, Zing | an admin's browser | The page opened in a tab of its own. The data it fetches (`/search/query`, with the page's own filters) is learned from it, then asked for from inside the page each time, never the browser's cached copy. |
-| Premium Bandai | an admin's browser | The same: its `/api/search`, with the region its code sends. |
+| Premium Bandai | Mugibot's server, else an admin's browser | A brand's or shop's page (One Piece Card Game's, Bandai Card Shop's) and its search page with the site's filters: its `/api/search` for that brand's or shop's code, newest first, with the region its code sends — from the server, or asked for from inside the page in an admin's browser while the server's refused (the same address: its look carries on). Another page: learned from the page in an admin's browser. |
 | BIG W, Pokémon Center, The Gamesmen | an admin's browser | The page opened and read once its products are drawn (BIG W's in its private window). |
 | Amazon | an admin's browser | Its own HTML, asked for from inside an Amazon page. |
 | Kmart | Mugibot's server | A search (`?searchTerm=`) through its search provider, the way its drop watches search it. Other Kmart pages are drawn in an admin's browser. |
@@ -1417,6 +1417,62 @@ Auto-checkout itself must be switched on (Tasks page). The watch says so if it i
 alert (in Discord or on the dashboard) buys as many as the member chose for that watch, or what the watch says.
 **Home** shows each priority page: how lately it was read, and whether the member's Auto-checkout buys its drops.
 
+### 🚨 Premium Bandai drops (Nov 2026)
+
+The owner's two Premium Bandai pages, as priority watches for everyone — **whatever drops on them is bought**:
+
+- **One Piece Card Game**: `https://p-bandai.com/au/brand/onepiececardgame`
+- **Bandai Card Shop**: `https://p-bandai.com/au/shop/bandaicardshop`
+
+**How they're read.** Each page carries its own code (One Piece Card Game `06-0074`, Bandai Card Shop `05-0004`), and the
+site's search JSON lists that brand's or shop's products by it, newest first —
+`/api/search?limit=100&offset=0&sortType=NewArrival&_f_brands=06-0074` (`_f_shops=05-0004`), with the region header its
+code sends (`x-g1-area-code: au`). That's read **from Mugibot's server** (Premium Bandai answers it, Nov 2026: one small
+JSON a read, ~1 s), and while the server's refused, **from an admin's browser**, asked for at the same address from inside
+the page — so the watch's look carries on where the server left off (a drop's rush is when a store starts refusing).
+Every bot check or "too many" is waited out, never got around.
+
+**How often.** Every **3 seconds** (its searches stay every 30 s). And Premium Bandai publishes when each pre-order's
+window opens (`saleStartExpectedDt`), so from **30 seconds before a window opens till 3 minutes after, the page is read
+every second** — the moment it opens is seen within about a second. (Not "every millisecond": an answer takes about a
+second to come back from Bandai; a thousand asks a second would be a flood its bot protection turns away — and then
+nothing's read at all, right when it matters.) Each watch's card shows "⏱ next pre-order opens … — read every second
+around it".
+
+**What's bought.** Anything new on either page: no key phrases, no lowest price, **no kind of product left out**
+(accessories too — the owner's rule: "doesn't matter what drops, just buy it"). Bandai's order windows, as its JSON gives
+them:
+
+- **On** (open): on sale. New on the page → bought at once.
+- **Waiting** (listed ahead of its window): **armed**, and bought the moment its window opens — for each member whose
+  Auto-checkout of these drops is on, including one who turns it on after it was listed (up to their max).
+- **On, sold out** (`OUT_OF_STOCK` in its window): armed — bought if stock comes back (a cancellation) before it closes.
+- **End** (closed for good): never armed — and anything armed for it while it was open is disarmed (each member told). The
+  same product's next window is a **new code** (`…001`, then `…002`), so it's a new drop, bought as one.
+
+What was on sale when a page was first read is "how things were" (there before the watch), as on every page watch.
+
+**Who buys.** Every member's DM'd each drop (🚨 PRIORITY DROP, ⚡ Buy). It's bought **for each member who's turned on
+🤖 Auto-checkout its drops for me** (🎯 Drop watches → 🚨 Priority drops) — up to their own max for one, as many as Premium
+Bandai allows (Max) or one (Min), within their own Auto-checkout limits — through **Premium Bandai's own checkout**:
+PLACE PRE-ORDER → View Cart → Proceed to Checkout → Global-e's frame (details, card, the purchase agreement) → **Pay and
+Place Order** (docs/RETAILER-FLOWS.md). Nobody's Auto-checkout is ever turned on for them.
+
+**Set up.** By itself once, when the server starts (Nov 2026): for the admin whose 🚨 EB Games pre-order drops are set
+up — as their One Piece page has it (how many, and their own Auto-checkout with its max price) — else the first of
+`ADMIN_USERNAMES` with an account. Posted where Premium Bandai's drops go by the usual rules (`#premium-bandai`). After
+that (or on a new install), **Monitors → 🎯 Drop watches → 🚨 Premium Bandai drops → Watch Premium Bandai drops** adds
+them. ✎ on a watch changes it as any priority watch.
+
+**Signed out.** Premium Bandai, EB Games and JB Hi-Fi are among the stores every member keeps signed in to by default;
+a sign-out at one is DM'd by Mugibot at once with a **Sign in** button, and the extension (1.43.0) looks often enough
+to see it within minutes — Premium Bandai every minute, JB Hi-Fi every 2, EB Games every 5.
+
+Tests: `test/pbandai.test.js` (the pages' reads, the windows, the pace, the preset and its setting up, the buys, the
+browser standing in), `test/signins.test.js`, and end to end through the extension (`test/extension.e2e.test.js`: a
+window opening, read every second, bought through Global-e's frame and placed once; a new product bought and placed
+once; each store's sign-in read at its own pace).
+
 ### Mugibot 2.1: the dashboard, alerts and queues
 
 - **The dashboard** is dark by default (a drop bot's look) and has four pages: **🏠 Home** (the front door — your setup as
@@ -1455,7 +1511,10 @@ alert (in Discord or on the dashboard) buys as many as the member chose for that
 - **Store sign-ins, 24/7** (Account → 🔑 Store sign-ins): see `server/signins.js`. The stores a member keeps signed in to
   (EB Games, Premium Bandai, JB Hi-Fi, BIG W, Target and Kmart by default) are checked around the clock by the extension
   (1.40.0): pages that say so in their source every 10 minutes; the others' home pages, opened in the extension's window,
-  when nothing has said for 20 minutes (BIG W: an hour). Signed out → told at once on the dashboard, on the extension's
+  when nothing has said for 20 minutes (BIG W: an hour). Extension **1.43.0** (Nov 2026): each at its own pace —
+  **Premium Bandai every minute, JB Hi-Fi every 2 minutes, EB Games every 5** — so a sign-out at one of those three is
+  DM'd on Discord within minutes, not 10–20. (JB Hi-Fi's not every minute: its home page is a big one, and its
+  checkpoint looks at how often a browser asks.) Signed out → told at once on the dashboard, on the extension's
   button (`IN?`) and by Discord DM with a **Sign in** button; reminded twice a day at most; told when back in. Mugibot
   never signs in for anyone and never sees a password.
 - **One Piece at EB Games and Premium Bandai** (Drops → drop watches → 🏴‍☠️ One Piece preset): watches for "one piece tcg" /

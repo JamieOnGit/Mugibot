@@ -2422,8 +2422,37 @@ test("store login monitor: the extension sees where you're signed in (its checks
   assert.equal(l['demo-jbhifi'].how, 'check');
   assert.equal(l['demo-kmart'].checked, false, "Kmart's pages don't say, so it isn't checked in the background");
   assert.notEqual(l['demo-kmart'].how, 'check');
-  // Within 10 minutes it doesn't ask again (the alarm runs every 30 s).
+  // Not again till each store is due (the alarm asks every 30 s).
   assert.equal(await sw.evaluate(() => globalThis.mugibotCheckLogins()), 0);
+  // Each at its own pace (1.43.0): Premium Bandai's every minute, JB Hi-Fi's every 2 — so a sign-out there is DM'd within
+  // a minute or two — the others every 10.
+  const checksAt = () => sw.evaluate(() => chrome.storage.local.get('loginChecks').then((x) => x.loginChecks || {}));
+  const shift = (ms) => sw.evaluate((by) => chrome.storage.local.get('loginChecks').then(({ loginChecks = {} }) => {
+    for (const k of Object.keys(loginChecks)) loginChecks[k] -= by;
+    return chrome.storage.local.set({ loginChecks });
+  }), ms);
+  await shift(61 * 1000);
+  const t1 = Date.now();
+  await sw.evaluate(() => globalThis.mugibotCheckLogins());
+  let at = await checksAt();
+  assert.ok(at['demo-pbandai'] >= t1, 'a minute on: Premium Bandai read again');
+  assert.ok(at['demo-jbhifi'] < t1, "JB Hi-Fi: every 2 minutes");
+  assert.ok(at['demo-thegamescube'] < t1, 'the others: every 10 minutes');
+  await shift(61 * 1000);
+  const t2 = Date.now();
+  await sw.evaluate(() => globalThis.mugibotCheckLogins());
+  at = await checksAt();
+  assert.ok(at['demo-pbandai'] >= t2 && at['demo-jbhifi'] >= t2, 'two minutes on: both');
+  assert.ok(at['demo-thegamescube'] < t2, 'the others still not');
+  // Signed in at Premium Bandai, then signed out: its next minute's read sees it, and the account hears straight away.
+  store.state.signedIn.pbandai = true;
+  await shift(61 * 1000);
+  await sw.evaluate(() => globalThis.mugibotCheckLogins());
+  await waitFor(async () => (await loginsNow())['demo-pbandai'].status === 'in', { message: 'Premium Bandai: signed in' });
+  store.state.signedIn.pbandai = false;
+  await shift(61 * 1000);
+  await sw.evaluate(() => globalThis.mugibotCheckLogins());
+  await waitFor(async () => (await loginsNow())['demo-pbandai'].status === 'out', { message: 'Premium Bandai: signed out, seen a minute later' });
 
   // A store whose pages don't say so: read from the page you open (the ⚡ Buy tests before this one
   // opened Kmart already, so look for a fresh reading). The header's "Sign in"…
@@ -5208,6 +5237,77 @@ test("🚨 priority drops: the EB Games pre-order preset (One Piece — anything
     sweeper.save({ stores: off }, null);
     await useItems([]);
     await closeStorePages('ebgames');
+  }
+});
+
+test("🚨 Premium Bandai drops (the owner's two pages): read from Mugibot's server as the site's search JSON; a pre-order listed ahead of its window is armed, its page read every second as it opens, and the moment it opens this browser checks it out through Premium Bandai's own checkout (Global-e's frame, \"Pay and Place Order\") — placed, once; then something new on the page — bought at once, placed, once; a closed window never armed", async () => {
+  const userId = env.app.repo.userByUsername('ash').id;
+  const sweeper = env.app.sweeper;
+  const off = Object.fromEntries(sweeper.stores().map((s) => [s.retailer.id, 'off']));
+  sweeper.save({ stores: { ...off, 'demo-pbandai': 'server' } }, null);
+  env.app.repo.updateUser(userId, { role: 'admin' });
+  await useItems([]);
+  await pageWatchAco();
+  const S = store.shop('pbandai');
+  const ordersBefore = S.orders.length;
+  // On the pages already: a window closed for good, and a pre-order whose window opens in a few seconds.
+  const opensAt = Date.now() + 25_000;
+  store.addProduct('pbandai', { sku: 'N2990200001', name: 'ONE PIECE CARD GAME 3rd Anniversary Set', price: 148, status: 'out_of_stock', saleStatus: 'End', brand: '06-0074' });
+  store.addProduct('pbandai', { sku: 'N2990200002', name: 'ONE PIECE CARD GAME Premium Card Collection -Ace & Sabo & Luffy-', price: 52, status: 'coming_soon', opensAt, brand: '06-0074', shop: '05-0004' });
+  const preset = await browserApi('POST', '/api/drops/presets/pbandaidrops', { demo: true, qty: 'min' });
+  assert.equal(preset.status, 200, JSON.stringify(preset.body));
+  const [onePiece, cardShop] = preset.body.added;
+  assert.equal(onePiece.page, `${store.url}/pbandai/brand/onepiececardgame`);
+  for (const w of preset.body.added) assert.equal((await browserApi('PUT', `/api/drops/${w.id}/follow`, { aco: true, maxPrice: 300, qty: 'min' })).status, 200);
+  const key = (w) => `${w.store}|${w.page}`;
+  // Read both pages, a turn each (their next reads as due).
+  const readBoth = async () => {
+    let n = 0;
+    for (let i = 0; i < 8 && n < 2; i++) {
+      n += await env.app.pages.tick();
+      if (n < 2) await new Promise((res) => setTimeout(res, 600));
+    }
+    return n;
+  };
+  try {
+    await acoListen();
+    assert.equal(await readBoth(), 2, 'both pages read from the server');
+    assert.ok(env.app.drops.get(onePiece.id).baselineAt && env.app.drops.get(cardShop.id).baselineAt, 'their first look');
+    assert.equal(env.app.repo.itemBySku(userId, 'demo-pbandai', 'N2990200001'), null, 'closed for good: never armed');
+    const armed = env.app.repo.itemBySku(userId, 'demo-pbandai', 'N2990200002');
+    assert.ok(armed && armed.aco, 'listed ahead of its window: armed');
+    // Within 30 s of its opening: read every second.
+    const st = env.app.pages.state.get(key(onePiece));
+    assert.equal(st.nextAt - st.startedAt, 1000, 'read every second as it opens');
+    // Its window opens: read within a second — and bought.
+    await new Promise((res) => setTimeout(res, Math.max(0, opensAt - Date.now())));
+    store.set('pbandai', 'N2990200002', { status: 'preorder', opensAt: null });
+    const opened = Date.now();
+    await waitFor(async () => { await env.app.pages.tick(); return env.app.db.get('SELECT 1 AS y FROM aco_runs WHERE item_id = :i', { i: armed.id }); }, { timeout: 10000, interval: 200, message: 'its Auto-checkout started' });
+    assert.ok(Date.now() - opened < 3000, `started ${Date.now() - opened} ms after it opened`);
+    await waitFor(() => S.orders.length === ordersBefore + 1, { timeout: 90000, message: 'the order placed at the dummy Premium Bandai' });
+    assert.deepEqual(S.orders.at(-1).cart.map((c) => [c.sku, c.qty]), [['N2990200002', 1]]);
+    assert.equal(S.orders.at(-1).form.Terms, true, 'the purchase agreement ticked');
+    await waitFor(async () => (await lastRun()).status === 'placed', { message: 'the run says placed' });
+    await closeStorePages('pbandai');
+    // Something new on the page (an accessory, even: whatever drops).
+    store.addProduct('pbandai', { sku: 'N2990200003', name: 'ONE PIECE CARD GAME Official Playmat -Straw Hat Crew-', price: 35, status: 'preorder', brand: '06-0074' });
+    await new Promise((res) => setTimeout(res, 3100));
+    await readBoth();
+    await waitFor(() => S.orders.length === ordersBefore + 2, { timeout: 90000, message: 'the new one placed too' });
+    assert.deepEqual(S.orders.at(-1).cart.map((c) => [c.sku, c.qty]), [['N2990200003', 1]]);
+    await waitFor(async () => (await lastRun()).status === 'placed', { message: 'placed' });
+    // Read on: nothing bought twice.
+    await new Promise((res) => setTimeout(res, 3100));
+    await readBoth();
+    await new Promise((res) => setTimeout(res, 1500));
+    assert.equal(S.orders.length, ordersBefore + 2, 'each placed once');
+  } finally {
+    for (const w of preset.body.added) await browserApi('DELETE', `/api/drops/${w.id}`);
+    env.app.repo.updateUser(userId, { role: 'user' });
+    sweeper.save({ stores: off }, null);
+    await useItems([]);
+    await closeStorePages('pbandai');
   }
 });
 

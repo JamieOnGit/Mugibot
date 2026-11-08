@@ -1055,8 +1055,12 @@ export class Sweeper {
         // (Alerts: listed already as far as a drop watch knows — found by another search than its own words', unless it's
         //  new; or seen by the watch before.)
         const dropDone = (w) => baseline || !this.drops.baseAt(w, r.id) || (term.keyword !== w.words && !newListing) || (!!seen.get(w.id) && seen.get(w.id).before !== null);
+        // (An order window closed for good — Premium Bandai's "End": in the catalogue as ever, but no VIP or drop watch's
+        //  find, never armed waiting for a return that can't come; what was armed for it, disarmed.)
+        const closed = p.ended === true;
+        if (closed) this.closedWindow(r, p);
         // Someone's own drop watch's words in the name (monitor/drops.js): on their watchlist, theirs alone.
-        if (this.drops && !mkt) {
+        if (this.drops && !mkt && !closed) {
           for (const w of this.drops.ownFor(r.id, title)) {
             await this.drops.foundOwn(w, r, p, status, { baseline: dropDone(w), verdict: verdict(w), later }).catch((e) => this.cfg.log('[drops]', e.message));
           }
@@ -1079,8 +1083,8 @@ export class Sweeper {
         if (cards && ev.includes('new')) cardsNew += 1;
         const product = () => [p.sku, ...(p.aliases || [])].map((k) => this.catalog.productFor(r.id, k)).find(Boolean);
         // (Armed by what the watch saw of it: something on sale before the watch is never bought, whichever search comes first.)
-        if (watch) await this.vip.found(watch, product(), { verdict: verdict(watch), status, later }).catch((e) => this.cfg.log('[vip]', e.message));
-        if (drop) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, verdict: verdict(drop), status, later }).catch((e) => this.cfg.log('[drops]', e.message));
+        if (watch && !closed) await this.vip.found(watch, product(), { verdict: verdict(watch), status, later }).catch((e) => this.cfg.log('[vip]', e.message));
+        if (drop && !closed) await this.drops.foundShared(drop, product(), { baseline: dropBaseline, verdict: verdict(drop), status, later }).catch((e) => this.cfg.log('[drops]', e.message));
       }
       // (One more read of each own watch's first look, while that's going.)
       if (this.sightings) for (const w of mine) this.sightings.ownRead(w, r.id, { whole, codes: codesIn, how: way });
@@ -1139,6 +1143,13 @@ export class Sweeper {
         // What each VIP and drop watch at this store saw of it (monitor/sightings.js): this page's watches, their own read.
         // (A page sorted newest first: what's below it in this read, for whether it can be an old product coming into view.)
         const seen = this.sight(r, p, { title, status, own, way: how, before, now, below: newestFirst ? codesIn.slice(i + 1).flat() : null });
+        // (An order window that's closed for good — Premium Bandai's "End": never a find, so never armed on everyone's
+        //  watchlist waiting for a return that can't come — and what a watch armed for it while it was open, disarmed
+        //  (once a code: drops.windowClosed). Its next window is a new code: that one's the drop.)
+        if (p.ended) {
+          this.closedWindow(r, p);
+          continue;
+        }
         const verdict = (w) => (seen.get(w.id) || {}).verdict || 'pending';
         // (A key phrase in its name — or, a page with none, any product — at the watch's lowest price or more.)
         const hits = watches.map((w) => ({ w, phrase: this.drops.pageHit(w, title, typeof p.price === 'number' ? p.price : null) })).filter((x) => x.phrase);
@@ -1176,6 +1187,18 @@ export class Sweeper {
       // (wait: a browser's results — answered once the channel's posts are in, as before; members' DMs already going.)
       if (wait) await posted;
     }
+  }
+
+  /**
+   * An order window closed for good (Premium Bandai's "End", p.ended): no watch's find — and what a watch armed for it
+   * while it was open, disarmed (drops.windowClosed), once a code.
+   */
+  closedWindow(r, p) {
+    const k = `${r.id}|${p.sku}`;
+    if (!this.drops || (this.closedSeen ||= new Set()).has(k)) return;
+    if (this.closedSeen.size > 20000) this.closedSeen.clear();
+    this.closedSeen.add(k);
+    this.drops.windowClosed(r.id, p.sku);
   }
 
   /** The VIP and drop watches at a store whose words are these (their own search: monitor/sightings.js). */
@@ -2069,6 +2092,9 @@ export class Sweeper {
       price: price(p.price), wasPrice: price(p.wasPrice), inStock: typeof p.inStock === 'boolean' ? p.inStock : null, preorder: p.preorder === true, inStoreOnly: p.inStoreOnly === true,
       url: onStore(p.url), image: /^https:\/\//.test(image) ? image : '', marketplace: p.marketplace === true,
       variantId: /^\d{1,20}$/.test(String(p.variantId ?? '')) ? String(p.variantId) : null,
+      // (Premium Bandai's: an order window that's closed for good; and when one that hasn't opened yet does.)
+      ...(p.ended === true ? { ended: true } : {}),
+      ...(typeof p.opensAt === 'number' && Number.isFinite(p.opensAt) && p.opensAt > 0 && p.opensAt < 8.64e15 ? { opensAt: p.opensAt } : {}),
     };
   }
 
