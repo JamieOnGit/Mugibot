@@ -2310,17 +2310,21 @@ async function probeLogins(st, held, { force = false } = {}) {
     const keep = new Set(st.signins || []);
     // (Not for an account whose membership has lapsed: nothing is bought for it anyway.)
     if (!keep.size || st.active === false) return 0;
-    const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
+    const { [LOGINS]: all = {}, loginProbes = {} } = await chrome.storage.local.get([LOGINS, 'loginProbes']);
     const denied = await deniedStores().catch(() => new Set());
     let n = 0;
     for (const r of st.flows || []) {
       const a = r.account;
       if (!keep.has(r.id) || !a || a.check || a.probe === false || !r.base || held.has(r.id) || denied.has(r.id)) continue;
       const every = Number(a.probeMinutes) > 0 ? Math.max(60 * 1000, Number(a.probeMinutes) * 60 * 1000) : PROBE_MS;
-      const last = all[r.id];
-      if (!force && last && Date.now() - last.at < every) continue;
+      // (Since it was last seen either way, or last looked at — a look that couldn't tell counts too: a store whose page
+      //  never says, its bot check up or the store down, is looked at again at its pace, never at every alarm.)
+      const last = Math.max(all[r.id] ? all[r.id].at : 0, Number(loginProbes[r.id]) || 0);
+      if (!force && Date.now() - last < every) continue;
       // (force — the dashboard's "Check now": still not one looked at in the last minute.)
-      if (force && last && Date.now() - last.at < 60 * 1000) continue;
+      if (force && Date.now() - last < 60 * 1000) continue;
+      loginProbes[r.id] = Date.now();
+      await chrome.storage.local.set({ loginProbes });
       const status = await probeOne(r).catch(() => null);
       if (status) { await noteLogin(r.id, status, 'probe'); n += 1; }
     }

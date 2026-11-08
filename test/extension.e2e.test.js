@@ -111,7 +111,13 @@ async function buyFromDashboard(page, name) {
   await page.goto(`${env.url}/app#watch`);
   const row = page.locator('#w-list li', { hasText: name });
   assert.equal(await row.locator('input.qty').count(), 0, 'no quantity box by ⚡ Buy (how many is the item\'s)');
-  const [shop] = await Promise.all([ctx.waitForEvent('page'), row.getByRole('button', { name: '⚡ Buy' }).click()]);
+  // (The tab ⚡ Buy opens on the dummy store — never one the extension opens of its own meanwhile: a store's home page
+  //  looked at for your sign-in, a real store's or Chrome's error page.)
+  const onStore = async (p) => {
+    if (p.url() === 'about:blank') await p.waitForURL((u) => u.href !== 'about:blank', { timeout: 15000 }).catch(() => null);
+    return p.url().startsWith(store.url);
+  };
+  const [shop] = await Promise.all([ctx.waitForEvent('page', { predicate: onStore }), row.getByRole('button', { name: '⚡ Buy' }).click()]);
   return shop;
 }
 
@@ -2411,7 +2417,7 @@ test("store login monitor: the extension sees where you're signed in (its checks
   };
   // Signed in at the dummy JB Hi-Fi (Shopify) and The Games Cube; not at Trainer Town or Premium Bandai.
   store.state.signedIn = { jbhifi: true, thegamescube: true };
-  await sw.evaluate(() => chrome.storage.local.remove(['logins', 'loginsCheckedAt']));
+  await sw.evaluate(() => chrome.storage.local.remove(['logins', 'loginsCheckedAt', 'loginChecks', 'loginProbes']));
   const checked = await sw.evaluate(() => globalThis.mugibotCheckLogins({ force: true }));
   assert.ok(checked >= 4, `stores whose pages say so, checked: ${checked}`);
   await waitFor(async () => {
@@ -2444,6 +2450,14 @@ test("store login monitor: the extension sees where you're signed in (its checks
   at = await checksAt();
   assert.ok(at['demo-pbandai'] >= t2 && at['demo-jbhifi'] >= t2, 'two minutes on: both');
   assert.ok(at['demo-thegamescube'] < t2, 'the others still not');
+  // A store looked at in its own page (EB Games', Kmart's…) is looked at again at its pace — even when the look couldn't
+  // tell (its bot check up, the store unreachable): never a tab opened at every alarm.
+  const probes = () => sw.evaluate(() => chrome.storage.local.get('loginProbes').then((x) => x.loginProbes || {}));
+  const p1 = await probes();
+  assert.ok(Object.keys(p1).length >= 1, `looked at in their own pages: ${JSON.stringify(p1)}`);
+  await sw.evaluate(() => globalThis.mugibotCheckLogins());
+  await sw.evaluate(() => globalThis.mugibotCheckLogins());
+  assert.deepEqual(await probes(), p1, 'not looked at again at the next alarms');
   // Signed in at Premium Bandai, then signed out: its next minute's read sees it, and the account hears straight away.
   store.state.signedIn.pbandai = true;
   await shift(61 * 1000);
@@ -2535,7 +2549,7 @@ test("🔑 store sign-ins, 24/7 (Mugibot 2.0): a store you keep signed in to who
     // (The extension's copy of your settings, asked for afresh — and nothing seen at EB Games yet.)
     await sw.evaluate(async () => {
       const all = await chrome.storage.local.get(null);
-      await chrome.storage.local.remove([...Object.keys(all).filter((k) => k.startsWith('state:')), 'logins', 'loginsCheckedAt']);
+      await chrome.storage.local.remove([...Object.keys(all).filter((k) => k.startsWith('state:')), 'logins', 'loginsCheckedAt', 'loginChecks', 'loginProbes']);
     });
     const before = discord.dmsTo('d-ash').length;
     const asked = store.state.requests.length;
