@@ -125,6 +125,17 @@ export function ebNeedsPriority(w, store = w.store) {
 
 export const EB_ONLY_PRIORITY = 'At EB Games, Auto-checkout buys only from the 🚨 priority pages (EB Games pre-order drops) — this watch alerts you instead. ⚡ Buy it yourself from the alert, or watch the product by its link';
 
+// Premium Bandai's pages the 🚨 Premium Bandai drops preset reads (the owner's two, Nov 2026): the One Piece Card Game
+// brand page and the Bandai Card Shop — every product on each, newest first (monitor/pages.js reads the site's search
+// JSON for them: from the server, every 3 s, and every second around an order window's published opening time).
+export const PB_PAGES = Object.freeze({
+  onepiece: '/brand/onepiececardgame',
+  cardshop: '/shop/bandaicardshop',
+});
+
+// (Premium Bandai, and the dummy store's copy of it.)
+export const PB_STORES = new Set(['pbandai', 'demo-pbandai']);
+
 /** Which of the preset's EB Games pages a link is (its own filters, whatever their order), or ''. */
 export function ebPageOf(url) {
   let u;
@@ -157,6 +168,19 @@ export const PRESETS = Object.freeze({
       { key: 'onepiece', label: 'EB Games One Piece pre-orders', path: EB_PAGES.onepiece, phrases: [] },
       { key: 'pokemon', label: 'EB Games Pokémon pre-orders (boosters, collections, decks)', path: EB_PAGES.pokemon, phrases: [] },
       { key: 'onepiece-boosters', label: 'EB Games One Piece boosters', path: EB_PAGES.boosters, phrases: ['one piece booster'] },
+    ],
+  },
+  // 🚨 Premium Bandai's pages (Nov 2026, the owner's two), for everyone — priority watches: whatever drops on them
+  // (anything new: no key phrases, no lowest price, no kind of product left out — "doesn't matter what drops, buy it"),
+  // every member DM'd the moment it's up, and bought straight away through Premium Bandai's own checkout for each member
+  // who's turned on Auto-checkout of these drops (up to their own max, as many as the store allows or one). A pre-order
+  // listed ahead of its window ("Waiting") is armed then, and bought the moment its window opens.
+  pbandaidrops: {
+    label: 'Premium Bandai drops',
+    store: 'pbandai',
+    pages: [
+      { key: 'onepiece', label: 'Premium Bandai One Piece Card Game', path: PB_PAGES.onepiece, phrases: [], category: 'onepiece' },
+      { key: 'cardshop', label: 'Premium Bandai Card Shop', path: PB_PAGES.cardshop, phrases: [], category: 'other' },
     ],
   },
   onepiece: {
@@ -505,6 +529,9 @@ export class Drops {
     if (w.url) return true;
     // (EB Games: only the 🚨 priority pages' finds — ebNeedsPriority. A keyword watch at every store: not there.)
     if (ebNeedsPriority(w, store)) return false;
+    // (Premium Bandai's 🚨 priority pages: anything new on them — the owner's rule, Nov 2026: "doesn't matter what drops,
+    //  just buy it". Bandai's own store sells no single cards: every product there is a set, a box or goods.)
+    if (w.priority && PB_STORES.has(store)) return true;
     if (isSingle(name)) return false;
     // (A priority page's: anything new on it but an accessory — it's the admin's own page of card products, from their
     //  lowest price. "auto": only a card product Mugibot recognises.)
@@ -763,6 +790,7 @@ export class Drops {
   start() {
     this.priceDropsInNonTcg();
     try { this.upgradePresets(); } catch (e) { this.cfg.log('[drops] upgrade:', e.message); }
+    try { this.setUpPBandai(); } catch (e) { this.cfg.log('[drops] Premium Bandai drops:', e.message); }
     if (this.timer || !this.cfg.monitor.enabled) return;
     this.timer = setInterval(() => { this.tick().catch((e) => this.cfg.log('[drops]', e.message)); }, 5000);
     this.timer.unref?.();
@@ -1162,6 +1190,58 @@ export class Drops {
   }
 
   /**
+   * 🚨 Premium Bandai drops, set up once when the server starts (Nov 2026, the owner's ask): its two pages — One Piece
+   * Card Game's and Bandai Card Shop's — as priority watches for everyone, for one admin: the one whose EB Games
+   * pre-order drops are set up (as their One Piece page has it: how many, and their own Auto-checkout of it with its
+   * max price), else the first of ADMIN_USERNAMES with an account, else the first admin. Posted where Premium Bandai's
+   * drops go by the usual rules (#premium-bandai); every member DM'd each drop, and each turns on their own
+   * Auto-checkout of them (never turned on for them). A page that admin watches already is left as it is. Once, ever:
+   * after that (or with no admin yet), the preset's button on the Monitors page adds them.
+   */
+  setUpPBandai() {
+    if (Number(this.repo.getSetting('pbandaiPresetVersion')) >= 1) return;
+    const now = this.now();
+    const admins = this.db.all("SELECT id, username, created_at FROM users WHERE role = 'admin' AND disabled = 0 ORDER BY created_at, id");
+    const isAdmin = new Set(admins.map((u) => u.id));
+    const all = this.db.all('SELECT * FROM drop_watches ORDER BY created_at, id').map(toWatch);
+    // (The EB Games pre-order drops' owner: their One Piece page — or another of theirs — is how theirs are set.)
+    const eb = all.filter((w) => w.priority && w.page && EB_STORES.has(w.store) && isAdmin.has(w.userId) && ebPageOf(w.page));
+    const template = eb.find((w) => ebPageOf(w.page) === 'onepiece') || eb[0] || null;
+    const named = (this.cfg.adminUsernames || []).map((n) => admins.find((u) => String(u.username).toLowerCase() === n)).find(Boolean);
+    const ownerId = template ? template.userId : (named || admins[0] || {}).id;
+    if (!ownerId) {
+      this.repo.setSetting('pbandaiPresetVersion', 1);
+      return;
+    }
+    const r = this.retailers.get(template && template.store.startsWith('demo-') && this.cfg.demoStoreUrl ? 'demo-pbandai' : 'pbandai');
+    if (!r) return;
+    const aco = !!(template && template.aco && template.maxPrice !== null);
+    const added = [];
+    for (const pg of PRESETS.pbandaidrops.pages) {
+      const page = pageLink(`${r.base}${pg.path}`);
+      if (all.some((w) => w.userId === ownerId && w.page === page)) continue;
+      const id = newId('drp');
+      this.db.run(`INSERT INTO drop_watches (id, user_id, shared, store, site, words, url, label, category, aco, max_price, qty, channel_id, role_id, page, phrases, every_seconds, min_price, priority, created_at)
+        VALUES (:id, :u, 1, :store, '', '', '', :label, :category, :aco, :max, :qty, '', '', :page, '[]', :every, NULL, 1, :t)`, {
+        id, u: ownerId, store: r.id, label: pg.label, category: pg.category, aco: aco ? 1 : 0, max: aco ? template.maxPrice : null,
+        qty: template ? template.qty : 'max', page, every: floorFor(r), t: now,
+      });
+      this.repo.audit(ownerId, null, 'drop-upgrade', `added ${id}: priority, everything @ ${page}`);
+      added.push(pg.label);
+    }
+    if (added.length) {
+      this.repo.addEvent(ownerId, {
+        type: 'aco', level: 'warn',
+        message: `🚨 Premium Bandai drops: watching ${added.join(' and ')} for everyone — every 3 seconds, and every second around a pre-order's opening time. Whatever drops there, every member's DM'd and it's bought for each member who's turned on Auto-checkout of these drops. ${aco
+          ? `Your own Auto-checkout buys them, up to $${Number(template.maxPrice).toFixed(2)} each (as your EB Games pre-order drops) — change it with ✎ on each.`
+          : 'Turn on your own Auto-checkout of them (your max price) on the Monitors page → 🎯 Drop watches.'}`,
+      });
+    }
+    this.repo.setSetting('pbandaiPresetVersion', 1);
+    this.changed();
+  }
+
+  /**
    * A preset of search pages for everyone (EB Games' pre-order drops): each a priority watch — every member DM'd the
    * moment something new is up there, and bought for each member who's turned its Auto-checkout on. Admins only.
    * input: { minPrice (each page's lowest price), qty ('max' | 'min'), phrases: { <page key>: [...] } (else each
@@ -1183,7 +1263,7 @@ export class Drops {
       const phrases = input.phrases && input.phrases[pg.key] !== undefined ? input.phrases[pg.key] : pg.phrases;
       try {
         added.push(await this.add({
-          page, phrases, label: pg.label, shared: true, priority: true, category: pg.key.startsWith('onepiece') ? 'onepiece' : 'pokemon', every: floorFor(r),
+          page, phrases, label: pg.label, shared: true, priority: true, category: pg.category || (pg.key.startsWith('onepiece') ? 'onepiece' : 'pokemon'), every: floorFor(r),
           minPrice: input.minPrice, qty: input.qty || 'max', aco: !!input.aco, maxPrice: input.maxPrice, channelId: input.channelId, roleId: input.roleId,
         }, user));
       } catch (e) {
@@ -1549,9 +1629,46 @@ export class Drops {
     if (aco !== cur.aco) {
       this.repo.addEvent(user.id, { type: 'aco', level: aco ? 'warn' : 'info', message: aco ? `🚨 ${nameOf(w)}: your Auto-checkout buys what drops there from now on — up to ${'$'}${maxPrice.toFixed(2)} each, ${qty === 'max' ? `as many as ${this.where(w)} allows` : 'one'}, within your Auto-checkout limits` : `🚨 ${nameOf(w)}: your Auto-checkout of its drops is off — you're still told when something drops` });
     }
+    // (What's there already and not on sale yet — a pre-order listed ahead of its window — armed for them now too.)
+    if (aco && (!cur.aco || maxPrice !== cur.maxPrice)) this.armWaiting(w, user, { maxPrice, qty });
     this.repo.audit(user.id, null, 'drop-follow', `${w.id}: aco=${aco ? 1 : 0} max=${maxPrice ?? ''} qty=${qty} dm=${mute ? 0 : 1}`);
     this.hub.publish(user.id, 'drop', { id: w.id });
     return this.view(this.get(w.id), user);
+  }
+
+  /**
+   * An order window closed for good (Premium Bandai's "End": its next window is a new code) — what a drop watch put on a
+   * watchlist armed for it and couldn't buy while it was open (it sold out first), disarmed: it can't come back, so it
+   * never sits armed there. Never one whose checkout is going; an item its member put on their watchlist themselves (no
+   * drop watch's) is left as they set it. Each member told. Returns how many.
+   */
+  windowClosed(store, sku) {
+    const rows = this.db.all(`SELECT id, user_id, name, url FROM items WHERE store = :s AND sku = :k COLLATE NOCASE AND aco = 1 AND drop_watch IS NOT NULL
+      AND id NOT IN (SELECT item_id FROM aco_runs WHERE item_id IS NOT NULL AND status IN ('queued', 'sent', 'started', 'waiting', 'checkout', 'placing'))`, { s: store, k: sku });
+    for (const it of rows) {
+      this.db.run('UPDATE items SET aco = 0, aco_at = NULL WHERE id = :id', { id: it.id });
+      this.repo.addEvent(it.user_id, { type: 'aco', level: 'info', message: `${it.name}: its order window has closed at ${this.retailers.name(store)}, so Auto-checkout is disarmed for it — if it comes back, it's a new listing, and your drop watches buy that one`, name: it.name, sku, url: it.url || null });
+      this.hub.publish(it.user_id, 'watch', { id: it.id, aco: false });
+    }
+    return rows.length;
+  }
+
+  /**
+   * A member who's just turned on (or changed their max for) a priority watch's Auto-checkout: what the watch armed that
+   * isn't on sale yet — a pre-order listed before its window opens (Premium Bandai's "Waiting": listed days ahead), a
+   * sold-out product — armed for them too, up to their max, so it's bought the moment it goes on sale, as for everyone
+   * who had it on before. Returns how many.
+   */
+  armWaiting(w, user, { maxPrice, qty }) {
+    let n = 0;
+    for (const f of w.found) {
+      if (f.arm !== 'armed' || !f.productId) continue;
+      const product = this.catalog.productById(f.productId);
+      if (!product || !product.url || isOrderable(product.status)) continue;
+      if (typeof product.price === 'number' && product.price > maxPrice) continue;
+      if (this.armUser(user.id, w, product, READ.has(product.status) ? product.status : null, { maxPrice, qty, follower: true })) n += 1;
+    }
+    return n;
   }
 
   /**
@@ -1662,7 +1779,7 @@ export class Drops {
         : (admin || mine) && w.store === 'other' && w.words && this.viaBrowser(w) ? 'browser' : '',
       allow: w.fails > 0 && /refused|bot check/i.test(w.error) && !this.viaBrowser(w) && this.readsFor(w, viewer) ? this.allowFor(viewer, w.site || w.page) : '',
       ...(pg ? {
-        page: w.page, phrases: w.phrases, every: pg.every, floor: pg.floor, readEvery: pg.readEvery,
+        page: w.page, phrases: w.phrases, every: pg.every, floor: pg.floor, readEvery: pg.readEvery, opensAt: pg.opensAt, hot: pg.hot,
         // (What it's waiting on: 'browser' — an admin's browser to read it, 'update' — that browser's extension to update, 'off' — its store switched off.)
         waiting: pg.waiting === 'browser' || pg.waiting === 'update' ? (admin ? pg.waiting : 'browser') : pg.waiting,
         ...(admin && pg.needs ? { needs: pg.needs, has: pg.has } : {}),

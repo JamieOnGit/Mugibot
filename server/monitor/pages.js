@@ -51,14 +51,23 @@ const JOB_MS = 100 * 1000;
 const RELEARN_MS = 10 * 60 * 1000;
 // Reads going at once from the server (each page waits its turn, never two at once).
 const MAX_JOBS = 6;
+// An order window opening at a time the store publishes ahead (Premium Bandai's pre-orders: "Waiting", opening at its
+// saleStartExpectedDt): its page read every HOT_SECONDS from HOT_BEFORE_MS before it opens till HOT_AFTER_MS after — the
+// moment it goes on sale seen within a second or so — and at its usual pace the rest of the time.
+export const HOT_SECONDS = 1;
+export const HOT_BEFORE_MS = 30 * 1000;
+export const HOT_AFTER_MS = 3 * 60 * 1000;
 const SHOPIFY_SKU = /\/products\/([^/?#.]+)\/?$/i;
 
 /**
  * The fastest a store's page is read: every 3 s — or its searches' own pace, where it asks for slower (Pokémon Center's
- * 30 s). (BIG W's 20 s only while it's read in an ordinary window: PageWatches.floorNow.)
+ * 30 s), unless its pages have a pace of their own (sweep.pageMinSeconds: Premium Bandai's 3 s — one small JSON a read,
+ * where a search round asks for every keyword). (BIG W's 20 s only while it's read in an ordinary window:
+ * PageWatches.floorNow.)
  */
 export function floorFor(r) {
-  return Math.max(PAGE_MIN_SECONDS, Number(r && r.sweep && r.sweep.minSeconds) || 0);
+  const own = r && r.sweep ? r.sweep.pageMinSeconds ?? r.sweep.minSeconds : 0;
+  return Math.max(PAGE_MIN_SECONDS, Number(own) || 0);
 }
 
 /**
@@ -102,6 +111,43 @@ function relPath(r, u) {
 const NOT_A_LIST = /(^|[/_.-])(cart|carts|basket|bag|checkout|checkouts|account|accounts|my-?account|customer|profile|login|log-?in|logout|log-?out|sign-?in|sign-?out|signin|signout|register|wishlist|wish-?list|orders?|payment|password|api|admin|graphql)([/_.?-]|$)/i;
 const NOT_A_LIST_PARAM = /^(add|add-?to-?cart|addtocart|action|logout|quantity|qty|variant|id)$/i;
 
+// Premium Bandai's brand and shop pages (the owner's two, Nov 2026): each page carries its own code (PRELOAD_DATA's
+// brandCode, shopCode), and the site's search JSON lists that brand's or shop's products by it (_f_brands, _f_shops) —
+// every one, newest first (sortType=NewArrival), each with its order window's state and when it opens. (Read from the
+// real site, Nov 2026: /au/brand/onepiececardgame is 06-0074, /au/shop/bandaicardshop 05-0004.)
+export const PB_CODES = Object.freeze({
+  brand: Object.freeze({ onepiececardgame: '06-0074' }),
+  shop: Object.freeze({ bandaicardshop: '05-0004' }),
+});
+// What one read of Premium Bandai's search JSON asks for: its most (the brand page has 20 products, the card shop 42).
+const PB_LIMIT = 100;
+
+/**
+ * Premium Bandai's search JSON for one of its pages — a brand's or a shop's page (its code known), or its search page
+ * with the site's own filters (_f_brands=…, _f_shops=…) — newest first; '' for any other page (read as it's drawn).
+ */
+export function pbandaiData(r, pageUrl) {
+  let u;
+  try { u = new URL(pageUrl); } catch { return ''; }
+  if (!r || !r.base) return '';
+  const rel = relPath(r, u);
+  const q = new URLSearchParams({ limit: String(PB_LIMIT), offset: '0', sortType: 'NewArrival' });
+  const m = rel.match(/^\/(brand|shop)\/([a-z0-9][a-z0-9_-]*)\/?$/i);
+  if (m) {
+    const kind = m[1].toLowerCase();
+    const slug = m[2].toLowerCase();
+    // (Its own codes only — never something every object has, "/brand/constructor".)
+    const code = Object.hasOwn(PB_CODES[kind], slug) ? PB_CODES[kind][slug] : '';
+    if (!code) return '';
+    q.set(kind === 'brand' ? '_f_brands' : '_f_shops', code);
+  } else if (/^\/search\/?$/.test(rel) && [...u.searchParams.keys()].some((k) => /^_f_[A-Za-z]+$/.test(k))) {
+    for (const [k, v] of u.searchParams) if ((/^_f_[A-Za-z]+$/.test(k) || k === 'keyword') && v) q.set(k, v);
+  } else return '';
+  // (The site's own API, outside the region's pages — /api/search, not /au/… — as its searches are: sweep.fromOrigin.)
+  const origin = r.sweep && r.sweep.fromOrigin && !r.demo ? new URL(r.base).origin : r.base;
+  return `${origin}/api/search?${q}`;
+}
+
 /** Why a link can't be a search page watch ('' when it can): a page that does something, not one that lists products. */
 export function pageProblem(url) {
   let u;
@@ -138,9 +184,19 @@ export function planFor(r, pageUrl, { urlFor = null } = {}) {
     // page's own filters. Learned from the page as it asks (guess: the same filters asked of /search/query, if it doesn't).
     case 'ebgames':
       return { server: null, browser: render('ebgames', { learn: true, guess: /\/search\/?$/.test(rel) ? `${r.base}${rel.replace(/\/+$/, '')}/query${u.search}` : '' }) };
-    // Premium Bandai's: its /api/search (with the region its code sends).
-    case 'pbandai':
+    // Premium Bandai's: its /api/search (with the region its code sends). A brand's or shop's page (One Piece Card Game's,
+    // Bandai Card Shop's): that JSON for its code, newest first — from the server (it answers Mugibot's server, Nov
+    // 2026), else asked for from inside a Premium Bandai page in an admin's browser. Another page: learned from the page.
+    case 'pbandai': {
+      const data = pbandaiData(r, u.href);
+      if (data) {
+        return {
+          server: { url: data, parser: 'pbandai', json: true, size: PB_LIMIT },
+          browser: page('pbandai', { url: data, inPage: true, expect: 'json', pageUrl: u.href, headers: r.sweep.headers || null }),
+        };
+      }
       return { server: null, browser: render('pbandai', { learn: true, headers: r.sweep.headers || null, guess: search(param('keyword', 'q')) }) };
+    }
     // Amazon's search and category pages are its own HTML, asked for from inside an Amazon page (servers get HTTP 503).
     case 'amazon':
       return { server: null, browser: page('amazon', { inPage: true, expect: 'html', pageUrl: r.base }) };
@@ -175,6 +231,28 @@ export function planFor(r, pageUrl, { urlFor = null } = {}) {
 }
 
 const keyOf = (p) => String(p.sku || p.url || '').toLowerCase();
+
+/**
+ * When a page is read next, from the start of its last read (from) at its pace (every, ms): every HOT_SECONDS while an
+ * order window on it is about to open or just has (opens: when each opens), the first of those reads when one's due
+ * before its usual next — else at its pace.
+ */
+export function nextRead(opens, from, every) {
+  let next = from + every;
+  const fast = from + HOT_SECONDS * 1000;
+  for (const t of opens || []) {
+    const start = t - HOT_BEFORE_MS;
+    if (fast >= start && fast <= t + HOT_AFTER_MS) next = Math.min(next, fast);
+    else if (start > from) next = Math.min(next, start);
+  }
+  return next;
+}
+
+/** The next order window a page's last read showed opening (or just opened), and whether it's read every second for it now. */
+function windowOf(opens, now) {
+  const t = (opens || []).find((x) => x > now - HOT_AFTER_MS);
+  return t ? { opensAt: t, hot: now >= t - HOT_BEFORE_MS && now <= t + HOT_AFTER_MS } : null;
+}
 
 export class PageWatches {
   constructor({ cfg, db, retailers, drops, hub, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
@@ -238,7 +316,7 @@ export class PageWatches {
   st(key) {
     let s = this.state.get(key);
     if (!s) {
-      s = { nextAt: 0, inFlight: 0, startedAt: 0, fails: 0, lastAt: null, lastOkAt: null, okTimes: [], via: '', browserUntil: 0, serverEmpty: 0, dataUrl: '', learnedAt: 0, base: null, seen: new Set(), error: '', refused: false, siteBrowserAt: 0 };
+      s = { nextAt: 0, inFlight: 0, startedAt: 0, fails: 0, lastAt: null, lastOkAt: null, okTimes: [], via: '', browserUntil: 0, serverEmpty: 0, dataUrl: '', learnedAt: 0, base: null, seen: new Set(), error: '', refused: false, siteBrowserAt: 0, opens: [] };
       this.state.set(key, s);
     }
     return s;
@@ -445,7 +523,12 @@ export class PageWatches {
         const total = num(res.total, { min: 0, max: 1e7, int: true, def: null });
         const perPage = num(res.perPage, { min: 0, max: 1e5, int: true, def: null });
         const parsed = { products, problem, stated, total, perPage };
-        await this.done(g, { source: 'browser', how: res.how === 'data' ? 'browser:data' : 'browser:page', parsed, whole: total !== null && perPage !== null && holdsAll(parsed) });
+        // (Asked for at the very address the server asks — Premium Bandai's search JSON for a brand's or shop's page, the
+        //  same answer whoever asks: the server's way. A browser standing in for a refused server — a drop's rush is when
+        //  that happens — carries on where the server left off, never starting its look afresh with the drop in it.)
+        const plan = this.plan(g);
+        const same = res.how !== 'data' && !!plan && !!plan.server && !!plan.browser && !!plan.browser.inPage && plan.browser.url === plan.server.url;
+        await this.done(g, { source: 'browser', how: same ? 'server' : res.how === 'data' ? 'browser:data' : 'browser:page', parsed, whole: total !== null && perPage !== null && holdsAll(parsed) });
         out.push({ id: res.id, ok: true, products: products.length });
       } finally {
         // (Its next read is handed out only once this one's been taken in: never two at once for a page.)
@@ -504,8 +587,10 @@ export class PageWatches {
     // (The server's empty answer where an admin's browser draws the page: not part of the watches' first look — the page
     //  as the browser reads it is.)
     const look = !(serverEmpty && !products.length && this.browserAround());
+    // (What was asked for: the page's data from the server, or from inside a store page in the browser — newest first?)
+    const asked = source === 'server' ? (plan && plan.server ? plan.server.url : '') : st.dataUrl || (plan && plan.browser && plan.browser.inPage ? plan.browser.url : '');
     try {
-      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now, whole, how, look, wait: how !== 'server', newestFirst: newestFirst(g.page, st.dataUrl) });
+      if (g.r) await this.sweeper.ingestPage(g.r, peers, products, { fresh, now, whole, how, look, wait: how !== 'server', newestFirst: newestFirst(g.page, asked) });
       else await this.settleSite(peers, products, { fresh });
     } finally {
       for (const p of products) { const k = keyOf(p); if (k && st.seen.size < 5000) st.seen.add(k); }
@@ -517,8 +602,10 @@ export class PageWatches {
       st.refused = false;
       st.error = '';
       // (A website read from a browser while it refuses the server: the server asks again, less often. Over to an
-      //  admin's browser just now: its read straight away.)
-      st.nextAt = toBrowser ? now : (st.startedAt || now) + g.every * 1000 * (!g.r && source === 'browser' ? 4 : 1);
+      //  admin's browser just now: its read straight away. An order window opening soon: every second around it.)
+      st.opens = products.filter((p) => p.inStock !== true && typeof p.opensAt === 'number' && p.opensAt > now - HOT_AFTER_MS)
+        .map((p) => p.opensAt).sort((a, b) => a - b).slice(0, 50);
+      st.nextAt = toBrowser ? now : nextRead(st.opens, st.startedAt || now, g.every * 1000 * (!g.r && source === 'browser' ? 4 : 1));
     }
     const note = products.length ? ''
       : serverEmpty && st.serverEmpty >= 2 ? (this.browserAround() ? "Mugibot's server reads no products on this page — an admin's browser reads it instead" : "Mugibot's server reads no products on this page — an admin's browser can (Chrome with Mugibot's extension, signed in as an admin)")
@@ -621,8 +708,11 @@ export class PageWatches {
     if (!plan) waiting = 'unsupported';
     else if (!way) waiting = 'off';
     else if (way === 'browser' && !this.browserAround()) waiting = this.oldBrowser && this.now() - this.oldBrowser.at < BROWSER_AROUND_MS ? 'update' : 'browser';
+    const win = st ? windowOf(st.opens, this.now()) : null;
     return {
       every: w.every || PAGE_DEFAULT_SECONDS, floor: floorFor(r), readEvery: gaps.length ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length / 100) / 10 : null,
+      // (An order window on the page opening soon: when, and whether it's being read every second for it now.)
+      opensAt: win ? win.opensAt : null, hot: !!(win && win.hot),
       way: way || '', via: st ? st.via : '', nextAt: st ? st.nextAt || null : null, waiting,
       ...(waiting === 'update' ? { needs: PAGE_EXTENSION, has: this.oldBrowser.version } : {}),
     };

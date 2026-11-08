@@ -47,11 +47,15 @@ export default {
     // Needs the extension that sends those headers.
     extension: '1.8.1',
     minSeconds: 30,
+    // Its pages watched (a brand's, a shop's: monitor/pages.js) — one small JSON a read — every 3 s at the fastest, and
+    // every second around an order window's published opening time (Nov 2026: the owner's 🚨 Premium Bandai drops).
+    pageMinSeconds: 3,
     newestFirst: true,
   },
   // Store login monitor: the page's USER_DATA has the member ("loggedInMember") once you're signed in.
-  // (Guests can check out too — signed in, your billing address is already there.)
-  account: { signIn: '', check: { path: '', signedIn: /USER_DATA\s*=\s*\{[^\n]*"loggedInMember"\s*:\s*\{/, signedOut: /USER_DATA\s*=\s*\{/ } },
+  // (Guests can check out too — signed in, your billing address is already there.) Read every minute (its home page is
+  // small: 28 KB), so a sign-out here is DM'd on Discord within a minute (Nov 2026, the owner's ask; extension 1.43.0).
+  account: { signIn: '', check: { path: '', minutes: 1, signedIn: /USER_DATA\s*=\s*\{[^\n]*"loggedInMember"\s*:\s*\{/, signedOut: /USER_DATA\s*=\s*\{/ } },
   monitor: { server: true, browser: true },
   flow: {
     product: {

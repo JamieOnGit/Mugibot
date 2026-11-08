@@ -132,6 +132,10 @@ export const EXTENSION_VERSION = TEMPLATE.version;
 // is known by its label and the words around it ("Collect from", "Please enter suburb or postcode"), whatever its own
 // attributes say (EB Games' has "address" in them: 1.41.0 took it for the address lookup and typed your street into
 // it). The address lookup never types into it. Nothing else changed in how searches or checkouts go.
+// 1.43.0: your sign-ins checked at each store's own pace — Premium Bandai's every minute, JB Hi-Fi's every 2 minutes, EB
+// Games' (its home page looked at) every 5 — so a sign-out there is DM'd on Discord within minutes, not 10–20. And
+// Premium Bandai's pre-order windows read as the store gives them: one closed for good ("End") never armed, one not open
+// yet ("Waiting") with when it opens. Nothing else changed in how searches or checkouts go.
 export const ACO_EXTENSION_VERSION = '1.19.0';
 // The oldest that buys "as many as the store allows" (an older copy is asked for one).
 export const MOST_EXTENSION_VERSION = '1.40.0';

@@ -4,7 +4,7 @@
 // (📃 docs/MONITORING.md → Search pages). An admin's can be for everyone (#non-tcg-alerts, or the
 // Discord channel they pick for it, pinging the role they pick, and every dashboard); anyone's own are
 // theirs alone (their watchlist, their DMs).
-import { $, ago, api, busy, h, listTools, looksLikeListing, money, setMsg, toast } from './common.js';
+import { $, ago, api, busy, h, listTools, looksLikeListing, money, setMsg, toast, when } from './common.js';
 
 const STATUS = {
   in_stock: 'In stock', preorder: 'Pre-order', out_of_stock: 'Sold out', coming_soon: 'Coming soon', in_store: 'In store only', not_listed: 'Not listed yet',
@@ -286,6 +286,11 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     const ebOn = watches.filter((w) => w.priority && /ebgames/.test(w.store) && /subcategory=trading-cards-(one-piece|pokemon)/.test(w.page || '') && /sort=releasedate/.test(w.page || '')).length;
     $('#dw-eb-go').disabled = ebOn >= 3;
     $('#dw-eb-go').textContent = ebOn >= 3 ? '✓ Watching EB pre-order drops' : 'Watch EB pre-order drops';
+    // 🚨 The Premium Bandai preset (admins): its two pages — One Piece Card Game's and Bandai Card Shop's.
+    $('#dw-preset-pb').hidden = !admin;
+    const pbOn = watches.filter((w) => w.priority && /pbandai/.test(w.store) && /\/(brand\/onepiececardgame|shop\/bandaicardshop)\/?$/.test(w.page || '')).length;
+    $('#dw-pb-go').disabled = pbOn >= 2;
+    $('#dw-pb-go').textContent = pbOn >= 2 ? '✓ Watching Premium Bandai drops' : 'Watch Premium Bandai drops';
     const list = $('#dw-mine');
     list.textContent = '';
     if (!mine.length) list.append(h('li', { class: 'empty' }, narrowed && watches.some((w) => w.mine && !w.priority) ? 'None of yours match — change the search or press Clear.' : prio.some((w) => w.mine) ? 'No others yet (your priority ones are at the top) — paste a product\'s link above, or type the words in its name.' : 'No drop watches yet — paste a product\'s link above, or type the words in its name.'));
@@ -329,7 +334,9 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
     if (w.waiting === 'browser') return warn(isAdmin() ? `${whose(w.storeName)} page is read from an admin's browser — waiting for one (Chrome with Mugibot's extension, signed in as an admin)` : `Waiting to read ${whose(w.storeName)} page — it's read as soon as it can be`);
     if (w.error && w.fails) return warn(w.error, w.allow ? ` — ${allowText(w.allow)}` : '');
     if (!w.looked) return 'Reading the page in a moment…';
-    const bits = [`read ${ago(w.lastOkAt || w.lastAt)}`, w.readEvery ? `every ~${w.readEvery} s` : '', `${w.seen} on the page`, w.via === 'browser' ? (w.mine && !isAdmin() ? 'from your browser' : "from an admin's browser") : ''];
+    const bits = [`read ${ago(w.lastOkAt || w.lastAt)}`, w.readEvery ? `every ~${w.readEvery} s` : '', `${w.seen} on the page`, w.via === 'browser' ? (w.mine && !isAdmin() ? 'from your browser' : "from an admin's browser") : '',
+      // (A pre-order opening at a time the store published: read every second around it.)
+      w.hot ? '⏱ a pre-order opens now — read every second' : w.opensAt ? `⏱ next pre-order opens ${when(w.opensAt)} — read every second around it` : ''];
     const text = bits.filter(Boolean).join(' · ');
     return w.error ? h('span', {}, text, ' · ', h('span', { class: 'muted' }, w.error)) : text;
   }
@@ -645,6 +652,23 @@ export function setupDrops({ isAdmin = () => false, watching = () => null, watch
         setMsg($('#dw-eb-msg'), `Watching ${r.added.length} EB Games pre-order page${r.added.length === 1 ? '' : 's'} — every 3 seconds, every member DM'd when something drops${min ? ` (from ${money(min)})` : ''}.${skipped ? ` Not added: ${skipped}` : ''}`, true);
       } catch (err) {
         setMsg($('#dw-eb-msg'), err.message);
+      }
+    }).then(() => { if (d.data) render(); });
+  });
+
+  // 🚨 Premium Bandai drops (admins): its One Piece Card Game page and Bandai Card Shop — whatever drops on them, priority
+  // watches for everyone.
+  $('#dw-preset-pb').addEventListener('submit', (e) => {
+    e.preventDefault();
+    busy(e.target, async () => {
+      try {
+        const r = await api('POST', '/api/drops/presets/pbandaidrops', { qty: $('#dw-pb-qty').value });
+        d.data = { ...d.data, ...r };
+        render();
+        const skipped = (r.skipped || []).map((x) => `${x.label}: ${x.why}`).join('; ');
+        setMsg($('#dw-pb-msg'), `Watching ${r.added.length} Premium Bandai page${r.added.length === 1 ? '' : 's'} — every 3 seconds (every second around a pre-order's opening), every member DM'd when something drops.${skipped ? ` Not added: ${skipped}` : ''}`, true);
+      } catch (err) {
+        setMsg($('#dw-pb-msg'), err.message);
       }
     }).then(() => { if (d.data) render(); });
   });

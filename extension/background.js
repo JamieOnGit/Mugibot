@@ -2218,11 +2218,19 @@ function doneTyping(tabId, { all = false } = {}) {
 
 // --- the store login monitor -----------------------------------------------------
 // Whether you're signed in at each store (logins.js): seen on the store's pages as you open them,
-// and checked every 10 minutes for the stores whose pages say so. Your account shows it on the
-// dashboard (Extension tab) so you can sign in before a drop: signed in, ⚡ Buy's checkout is faster.
+// and checked every 10 minutes for the stores whose pages say so — or at a store's own pace
+// (account.check.minutes, 1.43.0: Premium Bandai's every minute, JB Hi-Fi's every 2), so a sign-out
+// there is told on Discord within a minute or two. Your account shows it on the dashboard (Extension
+// tab) so you can sign in before a drop: signed in, ⚡ Buy's checkout is faster.
 const LOGINS = 'logins';
 const LOGIN_CHECK_MS = 10 * 60 * 1000;
 let loginReport = null;
+
+/** How often a store whose pages say whether you're signed in is read for it: its own pace (a minute at least), else 10 minutes. */
+function loginEvery(check) {
+  const own = Number(check && check.minutes) || 0;
+  return own > 0 ? Math.max(60 * 1000, own * 60 * 1000) : LOGIN_CHECK_MS;
+}
 
 async function noteLogin(store, status, how) {
   const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
@@ -2250,36 +2258,49 @@ async function reportLogins() {
   if (Object.keys(all).length) await api('POST', '/api/ext/logins', { logins: all });
 }
 
-/** Every 10 minutes (force: now): the stores whose pages say whether you're signed in, read with your cookies. */
+/**
+ * Each store whose pages say whether you're signed in, read with your cookies at its own pace (loginEvery: every 10
+ * minutes, Premium Bandai's every minute…; force: all of them now) — and the others looked at in their own page
+ * (probeLogins). The alarm asks every 30 s; each store is read only once it's due.
+ */
+let checkingLogins = null;
 async function checkLogins({ force = false } = {}) {
-  if (!(await getAuth())) return 0;
-  const { loginsCheckedAt = 0 } = await chrome.storage.local.get('loginsCheckedAt');
-  if (!force && Date.now() - loginsCheckedAt < LOGIN_CHECK_MS) return 0;
-  await chrome.storage.local.set({ loginsCheckedAt: Date.now() });
-  const st = await getState();
-  // (Not at a store whose queue is up here: a request there could cost your place in line.)
-  const held = await heldStores();
-  let n = 0;
-  for (const r of st.flows || []) {
-    const check = r.account && r.account.check;
-    // (Not a store whose pages can only be read on the screen: Shop's.)
-    if (!check || check.fetch === false || check.onScreen || !r.base || held.has(r.id)) continue;
-    try {
-      const res = await fetch(`${r.base}${check.path || ''}`, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
-      const status = globalThis.MGBLogins.fromHtml((await res.text()).slice(0, 3000000), res.url, check);
-      if (status) { await noteLogin(r.id, status, 'check'); n += 1; }
-    } catch { /* the store didn't answer: try again next time */ }
-  }
-  n += await probeLogins(st, held, { force });
-  return n;
+  if (checkingLogins) return force ? checkingLogins.then(() => checkLogins({ force })) : 0;
+  checkingLogins = (async () => {
+    if (!(await getAuth())) return 0;
+    const now = Date.now();
+    const { loginChecks = {} } = await chrome.storage.local.get('loginChecks');
+    if (force) await chrome.storage.local.set({ loginsCheckedAt: now });
+    const st = await getState();
+    // (Not at a store whose queue is up here: a request there could cost your place in line.)
+    const held = await heldStores();
+    let n = 0;
+    for (const r of st.flows || []) {
+      const check = r.account && r.account.check;
+      // (Not a store whose pages can only be read on the screen: Shop's.)
+      if (!check || check.fetch === false || check.onScreen || !r.base || held.has(r.id)) continue;
+      if (!force && now - (Number(loginChecks[r.id]) || 0) < loginEvery(check)) continue;
+      loginChecks[r.id] = now;
+      await chrome.storage.local.set({ loginChecks });
+      try {
+        const res = await fetch(`${r.base}${check.path || ''}`, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
+        const status = globalThis.MGBLogins.fromHtml((await res.text()).slice(0, 3000000), res.url, check);
+        if (status) { await noteLogin(r.id, status, 'check'); n += 1; }
+      } catch { /* the store didn't answer: try again next time */ }
+    }
+    n += await probeLogins(st, held, { force });
+    return n;
+  })().finally(() => { checkingLogins = null; });
+  return checkingLogins;
 }
 
 // Mugibot 2.0 (1.40.0): a store you keep signed in to (Profile → Store sign-ins) whose pages don't say so in their
 // source — EB Games', BIG W's, Kmart's and Target's headers are drawn by their own code — is looked at in its own page:
 // its home page opened in a tab of the extension's own window (never its private one: your cookies are in this one),
 // its header read as on any page you open (logins.js), the tab closed. Only when nothing has said whether you're signed
-// in there for PROBE_MS (a store's own account.probeMinutes: BIG W's is longer), and never at a store whose queue is up
-// here, that turned this browser away ("Access Denied"), or with no probe (account.probe: false). One store at a time.
+// in there for PROBE_MS — or a store's own account.probeMinutes (1.43.0: EB Games' 5, so a sign-out there is told within
+// minutes; BIG W's 60) — and never at a store whose queue is up here, that turned this browser away ("Access Denied"),
+// or with no probe (account.probe: false). One store at a time.
 const PROBE_MS = 20 * 60 * 1000;
 let probing = null;
 
@@ -2289,17 +2310,21 @@ async function probeLogins(st, held, { force = false } = {}) {
     const keep = new Set(st.signins || []);
     // (Not for an account whose membership has lapsed: nothing is bought for it anyway.)
     if (!keep.size || st.active === false) return 0;
-    const { [LOGINS]: all = {} } = await chrome.storage.local.get(LOGINS);
+    const { [LOGINS]: all = {}, loginProbes = {} } = await chrome.storage.local.get([LOGINS, 'loginProbes']);
     const denied = await deniedStores().catch(() => new Set());
     let n = 0;
     for (const r of st.flows || []) {
       const a = r.account;
       if (!keep.has(r.id) || !a || a.check || a.probe === false || !r.base || held.has(r.id) || denied.has(r.id)) continue;
-      const every = Math.max(PROBE_MS, (Number(a.probeMinutes) || 0) * 60 * 1000);
-      const last = all[r.id];
-      if (!force && last && Date.now() - last.at < every) continue;
+      const every = Number(a.probeMinutes) > 0 ? Math.max(60 * 1000, Number(a.probeMinutes) * 60 * 1000) : PROBE_MS;
+      // (Since it was last seen either way, or last looked at — a look that couldn't tell counts too: a store whose page
+      //  never says, its bot check up or the store down, is looked at again at its pace, never at every alarm.)
+      const last = Math.max(all[r.id] ? all[r.id].at : 0, Number(loginProbes[r.id]) || 0);
+      if (!force && Date.now() - last < every) continue;
       // (force — the dashboard's "Check now": still not one looked at in the last minute.)
-      if (force && last && Date.now() - last.at < 60 * 1000) continue;
+      if (force && Date.now() - last < 60 * 1000) continue;
+      loginProbes[r.id] = Date.now();
+      await chrome.storage.local.set({ loginProbes });
       const status = await probeOne(r).catch(() => null);
       if (status) { await noteLogin(r.id, status, 'probe'); n += 1; }
     }

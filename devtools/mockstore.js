@@ -3220,19 +3220,32 @@ ${A.real ? '<div class="rewards"><input type="checkbox" id="CheckboxPS1-7" name=
     if (shop === 'pokemoncenter' && sub === '/_Incapsula_Resource') return html(200, '<html><body>Checking your browser…</body></html>');
     if (pathSearch) return html(200, clientSearchPage(shop, decodeURIComponent(pathSearch[1])));
     // Premium Bandai's search JSON (what its search page reads, and Mugibot's sweeps): only with the
-    // region its own code sends in x-g1-area-code — without it, an error, like the real site.
-    if (shop === 'pbandai' && sub === '/api/search' && u.searchParams.has('keyword')) {
+    // region its own code sends in x-g1-area-code — without it, an error, like the real site. A word search
+    // (keyword), or a brand's or shop's products (_f_brands, _f_shops: a product's brand or shop code, as its
+    // brand and shop pages ask for them) — newest first with sortType=NewArrival (the last added first). A product's
+    // order window: saleStatus as set ('End': closed; 'Waiting': not open yet, opening at opensAt), else from its status.
+    const pbFilter = (k) => u.searchParams.get(k) || '';
+    if (shop === 'pbandai' && sub === '/api/search' && (u.searchParams.has('keyword') || pbFilter('_f_brands') || pbFilter('_f_shops'))) {
       if (String(req.headers['x-g1-area-code'] || '').toLowerCase() !== 'au') return json(500, { status: 500, error: 'Internal Server Error', path: '/api/search' });
-      const all = searchHits(shop, u.searchParams.get('keyword'));
+      S.pbSearches = (S.pbSearches || 0) + 1;
+      if (S.refuseApi) return json(403, { status: 403, error: 'Forbidden' });
+      const brands = pbFilter('_f_brands').split(',').filter(Boolean);
+      const shops = pbFilter('_f_shops').split(',').filter(Boolean);
+      let all = u.searchParams.has('keyword') ? searchHits(shop, u.searchParams.get('keyword'))
+        : shopOf(shop).products.filter((x) => x.listed && ((x.brand && brands.includes(x.brand)) || (x.shop && shops.includes(x.shop))));
+      if (u.searchParams.get('sortType') === 'NewArrival') all = [...all].reverse();
+      const limit = Number(u.searchParams.get('limit')) || 20;
+      const page = all.slice(0, limit);
       return json(200, {
-        text: u.searchParams.get('keyword'),
+        text: u.searchParams.get('keyword') || '',
         productResults: {
-          sortType: u.searchParams.get('sortType') || 'Recommended', limit: Number(u.searchParams.get('limit')) || 20, offset: 0, totalCount: all.length,
+          sortType: u.searchParams.get('sortType') || 'Recommended', limit, offset: 0, totalCount: all.length,
           // (Nothing found: no products list at all, only the count — like the real site.)
-          products: all.length ? all.map((x) => ({
+          products: page.length ? page.map((x) => ({
             areaProductNo: `NAP${x.sku}AU`, productCode: x.sku, areaCode: 'AU', productName: { en: x.name },
-            productType: x.status === 'preorder' ? 'PreOrder' : 'Normal', fixedListPrice: { amount: x.price, currency: 'AUD' },
-            saleStatus: x.status === 'coming_soon' ? 'Waiting' : 'On', displayStatus: 'On',
+            productType: x.status === 'preorder' || x.saleStatus ? 'PreOrder' : 'Normal', fixedListPrice: { amount: x.price, currency: 'AUD' },
+            saleStatus: x.saleStatus || (x.status === 'coming_soon' ? 'Waiting' : 'On'), displayStatus: 'On',
+            ...(x.opensAt ? { saleStartExpectedDt: new Date(x.opensAt).toISOString() } : {}),
             productImages: [{ fileUrl: imagePath(shop, x).slice(1), mediaType: 'Image' }],
             flags: [...(x.status === 'preorder' ? ['PRE_ORDER'] : []), ...(x.status === 'out_of_stock' ? ['OUT_OF_STOCK'] : [])],
           })) : undefined,
